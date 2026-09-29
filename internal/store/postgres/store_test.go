@@ -213,10 +213,12 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 
 	tok := &store.EnrollmentToken{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		ClusterID:  cl.ID,
-		TokenHash:  sha256HexTest("test-token-abc"),
+		ID:           uuid.New().String(),
+		CustomerID:   cust.ID,
+		ClusterID:    cl.ID,
+		OperatorName: "op-001",
+		TokenHash:    sha256HexTest("test-token-abc"),
+		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 	}
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
 
@@ -224,8 +226,13 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.TokenStatePending, got.State)
 
-	// Mark used.
-	require.NoError(t, st.EnrollmentTokens().MarkUsed(ctx, tok.ID, "op-001"))
+	// Consume the token through the canonical enrollment path; the bare
+	// MarkUsed CAS has no production caller (operator/service.go drives
+	// OperatorManagement().EnrollOperator).
+	_, err = st.OperatorManagement().EnrollOperator(ctx, tok.ID, &store.Operator{
+		ID: "op-001", Name: "op-001", CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "serial-op-001",
+	}, &store.Session{ID: uuid.New().String()})
+	require.NoError(t, err)
 
 	got, err = st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
@@ -1381,10 +1388,19 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 		CreatedAt: now, UpdatedAt: now,
 	}
 	require.NoError(t, st.Notifications().Create(ctx, job))
-	pending, err := st.Notifications().GetPending(ctx, now.Add(time.Hour), 10)
+	// The dispatcher consumes jobs through the atomic claim (notifier/consumer.go);
+	// GetPending (the non-claiming listing) has no production caller. The claim honours the
+	// retry schedule, so the job is not claimable before next_retry_at and is at that instant.
+	notYet, err := st.Notifications().ClaimNext(ctx, now)
 	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, job.ID, pending[0].ID)
+	assert.Nil(t, notYet, "a job scheduled for later must not be claimable yet")
+
+	claimed, err := st.Notifications().ClaimNext(ctx, nextRetry)
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	assert.Equal(t, job.ID, claimed.ID)
+	assert.Equal(t, store.NotificationSending, claimed.Status)
+	assert.Equal(t, 1, claimed.Attempts)
 
 	// Time column round-trip (RFC3339 write ↔ TIMESTAMPTZ scan, AC-076-02):
 	// the scanned instant must equal the written one exactly.
@@ -1394,7 +1410,8 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 	// instants, not Location pointers.
 	assert.True(t, stored.NextRetryAt.Equal(nextRetry), "next_retry_at round-trip")
 	assert.True(t, stored.CreatedAt.Equal(now), "created_at round-trip")
-	assert.True(t, stored.UpdatedAt.Equal(now), "updated_at round-trip")
+	// The claim stamps updated_at with the instant it was claimed at.
+	assert.True(t, stored.UpdatedAt.Equal(nextRetry), "updated_at round-trip")
 
 	// Same (operation_id, channel, recipient) triple must be rejected by the
 	// UNIQUE constraint (idempotency fallback, AC-031-01).
@@ -1405,11 +1422,6 @@ func TestNotificationStoreLifecycle(t *testing.T) {
 	}
 	require.Error(t, st.Notifications().Create(ctx, duplicate))
 
-	claimed, err := st.Notifications().ClaimNext(ctx, now.Add(time.Hour))
-	require.NoError(t, err)
-	require.NotNil(t, claimed)
-	assert.Equal(t, store.NotificationSending, claimed.Status)
-	assert.Equal(t, 1, claimed.Attempts)
 	require.NoError(t, st.Notifications().MarkDeadLetter(ctx, job.ID, "delivery_failed", "test failure"))
 	deadLetter, err := st.Notifications().Get(ctx, job.ID)
 	require.NoError(t, err)

@@ -54,10 +54,6 @@ exceptions:
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
-    method: LinkCandidateArtifacts
-    reason: "[superseded] 候选制品与 bundle 关联走 LinkToBundleTx / LinkToBundle，此方法无调用者"
-    review_by: "2026-12-31"
-  - interface: CandidateArtifactStore
     method: LinkToBundle
     reason: "[superseded-by-Tx] 生产链路只用事务版 LinkToBundleTx，非事务版仅测试使用"
     review_by: "2026-12-31"
@@ -122,10 +118,6 @@ exceptions:
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: EnrollmentTokenStore
-    method: MarkUsed
-    reason: "[superseded] 令牌消费实际走 OperatorManagement().EnrollOperator（operator/service.go），该方法无调用者"
-    review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
     method: Revoke
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
@@ -148,10 +140,6 @@ exceptions:
   - interface: InventorySyncRequestStore
     method: GetActiveByCluster
     reason: "[unwired-read] 按集群读取活跃记录无调用者"
-    review_by: "2026-12-31"
-  - interface: NotificationStore
-    method: GetPending
-    reason: "[superseded] operator 派发使用 GetNextPending / GetInflightForOperator / GetDeliveredNotAcked，该方法无调用者"
     review_by: "2026-12-31"
   - interface: OperationEventStore
     method: Create
@@ -188,14 +176,6 @@ exceptions:
   - interface: OutboxStore
     method: Get
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: OutboxStore
-    method: GetPendingForOperator
-    reason: "[superseded] 同 GetPending：派发路径改名后的遗留方法"
-    review_by: "2026-12-31"
-  - interface: OutboxStore
-    method: UpdateSequence
-    reason: "[superseded] outbox 序号推进走 GetNextSequence，该方法无调用者"
     review_by: "2026-12-31"
   - interface: RolloutTrackingStore
     method: Get
@@ -240,10 +220,6 @@ exceptions:
   - interface: Store
     method: VulnerabilityExceptions
     reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
-    review_by: "2026-12-31"
-  - interface: TrustRootStore
-    method: BumpRevocationEpoch
-    reason: "[superseded] revocation epoch 推进走 TrustRoots().TransitionLiveRoot(..., bumpRevocation=true)（trust/service.go），该方法无调用者"
     review_by: "2026-12-31"
   - interface: ValuesApprovalReader
     method: ListAuditOutbox

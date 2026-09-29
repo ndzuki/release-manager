@@ -52,47 +52,6 @@ func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, b
 	})
 }
 
-// LinkCandidateArtifacts batch-links candidate artifacts by digest to a bundle.
-func (s *candidateArtifactStore) LinkCandidateArtifacts(ctx context.Context, bundleID string, digests []string) (int64, error) {
-	if len(digests) == 0 {
-		return 0, nil
-	}
-	args := make([]any, 0, len(digests)+1)
-	args = append(args, bundleID)
-	for _, digest := range digests {
-		args = append(args, digest)
-	}
-	placeholders := ""
-	for i := range digests {
-		if i > 0 {
-			placeholders += ","
-		}
-		placeholders += "?"
-	}
-	var linked int64
-	err := s.gorm.gorm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Exec(`
-			INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
-			SELECT ?, ca.id, NOW()
-			FROM candidate_artifacts ca
-			WHERE ca.digest IN (`+placeholders+`)
-			ON CONFLICT (bundle_id, artifact_id) DO NOTHING
-		`, args...)
-		if result.Error != nil {
-			return fmt.Errorf("insert bundle candidate artifact links: %w", result.Error)
-		}
-		linked = result.RowsAffected
-		if err := tx.Exec(`
-			UPDATE candidate_artifacts SET orphaned_at = NULL
-			WHERE id IN (SELECT artifact_id FROM bundle_candidate_artifacts WHERE bundle_id = ?)
-		`, bundleID).Error; err != nil {
-			return fmt.Errorf("clear linked candidate artifact orphaned_at: %w", err)
-		}
-		return nil
-	})
-	return linked, err
-}
-
 func (s *candidateArtifactStore) UpsertTx(tx *gorm.DB, candidate *store.CandidateArtifact) error {
 	if tx == nil {
 		return fmt.Errorf("upsert candidate artifact: nil transaction")

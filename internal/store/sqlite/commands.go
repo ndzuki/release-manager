@@ -74,11 +74,6 @@ func (s *outboxStore) GetByOperationID(ctx context.Context, operationID string) 
 	return scanOutboxEntry(row)
 }
 
-func (s *outboxStore) GetPendingForOperator(ctx context.Context, operatorID string) (*store.OutboxEntry, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE operator_id=? AND status='pending' ORDER BY sequence ASC LIMIT 1`, operatorID)
-	return scanOutboxEntry(row)
-}
-
 func (s *outboxStore) GetDeliveredNotAcked(ctx context.Context, operatorID string) ([]*store.OutboxEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+outboxColumns+` FROM outbox WHERE operator_id=? AND status IN ('delivered','persisted','running') AND acked_at IS NULL ORDER BY sequence ASC`, operatorID)
 	if err != nil {
@@ -112,23 +107,6 @@ func (s *outboxStore) GetNextSequence(ctx context.Context) (int64, error) {
 		return seq.Int64 + 1, nil
 	}
 	return 1, nil
-}
-
-func (s *outboxStore) UpdateSequence(ctx context.Context, id string, sequence int64) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE outbox SET sequence=?, updated_at=? WHERE id=?`,
-		sequence, time.Now().UTC().Format(time.RFC3339), id,
-	)
-	if err != nil {
-		return fmt.Errorf("update outbox sequence: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("outbox sequence rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
 }
 
 func (s *outboxStore) UpdateStatus(ctx context.Context, id string, status store.CommandStatus, resultJSON string) error {

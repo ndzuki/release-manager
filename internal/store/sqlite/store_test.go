@@ -183,10 +183,12 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 
 	tok := &store.EnrollmentToken{
-		ID:         uuid.New().String(),
-		CustomerID: cust.ID,
-		ClusterID:  cl.ID,
-		TokenHash:  sha256Hex("test-token-abc"),
+		ID:           uuid.New().String(),
+		CustomerID:   cust.ID,
+		ClusterID:    cl.ID,
+		OperatorName: "op-001",
+		TokenHash:    sha256Hex("test-token-abc"),
+		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 	}
 	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
 
@@ -194,8 +196,13 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.TokenStatePending, got.State)
 
-	// Mark used.
-	require.NoError(t, st.EnrollmentTokens().MarkUsed(ctx, tok.ID, "op-001"))
+	// Consume the token through the canonical enrollment path; the bare
+	// MarkUsed CAS has no production caller (operator/service.go drives
+	// OperatorManagement().EnrollOperator).
+	_, err = st.OperatorManagement().EnrollOperator(ctx, tok.ID, &store.Operator{
+		ID: "op-001", Name: "op-001", CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "serial-op-001",
+	}, &store.Session{ID: uuid.New().String()})
+	require.NoError(t, err)
 
 	got, err = st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
@@ -1733,14 +1740,38 @@ func TestTrustRootBumpPolicy(t *testing.T) {
 func TestTrustRootBumpRevocationEpoch(t *testing.T) {
 	st := setupStore(t)
 	ctx := t.Context()
+	now := time.Now().UTC()
 
-	epoch, err := st.TrustRoots().BumpRevocationEpoch(ctx, "production")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), epoch)
+	// Revocations advance the environment's revocation epoch through the canonical
+	// transition (production path: trust/service.go RevokeRoot ->
+	// TransitionLiveRoot(..., bumpRevocation=true)). A keeper root keeps the
+	// environment live so the last-root guard does not refuse the transition.
+	require.NoError(t, st.TrustRoots().Create(ctx, &store.TrustRoot{
+		ID: "root-epoch-keeper", Environment: "production", KeyID: "key-epoch-keeper", Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}))
 
-	epoch, err = st.TrustRoots().BumpRevocationEpoch(ctx, "production")
+	first := &store.TrustRoot{
+		ID: "root-epoch-1", Environment: "production", KeyID: "key-epoch-1", Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, first))
+	meta, err := st.TrustRoots().TransitionLiveRoot(ctx, first.ID, "production", store.TrustRootRevoked, &now, true)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), epoch)
+	assert.Equal(t, int64(1), meta.RevocationEpoch)
+	// REQ-043's invariant, pinned here rather than only in the DSN-gated postgres test:
+	// revoking advances the revocation epoch and must NOT move the policy version.
+	assert.Equal(t, int64(0), meta.Version, "revocation must not bump the policy version")
+
+	second := &store.TrustRoot{
+		ID: "root-epoch-2", Environment: "production", KeyID: "key-epoch-2", Issuer: "ci",
+		State: store.TrustRootActive, ValidFrom: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, st.TrustRoots().Create(ctx, second))
+	meta, err = st.TrustRoots().TransitionLiveRoot(ctx, second.ID, "production", store.TrustRootRevoked, &now, true)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), meta.RevocationEpoch)
+	assert.Equal(t, int64(0), meta.Version, "revocation must not bump the policy version")
 }
 
 func TestTrustRootGetPolicyDefault(t *testing.T) {

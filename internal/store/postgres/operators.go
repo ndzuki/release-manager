@@ -78,24 +78,6 @@ FROM enrollment_tokens WHERE token_hash = ?
 	return scanEnrollmentToken(row)
 }
 
-func (s *enrollmentTokenStore) MarkUsed(ctx context.Context, id, operatorID string) error {
-	now := time.Now().UTC()
-	result, err := s.gorm.ExecContext(ctx, `
-UPDATE enrollment_tokens SET state='used', used_at=?, operator_id=? WHERE id=? AND state='pending'
-`, now.Format(time.RFC3339Nano), operatorID, id)
-	if err != nil {
-		return fmt.Errorf("mark enrollment token used: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
-}
-
 // Revoke marks an enrollment token as revoked.
 func (s *enrollmentTokenStore) Revoke(ctx context.Context, id string) error {
 	now := time.Now().UTC()

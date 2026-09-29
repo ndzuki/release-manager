@@ -518,11 +518,38 @@ func TestLinkCandidateArtifacts_Batch(t *testing.T) {
 		linked int64
 		err    error
 	}
+	// The candidate->bundle link has exactly one shipping writer: the operation
+	// creation unit of work (sqlite/uow.go -> linkCandidateArtifacts). The
+	// superseded non-transactional CandidateArtifactStore.LinkCandidateArtifacts
+	// had no caller, so the concurrency contract is exercised through the UoW,
+	// with one definition per worker so operation availability never conflicts.
+	definitions := make([]*store.ReleaseDefinition, workers)
+	for worker := range workers {
+		definitions[worker] = &store.ReleaseDefinition{
+			ID: uuid.New().String(), Name: fmt.Sprintf("batch-link-def-%d", worker),
+			CustomerID: "customer-batch-link", ClusterID: "cluster-batch-link",
+			ReleaseName: fmt.Sprintf("batch-link-%d", worker), Status: store.DefStatusActive,
+		}
+		require.NoError(t, st.Definitions().Create(t.Context(), definitions[worker], nil))
+	}
+
 	results := make(chan linkResult, workers)
-	for range workers {
+	for worker := range workers {
 		go func() {
-			linked, err := st.CandidateArtifacts().LinkCandidateArtifacts(t.Context(), bundle.ID, digests)
-			results <- linkResult{linked: linked, err: err}
+			now := time.Now().UTC()
+			result, err := st.OperationCreationUnitOfWork()(t.Context(), store.OperationCreationRequest{
+				Operation: &store.Operation{
+					ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+					ReleaseDefinitionID: definitions[worker].ID, IdempotencyKey: uuid.New().String(),
+					RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+				},
+				CandidateArtifactDigests: digests,
+			})
+			if err != nil {
+				results <- linkResult{err: err}
+				return
+			}
+			results <- linkResult{linked: result.LinkedCandidateCount}
 		}()
 	}
 
@@ -555,9 +582,22 @@ func TestLinkCandidateArtifacts_NoMatch(t *testing.T) {
 	}
 	require.NoError(t, st.Bundles().Create(t.Context(), bundle))
 
-	linked, err := st.CandidateArtifacts().LinkCandidateArtifacts(t.Context(), bundle.ID, []string{"sha256:missing"})
+	definition := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "no-match-def", CustomerID: "customer-no-match",
+		ClusterID: "cluster-no-match", ReleaseName: "no-match", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(t.Context(), definition, nil))
+	now := time.Now().UTC()
+	result, err := st.OperationCreationUnitOfWork()(t.Context(), store.OperationCreationRequest{
+		Operation: &store.Operation{
+			ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+			ReleaseDefinitionID: definition.ID, IdempotencyKey: uuid.New().String(),
+			RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+		},
+		CandidateArtifactDigests: []string{"sha256:missing"},
+	})
 	require.NoError(t, err)
-	assert.Zero(t, linked)
+	assert.Zero(t, result.LinkedCandidateCount)
 }
 
 func TestCandidateArtifactDeleteOrphan(t *testing.T) {
