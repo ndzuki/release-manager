@@ -574,7 +574,7 @@ check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL
 	$(GO) run ./cmd/schemaparity/ -migrations migrations -exceptions schema-parity.exceptions.yaml
 
 .PHONY: check-tasks
-check-tasks: ## Ledger↔git gate: every done/closed card must be merged with a PR that exists in git (D-η/η-1)
+check-tasks: ## Ledger↔git gate: every done/closed card must cite at least one PR that exists merged in git (D-η/η-1; pr_url may list several, TASK-227)
 	@$(TASKS_RESOLVE); \
 	if [ -z "$$TASKS" ]; then \
 		if [ "$${ALLOW_NO_REQS:-}" = "1" ]; then \
