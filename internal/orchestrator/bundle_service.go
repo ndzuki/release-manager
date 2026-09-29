@@ -270,10 +270,12 @@ func (s *BundleService) GetBundle(
 			return nil, err
 		}
 	}
+	// TASK-223: this used to fall back to GetByAlias, which joined bundle_aliases -- a table
+	// nothing has ever written to (no producer, no backfill, and the contract above promises
+	// only the canonical identifier). The fallback therefore could not resolve anything; it
+	// only made an unknown id look like a supported-but-missing alias. Unknown ids are
+	// NOT_FOUND, which is what the RPC documents.
 	bundle, err := s.store.Bundles().Get(ctx, req.Msg.GetBundleId())
-	if errors.Is(err, store.ErrNotFound) {
-		bundle, err = s.store.Bundles().GetByAlias(ctx, req.Msg.GetBundleId())
-	}
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, bundleError(connect.CodeNotFound, "bundle_not_found",
 			fmt.Errorf("bundle %s not found", req.Msg.GetBundleId()))

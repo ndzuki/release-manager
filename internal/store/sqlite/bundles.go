@@ -384,10 +384,6 @@ func (s *bundleStore) CreateTx(_ *gorm.DB, _ *store.ReleaseBundle) error {
 	return errors.New("sqlite bundle transactions are unsupported")
 }
 
-func (s *bundleStore) GetByAlias(ctx context.Context, alias string) (*store.ReleaseBundle, error) {
-	return s.Get(ctx, alias)
-}
-
 // ReachableFromOrganization implements the tenant boundary for reading a bundle
 // (TASK-199). The predicate is shared with PostgreSQL (see store.ReachableBundlePredicate) so
 // the two engines cannot disagree about who may read what.

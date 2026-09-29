@@ -1650,7 +1650,6 @@ type BundleStore interface {
 	CreateTx(tx *gorm.DB, b *ReleaseBundle) error
 	Get(ctx context.Context, id string) (*ReleaseBundle, error)
 	GetByDigest(ctx context.Context, alg, value string) (*ReleaseBundle, error)
-	GetByAlias(ctx context.Context, alias string) (*ReleaseBundle, error)
 	List(ctx context.Context, filter BundleListFilter) (*BundlePage, error)
 	// ReachableFromOrganization reports whether a caller acting for orgID may read the
 	// bundle: it is the current bundle of one of that organization's release definitions,
