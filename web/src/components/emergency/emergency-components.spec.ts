@@ -73,6 +73,38 @@ describe('emergency components (Step 4)', () => {
     expect(wrapper.emitted('select-container')).toEqual([['app']]);
   });
 
+  // Found while running the browser smoke against the real stack: the API returned a
+  // verified artifact while the page claimed none existed, because the empty list before a
+  // container is chosen has nothing to do with verification.
+  it('ArtifactSelector asks for a container before claiming there are no candidates', () => {
+    const wrapper = mount(EmergencyArtifactSelector, {
+      props: {
+        containers: ['app'],
+        selectedContainer: '',
+        artifacts: [],
+        selectedArtifactId: null,
+        loading: false,
+        error: null,
+      },
+    });
+    expect(wrapper.text()).toContain('请先选择容器');
+    expect(wrapper.text()).not.toContain('没有可用的 VERIFIED 候选制品');
+
+    // Once a container is chosen and the server really returns nothing, the honest
+    // message is back.
+    const empty = mount(EmergencyArtifactSelector, {
+      props: {
+        containers: ['app'],
+        selectedContainer: 'app',
+        artifacts: [],
+        selectedArtifactId: null,
+        loading: false,
+        error: null,
+      },
+    });
+    expect(empty.text()).toContain('没有可用的 VERIFIED 候选制品');
+  });
+
   it('ChangeForm gates REQUIRE_PROMOTION on mapping completeness (AC-058-14)', async () => {
     const wrapper = mount(EmergencyChangeForm, {
       props: {
@@ -123,6 +155,9 @@ describe('emergency components (Step 4)', () => {
 
   it('ConfirmDialog requires risk acceptance before submit (AC-058-15/16)', async () => {
     const wrapper = mount(EmergencyConfirmDialog, {
+      // Overlay geometry (Teleport/focus trap) is AppDialog's concern and is
+      // covered by AppDialog.test.ts; this test is about the confirm flow.
+      global: { stubs: { Teleport: true } },
       props: {
         open: true,
         workload: target().workloadRef,
@@ -140,8 +175,12 @@ describe('emergency components (Step 4)', () => {
     await wrapper.find('input[type="checkbox"]').setValue();
     expect(wrapper.emitted('update:risk-accepted')).toEqual([[true]]);
     await wrapper.setProps({ riskAccepted: true });
-    expect((wrapper.find('button.primary').element as HTMLButtonElement).disabled).toBe(false);
-    await confirm.trigger('click');
+    // Re-query after the prop change: the footer button is slotted through
+    // AppDialog, so a re-render replaces the node and the earlier reference is
+    // detached.
+    const enabled = wrapper.find('button.primary');
+    expect((enabled.element as HTMLButtonElement).disabled).toBe(false);
+    await enabled.trigger('click');
     expect(wrapper.emitted('confirm')).toHaveLength(1);
   });
 });
