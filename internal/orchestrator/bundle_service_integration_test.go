@@ -444,6 +444,10 @@ func TestGetBundleDoesNotResolveAliases(t *testing.T) {
 
 	bundle := seedQueryableBundle(t, st, store.BundleValidated, "app")
 	def := bundleTenantFixture(t, st, "alias")
+	// Point the alias at a bundle this actor CAN read (it is the definition's current
+	// bundle). Nothing else would stop a restored fallback from answering 200, so a
+	// NOT_FOUND here proves the alias table is not consulted at all.
+	setCurrentBundle(t, st, def.ID, bundle.ID)
 	require.NoError(t, pgStore.GORM().Exec(`
 		INSERT INTO bundle_aliases (alias, canonical_bundle_id, alias_type, created_at)
 		VALUES (?, ?, 'legacy_id', NOW())

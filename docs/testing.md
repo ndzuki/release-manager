@@ -66,7 +66,7 @@ in-memory storage + `kubefake`，**不需要集群**：
 | --- | --- | --- | --- |
 | TASK-218 | `candidate_artifacts.validated_at IS NOT NULL` | **修复前**生产代码无人写入（现已由 `MarkValidatedForBundleTx` + validation worker 补齐） | fail-closed（功能不可用） |
 | TASK-220 | `verifications` 按**镜像** digest 查 `Trusted` | 唯一写入者按 **bundle** digest 写 | fail-closed（功能不可用） |
-| TASK-223 | `bundle_aliases` 的 `GetByAlias` 回落 | 全仓（含迁移）无任何 INSERT | 死路（legacy id/digest 永远 404） |
+| TASK-223 | `bundle_aliases` 的 `GetByAlias` 回落 | 生产代码无任何 INSERT（唯一 INSERT 是钉住该行为的测试；REQ-011 曾承诺别名解析但从未交付写入者，2026-09-29 记 breaking 变更并撤回该承诺） | 死路（回落已删除；未知 id ⇒ `NOT_FOUND`，与 RPC 注释一致） |
 
 **落地方式**（写这类测试时的最小形态）：
 1. 用**生产写入路径**造数据（如 `validation_worker` 的 outbox 周期、bundle 提交的 UoW），
