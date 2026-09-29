@@ -1,7 +1,7 @@
 # 架构决策记录（ADR）
 
 本目录是 release-manager 项目既有架构决策记录（ADR）的发布版副本，用于随代码一起阅读。
-ADR 的权威源在知识库 Vault：`Projects/001-release-manager/Notes/adr/`；
+ADR 的权威源在知识库 Vault：`Projects/001-release-manager/Notes/decisions/`；
 本仓库副本不独立演进，决策内容的修订、状态变更与关联关系更新以知识库版本为准。
 
 共 23 篇：ADR-000 ～ ADR-022，按编号升序索引如下。

@@ -2,7 +2,7 @@
 
 `release-manager` 是面向多 Customer 的 Helm 发布管理控制面：中心控制面负责编排与权威状态，客户 Cluster 内的 release-operator 以**出站**方式连回中心，并在集群内用 Go SDK 执行 Helm/Kubernetes 操作。平台以 **Customer** 为租户边界、**Cluster** 为部署与 Operator 运行的隔离边界，并把 ReleaseDefinition、ReleaseBundle、ValuesRevision、Operation 四个对象分离为"发布到哪里 / 发布什么 / 以什么配置发布 / 一次执行记录"。全部正式接口以 protobuf 为单一契约源、通过 Connect 单端口暴露。
 
-读者指引：新加入的工程师读第 1、2 节建立边界与服务地图；契约消费方（前端、Operator、CI）读第 3 节；运维与测试读第 4、5 节。领域词汇以 Vault 侧 `Notes/CONTEXT.md` 与 `Design/glossary.md` 为权威，本文不复述全部术语。
+读者指引：新加入的工程师读第 1、2 节建立边界与服务地图；契约消费方（前端、Operator、CI）读第 3 节；运维与测试读第 4、5 节。领域词汇以 Vault 侧 `Notes/CONTEXT.md` 为权威，本文不复述全部术语。
 
 ## 1. 执行边界与信任模型
 
@@ -34,7 +34,7 @@
 - Operator 在本地持久 Store（BoltDB 或等价实现）**fsync 命令后才发送 `ACK_PERSISTED`**；重启后重放未终态命令，并按 `command_id` 返回已完成结果而不重复执行。
 - 重连时 Operator 上报 `last_seen_sequence`，中心重投未持久化命令并处理 sequence gap。
 - 语义为**持久化 + at-least-once + 幂等执行**，不宣称跨网络 exactly-once；仅收到网络 ACK 不等于已持久化。
-- 例外：EMERGENCY 命令走在线 Operator stream，**不属于**标准 Command Outbox（见 `Design/contracts/emergency-execution.md`）。
+- 例外：EMERGENCY 命令走在线 Operator stream，**不属于**标准 Command Outbox（见 `Notes/contracts/emergency-execution.md`）。
 
 ### 1.5 授权边界
 
@@ -171,4 +171,5 @@ E2E 阶段词汇（`test/e2e/stage.go` 的 canonical 顺序）：`control-plane`
 - `api/proto/auth/v1/auth.proto` 声明了 `ExternalIdentityService`，`cmd/auth` 仅在只读 procedure 白名单中引用其两个 RPC，未见对应 handler 挂载。
 - Makefile 中 3 处 `./cmd/release-manager/` 引用与 `configs/manager.dev.yaml` 曾长期悬空（该命令在仓库中并不存在）；本次已把 `dev-stage-tenancy`、`dev-stage-config` 指向 release-orchestrator，把 `dev-stage-full` 改为导航目标，并删除孤儿配置。 <!-- check-docs:ignore 被删除的目录与配置，本行在记录其移除 -->
 
-> 事实源：Notes/PROJECT-CONVENTIONS.md、Notes/CONTEXT.md、Notes/Docs-Inventory-2026-09-14.md、Notes/adr/ADR-001-control-plane-operator-outbound-boundary.md、Notes/adr/ADR-002-connect-protobuf-single-port-contract.md、Notes/adr/ADR-003-release-input-model-separation.md、Notes/adr/ADR-004-sdk-only-cluster-execution.md、Notes/adr/ADR-005-durable-command-outbox-and-operator-replay.md、Notes/adr/ADR-006-server-authoritative-organization-authorization.md、Notes/adr/ADR-009-operation-state-cas-and-transactional-outbox.md、Notes/adr/ADR-014-shared-postgresql-pool-and-transaction-seam.md、Notes/adr/ADR-015-maintenance-cutover-authority-boundary.md、Design/decisions/D-001-execution-boundaries.md、Design/decisions/D-005-operation-consistency.md、Design/decisions/D-010-platform-ops.md、Design/contracts/connect-surface.md、Design/waves/wave-0-contract-foundation.md、Design/waves/wave-1-core-release-increment.md、Design/waves/wave-2-web-console.md、Design/waves/wave-3-stage-e2e.md、Design/waves/wave-4-observation-contract.md、Requirements/REQ-002-micro-service.md
+> 事实源（2026-09-24 vault 重构后）：Notes/PROJECT-CONVENTIONS.md、Notes/CONTEXT.md、Notes/decisions/ADR-001-control-plane-operator-outbound-boundary.md、Notes/decisions/ADR-002-connect-protobuf-single-port-contract.md、Notes/decisions/ADR-003-release-input-model-separation.md、Notes/decisions/ADR-004-sdk-only-cluster-execution.md、Notes/decisions/ADR-005-durable-command-outbox-and-operator-replay.md、Notes/decisions/ADR-006-server-authoritative-organization-authorization.md、Notes/decisions/ADR-009-operation-state-cas-and-transactional-outbox.md、Notes/decisions/ADR-014-shared-postgresql-pool-and-transaction-seam.md、Notes/decisions/ADR-015-maintenance-cutover-authority-boundary.md、Notes/decisions/D-001-execution-boundaries.md、Notes/decisions/D-005-operation-consistency.md、Notes/decisions/D-010-platform-ops.md、Notes/contracts/connect-surface.md、Requirements/REQ-002-micro-service.md
+> （重构说明：`Notes/adr/` ⇒ `Notes/decisions/`、`Design/decisions|contracts/` ⇒ `Notes/decisions|contracts/`；`Notes/Docs-Inventory-2026-09-14.md` 与 `Design/waves/**` 已随重构删除，不再作为事实源。）

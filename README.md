@@ -114,6 +114,8 @@ make proto         # buf generate（生成 Go/TS 契约代码）
 | `docs/configuration.md` | 各服务配置键、层级与默认值 |
 | `docs/cli.md` | `cmd/*` 全部可执行文件的 flag、退出码与调用方式 |
 | `docs/runbook.md` | 运维手册：故障定位与处置步骤 |
+| `docs/user-manual.md` | 控制台使用手册（逐页面截图 + 操作步骤 + 排错） |
+| `docs/ux-review.md` | 控制台交互体验审查：认证/授权 blocker、需求符合度与优化清单 |
 | `docs/observability.md` | 日志、指标与健康检查的可观测面 |
 | `docs/http-collections.md` | `api/kulala/*.http` 调试集合与当前可用性 |
 | `docs/dependencies.md` | 依赖许可清单（生成产物，`make check-licenses` 校验） |

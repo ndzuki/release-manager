@@ -217,5 +217,5 @@ orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
 > `Makefile`（dev-* / dev-stage-* / run-* 目标）、`configs/*.dev.yaml`、
 > `.github/workflows/test.yml`（e2e/e2e-prerequisite job 的工具安装与 env）、
 > `Projects/001-release-manager/Requirements/REQ-065-dev-environment.md`、
-> `Design/contracts/dev-environment-lifecycle.md`、`Design/contracts/dev-fixture-canonical.md`、
-> `Design/decisions/D-013`、`D-014`、`D-017`、`D-019`、`D-020`。
+> `Notes/contracts/dev-environment-lifecycle.md`、`Notes/contracts/dev-fixture-canonical.md`、
+> `Notes/decisions/D-013`、`D-014`、`D-017`、`D-019`、`D-020`。
