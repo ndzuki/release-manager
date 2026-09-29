@@ -2395,6 +2395,13 @@ type VerificationStore interface {
 	Create(ctx context.Context, rec *VerificationRecord) error
 	GetByDigestPolicyAndSignature(ctx context.Context, artifactDigest, policyVersion, signatureIdentity string) (*VerificationRecord, error)
 	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
+	// GetLatestVerdictByDigestAndPolicy returns the most recent record that actually states
+	// something about the artifact's trust: `trusted` or `rejected`. Every other status
+	// records that NO verdict was reached (nothing was attached to verify, or the policy
+	// could not be read), so it must not shadow a real verdict that came before it -- an
+	// unsigned operation running after a signed one would otherwise silently downgrade the
+	// bundle (TASK-220). A later rejection still wins over an earlier trust decision.
+	GetLatestVerdictByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 }
 
 // ScanResultStore defines the persistence contract for vulnerability scan results.
@@ -2643,6 +2650,12 @@ type CandidateArtifactStore interface {
 	// transaction that flips the bundle to validated, so "the bundle passed validation"
 	// and "its artifacts are candidates" cannot disagree.
 	MarkValidatedForBundleTx(tx *gorm.DB, bundleID string, now time.Time) (int64, error)
+	// BundlesForArtifact lists the bundles that carry a candidate artifact. The verification
+	// writer signs the BUNDLE digest -- a bundle is what CI signs and what CreateOperation
+	// verifies, while a candidate artifact is an image inside it and BundleImage carries no
+	// signature of its own (TASK-220). Anything that wants to know whether an artifact is
+	// trusted therefore has to walk back to the bundle(s) that delivered it.
+	BundlesForArtifact(ctx context.Context, artifactID string) ([]string, error)
 }
 
 // ArtifactEventStore persists externally observed artifact events.

@@ -198,6 +198,27 @@ func (s *candidateArtifactStore) UpsertLocationTx(_ *gorm.DB, _, _, _ string, _ 
 
 // MarkValidatedForBundleTx: bundle ingestion (and therefore validation) only exists on
 // PostgreSQL in this engine, which is the same reason LinkToBundleTx is unsupported here.
+// BundlesForArtifact reads the legacy bundle_id column: bundle ingestion only exists on
+// PostgreSQL, and SQLite keeps the artifact->bundle pointer on the artifact row itself.
+func (s *candidateArtifactStore) BundlesForArtifact(ctx context.Context, artifactID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT bundle_id FROM candidate_artifacts WHERE id = ? AND bundle_id IS NOT NULL AND bundle_id <> ''
+	`, artifactID)
+	if err != nil {
+		return nil, fmt.Errorf("list bundles for candidate artifact: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var bundleIDs []string
+	for rows.Next() {
+		var bundleID string
+		if scanErr := rows.Scan(&bundleID); scanErr != nil {
+			return nil, fmt.Errorf("scan bundle id for candidate artifact: %w", scanErr)
+		}
+		bundleIDs = append(bundleIDs, bundleID)
+	}
+	return bundleIDs, rows.Err()
+}
+
 func (s *candidateArtifactStore) MarkValidatedForBundleTx(_ *gorm.DB, _ string, _ time.Time) (int64, error) {
 	return 0, errors.New("sqlite candidate validation marking is unsupported")
 }

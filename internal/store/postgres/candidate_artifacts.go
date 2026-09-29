@@ -198,6 +198,27 @@ func (s *candidateArtifactStore) UpsertLocationTx(tx *gorm.DB, artifactID, ref, 
 // store.CandidateArtifactStore for the contract. Candidates are linked to the bundle
 // through bundle_candidate_artifacts (candidate_artifacts.bundle_id is the legacy column),
 // and an artifact that already carries validated_at keeps its original timestamp.
+// BundlesForArtifact reads the link table: on this engine a candidate artifact is bound to
+// its bundle through bundle_candidate_artifacts, not through a column on the artifact row.
+func (s *candidateArtifactStore) BundlesForArtifact(ctx context.Context, artifactID string) ([]string, error) {
+	rows, err := s.gorm.QueryContext(ctx, `
+		SELECT bundle_id FROM bundle_candidate_artifacts WHERE artifact_id = ? ORDER BY bundle_id
+	`, artifactID)
+	if err != nil {
+		return nil, fmt.Errorf("list bundles for candidate artifact: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var bundleIDs []string
+	for rows.Next() {
+		var bundleID string
+		if scanErr := rows.Scan(&bundleID); scanErr != nil {
+			return nil, fmt.Errorf("scan bundle id for candidate artifact: %w", scanErr)
+		}
+		bundleIDs = append(bundleIDs, bundleID)
+	}
+	return bundleIDs, rows.Err()
+}
+
 func (s *candidateArtifactStore) MarkValidatedForBundleTx(tx *gorm.DB, bundleID string, now time.Time) (int64, error) {
 	if tx == nil {
 		return 0, fmt.Errorf("mark candidate artifacts validated: nil transaction")

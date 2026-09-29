@@ -22,6 +22,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/authorization"
 	"github.com/ndzuki/release-manager/internal/store"
+	"github.com/ndzuki/release-manager/internal/trust"
 )
 
 const (
@@ -773,6 +774,75 @@ func (s *Service) resolveEmergencyImage(
 	}, nil
 }
 
+// trustedVerificationForArtifact resolves the trust record that authorises an emergency
+// change for a candidate artifact.
+//
+// The only production writer of verification records is CreateOperation, and it signs the
+// BUNDLE digest: a bundle is what CI signs, while a candidate artifact is an image inside
+// it and common.v1.BundleImage carries no signature of its own (TASK-220). Looking the
+// artifact's own digest up first keeps per-artifact records working if the contract ever
+// grows them; the bundle fallback is what makes a signed release usable for an emergency
+// change today, and it is resolved through the bundles that actually delivered the
+// artifact rather than through any bundle that happens to share its digest.
+//
+// Both lookups ask for the latest VERDICT, not the latest row: an operation that carried no
+// signature records `signature_missing` for the same digest, and letting that shadow an
+// earlier `trusted` verdict is what made a correctly signed release unusable (TASK-220). A
+// genuine later `rejected` still outranks the earlier trust decision.
+//
+// A verdict ON THE ARTIFACT is final: the bundle is consulted only when the artifact carries
+// no verdict of its own, so a per-artifact rejection can never be overridden by a trusted
+// bundle that happens to contain the same digest. This matters as soon as the contract grows
+// per-artifact signatures (the bundle fallback exists precisely because it does not today).
+//
+// The gate stays fail-closed: no verdict, a non-trusted verdict, a store error or (at the
+// call site) a stale revocation epoch all refuse the change.
+func (s *Service) trustedVerificationForArtifact(
+	ctx context.Context, artifact *store.CandidateArtifact, policy string,
+) (*store.VerificationRecord, error) {
+	own, err := s.store.Verifications().GetLatestVerdictByDigestAndPolicy(ctx, artifact.Digest, policy)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("load artifact verification: %w", err)
+	}
+	if own != nil {
+		return own, nil
+	}
+	bundleIDs, err := s.store.CandidateArtifacts().BundlesForArtifact(ctx, artifact.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list bundles for artifact: %w", err)
+	}
+	var untrusted *store.VerificationRecord
+	for _, bundleID := range bundleIDs {
+		bundle, getErr := s.store.Bundles().Get(ctx, bundleID)
+		if getErr != nil {
+			if errors.Is(getErr, store.ErrNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("load bundle %s for artifact trust: %w", bundleID, getErr)
+		}
+		digest := bundle.DigestValue
+		if bundle.DigestAlg != "" {
+			digest = bundle.DigestAlg + ":" + bundle.DigestValue
+		}
+		record, verErr := s.store.Verifications().GetLatestVerdictByDigestAndPolicy(ctx, digest, policy)
+		if verErr != nil {
+			if errors.Is(verErr, store.ErrNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("load bundle verification: %w", verErr)
+		}
+		if record != nil && record.Status == store.VerificationTrusted {
+			return record, nil
+		}
+		// Remember an existing-but-untrusted record so the caller's status check reports
+		// the refusal instead of an empty result.
+		if untrusted == nil {
+			untrusted = record
+		}
+	}
+	return untrusted, nil
+}
+
 func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID string) (*store.CandidateArtifact, error) {
 	artifact, err := s.store.CandidateArtifacts().Get(ctx, strings.TrimSpace(artifactID))
 	if errors.Is(err, store.ErrNotFound) {
@@ -792,13 +862,19 @@ func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID strin
 			"candidate artifact is not validated", true,
 		)
 	}
-	policy := trustPolicyVersion(s.targetEnv)
-	verification, err := s.store.Verifications().GetByDigestAndPolicy(ctx, artifact.Digest, policy)
-	if err != nil || verification.Status != store.VerificationTrusted {
+	// The policy version must come from the same source the verifier writes records with:
+	// it renders the live meta version (TASK-220). It used to be the hard-coded "v1", which
+	// no writer ever stored, so every lookup missed and the gate refused every change.
+	meta, err := s.store.TrustRoots().GetPolicy(ctx, s.targetEnv)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("load trust policy metadata: %w", err))
+	}
+	policy := trust.PolicyVersion(meta.Version)
+	verification, err := s.trustedVerificationForArtifact(ctx, artifact, policy)
+	if err != nil || verification == nil || verification.Status != store.VerificationTrusted {
 		return nil, emergencyError(connect.CodeFailedPrecondition, "artifact_not_trusted", "candidate artifact is not trusted")
 	}
-	meta, err := s.store.TrustRoots().GetPolicy(ctx, s.targetEnv)
-	if err != nil || verification.RevocationEpoch < meta.RevocationEpoch {
+	if verification.RevocationEpoch < meta.RevocationEpoch {
 		return nil, emergencyError(connect.CodeFailedPrecondition, "artifact_not_trusted", "candidate artifact verification is revoked")
 	}
 	if strings.Contains(artifact.Ref, "@sha256:") {
@@ -807,8 +883,6 @@ func (s *Service) resolveEmergencyArtifact(ctx context.Context, artifactID strin
 	artifact.Ref = strings.TrimSuffix(artifact.Ref, ":") + "@" + artifact.Digest
 	return artifact, nil
 }
-
-func trustPolicyVersion(_ string) string { return "v1" }
 
 func emergencyPromotionPathsForRef(definition *store.ReleaseDefinition, workload parsedWorkloadRef, container, field string) []string {
 	paths := make([]string, 0, 1)

@@ -41,6 +41,20 @@ func NewEd25519Verifier(st store.VerificationStore, resolver RootResolver, timeo
 }
 
 // Verify checks a base64-encoded Ed25519 signature over the canonical bundle digest.
+// PolicyVersion renders a trust policy meta version the way verification records store it.
+//
+// Both sides of a verification lookup MUST use this function: the writer persists the record
+// under this string and every reader queries by it. They drifted once -- the emergency gate
+// asked for a hard-coded "v1" while records were written as "1", so a correctly signed
+// bundle could never be found (TASK-220) -- which is why the rendering lives here instead of
+// being spelled out at each call site.
+func PolicyVersion(metaVersion int64) string {
+	if metaVersion <= 0 {
+		return "1"
+	}
+	return strconv.FormatInt(metaVersion, 10)
+}
+
 func (v *Ed25519Verifier) Verify(ctx context.Context, in Input) (*Output, error) {
 	if v.resolver == nil {
 		return unavailableOutput("verification_unavailable: live trust root resolver is not configured"), nil
@@ -54,10 +68,7 @@ func (v *Ed25519Verifier) Verify(ctx context.Context, in Input) (*Output, error)
 		v.logResolverFailure("get trust policy metadata", in.Environment, err)
 		return unavailableOutput("verification_unavailable: cannot resolve trust policy metadata"), nil
 	}
-	policyVersion := strconv.FormatInt(meta.Version, 10)
-	if meta.Version <= 0 {
-		policyVersion = "1"
-	}
+	policyVersion := PolicyVersion(meta.Version)
 	if cached := v.cachedRecord(verifyCtx, in, policyVersion, meta.RevocationEpoch); cached != nil {
 		return outputFromRecord(cached), nil
 	}
