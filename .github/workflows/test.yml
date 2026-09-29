@@ -662,3 +662,27 @@ jobs:
       # web surface has. Its inputs are source only, so it is safe in CI.
       - name: Type-check and build
         run: npm run build
+
+  # TASK-224: the store interfaces are where "the reader expects X while the writer produces
+  # Y" defects live (TASK-218 had no writer at all, TASK-222's writer hid behind a
+  # unit-of-work helper, TASK-223's reader joined a table nothing populated). This job loads
+  # the packages with go/packages and fails when an interface method has no attributable call
+  # site -- nothing selects it through its interface, and no type explicitly bound to that
+  # interface calls it (concrete method expressions are not attributed; see the package doc's
+  # known limits) -- and is not registered in
+  # storesurface.exceptions.yaml with a reason and a review date. The analysis is type-based:
+  # a comment, a string literal or a same-named method on another interface cannot make a
+  # dead method look alive.
+  store-surface:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
+
+      - name: Check the store interface surface
+        run: make check-store-surface

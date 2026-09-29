@@ -1,0 +1,283 @@
+# Store interface methods that are not called through their interface nor on a concrete
+# implementer (TASK-224).
+#
+# The list is produced by `go run ./cmd/storesurface/`, which loads the packages with
+# go/packages and matches calls against the interfaces' *types.Func objects: comments,
+# string literals and same-named methods on unrelated types do not count, and a method a
+# concrete type EXPLICITLY BOUND to the interface calls (anywhere in the module, not just the
+# store package) is alive. Every entry needs a reason and a
+# review date; the gate fails when a dead method is missing here, when an entry no longer
+# matches a dead method, when a reason is missing, or when review_by has passed.
+#
+# The first registry (TASK-224) listed 36 methods because it counted bare method names and
+# same-named methods masked each other; the type-based analysis found 67. That difference is
+# the finding, not a regression.
+exceptions:
+  - interface: AuditEventStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: AuditEventStore
+    method: DeleteByIDs
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: AuditEventStore
+    method: GetByID
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: AuditEventStore
+    method: ListByResource
+    reason: "[unwired-read] 按资源读取审计事件无调用者（查询走 List/Query）"
+    review_by: "2026-12-31"
+  - interface: AuditEventStore
+    method: ListOlderThan
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: BindingStore
+    method: ListByCustomer
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: BindingStore
+    method: Update
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: BundleStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: BundleStore
+    method: DeleteBefore
+    reason: "[unwired-write] 批量删除无调用者（GC 另有专用方法）"
+    review_by: "2026-12-31"
+  - interface: CandidateArtifactStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: CandidateArtifactStore
+    method: LinkCandidateArtifacts
+    reason: "[superseded] 候选制品与 bundle 关联走 LinkToBundleTx / LinkToBundle，此方法无调用者"
+    review_by: "2026-12-31"
+  - interface: CandidateArtifactStore
+    method: LinkToBundle
+    reason: "[superseded-by-Tx] 生产链路只用事务版 LinkToBundleTx，非事务版仅测试使用"
+    review_by: "2026-12-31"
+  - interface: ConvergenceTaskStore
+    method: BindRevision
+    reason: "[superseded] values_approval 的 store SQL 直接执行 revision 绑定，该方法无调用者"
+    review_by: "2026-12-31"
+  - interface: ConvergenceTaskStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: ConvergenceTaskStore
+    method: HasPendingPromotionForDefinition
+    reason: "[unwired-read] 待收敛判定当前用 ListByDefinition(..., pending_promotion)，此便捷读取无调用者"
+    review_by: "2026-12-31"
+  - interface: ConvergenceTaskStore
+    method: MarkConverged
+    reason: "[superseded] values_approval 的 store SQL 直接执行收敛标记，该方法无调用者"
+    review_by: "2026-12-31"
+  - interface: CustomerStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: CustomerStore
+    method: GetBySlug
+    reason: "[unwired-read] customer slug 读取无调用者（按 id 读取是当前路径）"
+    review_by: "2026-12-31"
+  - interface: DefinitionEventStore
+    method: List
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: DefinitionStore
+    method: SetCurrentBundle
+    reason: "[superseded] current_bundle_id 只由操作创建 UoW 写入（TASK-215 已记录），该方法无生产调用者"
+    review_by: "2026-12-31"
+  - interface: EmergencyIntentStore
+    method: GetActiveLocksForDefinition
+    reason: "[unwired-read] 按定义读取活跃锁无调用者（紧急锁走 emergency 查询）"
+    review_by: "2026-12-31"
+  - interface: EmergencyIntentStore
+    method: ListPendingDeliveryByDefinition
+    reason: "[unwired-read] 按定义读取待投递无调用者"
+    review_by: "2026-12-31"
+  - interface: EmergencyIntentStore
+    method: ResolveEmergencyEffect
+    reason: "[unwired-write] 紧急效果解析在记忆路径内完成，此方法无调用者"
+    review_by: "2026-12-31"
+  - interface: EmergencyIntentStore
+    method: SaveRevertReconciliation
+    reason: "[unwired-write] 回退对账结果保存无调用者"
+    review_by: "2026-12-31"
+  - interface: EnrollmentTokenStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: EnrollmentTokenStore
+    method: ListByCluster
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: EnrollmentTokenStore
+    method: ListByCustomer
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: EnrollmentTokenStore
+    method: MarkUsed
+    reason: "[superseded] 令牌消费实际走 OperatorManagement().EnrollOperator（operator/service.go），该方法无调用者"
+    review_by: "2026-12-31"
+  - interface: EnrollmentTokenStore
+    method: Revoke
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: IdempotencyStore
+    method: CreateOrGet
+    reason: "[unwired-write] idempotency 记录写入由提交 UoW 内部完成，方法本身无调用者"
+    review_by: "2026-12-31"
+  - interface: IdempotencyStore
+    method: DeleteExpired
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: IdempotencyStore
+    method: GetExpired
+    reason: "[unwired-read] 过期记录清理读取无调用者（GC 走 DeleteOrphanBefore/DeleteBefore）"
+    review_by: "2026-12-31"
+  - interface: InventorySyncRequestStore
+    method: Get
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: InventorySyncRequestStore
+    method: GetActiveByCluster
+    reason: "[unwired-read] 按集群读取活跃记录无调用者"
+    review_by: "2026-12-31"
+  - interface: NotificationStore
+    method: GetPending
+    reason: "[superseded] operator 派发使用 GetNextPending / GetInflightForOperator / GetDeliveredNotAcked，该方法无调用者"
+    review_by: "2026-12-31"
+  - interface: OperationEventStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OperationExecutionResultStore
+    method: Get
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OperationStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OperationStore
+    method: CreateIfAvailable
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OperationStore
+    method: GetByIdempotencyKey
+    reason: "[unwired-read] 幂等键读取无调用者"
+    review_by: "2026-12-31"
+  - interface: OperatorStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OperatorStore
+    method: ListByCustomer
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OperatorStore
+    method: Update
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OutboxStore
+    method: Get
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: OutboxStore
+    method: GetPendingForOperator
+    reason: "[superseded] 同 GetPending：派发路径改名后的遗留方法"
+    review_by: "2026-12-31"
+  - interface: OutboxStore
+    method: UpdateSequence
+    reason: "[superseded] outbox 序号推进走 GetNextSequence，该方法无调用者"
+    review_by: "2026-12-31"
+  - interface: RolloutTrackingStore
+    method: Get
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: SessionStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: ArtifactEvents
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: DefinitionEvents
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: ExecutionResults
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: Idempotency
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: OperationEvents
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: RolloutTrackings
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: ScanResults
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: ValuesApprovalEvidence
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: Store
+    method: VulnerabilityExceptions
+    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    review_by: "2026-12-31"
+  - interface: TrustRootStore
+    method: BumpRevocationEpoch
+    reason: "[superseded] revocation epoch 推进走 TrustRoots().TransitionLiveRoot(..., bumpRevocation=true)（trust/service.go），该方法无调用者"
+    review_by: "2026-12-31"
+  - interface: ValuesApprovalReader
+    method: ListAuditOutbox
+    reason: "[unwired-read] 审计 outbox 读取无调用者"
+    review_by: "2026-12-31"
+  - interface: ValuesApprovalReader
+    method: ListDecisions
+    reason: "[unwired-read] 决策记录读取无调用者"
+    review_by: "2026-12-31"
+  - interface: ValuesApprovalReader
+    method: ListNotificationOutbox
+    reason: "[unwired-read] 通知 outbox 读取无调用者（投递 worker 走 ClaimPending 一类方法）"
+    review_by: "2026-12-31"
+  - interface: ValuesStore
+    method: Create
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: ValuesStore
+    method: GetByDigest
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: ValuesStore
+    method: GetLatestApproved
+    reason: "[unwired-read] 最新已批准 revision 读取无调用者"
+    review_by: "2026-12-31"
+  - interface: ValuesStore
+    method: GetNextRevisionNumber
+    reason: "[unwired-read] revision 序号读取无调用者"
+    review_by: "2026-12-31"
+  - interface: ValuesStore
+    method: List
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"
+  - interface: VulnerabilityExceptionStore
+    method: Get
+    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    review_by: "2026-12-31"

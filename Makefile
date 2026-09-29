@@ -563,6 +563,12 @@ check-error-codes: ## Check that every error code an AC asserts is emittable (TA
 check-migrations: ## Static gate: migration numbering is contiguous and every version has up+down (REQ-008 §8-19)
 	$(GO) test -race -count=1 -run TestMigrationVersionsAreContinuousAndPaired ./migrations/
 
+.PHONY: check-store-surface
+check-store-surface: ## Gate the store interface surface: every method needs a caller or a registered exception (TASK-224)
+	@mkdir -p bin
+	@$(GO) build -buildvcs=false -o bin/storesurface ./cmd/storesurface/
+	@./bin/storesurface -root . -exceptions storesurface.exceptions.yaml
+
 .PHONY: check-schema-parity
 check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL migrations, table+column+type diff (D-ε/ε-1)
 	$(GO) run ./cmd/schemaparity/ -migrations migrations -exceptions schema-parity.exceptions.yaml
@@ -643,7 +649,7 @@ test-operator-image-sdk-only: ## Run operator image SDK-only gate (REQ-061)
 			--policy imagecheck.operator.yaml \
 			--dockerfile deploy/docker/Dockerfile.operator
 .PHONY: quality
-quality: sdk-check test-coverage lint check-reqs check-error-codes check-tasks check-schema-parity check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto web-check ## Full quality gate run (web-check needs Node; run 'make web-install' once)
+quality: sdk-check test-coverage lint check-reqs check-error-codes check-tasks check-schema-parity check-store-surface check-licenses check-docs check-config-keys check-migrations check-probes api-check lint-proto web-check ## Full quality gate run (web-check needs Node; run 'make web-install' once)
 
 .PHONY: quality-vault
 quality-vault: ## `make quality` that REQUIRES the vault REQ documents (fails when REQS_DIR is unset)

@@ -2393,7 +2393,6 @@ type NotificationStore interface {
 type VerificationStore interface {
 	Create(ctx context.Context, rec *VerificationRecord) error
 	GetByDigestPolicyAndSignature(ctx context.Context, artifactDigest, policyVersion, signatureIdentity string) (*VerificationRecord, error)
-	GetByDigestAndPolicy(ctx context.Context, artifactDigest, policyVersion string) (*VerificationRecord, error)
 	// GetLatestVerdictByDigestAndPolicy returns the most recent record that actually states
 	// something about the artifact's trust: `trusted` or `rejected`. Every other status
 	// records that NO verdict was reached (nothing was attached to verify, or the policy

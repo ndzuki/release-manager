@@ -84,7 +84,7 @@ func (s *stubStore) Create(_ context.Context, rec *store.VerificationRecord) err
 	return nil
 }
 
-func (s *stubStore) GetByDigestAndPolicy(_ context.Context, artifactDigest, policyVersion string) (*store.VerificationRecord, error) {
+func (s *stubStore) byDigestAndPolicy(_ context.Context, artifactDigest, policyVersion string) (*store.VerificationRecord, error) {
 	key := artifactDigest + ":" + policyVersion
 	rec, ok := s.records[key]
 	if !ok {
@@ -99,7 +99,7 @@ func (s *stubStore) GetByDigestPolicyAndSignature(
 	policyVersion string,
 	signatureIdentity string,
 ) (*store.VerificationRecord, error) {
-	rec, err := s.GetByDigestAndPolicy(ctx, artifactDigest, policyVersion)
+	rec, err := s.byDigestAndPolicy(ctx, artifactDigest, policyVersion)
 	if err != nil || rec.SignatureIdentity != signatureIdentity {
 		return nil, store.ErrNotFound
 	}
@@ -114,7 +114,7 @@ func (s *stubStore) GetLatestVerdictByDigestAndPolicy(
 	artifactDigest string,
 	policyVersion string,
 ) (*store.VerificationRecord, error) {
-	rec, err := s.GetByDigestAndPolicy(ctx, artifactDigest, policyVersion)
+	rec, err := s.byDigestAndPolicy(ctx, artifactDigest, policyVersion)
 	if err != nil {
 		return nil, err
 	}
