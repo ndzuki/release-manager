@@ -44,8 +44,36 @@ in-memory storage + `kubefake`，**不需要集群**：
 
 ### 前端测试
 
-`web/package.json` 提供 `test`（`vitest run`）、`test:e2e`（`playwright test`）、`lint`（`eslint .`）；
-Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行。
+`web/package.json` 提供 `test`（`vitest run`）、`test:e2e`（`playwright test`）、`lint`（`eslint .`）
+与 `build`（`vue-tsc -b && vite build`）。Makefile 转发其中三关（TASK-175，见命令矩阵的
+`make web-install` / `make web-check`）；`make web-check` 已并入 `make quality`，所以本地的
+「全量质量门禁」覆盖前端三关。`test:e2e` 需要完整 dev 栈，仍由 CI 的
+`e2e`/`e2e-prerequisite` job 承担（PR 上不跑，push 与 `workflow_dispatch` 跑）。
+
+### 跨两侧契约测试（「读侧要求 X / 写侧生产 Y」）
+
+**规则**：任何**读侧要求某字段非空或处于特定状态**的查询（`WHERE x IS NOT NULL`、
+`status = 'pending'`、按 digest/id 精确匹配等），必须有一条测试**从生产写入路径触发**，
+再断言读侧能看到它（或断言对应的门禁真的会触发）。
+
+**为什么**：两侧各自都有测试时 CI 全绿，而功能仍可能不可用 —— 读侧用例常用手写的夹具行
+（直接 `store.X().Create`），写侧的用例只验证自己写的那部分，于是「没有写入者」或
+「写入键与查询键不一致」都能长期不被发现。2026-09-29 一次系统性排查
+（TASK-221）分四遍扫描（读侧谓词 21 项、扩展表 5 张、store 接口 225 个方法、契约面 105 个 rpc）
+共查出 **4 处**这类缺陷：
+
+| 缺陷 | 读侧要求 | 写侧实际 | 方向 |
+| --- | --- | --- | --- |
+| TASK-218 | `candidate_artifacts.validated_at IS NOT NULL` | **修复前**生产代码无人写入（现已由 `MarkValidatedForBundleTx` + validation worker 补齐） | fail-closed（功能不可用） |
+| TASK-220 | `verifications` 按**镜像** digest 查 `Trusted` | 唯一写入者按 **bundle** digest 写 | fail-closed（功能不可用） |
+| TASK-222 | `convergence_tasks` 的 `pending_promotion` | 生产代码无人创建 | **fail-open（门禁静默失效）** |
+| TASK-223 | `bundle_aliases` 的 `GetByAlias` 回落 | 全仓（含迁移）无任何 INSERT | 死路（legacy id/digest 永远 404） |
+
+**落地方式**（写这类测试时的最小形态）：
+1. 用**生产写入路径**造数据（如 `validation_worker` 的 outbox 周期、bundle 提交的 UoW），
+   而不是直接 `Create` 夹具行；确实只能直接构造时，在测试名/注释里写明「这是夹具捷径」；
+2. 断言**读侧**（门禁函数、列表接口、RPC 响应）能看到或拒绝；
+3. 至少一条**负控制**：不该写入/不该触发的情况必须不写入、不触发（TASK-222 的 fail-open 正是缺这类断言）。
 
 ## 命令矩阵
 
@@ -64,13 +92,15 @@ Makefile 内没有对应的转发 target，需在 `web/` 目录内直接运行�
 | `make check-schema-parity` | 双引擎 schema parity 门禁（D-ε/ε-1，兑现 `AGENTS.md` 硬约束 4）：生成两侧「表 + 列 + 类型」规范化快照并 diff。**SQLite 侧**执行 `internal/store/sqlite` 的真实迁移路径到**进程内 in-memory 库**再读 `pragma_table_info`（不落盘、不联网、只读 schema 元数据；比解析 `db.go` 文本更忠实，能看到增量 `ALTER`）；**PG 侧**只解析 `migrations/*.up.sql`，**不连库**（覆盖 `CREATE TABLE`、`ALTER TABLE ADD/DROP/RENAME COLUMN`、`RENAME TO`、`DROP TABLE`）。类型按「SQLite 存储类 vs PG 类型应有的存储类」归一化（`TIMESTAMPTZ`/`TEXT`→text、`BIGINT`/`BOOLEAN`→integer、`BYTEA`→blob、`JSONB`→text 或 blob），因此不会因两引擎类型词汇不同而误报。**同名表**的列缺失/类型不一致 → 失败；**仅存在于一侧的表** → 只报告不失败（两引擎表集合本就不同）。负控制：`TestDiffNegativeControlTypeMutation`（改一个列类型即变红）+ 测试内的变异用例。实现：`internal/quality/schemaparity` + `cmd/schemaparity` | 无 | 本地；`make quality` 已含（CI 未接入） |
 | `make check-tasks` | 台账↔git 一致性门禁（D-η/η-1，兑现 `PROJECT-CONVENTIONS.md` 的「应由门禁校验」承诺）：vault `Tasks/*.md` 中 `status: done|closed` 的卡片必须 `merge_status: merged`、`pr_url` 非空，且该 PR 在 git 中**真实合并**。证据两路：`gh pr list --json number,state,mergeCommit` 的 mergeCommit OID 必须存在于本地 `git log`；无 `gh` 时降级为本地 `git log` 的 `Merge pull request #N from` 匹配。拿不到证据 → `UNVERIFIED` 且**失败**，`ALLOW_UNVERIFIED_TASKS=1` 才降级为报告（**不会**放过台账矛盾）。缺 TASK 文档时与 `check-reqs` 同策略失败（`ALLOW_NO_REQS=1` 显式跳过）；`TASKS_DIR` 指向 vault `Tasks/`，未设时从 `REQS_DIR` 的兄弟目录推导。实现：`cmd/taskcheck` + `internal/quality/taskcheck`；负控制 `TestCheckNegativeControlDoneButUnmerged`（`done` + `unmerged` 必须报违规） | 无（git；`gh` 可选） | 本地；`make quality` 已含（CI 未接入） |
 | 审计写入结构门禁 | `go test ./internal/store/` 的 `TestAuditWritesStayOnSanctionedPaths`：除登记的 6 个 store 文件外，任何 `INSERT [OR IGNORE] INTO audit_events` 都失败；事务写入者必须调用 `store.SanitizeAuditEvent` 兜底脱敏（负控制在同文件） | 无 | CI `test` job 的全量 `go test` |
+| `make web-install` | 按 `web/package-lock.json` 安装前端依赖（`npm ci`）：锁文件即契约，避免 `node_modules` 漂移 | Node（`web/package.json` 的 `engines`: ^20 \|\| ^22 \|\| >=24）+ 网络 | 本地；CI 的 `web` job 用同一 `npm ci`（该 job 目前只在未提交的工作树，见下行与 TASK-175） |
+| `make web-check` | 前端三关：`npm run lint`（eslint）+ `npm test`（vitest）+ `npm run build`（`vue-tsc -b && vite build`）。缺 `web/node_modules` 时**明确报错并指向 `make web-install`**，不以其它失败形式掩盖 | 同上（需先 `make web-install`） | 本地 + `make quality` 已含；CI 的 `web` job 跑等价的三步（15 分钟超时）——**该 job 目前只在未提交的工作树里**（git HEAD 无 `setup-node`），远端 PR 要等它提交后才真正跑前端门禁，见 TASK-175 |
 | `make check-licenses` | 校验所有**会进入产物**的依赖许可证（Go 默认构建闭包 + 前端生产依赖）：拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic 以及无许可证文件的依赖；同时校验根目录 `NOTICE` 未过期 | `go`（模块缓存）；前端部分需 `jq`，缺失时**显式报「未检查」**而非静默通过 | 本地 + CI `license-check` job（同一脚本、同一策略、同一例外文件 `license-exceptions.tsv`） |
 | `make check-docs` | 文档事实门禁：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须与当前代码一致；无匹配即失败，陈述"某物不存在"的行用同行 `<!-- check-docs:ignore 理由 -->` 豁免 | 无 | 本地（CI 未接入该 target）；`make quality` 已含 |
 | `make check-config-keys` | 配置键真实性门禁（REQ-094/TASK-094）：双向——①每个服务配置文件（`configs/*.dev.yaml`、`deploy/kustomize/**/configs/*.yaml`）的叶子键必须解析到 `ServiceConfig` 的 mapstructure 路径或 orchestrator 自有结构体 raw 段（`gc`/`emergency`/`trust`）；②`ServiceConfig` 每个叶子字段必须在 `cmd/`+`internal/` 非测试代码中存在选择器引用（allowlist 需附理由）。`TestFakeKeyFailsTheGate` 为负控制。实现：`internal/config/configkeys_gate_test.go` | 无（Go 测试） | 本地；`make quality` 已含（CI 未接入） |
 | `make check-probes` | kustomize 探针真实性门禁（REQ-099/TASK-099）：`deploy/kustomize` 下每个 Deployment 容器必须有 `startupProbe`、每个探针显式 `timeoutSeconds`、readiness/liveness 路径分离（`/readyz` vs `/health`；配对例外须登记）。`TestProbeGateRejectsHistoricalShape` 用 REQ-099 前的真实形态作负控制。实现：`deploy/dev/probes_gate_test.go` | 无（Go 测试） | 本地；`make quality` 已含（CI 未接入） |
 | `make lint-proto` | `buf lint`（`buf.yaml` 的 `STANDARD` 减去 3 条命名规则）。**注意**：`STANDARD` 不含 `COMMENT_*`，因此它通过**不代表** proto 注释完整；注释覆盖靠人工与 `api/proto` 变更评审保证，`buf.yaml` 内记录了不开 `COMMENT_*` 的理由。当前基线干净（`ReleaseMode` 的两个历史枚举值用同行 `buf:lint:ignore` 定点豁免并写明原因） | `buf`（缺失时 `make` 会 `go install`） | 本地（`make quality` 已含；CI 未接入该 target） |
 | `make pr-merge-check PR=<n>` | 合并前门禁（**helper，不是 `make quality` 成员**）：`gh pr checks` 中任何 check 既非 `pass` 也非 `skipping` 即**拒绝合并**并列出阻塞项。为什么机械化：项目里"合并前必查 `gh pr checks`"被写下过两次、也被违反过两次（2026-09-18；2026-09-27 合并 #198 时误读了输出）—— 只写在散文里的规则不成立 | `gh`（需网络与已登录） | 本地；合并前手动运行 |
-| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-error-codes` + `check-tasks` + `check-schema-parity` + `check-licenses` + `check-docs` + `check-config-keys` + `check-migrations` + `check-probes` + `lint-proto` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
+| `make quality` | `sdk-check` + `test-coverage` + `lint` + `check-reqs` + `check-error-codes` + `check-tasks` + `check-schema-parity` + `check-licenses` + `check-docs` + `check-config-keys` + `check-migrations` + `check-probes` + `lint-proto` + `web-check` 的聚合门禁 | 同各子项 | 本地；CI 不直接调用，而是分 job 跑等价命令 |
 | `make test-install-sdk` / `test-upgrade-sdk` / `test-rollout-watch` | Helm Install / Upgrade / Rollout watch SDK 链路 | Docker + kind（rollout 另有 120 秒时长门禁） | 本地 + CI 对应 job（各 15 分钟超时） |
 | `make test-rollback-sdk` | Rollback SDK 链路 | 无（in-memory storage + `kubefake`） | 本地（CI 未接入） |
 | `make test-operator-image-sdk-only` | operator 镜像合规（内部先调 `make docker-build-operator` 产出并 `docker save` 镜像 tarball） | Docker | 本地 + CI `operator-image-sdk-only` job |
@@ -290,5 +320,5 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 > `test/e2e/prerequisite/smoke.sh`、`test/integration/`、
 > `internal/store/postgres/`、`web/package.json`；
 > `Projects/001-release-manager/Requirements/REQ-037`、`REQ-061`~`REQ-064`、`REQ-066`；
-> `Design/contracts/e2e-runner-surface.md`、`Design/contracts/e2e-environment-config.md`；
-> `Design/decisions/D-021`、`D-032`、`D-033`、`D-034`。
+> `Notes/contracts/e2e-runner-surface.md`、`Notes/contracts/e2e-environment-config.md`；
+> `Notes/decisions/D-021`、`D-032`、`D-033`、`D-034`。
