@@ -429,3 +429,38 @@ func TestGetBundleAllowsABundleAnOperationUsed(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 }
+
+// TASK-223: bundle_aliases has no writer anywhere -- no producer, no backfill migration, and
+// the RPC documents only the canonical identifier (unknown id => NOT_FOUND). GetBundle used
+// to fall back to GetByAlias, which could therefore never resolve anything while making an
+// unknown id look like a supported-but-missing alias. Pin the honest behaviour: even a row
+// an operator inserted by hand does not make an unknown id resolve.
+func TestGetBundleDoesNotResolveAliases(t *testing.T) {
+	st := bundleServiceStore(t)
+	svc := NewBundleService(st, nil, nil)
+
+	pgStore, ok := st.(*postgresstore.Store)
+	require.True(t, ok, "the alias table only exists on PostgreSQL")
+
+	bundle := seedQueryableBundle(t, st, store.BundleValidated, "app")
+	def := bundleTenantFixture(t, st, "alias")
+	// Point the alias at a bundle this actor CAN read (it is the definition's current
+	// bundle). Nothing else would stop a restored fallback from answering 200, so a
+	// NOT_FOUND here proves the alias table is not consulted at all.
+	setCurrentBundle(t, st, def.ID, bundle.ID)
+	require.NoError(t, pgStore.GORM().Exec(`
+		INSERT INTO bundle_aliases (alias, canonical_bundle_id, alias_type, created_at)
+		VALUES (?, ?, 'legacy_id', NOW())
+	`, "legacy-bundle-1", bundle.ID).Error)
+
+	actor := authctx.WithActor(context.Background(), authctx.Actor{
+		UserID: "user-alias", OrganizationID: "org-alias", Roles: []string{string(store.RoleReleaseAdmin)},
+	})
+	_, err := svc.GetBundle(actor, connect.NewRequest(&orchestratorv1.GetBundleRequest{
+		BundleId: "legacy-bundle-1", ReleaseDefinitionId: def.ID,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+	// bundleError carries the reason inside the message rather than in X-Reason-Code.
+	assert.Contains(t, err.Error(), "bundle_not_found")
+}

@@ -95,13 +95,6 @@ func (s *bundleStore) GetByDigest(ctx context.Context, algorithm, value string) 
 	return getBundle(ctx, s.gorm.gorm, `WHERE b.digest_alg = ? AND b.digest_value = ?`, algorithm, value)
 }
 
-func (s *bundleStore) GetByAlias(ctx context.Context, alias string) (*store.ReleaseBundle, error) {
-	return getBundle(ctx, s.gorm.gorm, `
-		JOIN bundle_aliases AS a ON a.canonical_bundle_id = b.id
-		WHERE a.alias = ?
-	`, alias)
-}
-
 func getBundle(ctx context.Context, db *gorm.DB, suffix string, args ...any) (*store.ReleaseBundle, error) {
 	row := db.WithContext(ctx).Raw(`
 		SELECT b.id, b.name, b.digest_alg, b.digest_value, b.status,
