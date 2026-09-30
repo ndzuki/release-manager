@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1185,4 +1186,52 @@ func TestOperationTransition_SetsPreflightTerminal(t *testing.T) {
 	assert.NotEmpty(t, *plTerminalAt)
 	assert.Equal(t, *opTerminalAt, *plTerminalAt,
 		"preflight_lifecycles.operation_terminal_at must match operations.terminal_at (same transaction timestamp)")
+}
+
+// TASK-229: BundlesForArtifact must find the association PRODUCTION creates. The
+// operation-creation unit of work links candidates through bundle_candidate_artifacts on both
+// engines, while this lookup used to read the legacy candidate_artifacts.bundle_id column --
+// which nothing that reads the association writes, so the emergency bundle trust fallback
+// silently found nothing on SQLite.
+func TestBundlesForArtifactReadsTheLinkTheUnitOfWorkWrites(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	def := &store.ReleaseDefinition{
+		ID: uuid.New().String(), Name: "link-def", CustomerID: "customer-link", ClusterID: "cluster-link",
+		ReleaseName: "link", ChartName: "nginx", Status: store.DefStatusActive,
+	}
+	require.NoError(t, st.Definitions().Create(ctx, def, nil))
+
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "link-bundle", DigestAlg: "sha256",
+		DigestValue: strings.Repeat("e", 64), Status: store.BundleValidated, CreatedAt: now,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	candidate := &store.CandidateArtifact{
+		ID: uuid.New().String(), ArtifactType: store.ArtifactImage, Digest: strings.Repeat("f", 64),
+		Ref: "registry.example.com/team/api@" + strings.Repeat("f", 64), CreatedAt: now, LastSeenAt: now,
+	}
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, candidate))
+
+	result, err := st.OperationCreationUnitOfWork()(ctx, store.OperationCreationRequest{
+		Operation: &store.Operation{
+			ID: uuid.New().String(), OperationType: store.OperationInstall, Status: store.StatusPending,
+			ReleaseDefinitionID: def.ID, IdempotencyKey: uuid.New().String(),
+			RequestHash: uuid.New().String(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+		},
+		CandidateArtifactDigests: []string{candidate.Digest},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.LinkedCandidateCount, "the unit of work links the candidate")
+
+	got, err := st.CandidateArtifacts().BundlesForArtifact(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{bundle.ID}, got, "the link the production writer made must be readable")
+
+	stored, err := st.CandidateArtifacts().Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Empty(t, stored.BundleID, "the legacy column is not the association")
 }

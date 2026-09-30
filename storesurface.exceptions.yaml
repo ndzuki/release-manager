@@ -55,7 +55,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: LinkToBundle
-    reason: "[superseded-by-Tx] 生产链路只用事务版 LinkToBundleTx，非事务版仅测试使用"
+    reason: "[test-utility] 非事务版链接 API：两引擎现在都写链接表 bundle_candidate_artifacts（与生产同一关联），生产链路用 UoW 的 linkCandidateArtifacts / PG 的 LinkToBundleTx；本方法仅测试 fixture 使用（TASK-229）"
     review_by: "2026-12-31"
   - interface: ConvergenceTaskStore
     method: BindRevision

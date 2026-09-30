@@ -48,7 +48,33 @@ func seedArtifactTrustedThroughBundle(
 		RootID: root.ID, KeyID: root.KeyID,
 	}))
 	if link {
-		require.NoError(t, st.CandidateArtifacts().LinkToBundle(t.Context(), artifactID, bundle.ID))
+		// Link through the PRODUCTION writer, not the test-utility API: in a deployment the
+		// operation-creation unit of work creates the association, and seeding with the utility
+		// instead is what let the SQLite read-side divergence stay invisible (TASK-229). A
+		// dedicated definition carries the link so the fixtures under test keep their own
+		// definition/bundle relationships.
+		def := &store.ReleaseDefinition{
+			ID: "def-link-" + artifactID, Name: "def-link-" + artifactID,
+			CustomerID: "cust-001", ClusterID: "cls-001", Namespace: "default",
+			ReleaseName: "def-link-" + artifactID, ChartName: "nginx", Status: store.DefStatusActive,
+		}
+		require.NoError(t, st.Definitions().Create(t.Context(), def, nil))
+		// store.Store does not expose the unit of work; the concrete engine store does, and it
+		// is the same one the service uses.
+		uowStore, ok := st.(interface {
+			OperationCreationUnitOfWork() store.OperationCreationUnitOfWork
+		})
+		require.True(t, ok, "the test store must expose the operation-creation unit of work")
+		result, err := uowStore.OperationCreationUnitOfWork()(t.Context(), store.OperationCreationRequest{
+			Operation: &store.Operation{
+				ID: uuid.NewString(), OperationType: store.OperationInstall, Status: store.StatusPending,
+				ReleaseDefinitionID: def.ID, IdempotencyKey: uuid.NewString(),
+				RequestHash: uuid.NewString(), BundleID: bundle.ID, CreatedAt: now, UpdatedAt: now,
+			},
+			CandidateArtifactDigests: []string{digest},
+		})
+		require.NoError(t, err)
+		require.Equal(t, int64(1), result.LinkedCandidateCount, "the unit of work must create the link")
 	}
 }
 

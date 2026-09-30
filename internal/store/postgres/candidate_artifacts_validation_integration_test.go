@@ -135,3 +135,31 @@ func TestBundlesForArtifactReadsTheLinkTable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, unknown)
 }
+
+// TASK-229: the mirror of the SQLite test through THIS engine's production writer. Submitting a
+// bundle with candidate artifacts links them through bundle_candidate_artifacts, and
+// BundlesForArtifact must return the bundle from that link alone -- no test-only linking call.
+func TestBundlesForArtifactReadsWhatTheSubmissionWriterLinks(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	digest := uuid.NewString()
+	candidate := &store.CandidateArtifact{
+		ID: uuid.NewString(), ArtifactType: store.ArtifactImage, Digest: digest,
+		Ref: "registry.example.com/team/api@" + digest, CreatedAt: now, LastSeenAt: now,
+	}
+	submitted, created, err := st.BundleSubmissions().Submit(ctx, store.BundleSubmission{
+		Bundle: &store.ReleaseBundle{
+			ID: uuid.NewString(), Name: "submit-linked-bundle", DigestAlg: "sha256",
+			DigestValue: uuid.NewString(), Status: store.BundleValidated, CreatedAt: now,
+		},
+		Candidates: []*store.CandidateArtifact{candidate},
+	})
+	require.NoError(t, err)
+	require.True(t, created)
+
+	bundleIDs, err := st.CandidateArtifacts().BundlesForArtifact(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{submitted.ID}, bundleIDs, "the link the submission writer made must be readable")
+}

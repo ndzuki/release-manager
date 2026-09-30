@@ -272,14 +272,23 @@ func (s *bundleStore) DeleteExpiredBefore(ctx context.Context, cutoff time.Time,
 			)`, cutoffStr, limit); err != nil {
 			return fmt.Errorf("clear expired bundle references: %w", err)
 		}
-		// Mark candidates whose only link disappears as orphaned (AC-069-05).
+		// Mark candidates whose only link disappears as orphaned (AC-069-05). The association
+		// lives in the link table on both engines; this used to read the legacy
+		// candidate_artifacts.bundle_id column, which the operation-creation unit of work never
+		// writes (TASK-229).
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE candidate_artifacts SET orphaned_at = COALESCE(orphaned_at, ?)
-			WHERE bundle_id IN (
+			WITH expired AS (
 				SELECT id FROM release_bundles
 				WHERE status = 'archived' AND archived_at < ?
 				ORDER BY archived_at, id LIMIT ?
-			)`, now, cutoffStr, limit); err != nil {
+			)
+			UPDATE candidate_artifacts SET orphaned_at = COALESCE(orphaned_at, ?)
+			WHERE id IN (SELECT bca.artifact_id FROM bundle_candidate_artifacts bca JOIN expired e ON e.id = bca.bundle_id)
+			  AND NOT EXISTS (
+				SELECT 1 FROM bundle_candidate_artifacts other
+				WHERE other.artifact_id = candidate_artifacts.id
+				  AND other.bundle_id NOT IN (SELECT id FROM expired)
+			  )`, cutoffStr, limit, now); err != nil {
 			return fmt.Errorf("mark expired candidate orphans: %w", err)
 		}
 		result, err := tx.ExecContext(ctx, `DELETE FROM release_bundles WHERE rowid IN (SELECT rowid FROM release_bundles WHERE status = 'archived' AND archived_at < ? ORDER BY archived_at, id LIMIT ?)`, cutoffStr, limit)
