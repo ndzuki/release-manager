@@ -332,51 +332,6 @@ func scanOperator(row interface{ Scan(...interface{}) error }) (*store.Operator,
 
 type sessionStore struct{ db *sql.DB }
 
-func (s *sessionStore) Create(ctx context.Context, sess *store.Session) error {
-	prepareSession(sess)
-	capabilities, err := json.Marshal(sess.Capabilities)
-	if err != nil {
-		return fmt.Errorf("marshal session capabilities: %w", err)
-	}
-
-	var statusReason, closedAt *string
-	if sess.StatusReason != nil {
-		v := string(*sess.StatusReason)
-		statusReason = &v
-	}
-	if sess.ClosedAt != nil {
-		v := sess.ClosedAt.UTC().Format(time.RFC3339Nano)
-		closedAt = &v
-	}
-
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO sessions (
-	id, operator_id, customer_id, cluster_id, instance_id, version, capabilities, active_config_version,
-	status, status_reason, started_at, last_heartbeat, expires_at, closed_at
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`,
-		sess.ID,
-		sess.OperatorID,
-		sess.CustomerID,
-		sess.ClusterID,
-		sess.InstanceID,
-		sess.Version,
-		string(capabilities),
-		sess.ActiveConfigVersion,
-		string(sess.Status),
-		statusReason,
-		sess.StartedAt.UTC().Format(time.RFC3339Nano),
-		sess.LastHeartbeat.UTC().Format(time.RFC3339Nano),
-		sess.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		closedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("insert session: %w", err)
-	}
-	return nil
-}
-
 func (s *sessionStore) Establish(ctx context.Context, sess *store.Session) error {
 	prepareSession(sess)
 	capabilities, err := json.Marshal(sess.Capabilities)

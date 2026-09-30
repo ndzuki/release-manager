@@ -284,7 +284,7 @@ func TestSessionLifecycle(t *testing.T) {
 		OperatorID: op.ID,
 		Status:     store.SessionOnline,
 	}
-	require.NoError(t, st.Sessions().Create(ctx, sess))
+	require.NoError(t, st.Sessions().Establish(ctx, sess))
 
 	// Heartbeat.
 	require.NoError(t, st.Sessions().Heartbeat(ctx, sess.ID))
@@ -1406,7 +1406,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 	customerID, clusterID := seedOperatorManagementScope(t, st)
 	old := &store.Operator{ID: "operator-old", Name: "operator-old", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-old"}
 	require.NoError(t, st.Operators().Create(ctx, old))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}))
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}))
 	token := &store.EnrollmentToken{
 		ID: "token-enroll", CustomerID: customerID, ClusterID: clusterID, OperatorName: "operator-new",
 		TokenHash: sha256Hex("plaintext-enroll"), ExpiresAt: time.Now().UTC().Add(time.Hour),
@@ -1454,7 +1454,7 @@ func TestOperatorStore_ListByClusterFilterNoSession(t *testing.T) {
 	otherCustomerID, otherClusterID := seedOperatorManagementScope(t, st)
 	withSession := &store.Operator{ID: "operator-with-session", Name: "with-session", CustomerID: otherCustomerID, ClusterID: otherClusterID, CertSerial: "serial-session"}
 	require.NoError(t, st.Operators().Create(ctx, withSession))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-filter", OperatorID: withSession.ID, CustomerID: otherCustomerID, ClusterID: otherClusterID, Status: store.SessionOffline}))
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-filter", OperatorID: withSession.ID, CustomerID: otherCustomerID, ClusterID: otherClusterID, Status: store.SessionOffline}))
 
 	page, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{NoSession: true}, 20, nil)
 	require.NoError(t, err)
@@ -1469,11 +1469,11 @@ func TestOperatorStore_ListByClusterFilterUsesLatestSession(t *testing.T) {
 	op := &store.Operator{ID: "operator-latest-session", Name: "latest-session", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-latest-session"}
 	require.NoError(t, st.Operators().Create(ctx, op))
 	startedAt := time.Now().UTC().Add(-time.Minute)
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "session-old-offline", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
 		Status: store.SessionOffline, StartedAt: startedAt, LastHeartbeat: startedAt,
 	}))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "session-new-online", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
 		Status: store.SessionOnline, StartedAt: startedAt.Add(time.Second), LastHeartbeat: startedAt.Add(time.Second),
 	}))
@@ -1526,7 +1526,7 @@ func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
 	op := &store.Operator{ID: "operator-revoke", Name: "operator-revoke", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-revoke"}
 	require.NoError(t, st.Operators().Create(ctx, op))
 	session := &store.Session{ID: "session-revoke", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}
-	require.NoError(t, st.Sessions().Create(ctx, session))
+	require.NoError(t, st.Sessions().Establish(ctx, session))
 
 	result, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "security incident", operatorAuditEvent("audit-revoke", op.ID, "operator.revoked"))
 	require.NoError(t, err)
@@ -2495,4 +2495,39 @@ func createCustomerViaManagement(ctx context.Context, st interface {
 		OrgID:     orgID,
 		BindingID: "binding-managed:" + customer.ID,
 	})
+}
+
+// Establish refuses a newcomer from a different instance while another session is online. The
+// reconnect case above cannot show this: both of its sessions share an instance id, so the guard
+// never fires. Review of TASK-226 B-4b found the deletion's evidence resting on a fixture whose
+// rows both had an EMPTY instance_id, which proves nothing about this boundary, so pin it here.
+func TestSessionEstablishRejectsADifferentInstance(t *testing.T) {
+	st := setupStore(t)
+	ctx := context.Background()
+
+	cust := &store.Customer{ID: uuid.New().String(), Name: "Session Conflict", Slug: "session-conflict"}
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
+	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
+	require.NoError(t, st.Clusters().Create(ctx, cl))
+	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "SESSION-CONFLICT"}
+	require.NoError(t, st.Operators().Create(ctx, op))
+
+	first := &store.Session{
+		ID: uuid.New().String(), OperatorID: op.ID, InstanceID: "instance-1", Version: "1.0.0",
+		Capabilities: map[string]string{"helm": "true"}, ActiveConfigVersion: "config-v1",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	require.NoError(t, st.Sessions().Establish(ctx, first))
+
+	second := &store.Session{
+		ID: uuid.New().String(), OperatorID: op.ID, InstanceID: "instance-2", Version: "1.0.0",
+		Capabilities: map[string]string{"helm": "true"}, ActiveConfigVersion: "config-v1",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	err := st.Sessions().Establish(ctx, second)
+	require.ErrorIs(t, err, store.ErrDuplicateKey, "a different live instance must not be replaced")
+
+	active, err := st.Sessions().GetActiveByOperator(ctx, op.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, active.ID, "the online session stays active")
 }

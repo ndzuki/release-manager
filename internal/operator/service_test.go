@@ -51,7 +51,7 @@ func newTestSvc(t *testing.T) store.Store {
 	op := &store.Operator{ID: "op-1", CustomerID: "cust-1", ClusterID: "clus-1", CertSerial: "cert-1", Status: store.OperatorActive, RegisteredAt: time.Now(), UpdatedAt: time.Now()}
 	require.NoError(t, st.Operators().Create(ctx, op))
 	sess := &store.Session{ID: "sess-1", OperatorID: "op-1", Status: store.SessionOnline, StartedAt: time.Now(), LastHeartbeat: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}
-	require.NoError(t, st.Sessions().Create(ctx, sess))
+	require.NoError(t, st.Sessions().Establish(ctx, sess))
 	return st
 }
 

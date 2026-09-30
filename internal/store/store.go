@@ -2252,7 +2252,6 @@ type OperatorStore interface {
 
 // SessionStore defines the persistence contract for operator sessions.
 type SessionStore interface {
-	Create(ctx context.Context, s *Session) error
 	Establish(ctx context.Context, s *Session) error
 	Get(ctx context.Context, id string) (*Session, error)
 	Heartbeat(ctx context.Context, id string) error

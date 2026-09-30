@@ -74,7 +74,7 @@ func newIdentityOrderingFixture(t *testing.T) *identityOrderingFixture {
 		CertSerial: "cert-088", Status: store.OperatorActive,
 		RegisteredAt: now, UpdatedAt: now,
 	}))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: identityOrderingSessionID, OperatorID: identityOrderingOperatorID,
 		Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now,
 		ExpiresAt: now.Add(time.Hour),

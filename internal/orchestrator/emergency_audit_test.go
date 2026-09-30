@@ -110,7 +110,7 @@ func seedEmergencyAuditIdentity(t *testing.T, st store.Store) {
 	_, err = st.Definitions().Update(t.Context(), definition, nil)
 	require.NoError(t, err)
 	require.NoError(t, st.Operators().Create(t.Context(), &store.Operator{ID: "op-audit", Name: "op-audit", CustomerID: "cust-001", ClusterID: "cls-audit"}))
-	require.NoError(t, st.Sessions().Create(t.Context(), &store.Session{
+	require.NoError(t, st.Sessions().Establish(t.Context(), &store.Session{
 		ID: uuid.NewString(), OperatorID: "op-audit", Status: store.SessionOnline,
 		StartedAt: time.Now().UTC(), LastHeartbeat: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour),
 	}))
