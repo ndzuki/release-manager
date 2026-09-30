@@ -10,26 +10,20 @@
 # method is missing here, when an entry no longer matches one (stale), when a reason is missing,
 # or when review_by has passed.
 #
-# This registry is NOT part of `make quality` and NOT wired into CI: whether that happens is a
-# project decision, not an implementation detail.
+# Wired into CI as the `dead-methods` job, deliberately absent from any required set: this repo
+# has no branch protection today, so nothing blocks a merge, and when protection is introduced the
+# job should stay non-required. It also stays out of `make quality` on purpose, so a local
+# `make quality` does not depend on it. The one known limit that can report a LIVE method (a run-time assembled
+# reflect.MethodByName name) is recorded in the package comment and docs/testing.md.
+#
+# History (comment-only: the machine-readable list is empty, so a reader of the data alone
+# cannot tell there ever were entries): the first two were `internal/auth`
+# storeAdapter.UpdatePolicy/UpdatePolicies.
+# They were unreachable because casbin only selects them through the UNGUARDED assertion
+# `e.adapter.(persist.UpdatableAdapter)` in enforcer_distributed.go, which this adapter cannot
+# satisfy (it lacks UpdateFilteredPolicies) AND because this repo builds a SyncedEnforcer rather
+# than a DistributedEnforcer. On the user's decision (2026-09-30) the two dead stubs were deleted
+# instead of completing the interface, so the entries are gone rather than renewed; the caveat for
+# anyone adopting a distributed enforcer lives next to the adapter in internal/auth/casbin.go.
 
-exceptions:
-  # TASK-234 finding (2026-09-30): both methods are unreachable today. Casbin selects them only
-  # through the runtime assertion `e.adapter.(persist.UpdatableAdapter)`
-  # (enforcer_distributed.go:144/174), but *storeAdapter does not implement that interface: it is
-  # missing UpdateFilteredPolicies, which persist.UpdatableAdapter requires
-  # (persist/update_adapter.go:18-26). The bodies only return "authorization policy writes use
-  # AuthorizationStore" anyway, so nothing calls them. Kept rather than deleted because whether
-  # this adapter should support Casbin's Auto-Save/update path (and therefore gain
-  # UpdateFilteredPolicies) is a product decision; TASK-234 reported it to the Lead instead of
-  # forcing a fix.
-  - package: github.com/ndzuki/release-manager/internal/auth
-    receiver: storeAdapter
-    method: UpdatePolicy
-    reason: "[dynamic-iface] 当前不可达：本仓构建的是 casbin.NewSyncedEnforcer（internal/auth/casbin.go:56），而唯一选择 persist.UpdatableAdapter 的代码在 DistributedEnforcer 路径（enforcer_distributed.go:144/174）⇒ 这两行根本不会执行。注意该断言**不带 comma-ok**：*storeAdapter 恰缺 UpdateFilteredPolicies（UpdatableAdapter = Adapter 5 方法 + UpdatePolicy + UpdatePolicies + UpdateFilteredPolicies）⇒ 若将来改用 DistributedEnforcer，走到该行会 panic 而非静默跳过。保留待裁决（补齐 UpdateFilteredPolicies 或删除这两个 stub，属产品决定）"
-    review_by: "2026-12-31"
-  - package: github.com/ndzuki/release-manager/internal/auth
-    receiver: storeAdapter
-    method: UpdatePolicies
-    reason: "[dynamic-iface] 同 UpdatePolicy：SyncedEnforcer 不触发 DistributedEnforcer 路径（enforcer_distributed.go:174 的无守卫断言不会执行），且 *storeAdapter 缺 UpdateFilteredPolicies ⇒ 当前不可达；方法体只返回 authorization policy writes use AuthorizationStore；保留待裁决"
-    review_by: "2026-12-31"
+exceptions: []

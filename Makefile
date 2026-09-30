@@ -570,7 +570,7 @@ check-store-surface: ## Gate the store interface surface: every method needs a c
 	@./bin/storesurface -root . -exceptions storesurface.exceptions.yaml
 
 .PHONY: check-dead-methods
-check-dead-methods: ## Gate exported methods on unexported types: each needs a reference, an interface member, or a registered exception (TASK-234; not in CI yet)
+check-dead-methods: ## Gate exported methods on unexported types: each needs a reference, an interface member, or a registered exception (TASK-234; CI job dead-methods is deliberately NOT required)
 	@mkdir -p bin
 	@$(GO) build -buildvcs=false -o bin/deadmethods ./cmd/deadmethods/
 	@./bin/deadmethods -root . -exceptions deadmethods.exceptions.yaml
