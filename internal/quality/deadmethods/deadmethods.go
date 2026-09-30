@@ -37,8 +37,9 @@
 //     ("X") cannot be resolved statically. An embedded receiver type, and a method name that
 //     appears in a MethodByName string literal, are treated as alive.
 //
-// Known limits, all in the SAFE direction (they hide a dead method instead of reporting a live
-// one) and listed here so nobody mistakes them for coverage:
+// Known limits and listed here so nobody mistakes them for coverage. Most hide a dead method
+// (the safe direction), but ONE of them can report a live method, and that one is called out
+// explicitly:
 //
 //   - structural interface membership means a type that happens to satisfy an unrelated
 //     interface is alive even when no code ever selects the method through it;
@@ -46,6 +47,11 @@
 //     cannot be reached from another module, but a method on an EXPORTED type can, which is why
 //     exported receiver types are out of scope on purpose;
 //   - a MethodByName literal naming a method of a different type keeps the name alive everywhere;
+//   - ONLY MethodByName string LITERALS are recognised. A name assembled at run time -- for
+//     example reflect.Value.MethodByName("By" + "Computed") -- is invisible here, so a method that
+//     really is reached that way is REPORTED. This is the one limit that points the unsafe way,
+//     and it is why the checker stays out of required CI until the call sites (or a name-prefix
+//     heuristic) have been reviewed. Review measured it on 2026-09-30 with a synthetic module.
 //   - test files are not loaded by default (Options.IncludeTests), so a method exercised only by
 //     tests is reported and has to be registered in deadmethods.exceptions.yaml with a reason --
 //     the same "test-utility" disposition check-store-surface already uses.
@@ -441,6 +447,9 @@ func collectUsedMethods(pkgs []*packages.Package) map[string]bool {
 				used[methodObjectKey(fn)] = true
 			}
 		}
+		// Defensive: method values (x.M) and method expressions (T.M) also record the object in
+		// Uses, which review confirmed when deleting this loop changed no test outcome. It stays
+		// because Selections is the documented home for those forms and costs nothing here.
 		for _, selection := range info.Selections {
 			if fn, ok := selection.Obj().(*types.Func); ok && isMethod(fn) {
 				used[methodObjectKey(fn)] = true
