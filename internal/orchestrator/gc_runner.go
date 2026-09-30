@@ -239,9 +239,9 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 			}
 		}
 	}
-	if deletedIdempotency > 0 {
-		s.logger.Info("gc_idempotency_purged", "phase", 6, "deleted_idempotency", deletedIdempotency)
-	}
+	// Logged even at zero so operators can tell "ran, nothing had expired" from "never ran" --
+	// the other phases report unconditionally in the completion summary.
+	s.logger.Info("gc_idempotency_purged", "phase", 6, "deleted_idempotency", deletedIdempotency)
 
 	resp.Errors = errs
 	return resp, errs, nil
