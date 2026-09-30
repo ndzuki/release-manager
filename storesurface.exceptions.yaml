@@ -19,7 +19,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: DeleteByIDs
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[local-narrow-iface] 同为 internal/audit/archiver.go 的本地窄接口调用（archiver.go:124，归档完成后删除已导出事件）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: GetByID
@@ -31,7 +31,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: ListOlderThan
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[local-narrow-iface] 生产经 internal/audit/archiver.go 的消费者本地窄接口 archiveEventStore 调用（archiver.go:71、:151）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
   - interface: BindingStore
     method: ListByCustomer
