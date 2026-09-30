@@ -1,0 +1,35 @@
+# Exported methods on unexported receiver types that nothing references and no interface claims
+# (TASK-234).
+#
+# The list is produced by `go run ./cmd/deadmethods/`, which loads the module with go/packages
+# and answers two questions with go/types: does the method object appear in TypesInfo.Uses or
+# TypesInfo.Selections anywhere in shipping code, and does any interface reachable from the
+# loaded package graph (standard library and third-party modules included) declare it for a type
+# that implements that interface. Comments, string literals and same-named methods on other types
+# do not count. Every entry needs a reason and a review date; the gate fails when an unreferenced
+# method is missing here, when an entry no longer matches one (stale), when a reason is missing,
+# or when review_by has passed.
+#
+# This registry is NOT part of `make quality` and NOT wired into CI: whether that happens is a
+# project decision, not an implementation detail.
+
+exceptions:
+  # TASK-234 finding (2026-09-30): both methods are unreachable today. Casbin selects them only
+  # through the runtime assertion `e.adapter.(persist.UpdatableAdapter)`
+  # (enforcer_distributed.go:144/174), but *storeAdapter does not implement that interface: it is
+  # missing UpdateFilteredPolicies, which persist.UpdatableAdapter requires
+  # (persist/update_adapter.go:18-26). The bodies only return "authorization policy writes use
+  # AuthorizationStore" anyway, so nothing calls them. Kept rather than deleted because whether
+  # this adapter should support Casbin's Auto-Save/update path (and therefore gain
+  # UpdateFilteredPolicies) is a product decision; TASK-234 reported it to the Lead instead of
+  # forcing a fix.
+  - package: github.com/ndzuki/release-manager/internal/auth
+    receiver: storeAdapter
+    method: UpdatePolicy
+    reason: "[dynamic-iface] casbin 只在运行时类型断言 persist.UpdatableAdapter 成立时才调用它，而 *storeAdapter 缺少 UpdatableAdapter 要求的 UpdateFilteredPolicies ⇒ 断言永不成立、当前不可达；保留待裁决（补齐 UpdateFilteredPolicies 或删除，属产品决定）"
+    review_by: "2026-12-31"
+  - package: github.com/ndzuki/release-manager/internal/auth
+    receiver: storeAdapter
+    method: UpdatePolicies
+    reason: "[dynamic-iface] 同上：persist.UpdatableAdapter（enforcer_distributed.go:174）因缺少 UpdateFilteredPolicies 而永不成立，方法体只返回 authorization policy writes use AuthorizationStore；保留待裁决"
+    review_by: "2026-12-31"

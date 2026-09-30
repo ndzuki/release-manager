@@ -100,6 +100,7 @@ in-memory storage + `kubefake`，**不需要集群**：
 | `make web-install` | 按 `web/package-lock.json` 安装前端依赖（`npm ci`）：锁文件即契约，避免 `node_modules` 漂移 | Node（`web/package.json` 的 `engines`: ^20 \|\| ^22 \|\| >=24）+ 网络 | 本地；CI 的 `web` job 用同一 `npm ci`（`.github/workflows/test.yml`，`pull_request` 触发） |
 | `make web-check` | 前端三关：`npm run lint`（eslint）+ `npm test`（vitest）+ `npm run build`（`vue-tsc -b && vite build`）。缺 `web/node_modules` 时**明确报错并指向 `make web-install`**，不以其它失败形式掩盖 <!-- check-docs:ignore web/node_modules npm 本地安装产物，gitignore 掉，干净检出中本就不存在 --> | 同上（需先 `make web-install`） | 本地 + `make quality` 已含；CI 的 `web` job 跑等价的三步（15 分钟超时，`pull_request` 触发） |
 | `make check-store-surface` | 门禁 `internal/store` 的**接口面**：每个声明的方法必须在**非测试代码里、通过它的接口（或被**显式绑定**到该接口的具体类型）被调用**，否则要登记到 `storesurface.exceptions.yaml`（含理由与复核日期）。判定用 **`go/types`**（`golang.org/x/tools/go/packages`）解析真实调用点：**注释/字符串不算**、**同名方法跨接口不互相掩盖**（绑定判定刻意不用结构的 `types.Implements`：方法集相同时它会互相掩盖，反例已固化为单测）、被**显式绑定**到该接口的具体类型上的调用算活（不限 store 包内）。这是 TASK-221 排查的机检化（旧版按裸方法名 grep，漏报了 31 个真死方法且一行注释即可绕过）。检查项：未登记的零调用方法、已失效的例外条目、缺理由、复核日期已过 | `go`（纯静态，无外部依赖） | 本地 + `make quality` 已含；CI `store-surface` job |
+| `make check-dead-methods` | 门禁**另一类盲区**：**未导出接收类型上的导出方法**。`check-store-surface` 只看接口方法，`golangci-lint` 的 `unused` 又**故意不报**这一形态（它保守假设该类型可能实现某个接口）⇒ 这类死代码两道门都看不见（TASK-226 手工删掉的 7 个正是如此，加回去两道门仍全绿）。判定用 **`go/types`** 回答三问：①**引用**——方法对象是否出现在 `TypesInfo.Uses`/`Selections`（覆盖调用、方法值、方法表达式；注释/字符串/同名方法不算）；②**接口成员**——加载图里**任一**接口（**含 stdlib 与第三方**：`database/sql.Result`、Casbin `persist.Adapter`、client-go `RESTClientGetter`、universe 的 `error`）是否以同名同签名声明它且接收者类型实现该接口；③**晋升与按名派发**——被内嵌（方法被提升）或名字出现在 `reflect` `MethodByName("X")` 字面量里的，视为存活。**②是核心防线**：变异实测把它关掉，本仓 691 个候选里 **671 个**被误报（生成 connect 客户端等接口实现），合成模块测试里 `sql.Result`/第三方风格接口/`error` 用例同步变红。未登记的不可达方法、已失效条目、缺理由、复核日期已过都会失败；例外登记在 `deadmethods.exceptions.yaml`（reason + review_by）。边界（均取安全方向：宁可不报不误报）：结构式接口成员判定会让「恰好满足某无关接口」的类型存活、跨模块消费者不可见、按名派发命中同名方法即全仓存活；默认**不加载测试文件**（只有测试引用的方法需登记理由）。实现：`internal/quality/deadmethods` + `cmd/deadmethods` | `go`（纯静态，无外部依赖） | 本地 `make check-dead-methods`；**不在 CI、不在 `make quality`**（是否接入由项目裁定） |
 | `make check-licenses` | 校验所有**会进入产物**的依赖许可证（Go 默认构建闭包 + 前端生产依赖）：拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic 以及无许可证文件的依赖；同时校验根目录 `NOTICE` 未过期 | `go`（模块缓存）；前端部分需 `jq`，缺失时**显式报「未检查」**而非静默通过 | 本地 + CI `license-check` job（同一脚本、同一策略、同一例外文件 `license-exceptions.tsv`） |
 | `make check-docs` | 文档事实门禁：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须与当前代码一致；无匹配即失败，陈述"某物不存在"的行用同行 `<!-- check-docs:ignore 理由 -->` 豁免 | 无 | 本地（CI 未接入该 target）；`make quality` 已含 |
 | `make check-config-keys` | 配置键真实性门禁（REQ-094/TASK-094）：双向——①每个服务配置文件（`configs/*.dev.yaml`、`deploy/kustomize/**/configs/*.yaml`）的叶子键必须解析到 `ServiceConfig` 的 mapstructure 路径或 orchestrator 自有结构体 raw 段（`gc`/`emergency`/`trust`）；②`ServiceConfig` 每个叶子字段必须在 `cmd/`+`internal/` 非测试代码中存在选择器引用（allowlist 需附理由）。`TestFakeKeyFailsTheGate` 为负控制。实现：`internal/config/configkeys_gate_test.go` | 无（Go 测试） | 本地；`make quality` 已含（CI 未接入） |
@@ -110,6 +111,28 @@ in-memory storage + `kubefake`，**不需要集群**：
 | `make test-install-sdk` / `test-upgrade-sdk` / `test-rollout-watch` | Helm Install / Upgrade / Rollout watch SDK 链路 | Docker + kind（rollout 另有 120 秒时长门禁） | 本地 + CI 对应 job（各 15 分钟超时） |
 | `make test-rollback-sdk` | Rollback SDK 链路 | 无（in-memory storage + `kubefake`） | 本地（CI 未接入） |
 | `make test-operator-image-sdk-only` | operator 镜像合规（内部先调 `make docker-build-operator` 产出并 `docker save` 镜像 tarball） | Docker | 本地 + CI `operator-image-sdk-only` job |
+
+## 死代码盲区：`make check-dead-methods` 与 `make check-store-surface` 的分工
+
+两个门禁回答的是**不同问题**，都建立在 `go/types` 上，都不看注释与字符串：
+
+- `make check-store-surface` 问：**接口方法**有没有被调用（或有没有登记例外）。范围只限 `internal/store`
+  声明的接口，判定要求调用**通过该接口**或通过**显式绑定**到它的具体类型。
+- `make check-dead-methods` 问：**未导出接收类型上的导出方法**有没有被引用。这类方法不在任何接口上，
+  所以第一个门禁看不见；`golangci-lint` 的 `unused` 也**故意不报**（它保守地假设该类型可能实现某个
+  接口，而 Go 里确实无法从名字判断）—— 两道门都看不见正是本门禁存在的理由。
+
+判定由三个条件合成，任一成立即视为存活：**引用**（`TypesInfo.Uses`/`Selections` 里出现该方法对象，
+覆盖调用 / 方法值 / 方法表达式）、**接口成员**（加载图内任一接口 —— 含 stdlib 与第三方 —— 以同名同签名
+声明它且接收者类型实现该接口）、**晋升或按名派发**（接收类型被内嵌；或方法名出现在 `reflect`
+`MethodByName("X")` 字面量里）。第二条是防误报的核心：把它关掉做变异，本仓 691 个候选里会多出 **671** 个
+误报（生成 connect 客户端等大量接口实现）。
+
+边界（全部取"宁可不报、不可误报"的安全方向）：结构式接口判定会让"恰好满足某个无关接口"的类型存活；
+跨模块消费者不可见（因此**接收类型导出**的方法不在范围内）；按名派发只要名字命中就全仓存活；默认
+**不加载测试文件**，所以只有测试引用的方法会被报出，需要像 `check-store-surface` 的 `[test-utility]`
+一样在 `deadmethods.exceptions.yaml` 登记理由与复核日期。真实动作（删除 / 接线 / 登记）仍由人决定：
+门禁只保证"沉默不等于通过"。
 
 ## E2E（分阶段 runner）
 

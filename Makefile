@@ -569,6 +569,12 @@ check-store-surface: ## Gate the store interface surface: every method needs a c
 	@$(GO) build -buildvcs=false -o bin/storesurface ./cmd/storesurface/
 	@./bin/storesurface -root . -exceptions storesurface.exceptions.yaml
 
+.PHONY: check-dead-methods
+check-dead-methods: ## Gate exported methods on unexported types: each needs a reference, an interface member, or a registered exception (TASK-234; not in CI yet)
+	@mkdir -p bin
+	@$(GO) build -buildvcs=false -o bin/deadmethods ./cmd/deadmethods/
+	@./bin/deadmethods -root . -exceptions deadmethods.exceptions.yaml
+
 .PHONY: check-schema-parity
 check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL migrations, table+column+type diff (D-ε/ε-1)
 	$(GO) run ./cmd/schemaparity/ -migrations migrations -exceptions schema-parity.exceptions.yaml
