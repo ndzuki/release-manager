@@ -138,7 +138,11 @@ func auditEventFromOutbox(entry *store.ApprovalOutboxEntry) *store.AuditEvent {
 	event.ID = stringField(payload, "event_id", entry.ID)
 	event.OrganizationID = stringField(payload, "organization_id", "")
 	event.Role = stringField(payload, "actor_role", "")
-	if actor := stringField(payload, "actor_user_id", ""); actor != "" {
+	// Five payload shapes reach this outbox and they name the actor differently: the approval
+	// transition uses actor_user_id, values lifecycle created/discarded use
+	// created_by_user_id/decided_by_user_id. Reading only one of them dropped the actor (and,
+	// with it, any tenant filter) for the other transitions (review of TASK-231).
+	if actor := firstStringField(payload, "actor_user_id", "created_by_user_id", "decided_by_user_id", "actor_id"); actor != "" {
 		event.ActorKind = store.AuditActorUser
 		event.ActorID = actor
 	}
@@ -153,7 +157,9 @@ func auditEventFromOutbox(entry *store.ApprovalOutboxEntry) *store.AuditEvent {
 	if status := stringField(payload, "state", stringField(payload, "status", "")); status != "" {
 		event.Status = status
 	}
-	if occurred := stringField(payload, "occurred_at", ""); occurred != "" {
+	// Same for the timestamp: approved carries occurred_at, created/discarded carry
+	// created_at/decided_at.
+	if occurred := firstStringField(payload, "occurred_at", "created_at", "decided_at"); occurred != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, occurred); err == nil {
 			event.CreatedAt = parsed
 		}
@@ -165,6 +171,16 @@ func auditEventFromOutbox(entry *store.ApprovalOutboxEntry) *store.AuditEvent {
 		event.Metadata["request_id"] = requestID
 	}
 	return event
+}
+
+// firstStringField returns the first non-empty string among keys.
+func firstStringField(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringField(payload, key, ""); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func stringField(payload map[string]any, key, fallback string) string {

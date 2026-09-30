@@ -497,4 +497,21 @@ func TestSubmitBundleRecordsTheSubmitter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "org-attrib", got.SubmittedByOrganizationID)
 	assert.Equal(t, "user-attrib", got.SubmittedByUserID)
+
+	// TASK-231: the audit outbox row the submission wrote must carry the tenant, or the audit
+	// drain maps it into an organization-less event that no tenant-scoped audit query returns.
+	pgStore, ok := st.(*postgresstore.Store)
+	require.True(t, ok)
+	var payload struct {
+		OrganizationID string `json:"organization_id"`
+		ActorUserID    string `json:"actor_user_id"`
+	}
+	row := pgStore.GORM().Raw(`
+		SELECT payload_json FROM audit_outbox
+		WHERE event_type = 'release_bundle.created' AND payload_json->>'bundle_id' = ?
+		ORDER BY created_at DESC LIMIT 1
+	`, resp.Msg.GetBundle().GetId()).Row()
+	require.NoError(t, row.Scan(&payload))
+	assert.Equal(t, "org-attrib", payload.OrganizationID)
+	assert.Equal(t, "user-attrib", payload.ActorUserID)
 }

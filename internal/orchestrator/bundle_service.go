@@ -90,9 +90,14 @@ func (s *BundleService) SubmitBundle(
 			ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
 		}
 	}
+	// The audit outbox row must be self-describing: the audit drain maps it into an audit event,
+	// and an event without an organization is invisible to every tenant-scoped audit query
+	// (TASK-231). The submitter is already resolved for attribution (TASK-216).
 	auditPayload, err := json.Marshal(map[string]string{
-		"bundle_id": bundle.ID,
-		"digest":    "sha256:" + requestHash,
+		"bundle_id":       bundle.ID,
+		"digest":          "sha256:" + requestHash,
+		"organization_id": actor.OrganizationID,
+		"actor_user_id":   actor.UserID,
 	})
 	if err != nil {
 		return nil, internalBundleError("encode audit event", err)

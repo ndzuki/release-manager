@@ -182,3 +182,104 @@ func TestAuditOutboxWorkerPropagatesListFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, outbox.delivered)
 }
+
+// The outbox is written by five different transitions and they name the actor and the timestamp
+// differently. Mapping only the approval shape dropped the actor (and any tenant filter) for the
+// rest, which review of TASK-231 measured end to end.
+func TestAuditEventFromOutboxMapsEveryWriterShape(t *testing.T) {
+	tests := []struct {
+		name       string
+		eventType  string
+		payload    map[string]any
+		wantActor  string
+		wantOrg    string
+		wantRole   string
+		wantRes    string
+		wantResID  string
+		wantStatus string
+		wantTime   time.Time
+	}{
+		{
+			name: "values approval approved", eventType: "values_revision.approved",
+			payload: map[string]any{
+				"event_id": "e1", "revision_id": "vr-1", "organization_id": "org-1", "state": "approved",
+				"actor_user_id": "user-1", "actor_role": "release-admin", "occurred_at": "2026-09-30T09:00:00Z",
+			},
+			wantActor: "user-1", wantOrg: "org-1", wantRole: "release-admin",
+			wantRes: "values_revision", wantResID: "vr-1", wantStatus: "approved",
+			wantTime: time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "values lifecycle created", eventType: "ValuesRevisionCreated",
+			payload: map[string]any{
+				"event_id": "e2", "revision_id": "vr-2", "organization_id": "org-2",
+				"created_by_user_id": "user-2", "created_at": "2026-09-30T08:30:00Z",
+			},
+			wantActor: "user-2", wantOrg: "org-2", wantRes: "values_revision", wantResID: "vr-2",
+			wantStatus: "succeeded", wantTime: time.Date(2026, 9, 30, 8, 30, 0, 0, time.UTC),
+		},
+		{
+			name: "values lifecycle discarded", eventType: "ValuesRevisionDiscarded",
+			payload: map[string]any{
+				"event_id": "e3", "revision_id": "vr-3", "organization_id": "org-3",
+				"decided_by_user_id": "user-3", "decided_at": "2026-09-30T08:45:00Z",
+			},
+			wantActor: "user-3", wantOrg: "org-3", wantRes: "values_revision", wantResID: "vr-3",
+			wantStatus: "succeeded", wantTime: time.Date(2026, 9, 30, 8, 45, 0, 0, time.UTC),
+		},
+		{
+			name: "bundle created", eventType: "release_bundle.created",
+			payload: map[string]any{
+				"bundle_id": "bundle-1", "digest": "sha256:abc",
+				"organization_id": "org-4", "actor_user_id": "user-4",
+			},
+			wantActor: "user-4", wantOrg: "org-4", wantRes: "release_bundle", wantResID: "bundle-1",
+			wantStatus: "succeeded",
+		},
+		{
+			name: "artifact event recorded", eventType: "artifact_event.recorded",
+			payload: map[string]any{"event_id": "e5", "source_id": "source-5"},
+			// No revision or bundle: the event keeps the outbox row id as its resource, so the
+			// record still has a stable identity.
+			wantRes: "audit_outbox", wantResID: "outbox-artifact event recorded", wantStatus: "succeeded",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row := approvalOutboxRow(t, "outbox-"+tt.name, tt.eventType, tt.payload)
+			event := auditEventFromOutbox(row)
+			assert.Equal(t, tt.eventType, event.Action)
+			assert.Equal(t, tt.wantActor, event.ActorID, "actor")
+			assert.Equal(t, tt.wantOrg, event.OrganizationID, "organization (tenant scope)")
+			assert.Equal(t, tt.wantRole, event.Role)
+			assert.Equal(t, tt.wantRes, event.ResourceType)
+			assert.Equal(t, tt.wantResID, event.ResourceID)
+			assert.Equal(t, tt.wantStatus, event.Status)
+			if !tt.wantTime.IsZero() {
+				assert.Equal(t, tt.wantTime, event.CreatedAt)
+			}
+			if tt.wantActor == "" {
+				assert.Equal(t, store.AuditActorSystem, event.ActorKind, "an actorless event stays a system event")
+			} else {
+				assert.Equal(t, store.AuditActorUser, event.ActorKind)
+			}
+		})
+	}
+}
+
+// Acknowledging can fail after the event was emitted; the worker must report the partial count
+// and the error rather than pretend the batch was delivered.
+func TestAuditOutboxWorkerReportsAcknowledgementFailure(t *testing.T) {
+	rows := []*store.ApprovalOutboxEntry{
+		approvalOutboxRow(t, "outbox-5", "values_revision.approved", map[string]any{"event_id": "event-5"}),
+		approvalOutboxRow(t, "outbox-6", "values_revision.approved", map[string]any{"event_id": "event-6"}),
+	}
+	outbox := &fakeAuditOutbox{rows: rows, markErr: errors.New("db down")}
+	sink := &rejectingAuditSink{}
+	worker := NewAuditOutboxWorker(outbox, sink, auditWorkerLogger(), AuditOutboxWorkerConfig{})
+
+	delivered, err := worker.DrainOnce(context.Background())
+	require.Error(t, err)
+	assert.Zero(t, delivered)
+	assert.Len(t, sink.events, 1, "the first event was emitted before the acknowledgement failed")
+}
