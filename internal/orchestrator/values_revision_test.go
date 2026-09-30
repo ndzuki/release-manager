@@ -140,7 +140,7 @@ func TestCreateValuesRevision_InitialCanBeApprovedAndUsedForInstall(t *testing.T
 	}))
 	// TASK-215: the submission flow makes a validated bundle the definition's current
 	// bundle; the fixture says the same thing so the operation references a reachable one.
-	_, err = f.st.Definitions().SetCurrentBundle(f.ctx, f.defID, "bundle-initial-install")
+	err = writeCurrentBundleDirect(f.ctx, f.st, f.defID, "bundle-initial-install")
 	require.NoError(t, err)
 
 	operationRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{

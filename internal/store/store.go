@@ -2039,7 +2039,6 @@ type DefinitionStore interface {
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
 	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
-	SetCurrentBundle(ctx context.Context, defID string, bundleID string) (bool, error)
 }
 
 // ReleaseDefinitionEvent is emitted for release definition lifecycle changes.
@@ -2074,7 +2073,6 @@ type ValuesApprovalReader interface {
 type ValuesStore interface {
 	Create(ctx context.Context, revision *ValuesRevision) error
 	Get(ctx context.Context, id string) (*ValuesRevision, error)
-	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
 	GetLatest(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	ListPage(ctx context.Context, filter ValuesListFilter) (*ValuesPage, error)
 }
@@ -2100,7 +2098,6 @@ type PrepareSessionStore interface {
 // CustomerCreates().CreateCustomerWithOrgBinding (REQ-051).
 type CustomerStore interface {
 	Get(ctx context.Context, id string) (*Customer, error)
-	GetBySlug(ctx context.Context, slug string) (*Customer, error)
 	// Update applies name/slug/status changes with optimistic locking:
 	// the write succeeds only when the stored version equals expectedVersion,
 	// otherwise ErrOptimisticLock is returned (AC-051-02).
@@ -2223,7 +2220,6 @@ type OperatorLifecycleStore interface {
 type EnrollmentTokenStore interface {
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
-	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
 }
 
 // OperatorPage is a cursor-based page of operators.
@@ -2335,7 +2331,6 @@ type BindingStore interface {
 	Get(ctx context.Context, id string) (*OrgCustomerBinding, error)
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
-	ListByCustomer(ctx context.Context, customerID string) ([]*OrgCustomerBinding, error)
 	SetStatus(ctx context.Context, id string, s BindingStatus) error
 	RequireActive(ctx context.Context, orgID, customerID string) error
 }

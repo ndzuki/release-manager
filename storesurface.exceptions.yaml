@@ -25,10 +25,6 @@ exceptions:
     method: ListOlderThan
     reason: "[local-narrow-iface] 生产经 internal/audit/archiver.go 的消费者本地窄接口 archiveEventStore 调用（archiver.go:71、:151）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
-  - interface: BindingStore
-    method: ListByCustomer
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者是 sqlite/customer_bindings_test.go:42 的 fixture，它断言 require.Len(bindings,1)（恰好一条绑定）并取 binding.ID 关联事件；生产读面只有 GetByOrgAndCustomer/ListByOrg，前者表达不了「恰好一条」⇒ 改写即放宽断言 ⇒ 保留待裁定"
-    review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
     reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 sqlite bundle transactions are unsupported（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
@@ -45,17 +41,9 @@ exceptions:
     method: Create
     reason: "[test-utility] 生产 0、测试 8；生产落库由操作创建 UoW 的 insertConvergenceTask 承担（sqlite/uow.go:132）——本方法供 fixture 播种任意收敛任务状态"
     review_by: "2026-12-31"
-  - interface: CustomerStore
-    method: GetBySlug
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：两台引擎各有它自己的测试 TestCustomerGetBySlug（sqlite/store_test.go:70、postgres/store_test.go:98）⇒ 删除方法即删除测试（丢断言）⇒ 保留待裁定；按 id 读取是当前生产路径"
-    review_by: "2026-12-31"
   - interface: DefinitionEventStore
     method: List
     reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：它是 release_definition_events 的**唯一读面**，5 处测试（sqlite/store_test.go:1258、postgres/store_test.go:1084、orchestrator/definition_test.go:68/338/376）用它断言定义生命周期事件已落库；无替代读取路径 ⇒ 保留（故 Store.DefinitionEvents 访问器与接口不进入级联删除）"
-    review_by: "2026-12-31"
-  - interface: DefinitionStore
-    method: SetCurrentBundle
-    reason: "[superseded] current_bundle_id 只由操作创建 UoW 写入（TASK-215）；保留（TASK-226 收尾实测 2026-09-30）：5 处测试是它自己的语义套件（sqlite/lifecycle_test.go 的 TestSetCurrentBundle_*：unarchive 决策表）+ bundles_reachability_test.go 的 2 处 fixture ⇒ 删除会删掉整段断言；其行为在生产由 UoW + orchestrator service 决策表承担"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: GetActiveLocksForDefinition
@@ -72,10 +60,6 @@ exceptions:
   - interface: EmergencyIntentStore
     method: SaveRevertReconciliation
     reason: "[unwired-write] 回退对账结果保存无调用者"
-    review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
-    method: ListByCluster
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：3 处测试（sqlite/store_test.go:1335/1345/1392）断言 token 行数与状态（require.Len、pending 计数）；生产读面 GetPendingByCluster 只回 pending 单条、表达不了计数 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: OperationStore
     method: Create
@@ -132,10 +116,6 @@ exceptions:
   - interface: ValuesStore
     method: Create
     reason: "[unwired] 保留（B-3 取证）：40 处调用全是 fixture，其中 **≥18 处**（实现计 19、独立复核计 18，同一 6 个文件；任何 ≥1 处不可迁移即足以支持保留）需要 CreateDraft 表达不了的状态（Status=Approved / pending_approval、显式 state_version、历史链），分布在 6 个文件；改用测试内直插会绕过 Approve 对 approved_revision_id 指针/超集语义的维护（Approved 行直接插入不更新指针），其余 21 处虽可用 CreateDraft 但无收益 ⇒ 按『整条不干净则保留』判定"
-    review_by: "2026-12-31"
-  - interface: ValuesStore
-    method: GetByDigest
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者是它自己的测试 TestValuesRevisionGetByDigest（sqlite/store_test.go:695-712）⇒ 删除方法即删除该测试（丢断言）⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get

@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -65,18 +66,6 @@ func TestCustomerCreateAndGet(t *testing.T) {
 	assert.Equal(t, c.Name, got.Name)
 	assert.Equal(t, c.Slug, got.Slug)
 	assert.Equal(t, store.CustomerActive, got.Status)
-}
-
-func TestCustomerGetBySlug(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-
-	c := &store.Customer{ID: uuid.New().String(), Name: "Beta Inc", Slug: "beta-inc"}
-	require.NoError(t, createCustomerViaManagement(ctx, st, c))
-
-	got, err := st.Customers().GetBySlug(ctx, "beta-inc")
-	require.NoError(t, err)
-	assert.Equal(t, c.ID, got.ID)
 }
 
 func TestCustomerNotFound(t *testing.T) {
@@ -690,26 +679,6 @@ func TestValuesRevisionInitialParentPersistsAsNull(t *testing.T) {
 		`SELECT parent_revision_id FROM values_revisions WHERE id = ?`, revision.ID,
 	).Scan(&parentRevisionID))
 	assert.Nil(t, parentRevisionID)
-}
-
-func TestValuesRevisionGetByDigest(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-	def := createTestDefinition(t, st)
-
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: def.ID,
-		Version:             1,
-		Status:              store.ValuesStatusDraft,
-		CanonicalDocument:   []byte(`{}`),
-		Digest:              "auth0:deadbeef",
-	}
-	require.NoError(t, st.Values().Create(ctx, vr))
-
-	got, err := st.Values().GetByDigest(ctx, def.ID, "auth0:deadbeef")
-	require.NoError(t, err)
-	assert.Equal(t, vr.ID, got.ID)
 }
 
 // AC-079-G10 / D15: convergence bindings round-trip through the JSON-encoded
@@ -1332,7 +1301,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 	}
 	_, err = st.OperatorManagement().CreateEnrollmentToken(ctx, failedReplacement, true, &store.AuditEvent{ID: "invalid-audit"})
 	assert.ErrorIs(t, err, store.ErrAuditUnavailable)
-	unchanged, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	unchanged, err := tokensByCluster(st, clusterID)
 	require.NoError(t, err)
 	require.Len(t, unchanged, 1)
 	assert.Equal(t, first.ID, unchanged[0].ID)
@@ -1342,7 +1311,7 @@ func TestOperatorManagement_CreateEnrollmentTokenAtomic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, replaced.PreviousID)
 
-	old, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	old, err := tokensByCluster(st, clusterID)
 	require.NoError(t, err)
 	require.Len(t, old, 2)
 	assert.Equal(t, store.TokenStateRevoked, old[0].State)
@@ -1389,7 +1358,7 @@ func TestOperatorManagement_CreateEnrollmentTokenConcurrent(t *testing.T) {
 	assert.Equal(t, 1, succeeded)
 	assert.Equal(t, 1, conflicted)
 
-	tokens, err := st.EnrollmentTokens().ListByCluster(ctx, clusterID)
+	tokens, err := tokensByCluster(st, clusterID)
 	require.NoError(t, err)
 	var pending int
 	for _, token := range tokens {
@@ -2530,4 +2499,36 @@ func TestSessionEstablishRejectsADifferentInstance(t *testing.T) {
 	active, err := st.Sessions().GetActiveByOperator(ctx, op.ID)
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, active.ID, "the online session stays active")
+}
+
+// enrollmentTokenRow mirrors the token columns these assertions need: the store's
+// ListByCluster reader was removed with the TASK-226 dead-surface batch (no shipping caller),
+// so the fixture reads the rows directly instead of weakening the assertions.
+type enrollmentTokenRow struct {
+	ID           string
+	State        store.EnrollmentTokenState
+	ReplacedByID string
+}
+
+func tokensByCluster(st *sqlitestore.Store, clusterID string) ([]enrollmentTokenRow, error) {
+	rows, err := st.DB().QueryContext(context.Background(),
+		`SELECT id, state, replaced_by_id FROM enrollment_tokens WHERE cluster_id = ?`, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []enrollmentTokenRow
+	for rows.Next() {
+		var row enrollmentTokenRow
+		var state string
+		var replacedBy sql.NullString
+		if err := rows.Scan(&row.ID, &state, &replacedBy); err != nil {
+			return nil, err
+		}
+		row.State = store.EnrollmentTokenState(state)
+		row.ReplacedByID = replacedBy.String
+		tokens = append(tokens, row)
+	}
+	return tokens, rows.Err()
 }

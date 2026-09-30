@@ -631,34 +631,6 @@ func scanRowOperator(row interface{ Scan(...interface{}) error }) (*store.Operat
 // EnrollmentToken list methods (REQ-015)
 // ---------------------------------------------------------------------------
 
-// ListByCluster returns all enrollment tokens for a cluster.
-func (s *enrollmentTokenStore) ListByCluster(ctx context.Context, clusterID string) ([]*store.EnrollmentToken, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
-FROM enrollment_tokens WHERE cluster_id = ?
-`, clusterID)
-	if err != nil {
-		return nil, fmt.Errorf("list tokens by cluster: %w", err)
-	}
-	defer rows.Close()
-	return scanEnrollmentTokens(rows)
-}
-
-func scanEnrollmentTokens(rows *sql.Rows) ([]*store.EnrollmentToken, error) {
-	tokens := make([]*store.EnrollmentToken, 0)
-	for rows.Next() {
-		token, err := scanEnrollmentToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, token)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate token rows: %w", err)
-	}
-	return tokens, nil
-}
-
 // ---------------------------------------------------------------------------
 // New interface methods
 // ---------------------------------------------------------------------------

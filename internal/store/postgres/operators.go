@@ -76,18 +76,6 @@ ORDER BY created_at DESC LIMIT 1
 	return scanEnrollmentToken(row)
 }
 
-// ListByCluster returns all enrollment tokens for a cluster.
-func (s *enrollmentTokenStore) ListByCluster(ctx context.Context, clusterID string) ([]*store.EnrollmentToken, error) {
-	rows, err := s.gorm.QueryContext(ctx, `SELECT `+enrollmentTokenSelect+`
-FROM enrollment_tokens WHERE cluster_id = ?
-`, clusterID)
-	if err != nil {
-		return nil, fmt.Errorf("list tokens by cluster: %w", err)
-	}
-	defer rows.Close()
-	return scanEnrollmentTokens(rows)
-}
-
 func scanEnrollmentToken(row interface{ Scan(...interface{}) error }) (*store.EnrollmentToken, error) {
 	var (
 		token                            store.EnrollmentToken
@@ -146,21 +134,6 @@ func scanEnrollmentToken(row interface{ Scan(...interface{}) error }) (*store.En
 		token.ReplacedByID = *replacedByID
 	}
 	return &token, nil
-}
-
-func scanEnrollmentTokens(rows *sql.Rows) ([]*store.EnrollmentToken, error) {
-	tokens := make([]*store.EnrollmentToken, 0)
-	for rows.Next() {
-		token, err := scanEnrollmentToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, token)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate token rows: %w", err)
-	}
-	return tokens, nil
 }
 
 // ---------------------------------------------------------------------------

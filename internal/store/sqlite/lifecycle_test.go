@@ -215,7 +215,8 @@ func TestBundleListForArchive_ActiveDefinitionProtects(t *testing.T) {
 		now.Add(-100*24*time.Hour).Format(time.RFC3339), b.ID)
 	require.NoError(t, err)
 
-	// Create an active definition and link the bundle via SetCurrentBundle.
+	// Create an active definition and link the bundle directly: DefinitionStore.SetCurrentBundle
+	// was removed with the TASK-226 dead-surface batch (the operation-creation UoW owns the write).
 	def := &store.ReleaseDefinition{
 		ID:                uuid.New().String(),
 		Name:              "active-def",
@@ -226,7 +227,7 @@ func TestBundleListForArchive_ActiveDefinitionProtects(t *testing.T) {
 		OptimisticVersion: 1,
 	}
 	require.NoError(t, st.Definitions().Create(ctx, def, nil))
-	_, err = st.Definitions().SetCurrentBundle(ctx, def.ID, b.ID)
+	_, err = st.DB().ExecContext(ctx, `UPDATE release_definitions SET current_bundle_id = ? WHERE id = ?`, b.ID, def.ID)
 	require.NoError(t, err)
 
 	terminalStates := []store.OperationStatus{
@@ -347,124 +348,6 @@ func TestBundleListForArchive_EligibleAfterTerminal(t *testing.T) {
 }
 
 // ── Definition SetCurrentBundle (AC-069-02) ──────────────────────
-
-func TestSetCurrentBundle_ArchivedValidatedRestored(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-
-	b := &store.ReleaseBundle{
-		ID:          uuid.New().String(),
-		Name:        "unarchive-bundle",
-		DigestAlg:   "sha256",
-		DigestValue: "unarch123",
-		Status:      store.BundleArchived,
-	}
-	require.NoError(t, st.Bundles().Create(ctx, b))
-
-	// Manually set archival metadata (Create doesn't set it automatically).
-	_, err := st.DB().ExecContext(ctx,
-		`UPDATE release_bundles SET archived_at=?, status='archived', archived_from_status='validated' WHERE id=?`,
-		time.Now().UTC().Format(time.RFC3339), b.ID)
-	require.NoError(t, err)
-
-	def := &store.ReleaseDefinition{
-		ID:                uuid.New().String(),
-		Name:              "unarch-def",
-		CustomerID:        "cust-4",
-		ClusterID:         "cls-4",
-		ReleaseName:       "unarch-rel",
-		Status:            store.DefStatusActive,
-		OptimisticVersion: 1,
-	}
-	require.NoError(t, st.Definitions().Create(ctx, def, nil))
-
-	unarchived, err := st.Definitions().SetCurrentBundle(ctx, def.ID, b.ID)
-	require.NoError(t, err)
-	assert.True(t, unarchived)
-
-	got, err := st.Bundles().Get(ctx, b.ID)
-	require.NoError(t, err)
-	assert.Equal(t, store.BundleValidated, got.Status)
-	assert.Nil(t, got.ArchivedAt)
-}
-
-func TestSetCurrentBundle_ArchivedReceivedRejected(t *testing.T) {
-	tests := []struct {
-		name       string
-		fromStatus store.BundleStatus
-		wantErr    error
-	}{
-		{name: "received", fromStatus: store.BundleReceived, wantErr: store.ErrBundleNotReady},
-		{name: "rejected", fromStatus: store.BundleRejected, wantErr: store.ErrBundleRejected},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			st := setupStore(t)
-			bundle := &store.ReleaseBundle{
-				ID:          uuid.New().String(),
-				Name:        "archived-" + tt.name,
-				DigestAlg:   "sha256",
-				DigestValue: uuid.New().String(),
-				Status:      store.BundleArchived,
-			}
-			require.NoError(t, st.Bundles().Create(t.Context(), bundle))
-			_, err := st.DB().ExecContext(t.Context(), `
-				UPDATE release_bundles
-				SET archived_at=?, archived_from_status=?
-				WHERE id=?
-			`, time.Now().UTC().Format(time.RFC3339), string(tt.fromStatus), bundle.ID)
-			require.NoError(t, err)
-
-			definition := &store.ReleaseDefinition{
-				ID: uuid.New().String(), Name: "definition-" + tt.name,
-				CustomerID: "cust-" + tt.name, ClusterID: "cluster-" + tt.name,
-				ReleaseName: "release-" + tt.name, Status: store.DefStatusActive,
-			}
-			require.NoError(t, st.Definitions().Create(t.Context(), definition, nil))
-
-			_, err = st.Definitions().SetCurrentBundle(t.Context(), definition.ID, bundle.ID)
-			require.ErrorIs(t, err, tt.wantErr)
-
-			storedDefinition, err := st.Definitions().Get(t.Context(), definition.ID)
-			require.NoError(t, err)
-			assert.Nil(t, storedDefinition.CurrentBundleID)
-			storedBundle, err := st.Bundles().Get(t.Context(), bundle.ID)
-			require.NoError(t, err)
-			assert.Equal(t, store.BundleArchived, storedBundle.Status)
-			assert.Equal(t, tt.fromStatus, *storedBundle.ArchivedFromStatus)
-		})
-	}
-}
-
-func TestSetCurrentBundle_AlreadyValidated(t *testing.T) {
-	st := setupStore(t)
-	ctx := context.Background()
-
-	b := &store.ReleaseBundle{
-		ID:          uuid.New().String(),
-		Name:        "validated-bundle",
-		DigestAlg:   "sha256",
-		DigestValue: "val123",
-		Status:      store.BundleValidated,
-	}
-	require.NoError(t, st.Bundles().Create(ctx, b))
-
-	def := &store.ReleaseDefinition{
-		ID:                uuid.New().String(),
-		Name:              "val-def",
-		CustomerID:        "cust-5",
-		ClusterID:         "cls-5",
-		ReleaseName:       "val-rel",
-		Status:            store.DefStatusActive,
-		OptimisticVersion: 1,
-	}
-	require.NoError(t, st.Definitions().Create(ctx, def, nil))
-
-	unarchived, err := st.Definitions().SetCurrentBundle(ctx, def.ID, b.ID)
-	require.NoError(t, err)
-	assert.False(t, unarchived) // wasn't archived
-}
 
 // ── Candidate Artifact lifecycle (AC-069-08) ────────────────────
 

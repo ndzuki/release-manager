@@ -124,7 +124,7 @@ func TestRunGCPhase1ArchiveAndReferenceProtection(t *testing.T) {
 	protectedByDef := createCleanupBundle(ctx, t, st, "gc-p1-active-def", store.BundleValidated)
 	ageBundle(t, st, protectedByDef.ID)
 	def := createCleanupDefinition(t, st, "gc-p1-def")
-	_, err := st.Definitions().SetCurrentBundle(ctx, def.ID, protectedByDef.ID)
+	err := writeCurrentBundleDirect(ctx, st, def.ID, protectedByDef.ID)
 	require.NoError(t, err)
 
 	// Protected: referenced by a non-terminal operation.
@@ -147,7 +147,7 @@ func TestRunGCPhase1ArchiveAndReferenceProtection(t *testing.T) {
 		Status: store.DefStatusDraft,
 	}, nil)
 	require.NoError(t, err)
-	_, err = st.Definitions().SetCurrentBundle(ctx, "gc-p1-draft-def", draftRef.ID)
+	err = writeCurrentBundleDirect(ctx, st, "gc-p1-draft-def", draftRef.ID)
 	require.NoError(t, err)
 
 	// Too recent: not archived.
@@ -207,7 +207,7 @@ func TestRunGCPhase2PhysicalDeleteClearsReferences(t *testing.T) {
 		ID: "gc-p2-draft-def", Name: "gc-p2-draft-def", CustomerID: "c", ClusterID: "k",
 		ReleaseName: "gc-p2-draft-def", Status: store.DefStatusDraft,
 	}, nil))
-	_, err := st.Definitions().SetCurrentBundle(ctx, def.ID, bundle.ID)
+	err := writeCurrentBundleDirect(ctx, st, def.ID, bundle.ID)
 	require.NoError(t, err)
 	_, err = st.Bundles().Archive(ctx, []string{bundle.ID})
 	require.NoError(t, err)
