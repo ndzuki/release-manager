@@ -93,7 +93,7 @@ func (s *approvalOutboxStore) MarkDelivered(ctx context.Context, id string, at t
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("outbox rows affected: %w", err)
+		return fmt.Errorf("%s rows affected: %w", s.table, err)
 	}
 	if rows == 0 {
 		return store.ErrNotFound
