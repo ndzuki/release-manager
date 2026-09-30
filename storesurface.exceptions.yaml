@@ -19,7 +19,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: GetByID
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[test-utility] 生产 0、测试 12；生产读取走 Query/ListOlderThan（归档链路），本方法只被测试用来断言单条写入结果"
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: ListOlderThan
@@ -31,11 +31,11 @@ exceptions:
     review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 sqlite bundle transactions are unsupported（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[sqlite-tx-only] PostgreSQL 生产走 ArtifactEventSubmissions → UpsertTx/UpsertLocationTx；SQLite 的摄取尚未支持（Record 是 stub），非事务 Create/Upsert 是 SQLite 上唯一的制品写入能力（SQLite 侧 INSERT INTO candidate_artifacts 仅此一处，sqlite/candidate_artifacts.go:51），两个 Tx 变体 unsupported（:206/:210）⇒ 为保住双引擎能力保留；51 个测试调用点"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: LinkToBundle
@@ -47,7 +47,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: ConvergenceTaskStore
     method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[test-utility] 生产 0、测试 8；生产落库由操作创建 UoW 的 insertConvergenceTask 承担（sqlite/uow.go:132）——本方法供 fixture 播种任意收敛任务状态"
     review_by: "2026-12-31"
   - interface: ConvergenceTaskStore
     method: MarkConverged
@@ -95,7 +95,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: OperationStore
     method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[test-utility] 87 个测试 fixture 调用点、生产 0；生产创建唯一入口是操作创建 UoW 与 CreateIdempotent（Lead 决策保留，见 TASK-226 卡内「OperationStore.Create 处置」：fixture 需播种任意状态/固定 ID，逐处改写会为 87 处构造授权栅栏且判别力下降）"
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Create
@@ -111,7 +111,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: OutboxStore
     method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[test-utility] 生产 0、测试 14；OutboxStore 的生产派发走 GetNextPending（operator/service.go:1393）与 UpdateStatus/PersistAck/GetByCommandID，本方法只被测试用来读取单条 outbox 记录"
     review_by: "2026-12-31"
   - interface: RolloutTrackingStore
     method: Get
