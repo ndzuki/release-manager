@@ -97,10 +97,6 @@ exceptions:
     method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
-  - interface: OperationStore
-    method: CreateIfAvailable
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
   - interface: OperatorStore
     method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
@@ -126,15 +122,7 @@ exceptions:
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: Store
-    method: ArtifactEvents
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
-    review_by: "2026-12-31"
-  - interface: Store
     method: DefinitionEvents
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
-    review_by: "2026-12-31"
-  - interface: Store
-    method: OperationEvents
     reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
     review_by: "2026-12-31"
   - interface: Store
@@ -167,7 +155,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired] 保留（B-3 取证）：40 处调用全是 fixture，其中 19 处需要 CreateDraft 表达不了的状态（Status=Approved / pending_approval、显式 state_version、历史链），分布在 6 个文件；改用测试内直插会绕过 Approve 对 approved_revision_id 指针/超集语义的维护（Approved 行直接插入不更新指针），其余 21 处虽可用 CreateDraft 但无收益 ⇒ 按『整条不干净则保留』判定"
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: GetByDigest

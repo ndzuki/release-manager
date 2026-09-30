@@ -11,16 +11,6 @@ import (
 
 var errPostgresIngestionRequired = errors.New("bundle ingestion requires PostgreSQL")
 
-type unsupportedArtifactEventStore struct{}
-
-func (unsupportedArtifactEventStore) CreateTx(*gorm.DB, *store.ArtifactEvent) error {
-	return errPostgresIngestionRequired
-}
-
-func (unsupportedArtifactEventStore) GetBySourceAndEvent(context.Context, string, string) (*store.ArtifactEvent, error) {
-	return nil, errPostgresIngestionRequired
-}
-
 type unsupportedValidationOutboxStore struct{}
 
 func (unsupportedValidationOutboxStore) CreateTx(*gorm.DB, *store.ValidationOutboxEntry) error {

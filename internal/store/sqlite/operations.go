@@ -29,9 +29,6 @@ func (s *operationStore) Create(ctx context.Context, op *store.Operation) error 
 	return createOperation(ctx, s.db, op)
 }
 
-func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
-	return retryBusy(ctx, func() error { return createIfAvailable(ctx, s.db, op, nil) })
-}
 func (s *operationStore) CreateIdempotent(
 	ctx context.Context,
 	command store.OperationCreateCommand,

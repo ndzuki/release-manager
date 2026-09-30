@@ -2,14 +2,11 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/ndzuki/release-manager/internal/store"
 )
-
-type operationEventStore struct{ db *sql.DB }
 
 // insertOperationEvent is the only writer of operation events: the operation state
 // machine calls it inside its transitions (see operations.go and emergency_converge.go).

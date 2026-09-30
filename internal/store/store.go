@@ -2001,7 +2001,6 @@ type OperationStore interface {
 	// QueueOperation atomically applies NextStatus to the operation and persists
 	// Dispatch in the same transaction.
 	QueueOperation(ctx context.Context, req OperationQueueRequest) error
-	CreateIfAvailable(ctx context.Context, op *Operation) error
 	CreateIdempotent(ctx context.Context, command OperationCreateCommand) (*OperationCreateResult, error)
 	Get(ctx context.Context, id string) (*Operation, error)
 	GetByIdempotencyScopeAndKey(ctx context.Context, scope, key string) (*Operation, error)
@@ -2036,13 +2035,6 @@ type OperationStateChangedEvent struct {
 	StateVersion  int             `json:"state_version"`
 	CreatedAt     time.Time       `json:"created_at"`
 }
-
-// OperationEventStore persists operation state change events. Its only writer is the
-// package-private insertOperationEvent the operation state machine runs inside its
-// transitions (see internal/store/{sqlite,postgres}/operations.go), so the interface
-// declares no method of its own since TASK-226; the aggregate accessor is slated for
-// removal with the B2 batch.
-type OperationEventStore interface{}
 
 // DefinitionStore defines the persistence contract for release definitions.
 type DefinitionStore interface {
@@ -2645,12 +2637,6 @@ type CandidateArtifactStore interface {
 	BundlesForArtifact(ctx context.Context, artifactID string) ([]string, error)
 }
 
-// ArtifactEventStore persists externally observed artifact events.
-type ArtifactEventStore interface {
-	CreateTx(tx *gorm.DB, event *ArtifactEvent) error
-	GetBySourceAndEvent(ctx context.Context, sourceID, eventID string) (*ArtifactEvent, error)
-}
-
 // ValidationOutboxStore persists and claims bundle validation work.
 type ValidationOutboxStore interface {
 	CreateTx(tx *gorm.DB, entry *ValidationOutboxEntry) error
@@ -2717,7 +2703,6 @@ type PreflightLifecycleStore interface {
 // Store is the top-level persistence abstraction.
 type Store interface {
 	Operations() OperationStore
-	OperationEvents() OperationEventStore
 	Timeline() TimelineStore
 	Definitions() DefinitionStore
 	DefinitionEvents() DefinitionEventStore
@@ -2760,7 +2745,6 @@ type Store interface {
 	RolloutTrackings() RolloutTrackingStore
 	UpgradeResults() UpgradeResultStore
 	CandidateArtifacts() CandidateArtifactStore
-	ArtifactEvents() ArtifactEventStore
 	ValidationOutbox() ValidationOutboxStore
 	BundleSubmissions() BundleSubmissionStore
 	ArtifactEventSubmissions() ArtifactEventSubmissionStore
