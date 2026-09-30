@@ -31,7 +31,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
-    reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 "sqlite bundle transactions are unsupported"（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
+    reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 sqlite bundle transactions are unsupported（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: Create
