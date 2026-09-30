@@ -525,7 +525,7 @@ func TestOperationTransition_TerminalAt(t *testing.T) {
 	assert.Equal(t, 0, count, "no preflight lifecycle row should exist — transition handles missing lifecycle gracefully")
 }
 
-func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
+func TestOperationCreateIdempotentCheckAvailableAllowsEmergencyPeers(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 	def := createTestDefinition(t, st)

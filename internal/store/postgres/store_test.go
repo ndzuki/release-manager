@@ -449,7 +449,7 @@ func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
 	assert.Equal(t, 5, persisted.StateVersion)
 }
 
-func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
+func TestOperationCreateIdempotentCheckAvailableAllowsEmergencyPeers(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
