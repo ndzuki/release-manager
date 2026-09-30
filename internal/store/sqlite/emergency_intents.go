@@ -160,10 +160,6 @@ func (s *emergencyIntentStore) GetByCommandID(ctx context.Context, commandID str
 	return scanEmergencyIntent(s.db.QueryRowContext(ctx, emergencyIntentSelect+` WHERE command_id = ?`, commandID))
 }
 
-func (s *emergencyIntentStore) GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*store.EmergencyIntent, error) {
-	return listActiveEmergencyIntents(ctx, s.db, definitionID)
-}
-
 func listActiveEmergencyIntents(ctx context.Context, queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, definitionID string) ([]*store.EmergencyIntent, error) {
@@ -209,18 +205,6 @@ func (s *emergencyIntentStore) HasUnresolvedForDefinition(ctx context.Context, d
 		return false, nil, fmt.Errorf("iterate unresolved emergency effects: %w", err)
 	}
 	return len(operationIDs) > 0, operationIDs, nil
-}
-
-func (s *emergencyIntentStore) ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*store.EmergencyIntent, error) {
-	rows, err := s.db.QueryContext(ctx, emergencyIntentSelect+`
-		WHERE release_definition_id = ? AND delivery_status != 'persisted'
-		ORDER BY created_at ASC
-	`, definitionID)
-	if err != nil {
-		return nil, fmt.Errorf("list pending emergency delivery: %w", err)
-	}
-	defer rows.Close()
-	return scanEmergencyIntentRows(rows)
 }
 
 func (s *emergencyIntentStore) UpdateDeliveryStatus(ctx context.Context, id, status string) error {

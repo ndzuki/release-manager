@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"testing"
 
 	"gorm.io/gorm"
 
@@ -24,4 +25,17 @@ func writeCurrentBundleDirect(ctx context.Context, st store.Store, definitionID,
 			`UPDATE release_definitions SET current_bundle_id = $1 WHERE id = $2`, bundleID, definitionID).Error
 	}
 	return fmt.Errorf("store has no DB accessor")
+}
+
+// testSQLDB returns the *sql.DB behind a test store: SQLite exposes DB(), PostgreSQL SQLDB().
+func testSQLDB(t *testing.T, st store.Store) *sql.DB {
+	t.Helper()
+	if sqliteStore, ok := st.(interface{ DB() *sql.DB }); ok {
+		return sqliteStore.DB()
+	}
+	if pgStore, ok := st.(interface{ SQLDB() *sql.DB }); ok {
+		return pgStore.SQLDB()
+	}
+	t.Fatalf("store has no *sql.DB accessor")
+	return nil
 }

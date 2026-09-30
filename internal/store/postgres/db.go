@@ -149,7 +149,6 @@ type Store struct {
 	vulnExceptions     *vulnerabilityExceptionStore
 	custEvents         *customerEventStore
 	customerCreates    *customerBindingCreateStore
-	defEvents          *definitionEventStore
 	candidateArts      *candidateArtifactStore
 	artifactEvents     *artifactEventStore
 	validationOutbox   *validationOutboxStore
@@ -197,7 +196,6 @@ func New(sqlDB *sql.DB, gormDB *gorm.DB) (*Store, error) {
 	s.ops = &operationStore{gorm: s.db}
 	s.timeline = &timelineStore{gorm: s.db}
 	s.defs = &definitionStore{gorm: s.db}
-	s.defEvents = &definitionEventStore{gorm: s.db}
 	s.vals = &valuesStore{gorm: s.db}
 	s.valuesApproval = &valuesApprovalStore{gorm: s.db}
 	s.valuesLifecycle = &valuesLifecycleStore{gorm: s.db}
@@ -299,7 +297,6 @@ func (s *Store) Operators() store.OperatorStore                             { re
 func (s *Store) Sessions() store.SessionStore                               { return s.sessions }
 func (s *Store) Outbox() store.OutboxStore                                  { return s.outbox }
 func (s *Store) Definitions() store.DefinitionStore                         { return s.defs }
-func (s *Store) DefinitionEvents() store.DefinitionEventStore               { return s.defEvents }
 func (s *Store) Values() store.ValuesStore                                  { return s.vals }
 func (s *Store) ValuesLifecycle() store.ValuesLifecycleStore                { return s.valuesLifecycle }
 func (s *Store) PrepareSessions() store.PrepareSessionStore                 { return s.prepareSessions }

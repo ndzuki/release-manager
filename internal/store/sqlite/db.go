@@ -47,7 +47,6 @@ type Store struct {
 	syncRequests     *inventorySyncRequestStore
 	custEvents       *customerEventStore
 	customerCreates  *customerBindingCreateStore
-	defEvents        *definitionEventStore
 	candidateArts    *candidateArtifactStore
 	preflightCycles  *preflightLifecycleStore
 	auditExports     *auditExportStore
@@ -95,7 +94,6 @@ func Open(dsn string) (*Store, error) {
 	s.ops = &operationStore{db: db}
 	s.timeline = &timelineStore{db: db}
 	s.defs = &definitionStore{db: db}
-	s.defEvents = &definitionEventStore{db: db}
 	s.vals = &valuesStore{db: db}
 	s.valuesApproval = &valuesApprovalStore{db: db}
 	s.customers = &customerStore{db: db}
@@ -186,9 +184,6 @@ func (s *Store) Outbox() store.OutboxStore { return s.outbox }
 
 // Definitions returns the DefinitionStore.
 func (s *Store) Definitions() store.DefinitionStore { return s.defs }
-
-// DefinitionEvents returns the DefinitionEventStore.
-func (s *Store) DefinitionEvents() store.DefinitionEventStore { return s.defEvents }
 
 // Values returns the ValuesStore.
 func (s *Store) Values() store.ValuesStore { return s.vals }

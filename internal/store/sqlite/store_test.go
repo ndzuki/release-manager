@@ -1224,7 +1224,7 @@ func TestDefinitionEventPersistence(t *testing.T) {
 	}
 	require.NoError(t, st.Definitions().Create(ctx, def, event))
 
-	events, err := st.DefinitionEvents().List(ctx, def.ID)
+	events, err := definitionEventsByDefinition(st, def.ID)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "definition_created", events[0].EventType)
@@ -2531,4 +2531,32 @@ func tokensByCluster(st *sqlitestore.Store, clusterID string) ([]enrollmentToken
 		tokens = append(tokens, row)
 	}
 	return tokens, rows.Err()
+}
+
+// definitionEventRow mirrors the columns these assertions use: DefinitionEventStore.List was
+// removed with the TASK-226 dead-surface batch (no shipping caller), so the fixture reads the
+// rows directly.
+type definitionEventRow struct {
+	DefinitionID string
+	EventType    string
+}
+
+func definitionEventsByDefinition(st *sqlitestore.Store, definitionID string) ([]definitionEventRow, error) {
+	rows, err := st.DB().QueryContext(context.Background(),
+		`SELECT definition_id, event_type FROM release_definition_events WHERE definition_id = ? ORDER BY created_at, id`,
+		definitionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []definitionEventRow
+	for rows.Next() {
+		var row definitionEventRow
+		if err := rows.Scan(&row.DefinitionID, &row.EventType); err != nil {
+			return nil, err
+		}
+		events = append(events, row)
+	}
+	return events, rows.Err()
 }

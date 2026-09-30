@@ -41,18 +41,6 @@ exceptions:
     method: Create
     reason: "[test-utility] 生产 0、测试 8；生产落库由操作创建 UoW 的 insertConvergenceTask 承担（sqlite/uow.go:132）——本方法供 fixture 播种任意收敛任务状态"
     review_by: "2026-12-31"
-  - interface: DefinitionEventStore
-    method: List
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：它是 release_definition_events 的**唯一读面**，5 处测试（sqlite/store_test.go:1258、postgres/store_test.go:1084、orchestrator/definition_test.go:68/338/376）用它断言定义生命周期事件已落库；无替代读取路径 ⇒ 保留（故 Store.DefinitionEvents 访问器与接口不进入级联删除）"
-    review_by: "2026-12-31"
-  - interface: EmergencyIntentStore
-    method: GetActiveLocksForDefinition
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：3 处测试断言 release 后意图从活跃锁列表被排除；唯一生产读面 HasUnresolvedForDefinition 是不同谓词（bool+IDs）⇒ 在测试内用 SQL 复刻谓词等于只测测试自己的副本 ⇒ 保留待裁定"
-    review_by: "2026-12-31"
-  - interface: EmergencyIntentStore
-    method: ListPendingDeliveryByDefinition
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者 orchestrator/emergency_test.go:635 断言 assert.Empty(intents)（身份不合法时不得落意图）；无替代只读面，测试内复刻谓词同样失去意义 ⇒ 保留待裁定"
-    review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: ResolveEmergencyEffect
     reason: "[unwired-write] 保留（B-4b 2026-09-30 取证，0/4 可迁移；口径：strict `EmergencyIntents().ResolveEmergencyEffect(` 命中 4 处 = sqlite/emergency_store_test.go:163/182/204 + orchestrator/service_test.go:2514，全部为测试）：名义替代 ConvergeEmergencyResult（生产调用 internal/operator/service.go:881）是严格超集但语义不可替换——① EmergencyConvergeResult 无 Timeline 字段，而 :163 断言 resolveResult.Timeline 非空且 Kind=EMERGENCY_EFFECT_RESOLVED；② :204 断言「非终态 ⇒ ErrInvalidState」，而 Converge 对非终态会沿 EMERGENCY 链推进到终态而非报错；③ Converge 还要求 IntentID+终态 Status，NOT_APPLIED 时额外 abandonConvergenceTaskTx 并回写投影 EffectStatus；④ 已解析为「不同 effect」时 Resolve 返回 Resolved=false，Converge 返回 ErrInvalidState（幂等契约不同）⇒ 整条保留"
@@ -82,10 +70,6 @@ exceptions:
     reason: "[unwired-read] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入、REQ-064:266 不定义发布 ⇒ 显式「只写不读」；该接口只有 Get ⇒ 无级联；保留供 TASK-232 的 rollout 读面"
     review_by: "2026-12-31"
   - interface: Store
-    method: DefinitionEvents
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
-    review_by: "2026-12-31"
-  - interface: Store
     method: RolloutTrackings
     reason: "[accessor-without-consumer] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入，REQ-064:266 明确不定义事件发布 ⇒ 显式「只写不读」；保留供 TASK-232 的 rollout 读面（upgrade_result 已合、rollout 计数未接）"
     review_by: "2026-12-31"
@@ -108,10 +92,6 @@ exceptions:
   - interface: ValuesApprovalReader
     method: ListDecisions
     reason: "[unwired-read] 保留（用户裁定 2026-09-30）：决策证据读面无契约承诺（REQ-068 只承诺保留），TASK-231 未覆盖该表 ⇒ 显式「仅保留、不对外读」，待产品决定是否补读 RPC"
-    review_by: "2026-12-31"
-  - interface: ValuesApprovalReader
-    method: ListNotificationOutbox
-    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者是 orchestrator/values_approval_test.go:790 的 approvalNotificationEntries helper（断言审批流程已写通知 outbox）；生产投递走 ClaimPending（会改状态）⇒ 无等价只读面 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: Create

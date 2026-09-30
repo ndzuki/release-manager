@@ -24,6 +24,7 @@ package postgres_test
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -680,7 +681,7 @@ func TestEmergencyReleaseLock_ModesAndGuards(t *testing.T) {
 	// A released-but-UNKNOWN intent no longer blocks new operations
 	// (D7/AUDITED_OVERRIDE release semantics): it is excluded from
 	// GetActiveLocksForDefinition and HasUnresolvedForDefinition.
-	active, err := st.EmergencyIntents().GetActiveLocksForDefinition(ctx, "pg-def-release")
+	active, err := activeLocksByDefinition(st, "pg-def-release")
 	require.NoError(t, err)
 	releasedIDs := make([]string, 0)
 	for _, lock := range active {
@@ -785,4 +786,39 @@ func TestConvergeEmergencyResult_NotAppliedAbandonsThePendingTask(t *testing.T) 
 	require.NoError(t, err)
 	hasPending := len(pendingTasks) > 0
 	assert.False(t, hasPending, "AC-058-31: the definition must no longer be blocked")
+}
+
+// activeLockRow mirrors the id column these assertions use. GetActiveLocksForDefinition was
+// removed with the TASK-226 dead-surface batch (no shipping caller). This query MIRRORS the
+// predicate of listActiveEmergencyIntents in the engine verified above:
+//
+//	JOIN operations ON operations.id = emergency_intents.operation_id
+//	WHERE release_definition_id = $1
+//	  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+//	       OR emergency_intents.effect_status = 'UNKNOWN')
+//	  AND lock_released_at IS NULL
+type activeLockRow struct{ ID string }
+
+func activeLocksByDefinition(st interface{ SQLDB() *sql.DB }, definitionID string) ([]activeLockRow, error) {
+	rows, err := st.SQLDB().QueryContext(context.Background(), `
+		SELECT emergency_intents.id FROM emergency_intents
+		JOIN operations ON operations.id = emergency_intents.operation_id
+		WHERE emergency_intents.release_definition_id = $1
+		  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+		       OR emergency_intents.effect_status = 'UNKNOWN')
+		  AND emergency_intents.lock_released_at IS NULL
+		ORDER BY emergency_intents.created_at ASC`, definitionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var locks []activeLockRow
+	for rows.Next() {
+		var row activeLockRow
+		if err := rows.Scan(&row.ID); err != nil {
+			return nil, err
+		}
+		locks = append(locks, row)
+	}
+	return locks, rows.Err()
 }

@@ -632,9 +632,13 @@ func TestExecuteEmergencyChangeRejectsMissingWorkloadIdentity(t *testing.T) {
 	assert.Equal(t, "invalid_workload_ref", connectErrorReason(err))
 	assert.Empty(t, dispatcher.commands, "no command may be dispatched without identity")
 
-	intents, intentErr := st.EmergencyIntents().ListPendingDeliveryByDefinition(t.Context(), "def-001")
-	require.NoError(t, intentErr)
-	assert.Empty(t, intents, "no intent may be persisted without identity")
+	// Mirrors the removed ListPendingDeliveryByDefinition predicate
+	// (delivery_status != 'persisted'); the count keeps the assertion equivalent.
+	var pendingIntents int
+	require.NoError(t, testSQLDB(t, st).QueryRowContext(t.Context(),
+		`SELECT COUNT(*) FROM emergency_intents WHERE release_definition_id = ? AND delivery_status != 'persisted'`,
+		"def-001").Scan(&pendingIntents))
+	assert.Zero(t, pendingIntents, "no intent may be persisted without identity")
 }
 
 // AC-085-03: an identity whose kind/name/namespace disagrees with the

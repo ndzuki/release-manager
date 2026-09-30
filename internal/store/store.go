@@ -1344,8 +1344,6 @@ type EmergencyIntentStore interface {
 	GetByID(ctx context.Context, id string) (*EmergencyIntent, error)
 	GetByOperationID(ctx context.Context, operationID string) (*EmergencyIntent, error)
 	GetByCommandID(ctx context.Context, commandID string) (*EmergencyIntent, error)
-	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
-	ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	UpdateDeliveryStatus(ctx context.Context, id, status string) error
 	// PersistAck atomically marks a delivered emergency command as persisted and
 	// appends an ACK timeline entry in the same transaction (TASK-077 AC-077-01).
@@ -2049,11 +2047,6 @@ type ReleaseDefinitionEvent struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-// DefinitionEventStore provides read access to persisted definition events.
-type DefinitionEventStore interface {
-	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
-}
-
 // ValuesApprovalStore executes complete approval transitions atomically.
 type ValuesApprovalStore interface {
 	Submit(ctx context.Context, command ValuesApprovalCommand) (*ValuesApprovalResult, error)
@@ -2066,7 +2059,6 @@ type ValuesApprovalStore interface {
 type ValuesApprovalReader interface {
 	ListDecisions(ctx context.Context, revisionID string) ([]*ValuesRevisionDecision, error)
 	ListAuditOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
-	ListNotificationOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
 }
 
 // ValuesStore defines immutable revision reads and stable listing.
@@ -2693,7 +2685,6 @@ type Store interface {
 	Operations() OperationStore
 	Timeline() TimelineStore
 	Definitions() DefinitionStore
-	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
 	ValuesApproval() ValuesApprovalStore
 	ValuesApprovalEvidence() ValuesApprovalReader
