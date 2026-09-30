@@ -121,39 +121,6 @@ func decodeOperationCreateReplay(ctx context.Context, queryer operationQueryer, 
 	return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
 }
 
-func (s *operationStore) CreateIfAvailable(ctx context.Context, op *store.Operation) error {
-	tx, err := s.gorm.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin create operation: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit
-
-	query := `
-		SELECT COUNT(*) FROM operations
-		WHERE release_definition_id = ?
-		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
-	`
-	if op.OperationType == store.OperationEmergency {
-		query += " AND operation_type != 'EMERGENCY'"
-	}
-
-	var count int
-	if err := tx.QueryRowContext(ctx, query, op.ReleaseDefinitionID).Scan(&count); err != nil {
-		return fmt.Errorf("count conflicting operations: %w", err)
-	}
-	if count > 0 {
-		return store.ErrReleaseBusy
-	}
-
-	if err := createOperation(ctx, tx, op); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit create operation: %w", err)
-	}
-	return nil
-}
-
 type operationExecer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }

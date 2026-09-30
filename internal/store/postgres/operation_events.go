@@ -8,8 +8,6 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-type operationEventStore struct{ gorm *DB }
-
 // insertOperationEvent is the only writer of operation events: the operation state
 // machine calls it inside its transitions (see operations.go and emergency_converge.go).
 func insertOperationEvent(ctx context.Context, execer operationExecer, ev *store.OperationStateChangedEvent) error {

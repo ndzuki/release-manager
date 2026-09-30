@@ -20,7 +20,6 @@ import (
 type Store struct {
 	db               *sql.DB
 	ops              *operationStore
-	operationEvents  *operationEventStore
 	timeline         *timelineStore
 	defs             *definitionStore
 	vals             *valuesStore
@@ -94,7 +93,6 @@ func Open(dsn string) (*Store, error) {
 
 	s := &Store{db: db}
 	s.ops = &operationStore{db: db}
-	s.operationEvents = &operationEventStore{db: db}
 	s.timeline = &timelineStore{db: db}
 	s.defs = &definitionStore{db: db}
 	s.defEvents = &definitionEventStore{db: db}
@@ -141,9 +139,6 @@ func Open(dsn string) (*Store, error) {
 
 // Operations returns the OperationStore.
 func (s *Store) Operations() store.OperationStore { return s.ops }
-
-// OperationEvents returns the operation state event store.
-func (s *Store) OperationEvents() store.OperationEventStore { return s.operationEvents }
 
 // Timeline returns the ordered Operation timeline store.
 func (s *Store) Timeline() store.TimelineStore { return s.timeline }
@@ -271,8 +266,6 @@ func (s *Store) InventorySyncRequests() store.InventorySyncRequestStore { return
 
 // CandidateArtifacts returns the CandidateArtifactStore.
 func (s *Store) CandidateArtifacts() store.CandidateArtifactStore { return s.candidateArts }
-
-func (s *Store) ArtifactEvents() store.ArtifactEventStore { return unsupportedArtifactEventStore{} }
 
 func (s *Store) ValidationOutbox() store.ValidationOutboxStore {
 	return unsupportedValidationOutboxStore{}

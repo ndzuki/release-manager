@@ -449,7 +449,7 @@ func TestOperationTransition_OptimisticLockAndEvent(t *testing.T) {
 	assert.Equal(t, 5, persisted.StateVersion)
 }
 
-func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
+func TestOperationCreateIdempotentCheckAvailableAllowsEmergencyPeers(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
@@ -468,8 +468,12 @@ func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
 		ReleaseDefinitionID: def.ID,
 		IdempotencyKey:      "emergency-two-key",
 	}
-	require.NoError(t, st.Operations().CreateIfAvailable(ctx, first))
-	require.NoError(t, st.Operations().CreateIfAvailable(ctx, second))
+	// The production creation seam for a guarded create is CreateIdempotent with
+	// CheckAvailable (rollback.go): it is where availability is checked now.
+	_, opErr := st.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{Operation: first, CheckAvailable: true})
+	require.NoError(t, opErr)
+	_, opErr = st.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{Operation: second, CheckAvailable: true})
+	require.NoError(t, opErr)
 
 	standard := &store.Operation{
 		ID:                  "standard-blocked",
@@ -478,7 +482,8 @@ func TestOperationCreateIfAvailable_AllowsEmergencyPeers(t *testing.T) {
 		ReleaseDefinitionID: def.ID,
 		IdempotencyKey:      "standard-blocked-key",
 	}
-	assert.ErrorIs(t, st.Operations().CreateIfAvailable(ctx, standard), store.ErrReleaseBusy)
+	_, blockedErr := st.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{Operation: standard, CheckAvailable: true})
+	assert.ErrorIs(t, blockedErr, store.ErrReleaseBusy)
 }
 
 func TestFinalizeUpgradeRollsBackOnInventoryFailure(t *testing.T) {
