@@ -27,7 +27,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: BindingStore
     method: ListByCustomer
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者是 sqlite/customer_bindings_test.go:42 的 fixture，它断言 require.Len(bindings,1)（恰好一条绑定）并取 binding.ID 关联事件；生产读面只有 GetByOrgAndCustomer/ListByOrg，前者表达不了「恰好一条」⇒ 改写即放宽断言 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
@@ -42,36 +42,28 @@ exceptions:
     reason: "[test-utility] 非事务版链接 API：两引擎现在都写链接表 bundle_candidate_artifacts（与生产同一关联），生产链路用 UoW 的 linkCandidateArtifacts / PG 的 LinkToBundleTx；本方法仅测试 fixture 使用（TASK-229）"
     review_by: "2026-12-31"
   - interface: ConvergenceTaskStore
-    method: BindRevision
-    reason: "[superseded] values_approval 的 store SQL 直接执行 revision 绑定，该方法无调用者"
-    review_by: "2026-12-31"
-  - interface: ConvergenceTaskStore
     method: Create
     reason: "[test-utility] 生产 0、测试 8；生产落库由操作创建 UoW 的 insertConvergenceTask 承担（sqlite/uow.go:132）——本方法供 fixture 播种任意收敛任务状态"
     review_by: "2026-12-31"
-  - interface: ConvergenceTaskStore
-    method: MarkConverged
-    reason: "[superseded] values_approval 的 store SQL 直接执行收敛标记，该方法无调用者"
-    review_by: "2026-12-31"
   - interface: CustomerStore
     method: GetBySlug
-    reason: "[unwired-read] customer slug 读取无调用者（按 id 读取是当前路径）"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：两台引擎各有它自己的测试 TestCustomerGetBySlug（sqlite/store_test.go:70、postgres/store_test.go:98）⇒ 删除方法即删除测试（丢断言）⇒ 保留待裁定；按 id 读取是当前生产路径"
     review_by: "2026-12-31"
   - interface: DefinitionEventStore
     method: List
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：它是 release_definition_events 的**唯一读面**，5 处测试（sqlite/store_test.go:1258、postgres/store_test.go:1084、orchestrator/definition_test.go:68/338/376）用它断言定义生命周期事件已落库；无替代读取路径 ⇒ 保留（故 Store.DefinitionEvents 访问器与接口不进入级联删除）"
     review_by: "2026-12-31"
   - interface: DefinitionStore
     method: SetCurrentBundle
-    reason: "[superseded] current_bundle_id 只由操作创建 UoW 写入（TASK-215 已记录），该方法无生产调用者"
+    reason: "[superseded] current_bundle_id 只由操作创建 UoW 写入（TASK-215）；保留（TASK-226 收尾实测 2026-09-30）：5 处测试是它自己的语义套件（sqlite/lifecycle_test.go 的 TestSetCurrentBundle_*：unarchive 决策表）+ bundles_reachability_test.go 的 2 处 fixture ⇒ 删除会删掉整段断言；其行为在生产由 UoW + orchestrator service 决策表承担"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: GetActiveLocksForDefinition
-    reason: "[unwired-read] 按定义读取活跃锁无调用者（紧急锁走 emergency 查询）"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：3 处测试断言 release 后意图从活跃锁列表被排除；唯一生产读面 HasUnresolvedForDefinition 是不同谓词（bool+IDs）⇒ 在测试内用 SQL 复刻谓词等于只测测试自己的副本 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: ListPendingDeliveryByDefinition
-    reason: "[unwired-read] 按定义读取待投递无调用者"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者 orchestrator/emergency_test.go:635 断言 assert.Empty(intents)（身份不合法时不得落意图）；无替代只读面，测试内复刻谓词同样失去意义 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: ResolveEmergencyEffect
@@ -83,15 +75,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: EnrollmentTokenStore
     method: ListByCluster
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
-    method: ListByCustomer
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: InventorySyncRequestStore
-    method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：3 处测试（sqlite/store_test.go:1335/1345/1392）断言 token 行数与状态（require.Len、pending 计数）；生产读面 GetPendingByCluster 只回 pending 单条、表达不了计数 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: OperationStore
     method: Create
@@ -100,10 +84,6 @@ exceptions:
   - interface: OperatorStore
     method: Create
     reason: "[unwired] 保留（B-4a 2026-09-30 取证，0/66 可迁移）：名义替代 OperatorManagement().EnrollOperator 语义更窄——它要求传入 pending token 并在事务内消费、总是插入一条 session、还会 supersede 同 cluster 的 active operator；66 处调用全是 fixture（无一处是注册事务本身）：受影响文件里多数根本没有注册令牌播种；相当一部分站点固定 CertSerial 或 Status（fixture 需指定身份/证书/状态，含非 active）；2 处（sqlite/postgres 的 TestOperatorCreateAndGetByCertSerial）插入语义就是被测对象 ⇒ 整条保留。（原先写的 14/18、37/66、24/66 是单一计数口径下的近似，独立复核按另一口径得 11/18、41/66、15/66；口径差异 ±3~9 处，不影响保留结论，故改为不依赖口径的表述。）"
-    review_by: "2026-12-31"
-  - interface: OperatorStore
-    method: ListByCustomer
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Update
@@ -115,7 +95,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: RolloutTrackingStore
     method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired-read] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入、REQ-064:266 不定义发布 ⇒ 显式「只写不读」；该接口只有 Get ⇒ 无级联；保留供 TASK-232 的 rollout 读面"
     review_by: "2026-12-31"
   - interface: Store
     method: DefinitionEvents
@@ -123,7 +103,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: Store
     method: RolloutTrackings
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    reason: "[accessor-without-consumer] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入，REQ-064:266 明确不定义事件发布 ⇒ 显式「只写不读」；保留供 TASK-232 的 rollout 读面（upgrade_result 已合、rollout 计数未接）"
     review_by: "2026-12-31"
   - interface: Store
     method: ScanResults
@@ -131,7 +111,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: Store
     method: ValuesApprovalEvidence
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    reason: "[accessor-without-consumer] 保留（用户裁定 2026-09-30）：REQ-068:143/:563 承诺决策证据保留为审计轨迹，但**无读 RPC 契约**；TASK-231 只让 audit_outbox 经 drain 进入 audit_events（审计查询面可达），决策证据表本身仍无读面 ⇒ 显式「仅保留、不对外读」，要读面须先补 AC。访问器保留（其子接口仍有 ListDecisions/ListAuditOutbox）"
     review_by: "2026-12-31"
   - interface: Store
     method: VulnerabilityExceptions
@@ -143,11 +123,11 @@ exceptions:
     review_by: "2026-12-31"
   - interface: ValuesApprovalReader
     method: ListDecisions
-    reason: "[unwired-read] 决策记录读取无调用者"
+    reason: "[unwired-read] 保留（用户裁定 2026-09-30）：决策证据读面无契约承诺（REQ-068 只承诺保留），TASK-231 未覆盖该表 ⇒ 显式「仅保留、不对外读」，待产品决定是否补读 RPC"
     review_by: "2026-12-31"
   - interface: ValuesApprovalReader
     method: ListNotificationOutbox
-    reason: "[unwired-read] 通知 outbox 读取无调用者（投递 worker 走 ClaimPending 一类方法）"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者是 orchestrator/values_approval_test.go:790 的 approvalNotificationEntries helper（断言审批流程已写通知 outbox）；生产投递走 ClaimPending（会改状态）⇒ 无等价只读面 ⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: Create
@@ -155,11 +135,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: GetByDigest
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: ValuesStore
-    method: GetLatestApproved
-    reason: "[unwired-read] 最新已批准 revision 读取无调用者"
+    reason: "[unwired-read] 保留（TASK-226 收尾实测 2026-09-30）：唯一调用者是它自己的测试 TestValuesRevisionGetByDigest（sqlite/store_test.go:695-712）⇒ 删除方法即删除该测试（丢断言）⇒ 保留待裁定"
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get

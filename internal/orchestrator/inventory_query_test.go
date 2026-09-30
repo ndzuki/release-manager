@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -149,10 +150,16 @@ func TestTriggerInventorySyncCreatesOneDurableCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, first.Msg.GetSyncRequestId())
 
-	request, err := st.InventorySyncRequests().Get(ctx, first.Msg.GetSyncRequestId())
-	require.NoError(t, err)
-	assert.Equal(t, store.InventorySyncPending, request.Status)
-	outbox, err := st.Outbox().GetByCommandID(ctx, request.CommandID)
+	// The durable row is observed directly: InventorySyncRequestStore.Get was removed with the
+	// TASK-226 dead-surface batch (no shipping reader), so the fixture reads what it asserts.
+	sqliteStore, ok := st.(interface{ DB() *sql.DB })
+	require.True(t, ok)
+	var requestStatus, requestCommandID string
+	require.NoError(t, sqliteStore.DB().QueryRowContext(ctx,
+		`SELECT status, command_id FROM inventory_sync_requests WHERE id = ?`,
+		first.Msg.GetSyncRequestId()).Scan(&requestStatus, &requestCommandID))
+	assert.Equal(t, string(store.InventorySyncPending), requestStatus)
+	outbox, err := st.Outbox().GetByCommandID(ctx, requestCommandID)
 	require.NoError(t, err)
 	assert.Equal(t, inventorySyncOperationType, outbox.OperationType)
 	assert.Contains(t, string(outbox.Payload), first.Msg.GetSyncRequestId())

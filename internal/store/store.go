@@ -1383,8 +1383,6 @@ type ConvergenceTaskStore interface {
 	ListByDefinition(ctx context.Context, definitionID, statusFilter string) ([]*ConvergenceTask, error)
 	GetByOperationID(ctx context.Context, operationID string) (*ConvergenceTask, error)
 	HasPendingPromotionPath(ctx context.Context, definitionID string, promotionPaths []string) (bool, error)
-	MarkConverged(ctx context.Context, id, revisionID string) error
-	BindRevision(ctx context.Context, id, revisionID, revisionStatus string) error
 }
 
 // --- Emergency configuration (REQ-079) ---
@@ -1930,7 +1928,6 @@ type InventorySyncRequest struct {
 
 type InventorySyncRequestStore interface {
 	CreateIfAvailable(ctx context.Context, request *InventorySyncRequest, outbox *OutboxEntry) (*InventorySyncRequest, bool, error)
-	Get(ctx context.Context, id string) (*InventorySyncRequest, error)
 	UpdateStatus(ctx context.Context, id string, status InventorySyncRequestStatus, lastError string) error
 }
 
@@ -2078,7 +2075,6 @@ type ValuesStore interface {
 	Create(ctx context.Context, revision *ValuesRevision) error
 	Get(ctx context.Context, id string) (*ValuesRevision, error)
 	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
-	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetLatest(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	ListPage(ctx context.Context, filter ValuesListFilter) (*ValuesPage, error)
 }
@@ -2227,7 +2223,6 @@ type OperatorLifecycleStore interface {
 type EnrollmentTokenStore interface {
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
-	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
 	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
 }
 
@@ -2246,7 +2241,6 @@ type OperatorStore interface {
 	GetActiveByName(ctx context.Context, customerID, name string) (*Operator, error)
 	Update(ctx context.Context, op *Operator) error
 	ListByClusterFilter(ctx context.Context, customerID, clusterID string, filter OperatorListFilter, pageSize int32, cursor *OperatorCursor) (*OperatorPage, error)
-	ListByCustomer(ctx context.Context, customerID string) ([]*Operator, error)
 	ListByCluster(ctx context.Context, clusterID string) ([]*Operator, error)
 }
 

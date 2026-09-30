@@ -76,12 +76,6 @@ func (s *inventorySyncRequestStore) CreateIfAvailable(
 	return request, true, nil
 }
 
-func (s *inventorySyncRequestStore) Get(ctx context.Context, id string) (*store.InventorySyncRequest, error) {
-	return scanInventorySyncRequest(s.db.QueryRowContext(ctx, `
-		SELECT id, customer_id, cluster_id, operator_id, command_id, status, last_error, created_at, updated_at
-		FROM inventory_sync_requests WHERE id = ?`, id))
-}
-
 func (s *inventorySyncRequestStore) UpdateStatus(ctx context.Context, id string, status store.InventorySyncRequestStatus, lastError string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE inventory_sync_requests SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`,

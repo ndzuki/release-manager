@@ -133,43 +133,6 @@ func (s *convergenceTaskStore) HasPendingPromotionPath(ctx context.Context, defi
 	return false, nil
 }
 
-func (s *convergenceTaskStore) MarkConverged(ctx context.Context, id, revisionID string) error {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE convergence_tasks
-		SET status = 'converged', active_revision_id = ?, active_revision_status = 'approved', converged_at = ?
-		WHERE id = ? AND status = 'pending_promotion'
-	`, revisionID, now, id)
-	if err != nil {
-		return fmt.Errorf("mark convergence task converged: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("convergence rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
-}
-
-func (s *convergenceTaskStore) BindRevision(ctx context.Context, id, revisionID, revisionStatus string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?
-	`, revisionID, revisionStatus, id)
-	if err != nil {
-		return fmt.Errorf("bind convergence revision: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("bind revision rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
-}
-
 const convergenceTaskSelect = `
 	SELECT id, operation_id, release_definition_id, action, target_summary,
 		reason, promotion_paths, status, active_revision_id,

@@ -82,14 +82,6 @@ func (s *valuesStore) GetByDigest(ctx context.Context, definitionID, digest stri
 		ORDER BY version DESC, id DESC LIMIT 1
 	`, definitionID, digest))
 }
-
-func (s *valuesStore) GetLatestApproved(ctx context.Context, definitionID string) (*store.ValuesRevision, error) {
-	return scanValues(s.db.QueryRowContext(ctx, valuesSelect+`
-		WHERE release_definition_id = ? AND status = 'approved'
-		ORDER BY version DESC, id DESC LIMIT 1
-	`, definitionID))
-}
-
 func (s *valuesStore) GetLatest(ctx context.Context, definitionID string) (*store.ValuesRevision, error) {
 	return scanValues(s.db.QueryRowContext(ctx, valuesSelect+`
 		WHERE release_definition_id = ?

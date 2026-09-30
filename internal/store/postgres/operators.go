@@ -76,18 +76,6 @@ ORDER BY created_at DESC LIMIT 1
 	return scanEnrollmentToken(row)
 }
 
-// ListByCustomer returns all enrollment tokens for a customer.
-func (s *enrollmentTokenStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.EnrollmentToken, error) {
-	rows, err := s.gorm.QueryContext(ctx, `SELECT `+enrollmentTokenSelect+`
-FROM enrollment_tokens WHERE customer_id = ?
-`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list tokens by customer: %w", err)
-	}
-	defer rows.Close()
-	return scanEnrollmentTokens(rows)
-}
-
 // ListByCluster returns all enrollment tokens for a cluster.
 func (s *enrollmentTokenStore) ListByCluster(ctx context.Context, clusterID string) ([]*store.EnrollmentToken, error) {
 	rows, err := s.gorm.QueryContext(ctx, `SELECT `+enrollmentTokenSelect+`
@@ -286,18 +274,6 @@ func (s *operatorStore) GetActiveByName(ctx context.Context, customerID, name st
 FROM operators WHERE customer_id = ? AND operator_name = ? AND status = ?
 `, customerID, name, string(store.OperatorActive))
 	return scanOperator(row)
-}
-
-// ListByCustomer returns all operators for a customer.
-func (s *operatorStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.Operator, error) {
-	rows, err := s.gorm.QueryContext(ctx, `SELECT `+operatorSelect+`
-FROM operators WHERE customer_id = ?
-`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list operators by customer: %w", err)
-	}
-	defer rows.Close()
-	return scanOperators(rows)
 }
 
 // ListByCluster returns all operators for a cluster.

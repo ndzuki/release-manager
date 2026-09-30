@@ -879,7 +879,10 @@ func TestCreateValuesRevision_ConvergenceTaskConflictRollsBackSession(t *testing
 	require.NoError(t, err)
 
 	// Simulate drift: the task is already bound to another revision.
-	require.NoError(t, f.st.ConvergenceTasks().BindRevision(f.ctx, "task-vr-1", "some-other-revision", "draft"))
+	_, bindErr := f.st.DB().ExecContext(f.ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		"some-other-revision", "draft", "task-vr-1")
+	require.NoError(t, bindErr)
 
 	request := connect.NewRequest(&orchestratorv1.CreateValuesRevisionRequest{
 		ReleaseDefinitionId: f.defID,
@@ -1316,7 +1319,10 @@ func TestCreateValuesRevision_InitialConvergenceDriftFailsParentConflict(t *test
 // with convergence_conflict carrying the conflicting task IDs.
 func TestCreatePrepareSession_ConvergenceConflictCarriesTaskIDs(t *testing.T) {
 	f := newPrepareFixture(t)
-	require.NoError(t, f.st.ConvergenceTasks().BindRevision(f.ctx, "task-vr-1", "other-revision", "draft"))
+	_, bindErr := f.st.DB().ExecContext(f.ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		"other-revision", "draft", "task-vr-1")
+	require.NoError(t, bindErr)
 
 	request := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
 		ReleaseDefinitionId: f.defID,
@@ -1356,7 +1362,10 @@ func TestCreatePrepareSession_PathConflictCarriesTaskIDs(t *testing.T) {
 		SubmittedAt:         time.Now().UTC(),
 		CreatedAt:           time.Now().UTC(),
 	}))
-	require.NoError(t, f.st.ConvergenceTasks().BindRevision(f.ctx, "task-vr-2", "draft-revision", "draft"))
+	_, bindErr := f.st.DB().ExecContext(f.ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		"draft-revision", "draft", "task-vr-2")
+	require.NoError(t, bindErr)
 
 	request := connect.NewRequest(&orchestratorv1.CreatePrepareSessionRequest{
 		ReleaseDefinitionId: f.defID,

@@ -85,27 +85,6 @@ func (s *inventorySyncRequestStore) CreateIfAvailable(
 	return request, true, nil
 }
 
-func (s *inventorySyncRequestStore) Get(ctx context.Context, id string) (*store.InventorySyncRequest, error) {
-	return s.scan(ctx, `WHERE id = ?`, id)
-}
-
-func (s *inventorySyncRequestStore) scan(ctx context.Context, suffix string, args ...any) (*store.InventorySyncRequest, error) {
-	row := s.gorm.QueryRowContext(ctx, `
-		SELECT id, customer_id, cluster_id, operator_id, command_id, status, last_error, created_at, updated_at
-		FROM inventory_sync_requests `+suffix, args...)
-	var request store.InventorySyncRequest
-	var status string
-	if err := row.Scan(&request.ID, &request.CustomerID, &request.ClusterID, &request.OperatorID,
-		&request.CommandID, &status, &request.LastError, &request.CreatedAt, &request.UpdatedAt); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("scan inventory sync request: %w", err)
-	}
-	request.Status = store.InventorySyncRequestStatus(status)
-	return &request, nil
-}
-
 func (s *inventorySyncRequestStore) UpdateStatus(ctx context.Context, id string, status store.InventorySyncRequestStatus, lastError string) error {
 	result, err := s.gorm.ExecContext(ctx, `
 		UPDATE inventory_sync_requests SET status = ?, last_error = ?, updated_at = ? WHERE id = ?

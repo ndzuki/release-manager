@@ -616,8 +616,10 @@ func TestValuesRejectClearsConvergenceBinding(t *testing.T) {
 		CreatedByUserID:     "creator",
 	}
 	require.NoError(t, st.Values().Create(ctx, revision))
-	require.NoError(t, st.ConvergenceTasks().BindRevision(
-		ctx, result.ConvergenceTask.ID, revision.ID, string(store.ValuesStatusPendingApproval)))
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		revision.ID, string(store.ValuesStatusPendingApproval), result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
 
 	bound, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
 	require.NoError(t, err)
@@ -659,8 +661,10 @@ func TestValuesApproveConvergesBoundTasks(t *testing.T) {
 		CreatedByUserID:     "creator",
 	}
 	require.NoError(t, st.Values().Create(ctx, revision))
-	require.NoError(t, st.ConvergenceTasks().BindRevision(
-		ctx, result.ConvergenceTask.ID, revision.ID, string(store.ValuesStatusPendingApproval)))
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		revision.ID, string(store.ValuesStatusPendingApproval), result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
 
 	_, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
 		RevisionID: revision.ID, ExpectedStateVersion: 1, ActorUserID: "approver", Authorized: true,
@@ -695,8 +699,10 @@ func TestValuesDiscardUnbindsConvergenceTasks(t *testing.T) {
 		ActorUserID: "creator",
 	})
 	require.NoError(t, err)
-	require.NoError(t, st.ConvergenceTasks().BindRevision(
-		ctx, result.ConvergenceTask.ID, created.Revision.ID, string(store.ValuesStatusDraft)))
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		created.Revision.ID, string(store.ValuesStatusDraft), result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
 
 	bound, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
 	require.NoError(t, err)

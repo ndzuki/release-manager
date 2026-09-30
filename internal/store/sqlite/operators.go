@@ -225,18 +225,6 @@ FROM operators WHERE customer_id = ? AND operator_name = ? AND status = ?
 	return scanOperator(row)
 }
 
-// ListByCustomer returns all operators for a customer.
-func (s *operatorStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.Operator, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+operatorSelect+`
-FROM operators WHERE customer_id = ?
-`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list operators by customer: %w", err)
-	}
-	defer rows.Close()
-	return scanOperators(rows)
-}
-
 // ListByCluster returns all operators for a cluster.
 func (s *operatorStore) ListByCluster(ctx context.Context, clusterID string) ([]*store.Operator, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+operatorSelect+`
@@ -642,19 +630,6 @@ func scanRowOperator(row interface{ Scan(...interface{}) error }) (*store.Operat
 // ---------------------------------------------------------------------------
 // EnrollmentToken list methods (REQ-015)
 // ---------------------------------------------------------------------------
-
-// ListByCustomer returns all enrollment tokens for a customer.
-func (s *enrollmentTokenStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.EnrollmentToken, error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name, created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id
-FROM enrollment_tokens WHERE customer_id = ?
-`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list tokens by customer: %w", err)
-	}
-	defer rows.Close()
-	return scanEnrollmentTokens(rows)
-}
 
 // ListByCluster returns all enrollment tokens for a cluster.
 func (s *enrollmentTokenStore) ListByCluster(ctx context.Context, clusterID string) ([]*store.EnrollmentToken, error) {
