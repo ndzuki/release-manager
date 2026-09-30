@@ -60,6 +60,8 @@ func loadExceptions(path, today string) (map[string]exception, error) {
 
 func main() {
 	migrations := flag.String("migrations", "migrations", "directory holding the PostgreSQL *.up.sql migrations")
+	// The comparison covers table names, column names, storage classes and nullability;
+	// default *expressions*, other constraints and indexes are intentionally not compared.
 	exceptionsPath := flag.String("exceptions", "", "path to the schema-parity exception list (optional)")
 	flag.Parse()
 

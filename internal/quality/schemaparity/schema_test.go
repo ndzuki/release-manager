@@ -1,12 +1,17 @@
 package schemaparity
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 )
 
 func TestSQLiteStorageClass(t *testing.T) {
@@ -294,4 +299,142 @@ func TestDiffNegativeControlColumnMutation(t *testing.T) {
 	require.Len(t, report.Drift, 1)
 	assert.Equal(t, KindColumnMissingInPG, report.Drift[0].Kind)
 	assert.Equal(t, "last_seen_at", report.Drift[0].Column)
+}
+
+// Nullability and DEFAULT are applied in migration order: 000001 declares the
+// column NOT NULL DEFAULT ”, 000002 relaxes it exactly the way
+// migrations/000012_values_revision_management.up.sql does for
+// values_revisions.parent_revision_id. A parser that only reads CREATE TABLE
+// reports a false finding here (TASK-213's baseline measured precisely that).
+func TestSnapshotPostgresAppliesNullabilityInMigrationOrder(t *testing.T) {
+	dir := writeMigrations(t, map[string]string{
+		"000001_base.up.sql": `
+CREATE TABLE values_revisions (
+    id TEXT PRIMARY KEY,
+    parent_revision_id TEXT NOT NULL DEFAULT '',
+    note TEXT,
+    CHECK (parent_revision_id IS NOT NULL OR id <> '')
+);
+`,
+		"000002_relax.up.sql": `
+UPDATE values_revisions SET parent_revision_id = NULL WHERE parent_revision_id = '';
+ALTER TABLE values_revisions ALTER COLUMN parent_revision_id DROP NOT NULL;
+ALTER TABLE values_revisions ALTER COLUMN parent_revision_id DROP DEFAULT;
+ALTER TABLE values_revisions ALTER COLUMN note SET NOT NULL;
+ALTER TABLE values_revisions ADD COLUMN added TEXT NOT NULL DEFAULT 'x';
+`,
+	})
+
+	schema, err := SnapshotPostgres(dir)
+	require.NoError(t, err)
+	table, ok := schema.Table("values_revisions")
+	require.True(t, ok)
+
+	assert.True(t, table.Columns["parent_revision_id"].Nullable,
+		"DROP NOT NULL in a later migration must win over the CREATE TABLE's NOT NULL")
+	assert.False(t, table.Columns["parent_revision_id"].HasDefault, "DROP DEFAULT must clear the flag")
+	assert.False(t, table.Columns["note"].Nullable, "SET NOT NULL must be applied")
+	assert.False(t, table.Columns["id"].Nullable, "PRIMARY KEY implies NOT NULL")
+	assert.False(t, table.Columns["added"].Nullable, "ADD COLUMN parses its constraints")
+	assert.True(t, table.Columns["added"].HasDefault)
+}
+
+// CHECK never implies global non-nullability: values_revisions' real constraint
+// is `CHECK (parent_revision_id IS NOT NULL OR version = 1)`, and the column is
+// nullable. Quoted defaults are literals, not constraints.
+func TestNullabilityIgnoresCheckConstraintsAndQuotedText(t *testing.T) {
+	dir := writeMigrations(t, map[string]string{
+		"000001_probe.up.sql": `
+CREATE TABLE probe (
+    id TEXT,
+    guarded TEXT,
+    quoted TEXT DEFAULT 'NOT NULL',
+    pk_a TEXT,
+    pk_b TEXT,
+    PRIMARY KEY (pk_a, pk_b),
+    CHECK (guarded IS NOT NULL OR id = '')
+);
+`,
+	})
+
+	schema, err := SnapshotPostgres(dir)
+	require.NoError(t, err)
+	table, ok := schema.Table("probe")
+	require.True(t, ok)
+
+	assert.True(t, table.Columns["guarded"].Nullable, "CHECK must not make a column NOT NULL")
+	assert.True(t, table.Columns["id"].Nullable)
+	assert.True(t, table.Columns["quoted"].Nullable, "a quoted default is not a NOT NULL constraint")
+	assert.True(t, table.Columns["quoted"].HasDefault)
+	assert.False(t, table.Columns["pk_a"].Nullable, "table-level PRIMARY KEY implies NOT NULL")
+	assert.False(t, table.Columns["pk_b"].Nullable)
+}
+
+// The SQLite side reads the effective state from pragma_table_info: PRIMARY KEY
+// implies non-nullable, an explicit NOT NULL is honoured, a CHECK is not a
+// NOT NULL, and DEFAULT ” is a default (not an absent one).
+func TestSnapshotSQLiteNullability(t *testing.T) {
+	st, err := sqlitestore.Open(fmt.Sprintf("file:schemaparity-null-%d-%d?mode=memory&cache=shared",
+		os.Getpid(), time.Now().UnixNano()))
+	require.NoError(t, err)
+	defer st.Close()
+
+	_, err = st.DB().ExecContext(context.Background(), `
+		CREATE TABLE nullability_probe (
+			id TEXT PRIMARY KEY,
+			checked TEXT,
+			required TEXT NOT NULL,
+			with_default TEXT DEFAULT 'x',
+			blank_default TEXT DEFAULT '',
+			CHECK (checked IS NOT NULL OR id = '')
+		)`)
+	require.NoError(t, err)
+
+	schema, err := readSQLiteSchema(st.DB())
+	require.NoError(t, err)
+	table, ok := schema.Table("nullability_probe")
+	require.True(t, ok)
+
+	assert.False(t, table.Columns["id"].Nullable, "PRIMARY KEY implies NOT NULL on SQLite too")
+	assert.True(t, table.Columns["checked"].Nullable, "CHECK must not make a column NOT NULL")
+	assert.False(t, table.Columns["required"].Nullable)
+	assert.True(t, table.Columns["with_default"].Nullable)
+	assert.True(t, table.Columns["with_default"].HasDefault)
+	assert.True(t, table.Columns["blank_default"].HasDefault, "DEFAULT '' is a default, not an absent one")
+}
+
+// AC-213-02's falsifiable control: a column that one engine allows NULL on and
+// the other forbids is reported, in both directions, and equal nullability is
+// not.
+func TestDiffReportsNullabilityMismatch(t *testing.T) {
+	sqliteNullable := NewSchema()
+	sqliteNullable.AddTable("candidate_artifacts").SetColumn("last_seen_at", "TEXT", StorageText)
+	pgStrict := NewSchema()
+	strict := pgStrict.AddTable("candidate_artifacts")
+	strict.SetColumn("last_seen_at", "TIMESTAMPTZ", StorageText)
+	strict.SetNullable("last_seen_at", false)
+
+	report := Diff(sqliteNullable, pgStrict)
+	require.Len(t, report.Drift, 1)
+	assert.Equal(t, KindNullabilityMismatch, report.Drift[0].Kind)
+	assert.True(t, report.Failed())
+	assert.Contains(t, report.Drift[0].String(), "SQLite nullable=true default=false vs PostgreSQL nullable=false default=false")
+
+	// Opposite direction: PostgreSQL nullable, SQLite NOT NULL.
+	sqliteStrict := NewSchema()
+	sqliteStrict.AddTable("candidate_artifacts").SetColumn("last_seen_at", "TEXT", StorageText)
+	strictTable, ok := sqliteStrict.Table("candidate_artifacts")
+	require.True(t, ok)
+	strictTable.SetNullable("last_seen_at", false)
+	pgNullable := NewSchema()
+	pgNullable.AddTable("candidate_artifacts").SetColumn("last_seen_at", "TIMESTAMPTZ", StorageText)
+
+	report = Diff(sqliteStrict, pgNullable)
+	require.Len(t, report.Drift, 1)
+	assert.Equal(t, KindNullabilityMismatch, report.Drift[0].Kind)
+
+	// Control: the same nullability on both sides is not drift, even when the
+	// default presence differs (defaults are reported in the evidence, not failed).
+	same := Diff(sqliteNullable, pgNullable)
+	assert.Empty(t, same.Drift)
 }

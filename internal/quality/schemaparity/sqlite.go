@@ -47,6 +47,8 @@ func readSQLiteSchema(db *sql.DB) (*Schema, error) {
 		table := schema.AddTable(name)
 		for _, column := range columns {
 			table.SetColumn(column.Name, column.Raw, column.Storage)
+			table.SetNullable(column.Name, column.Nullable)
+			table.SetHasDefault(column.Name, column.HasDefault)
 		}
 	}
 	return schema, nil
@@ -75,9 +77,18 @@ func sqliteTableNames(db *sql.DB) ([]string, error) {
 	return names, nil
 }
 
+// sqliteColumns reads the column list of one table. It asks pragma_table_info
+// rather than parsing the DDL text: the pragma knows what the executed
+// migrations produced, including the incremental ALTERs, and it reports the
+// effective NOT NULL / DEFAULT / PRIMARY KEY state rather than the declaration.
+//
+// A PRIMARY KEY column counts as non-nullable on both engines even though a
+// SQLite rowid table tolerates NULL there: PostgreSQL makes its primary key
+// NOT NULL implicitly, so treating only the explicit constraint as non-nullable
+// would report every key column as drift.
 func sqliteColumns(db *sql.DB, table string) ([]Column, error) {
 	rows, err := db.QueryContext(context.Background(),
-		`SELECT name, type FROM pragma_table_info(?) ORDER BY cid`, table)
+		`SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid`, table)
 	if err != nil {
 		return nil, fmt.Errorf("read sqlite columns for %s: %w", table, err)
 	}
@@ -86,10 +97,18 @@ func sqliteColumns(db *sql.DB, table string) ([]Column, error) {
 	var columns []Column
 	for rows.Next() {
 		var name, raw string
-		if err := rows.Scan(&name, &raw); err != nil {
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&name, &raw, &notNull, &defaultValue, &primaryKey); err != nil {
 			return nil, fmt.Errorf("scan sqlite column for %s: %w", table, err)
 		}
-		columns = append(columns, Column{Name: name, Raw: raw, Storage: SQLiteStorageClass(raw)})
+		columns = append(columns, Column{
+			Name:       name,
+			Raw:        raw,
+			Storage:    SQLiteStorageClass(raw),
+			Nullable:   notNull == 0 && primaryKey == 0,
+			HasDefault: defaultValue.Valid,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate sqlite columns for %s: %w", table, err)

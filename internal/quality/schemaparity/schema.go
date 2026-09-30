@@ -47,6 +47,18 @@ type Column struct {
 	// JSONB column is stored as either TEXT or BLOB in this project, so both are
 	// accepted. An empty Accept means Storage is the only correct class.
 	Accept []string
+	// Nullable reports whether the column admits NULL after every migration has
+	// been applied. A PRIMARY KEY column is not nullable on either engine --
+	// PostgreSQL makes it NOT NULL implicitly, and SQLite's rowid tables are
+	// treated the same way here -- while a CHECK constraint never implies
+	// global non-nullability (values_revisions.parent_revision_id carries
+	// `CHECK (parent_revision_id IS NOT NULL OR version = 1)` and is nullable).
+	Nullable bool
+	// HasDefault reports whether the column declares a DEFAULT. Only the boolean
+	// is compared: the default's text differs legitimately between the engines
+	// ('{}'::jsonb vs '{}'), so comparing it would produce noise rather than
+	// signal.
+	HasDefault bool
 }
 
 // Table is a named set of columns.
@@ -84,11 +96,35 @@ func (t *Table) SetColumn(name, raw, storage string) {
 }
 
 // SetColumnAccept adds or replaces a column with an explicit accepted-class set.
+// The column starts nullable and without a default, which is what an
+// unconstrained declaration means; the readers overwrite both flags once they
+// have parsed the constraints.
 func (t *Table) SetColumnAccept(name, raw, storage string, accept []string) {
 	if t.Columns == nil {
 		t.Columns = make(map[string]Column)
 	}
-	t.Columns[name] = Column{Name: name, Raw: raw, Storage: storage, Accept: accept}
+	t.Columns[name] = Column{Name: name, Raw: raw, Storage: storage, Accept: accept, Nullable: true}
+}
+
+// SetNullable overwrites the nullability flag of an existing column. It is a
+// no-op for an unknown column so a stale ALTER cannot invent one.
+func (t *Table) SetNullable(name string, nullable bool) {
+	column, ok := t.Columns[name]
+	if !ok {
+		return
+	}
+	column.Nullable = nullable
+	t.Columns[name] = column
+}
+
+// SetHasDefault overwrites the default-presence flag of an existing column.
+func (t *Table) SetHasDefault(name string, hasDefault bool) {
+	column, ok := t.Columns[name]
+	if !ok {
+		return
+	}
+	column.HasDefault = hasDefault
+	t.Columns[name] = column
 }
 
 // DropColumn removes a column.
@@ -149,6 +185,12 @@ const (
 	KindColumnMissingInSQLite = "column_missing_in_sqlite"
 	// KindColumnTypeMismatch: both sides have the column but its storage class differs.
 	KindColumnTypeMismatch = "column_type_mismatch"
+	// KindNullabilityMismatch: both sides have the column with a compatible storage
+	// class, but one admits NULL and the other does not. This is the class of drift
+	// TASK-163's review found: a NOT NULL column with no default on one engine and a
+	// nullable column on the other lets an empty value through one path and not the
+	// other, and the storage-class-only comparison could not see it.
+	KindNullabilityMismatch = "nullability_mismatch"
 )
 
 // Finding is one drift in a table present on both sides.
@@ -160,6 +202,11 @@ type Finding struct {
 	SQLiteStore string
 	PGRaw       string
 	PGStore     string
+	// Nullability evidence, filled for KindNullabilityMismatch.
+	SQLiteNullable bool
+	SQLiteDefault  bool
+	PGSQLNullable  bool
+	PGSQLDefault   bool
 }
 
 func (f Finding) String() string {
@@ -170,6 +217,9 @@ func (f Finding) String() string {
 	case KindColumnMissingInSQLite:
 		return fmt.Sprintf("%s.%s: [%s] declared by the PostgreSQL migrations (%s) but absent from SQLite",
 			f.Table, f.Column, f.Kind, f.PGRaw)
+	case KindNullabilityMismatch:
+		return fmt.Sprintf("%s.%s: [%s] SQLite nullable=%t default=%t vs PostgreSQL nullable=%t default=%t",
+			f.Table, f.Column, f.Kind, f.SQLiteNullable, f.SQLiteDefault, f.PGSQLNullable, f.PGSQLDefault)
 	default:
 		return fmt.Sprintf("%s.%s: [%s] SQLite %s (storage %s) vs PostgreSQL %s (storage %s)",
 			f.Table, f.Column, f.Kind, f.SQLiteRaw, f.SQLiteStore, f.PGRaw, f.PGStore)
@@ -219,6 +269,18 @@ func Diff(sqliteSchema, pgSchema *Schema) *Report {
 					Kind: KindColumnTypeMismatch, Table: name, Column: column,
 					SQLiteRaw: sc.Raw, SQLiteStore: sc.Storage,
 					PGRaw: pc.Raw, PGStore: pc.Storage,
+				})
+			}
+			// Nullability is compared only once the storage classes agree: a column
+			// that is missing or has the wrong type is already reported, and a second
+			// finding on the same column would just add noise.
+			if pgAccepts(pc, sc.Storage) && sc.Nullable != pc.Nullable {
+				report.Drift = append(report.Drift, Finding{
+					Kind: KindNullabilityMismatch, Table: name, Column: column,
+					SQLiteRaw: sc.Raw, SQLiteStore: sc.Storage,
+					PGRaw: pc.Raw, PGStore: pc.Storage,
+					SQLiteNullable: sc.Nullable, SQLiteDefault: sc.HasDefault,
+					PGSQLNullable: pc.Nullable, PGSQLDefault: pc.HasDefault,
 				})
 			}
 		}

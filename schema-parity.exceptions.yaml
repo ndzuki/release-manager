@@ -39,3 +39,9 @@ exceptions:
     reason: "Legacy baseline residue: PostgreSQL carries a boolean used, SQLite tracks used_at instead."
     expires_at: "2027-03-31"
 
+  # ── Real nullability divergence found by TASK-213's new comparison ────
+  - owner: "release-manager"
+    table: "candidate_artifacts"
+    column: "last_seen_at"
+    reason: "TASK-213 (2026-09-30): SQLite adds the column with `ALTER TABLE candidate_artifacts ADD COLUMN last_seen_at TEXT` (nullable, internal/store/sqlite/db.go) while PostgreSQL declares `last_seen_at TIMESTAMPTZ NOT NULL` (migrations/000007_bundle_services.up.sql). TASK-163's alignment backfilled the data (`UPDATE ... SET last_seen_at = created_at WHERE last_seen_at IS NULL`) but never made the SQLite column NOT NULL, so SQLite still accepts a row PostgreSQL rejects -- a real cross-engine divergence the storage-class comparison could not see. Fixing it changes production DDL (SQLite NOT NULL DEFAULT, or relax PostgreSQL), which is outside TASK-213's scope."
+    expires_at: "2027-03-31"
