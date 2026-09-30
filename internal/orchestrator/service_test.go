@@ -1162,7 +1162,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 	t.Run("AC-053-04 AC-053-13 AC-053-14 AC-053-18 AC-053-19 AC-053-22 revoke is scoped audited and idempotent", func(t *testing.T) {
 		op := &store.Operator{ID: "operator-managed", Name: "operator-managed", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-managed"}
 		require.NoError(t, st.Operators().Create(ctx, op))
-		require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-managed", OperatorID: op.ID, CustomerID: op.CustomerID, ClusterID: op.ClusterID, Status: store.SessionOnline, LastHeartbeat: time.Now().UTC()}))
+		require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-managed", OperatorID: op.ID, CustomerID: op.CustomerID, ClusterID: op.ClusterID, Status: store.SessionOnline, LastHeartbeat: time.Now().UTC()}))
 
 		_, err := svc.GetOperator(actorCtx, connect.NewRequest(&orchestratorv1.GetOperatorRequest{
 			CustomerId: "customer-operator", ClusterId: "other-cluster", OperatorId: op.ID,
@@ -1223,7 +1223,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 	t.Run("AC-053-21 and AC-053-22 retry closes a stream after the committed revoke response is lost", func(t *testing.T) {
 		op := &store.Operator{ID: "operator-retry-revoke", Name: "operator-retry-revoke", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-retry-revoke"}
 		require.NoError(t, st.Operators().Create(ctx, op))
-		require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-retry-revoke", OperatorID: op.ID, CustomerID: op.CustomerID, ClusterID: op.ClusterID, Status: store.SessionOnline, LastHeartbeat: time.Now().UTC()}))
+		require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-retry-revoke", OperatorID: op.ID, CustomerID: op.CustomerID, ClusterID: op.ClusterID, Status: store.SessionOnline, LastHeartbeat: time.Now().UTC()}))
 		flakyRevoker := &streamRevokerStub{err: errors.New("operator service unavailable")}
 		flakyService := NewService(st, trust.NewStubVerifier(st.Verifications(), nil, slog.New(slog.DiscardHandler)), "staging", flakyRevoker, slog.New(slog.DiscardHandler))
 
@@ -1294,7 +1294,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 		offline := &store.Operator{ID: "operator-offline", Name: "operator-offline", CustomerID: "customer-operator", ClusterID: "cluster-operator", CertSerial: "serial-offline", Status: store.OperatorSuperseded, RegisteredAt: time.Now().UTC().Add(-time.Hour)}
 		require.NoError(t, st.Operators().Create(ctx, offline))
 		lastHeartbeat := time.Now().UTC().Add(-5 * time.Minute)
-		require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-offline", OperatorID: offline.ID, CustomerID: offline.CustomerID, ClusterID: offline.ClusterID, Status: store.SessionOffline, StatusReason: &reason, LastHeartbeat: lastHeartbeat}))
+		require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-offline", OperatorID: offline.ID, CustomerID: offline.CustomerID, ClusterID: offline.ClusterID, Status: store.SessionOffline, StatusReason: &reason, LastHeartbeat: lastHeartbeat}))
 		detail, err := svc.GetOperator(actorCtx, connect.NewRequest(&orchestratorv1.GetOperatorRequest{CustomerId: offline.CustomerID, ClusterId: offline.ClusterID, OperatorId: offline.ID}))
 		require.NoError(t, err)
 		assert.Equal(t, orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_OFFLINE, detail.Msg.GetOperator().GetSummary().GetSessionStatus())

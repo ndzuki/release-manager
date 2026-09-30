@@ -75,7 +75,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: ResolveEmergencyEffect
-    reason: "[unwired-write] 紧急效果解析在记忆路径内完成，此方法无调用者"
+    reason: "[unwired-write] 保留（B-4b 2026-09-30 取证，0/4 可迁移；口径：strict `EmergencyIntents().ResolveEmergencyEffect(` 命中 4 处 = sqlite/emergency_store_test.go:163/182/204 + orchestrator/service_test.go:2514，全部为测试）：名义替代 ConvergeEmergencyResult（生产调用 internal/operator/service.go:881）是严格超集但语义不可替换——① EmergencyConvergeResult 无 Timeline 字段，而 :163 断言 resolveResult.Timeline 非空且 Kind=EMERGENCY_EFFECT_RESOLVED；② :204 断言「非终态 ⇒ ErrInvalidState」，而 Converge 对非终态会沿 EMERGENCY 链推进到终态而非报错；③ Converge 还要求 IntentID+终态 Status，NOT_APPLIED 时额外 abandonConvergenceTaskTx 并回写投影 EffectStatus；④ 已解析为「不同 effect」时 Resolve 返回 Resolved=false，Converge 返回 ErrInvalidState（幂等契约不同）⇒ 整条保留"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: SaveRevertReconciliation
@@ -115,10 +115,6 @@ exceptions:
     review_by: "2026-12-31"
   - interface: RolloutTrackingStore
     method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: SessionStore
-    method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: Store

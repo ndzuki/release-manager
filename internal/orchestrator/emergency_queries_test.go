@@ -797,7 +797,7 @@ func emergencyTestServiceFromExisting(t *testing.T, svc *Service, st store.Store
 	}))
 	require.NoError(t, st.Clusters().Create(t.Context(), &store.Cluster{ID: "cls-001", Name: "cls-001", CustomerID: "cust-001"}))
 	require.NoError(t, st.Operators().Create(t.Context(), &store.Operator{ID: "op-001", Name: "op-001", CustomerID: "cust-001", ClusterID: "cls-001"}))
-	require.NoError(t, st.Sessions().Create(t.Context(), &store.Session{
+	require.NoError(t, st.Sessions().Establish(t.Context(), &store.Session{
 		ID: uuid.NewString(), OperatorID: "op-001", Status: store.SessionOnline, InstanceID: "inst-1",
 		StartedAt: time.Now().UTC(), LastHeartbeat: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour),
 	}))

@@ -141,7 +141,7 @@ func TestOperatorLifecycle_DisableCustomerCascade(t *testing.T) {
 		CertSerial: "cascade-serial-1", Status: store.OperatorActive,
 	}
 	require.NoError(t, st.Operators().Create(ctx, op))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "sess-cascade-pg", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
 		Status: store.SessionOnline,
 	}))
@@ -215,7 +215,7 @@ func TestOperatorLifecycle_DisableClusterCascade(t *testing.T) {
 		CertSerial: "cluster-serial-1", Status: store.OperatorActive,
 	}
 	require.NoError(t, st.Operators().Create(ctx, op))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "sess-cluster-cascade-pg", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
 		Status: store.SessionSuspect,
 	}))

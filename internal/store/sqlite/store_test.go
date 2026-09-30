@@ -284,7 +284,7 @@ func TestSessionLifecycle(t *testing.T) {
 		OperatorID: op.ID,
 		Status:     store.SessionOnline,
 	}
-	require.NoError(t, st.Sessions().Create(ctx, sess))
+	require.NoError(t, st.Sessions().Establish(ctx, sess))
 
 	// Heartbeat.
 	require.NoError(t, st.Sessions().Heartbeat(ctx, sess.ID))
@@ -1406,7 +1406,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 	customerID, clusterID := seedOperatorManagementScope(t, st)
 	old := &store.Operator{ID: "operator-old", Name: "operator-old", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-old"}
 	require.NoError(t, st.Operators().Create(ctx, old))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}))
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}))
 	token := &store.EnrollmentToken{
 		ID: "token-enroll", CustomerID: customerID, ClusterID: clusterID, OperatorName: "operator-new",
 		TokenHash: sha256Hex("plaintext-enroll"), ExpiresAt: time.Now().UTC().Add(time.Hour),
@@ -1454,7 +1454,7 @@ func TestOperatorStore_ListByClusterFilterNoSession(t *testing.T) {
 	otherCustomerID, otherClusterID := seedOperatorManagementScope(t, st)
 	withSession := &store.Operator{ID: "operator-with-session", Name: "with-session", CustomerID: otherCustomerID, ClusterID: otherClusterID, CertSerial: "serial-session"}
 	require.NoError(t, st.Operators().Create(ctx, withSession))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{ID: "session-filter", OperatorID: withSession.ID, CustomerID: otherCustomerID, ClusterID: otherClusterID, Status: store.SessionOffline}))
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{ID: "session-filter", OperatorID: withSession.ID, CustomerID: otherCustomerID, ClusterID: otherClusterID, Status: store.SessionOffline}))
 
 	page, err := st.Operators().ListByClusterFilter(ctx, customerID, clusterID, store.OperatorListFilter{NoSession: true}, 20, nil)
 	require.NoError(t, err)
@@ -1469,11 +1469,11 @@ func TestOperatorStore_ListByClusterFilterUsesLatestSession(t *testing.T) {
 	op := &store.Operator{ID: "operator-latest-session", Name: "latest-session", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-latest-session"}
 	require.NoError(t, st.Operators().Create(ctx, op))
 	startedAt := time.Now().UTC().Add(-time.Minute)
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "session-old-offline", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
 		Status: store.SessionOffline, StartedAt: startedAt, LastHeartbeat: startedAt,
 	}))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "session-new-online", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID,
 		Status: store.SessionOnline, StartedAt: startedAt.Add(time.Second), LastHeartbeat: startedAt.Add(time.Second),
 	}))
@@ -1526,7 +1526,7 @@ func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
 	op := &store.Operator{ID: "operator-revoke", Name: "operator-revoke", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-revoke"}
 	require.NoError(t, st.Operators().Create(ctx, op))
 	session := &store.Session{ID: "session-revoke", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline}
-	require.NoError(t, st.Sessions().Create(ctx, session))
+	require.NoError(t, st.Sessions().Establish(ctx, session))
 
 	result, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "security incident", operatorAuditEvent("audit-revoke", op.ID, "operator.revoked"))
 	require.NoError(t, err)

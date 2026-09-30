@@ -196,7 +196,7 @@ func TestEnrollSupersedesActiveOperatorAndClosesSession(t *testing.T) {
 		ID: "old-operator", Name: "old-operator", CustomerID: "customer-1", ClusterID: "cluster-1",
 		CertSerial: "old-serial-0000000000", Status: store.OperatorActive, RegisteredAt: now,
 	}))
-	require.NoError(t, st.Sessions().Create(t.Context(), &store.Session{
+	require.NoError(t, st.Sessions().Establish(t.Context(), &store.Session{
 		ID: "old-session", OperatorID: "old-operator", CustomerID: "customer-1", ClusterID: "cluster-1",
 		Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour),
 	}))

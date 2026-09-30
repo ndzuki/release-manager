@@ -280,7 +280,7 @@ func TestSessionLifecycle(t *testing.T) {
 		OperatorID: op.ID,
 		Status:     store.SessionOnline,
 	}
-	require.NoError(t, st.Sessions().Create(ctx, sess))
+	require.NoError(t, st.Sessions().Establish(ctx, sess))
 
 	// Heartbeat.
 	require.NoError(t, st.Sessions().Heartbeat(ctx, sess.ID))
@@ -1809,7 +1809,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 
 	now := time.Now().UTC()
 	oldSession := &store.Session{ID: "session-old", OperatorID: old.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour)}
-	require.NoError(t, st.Sessions().Create(ctx, oldSession))
+	require.NoError(t, st.Sessions().Establish(ctx, oldSession))
 
 	op := &store.Operator{ID: "operator-new", Name: "operator-old", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-new"}
 	session := &store.Session{ID: "session-new", CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour)}
@@ -1842,7 +1842,7 @@ func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
 	op := &store.Operator{ID: "operator-revoke", Name: "operator-revoke", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-revoke"}
 	require.NoError(t, st.Operators().Create(ctx, op))
 	session := &store.Session{ID: "session-revoke", OperatorID: op.ID, CustomerID: customerID, ClusterID: clusterID, Status: store.SessionOnline, StartedAt: now, LastHeartbeat: now, ExpiresAt: now.Add(time.Hour)}
-	require.NoError(t, st.Sessions().Create(ctx, session))
+	require.NoError(t, st.Sessions().Establish(ctx, session))
 
 	first, err := st.OperatorManagement().RevokeOperator(ctx, customerID, clusterID, op.ID, "first reason", operatorAuditEvent("audit-revoke-1", op.ID, "operator.revoked"))
 	require.NoError(t, err)

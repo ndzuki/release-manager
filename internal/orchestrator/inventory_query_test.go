@@ -138,7 +138,7 @@ func TestTriggerInventorySyncCreatesOneDurableCommand(t *testing.T) {
 	require.NoError(t, st.Operators().Create(ctx, &store.Operator{
 		ID: "operator-sync", CustomerID: "customer-sync", ClusterID: "cluster-sync", CertSerial: "sync-cert",
 	}))
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID: "session-sync", OperatorID: "operator-sync", Status: store.SessionOnline,
 		StartedAt: time.Now(), LastHeartbeat: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}))

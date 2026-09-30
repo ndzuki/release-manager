@@ -42,7 +42,7 @@ func TestGetActiveOperatorSessionMapsOnlineAndSuspect(t *testing.T) {
 			startedAt := time.Date(2030, time.January, 2, 3, 4, 5, 123456789, time.UTC)
 			lastHeartbeat := startedAt.Add(2 * time.Minute)
 			expiresAt := startedAt.Add(time.Hour)
-			require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+			require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 				ID:                  sessionID,
 				OperatorID:          operatorID,
 				CustomerID:          customerID,
@@ -128,7 +128,7 @@ func TestGetActiveOperatorSessionReadsPersistedSessionAfterServiceRecreation(t *
 		Status:     store.OperatorActive,
 	}))
 	startedAt := time.Date(2030, time.February, 3, 4, 5, 6, 0, time.UTC)
-	require.NoError(t, st.Sessions().Create(ctx, &store.Session{
+	require.NoError(t, st.Sessions().Establish(ctx, &store.Session{
 		ID:                  sessionID,
 		OperatorID:          operatorID,
 		CustomerID:          customerID,
