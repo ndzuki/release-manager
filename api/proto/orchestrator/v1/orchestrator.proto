@@ -31,6 +31,7 @@ import "google/protobuf/timestamp.proto";
 import "common/v1/domain.proto";
 import "common/v1/trust.proto";
 import "common/v1/types.proto";
+import "operator/v1/upgrade_result.proto";
 
 option go_package = "github.com/ndzuki/release-manager/api/gen/orchestrator/v1;orchestratorv1";
 
@@ -340,6 +341,11 @@ message GetOperationResponse {
   // (TASK-149 / REQ-056 AC-056-03). It is present only once preflight has
   // concluded; before that the operation is still in flight.
   PreflightResult preflight_result = 3;
+  // UpgradeResult is the typed terminal outcome of an upgrade, read from
+  // operation_execution_results (REQ-021:217). It is the durable message the
+  // operator returned -- digests and Secret REFERENCES, never values -- and it is
+  // absent for operations that are not upgrades or have not finished.
+  operator.v1.UpgradeResult upgrade_result = 4;
 }
 
 // PreflightStageResult is one preflight stage's outcome.
