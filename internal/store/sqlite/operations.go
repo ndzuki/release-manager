@@ -132,48 +132,6 @@ func decodeOperationCreateReplay(ctx context.Context, queryer operationQueryer, 
 	return &store.OperationCreateResult{Operation: operation, Replayed: true}, nil
 }
 
-func (s *operationStore) CreateIfAvailableWithDispatch(ctx context.Context, op *store.Operation, dispatch *store.OutboxEntry) error {
-	return retryBusy(ctx, func() error { return createIfAvailable(ctx, s.db, op, dispatch) })
-}
-
-func createIfAvailable(ctx context.Context, db *sql.DB, op *store.Operation, dispatch *store.OutboxEntry) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin create operation: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit
-
-	query := `
-		SELECT COUNT(*) FROM operations
-		WHERE release_definition_id = ?
-		  AND status NOT IN ('succeeded','failed','cancelled','timeout')
-	`
-	if op.OperationType == store.OperationEmergency {
-		query += " AND operation_type != 'EMERGENCY'"
-	}
-
-	var count int
-	if err := tx.QueryRowContext(ctx, query, op.ReleaseDefinitionID).Scan(&count); err != nil {
-		return fmt.Errorf("count conflicting operations: %w", err)
-	}
-	if count > 0 {
-		return store.ErrReleaseBusy
-	}
-
-	if err := createOperation(ctx, tx, op); err != nil {
-		return err
-	}
-	if dispatch != nil {
-		if err := createOutbox(ctx, tx, dispatch); err != nil {
-			return fmt.Errorf("create preflight dispatch: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit create operation: %w", err)
-	}
-	return nil
-}
-
 // retryBusy retries fn up to 10 times with exponential backoff when
 // the error indicates a SQLite busy condition (concurrent write in WAL mode).
 func retryBusy(ctx context.Context, fn func() error) error {

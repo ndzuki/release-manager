@@ -24,10 +24,6 @@ func (s *sessionStoreStub) UpdateStatus(_ context.Context, id string, status sto
 	s.statuses[id] = status
 	return nil
 }
-func (s *sessionStoreStub) UpdateStatusReason(_ context.Context, id string, status store.SessionStatus, _ store.SessionStatusReason) error {
-	s.statuses[id] = status
-	return nil
-}
 func (s *sessionStoreStub) GetActiveByOperator(context.Context, string) (*store.Session, error) {
 	return nil, store.ErrNotFound
 }
