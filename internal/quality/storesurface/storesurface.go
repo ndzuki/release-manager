@@ -15,8 +15,18 @@
 // a binding written inside a function body (including init), a binding inherited through an
 // embedded interface, a conversion to the interface, a struct-literal field, a multi-value
 // return, a package-level func literal, assignments and named-result writes, and concrete
-// method expressions. A method caught by one of these lands in the report, where an operator
-// registers it or extends the collector.
+// method expressions.
+//
+// One more, found in review and worth naming because Go recommends the pattern: a call through a
+// CONSUMER-LOCAL NARROW INTERFACE. `internal/audit/archiver.go` declares its own
+// `archiveEventStore{ ListOlderThan; DeleteByIDs }` and calls those methods, but the selected
+// object belongs to that local interface, not to store.AuditEventStore, so the identity match
+// misses and the methods land in the report (they are registered as `[local-narrow-iface]`).
+// Do not fix this by matching names or signatures: that is exactly the same-name masking the
+// binding rule exists to prevent (see the counter-example above).
+//
+// A method caught by one of these lands in the report, where an operator registers it or extends
+// the collector.
 //
 // Why this gate exists: TASK-221's audit found methods with no call sites at all, and a later
 // fix orphaned another. A method nobody calls is either dead weight or a missing wire-up, and

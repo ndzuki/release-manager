@@ -106,6 +106,13 @@ type BStore interface {
 	Dead(ctx context.Context) error
 }
 
+// NarrowStore's only caller sits behind a CONSUMER-LOCAL NARROW INTERFACE. That is a documented
+// limit of this analysis rather than a bug to fix (TASK-230): the fixture pins that the gate
+// still reports such a method instead of pretending the limit is gone.
+type NarrowStore interface {
+	OnlyViaConsumer(ctx context.Context) error
+}
+
 // CStore's method set is a strict subset of AStore's: the same concrete type implements both.
 type CStore interface {
 	Ping(ctx context.Context) error
@@ -198,6 +205,27 @@ import (
 
 func useClosureType() error { return (&store.XStoreImpl{}).Ping(context.Background()) }
 `,
+		// A consumer-local narrow interface call: Go recommends this shape and the gate's
+		// identity match cannot attribute it (documented limit, pinned here).
+		"internal/auditlike/archiver.go": `package auditlike
+
+import "context"
+
+type archiveStore interface {
+	OnlyViaConsumer(ctx context.Context) error
+}
+
+// archiverImpl implements the LOCAL interface, not the store one: no binding ties it to
+// store.NarrowStore, which is the whole point of this case.
+type archiverImpl struct{}
+
+func (archiverImpl) OnlyViaConsumer(ctx context.Context) error { return nil }
+
+func Drain(s archiveStore) error { return s.OnlyViaConsumer(context.Background()) }
+
+// Wire keeps the local interface genuinely satisfied, so the call is the production shape.
+func Wire() error { return Drain(archiverImpl{}) }
+`,
 		// Comments and string literals must not keep BStore.Dead alive.
 		"internal/app/comment.go": `package app
 
@@ -234,8 +262,8 @@ func TestAnalyzeIsTypeBased(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
-	if analysis.Interfaces != 4 || analysis.Declared != 6 {
-		t.Fatalf("want 4 interfaces / 6 declarations, got %d / %d", analysis.Interfaces, analysis.Declared)
+	if analysis.Interfaces != 5 || analysis.Declared != 7 {
+		t.Fatalf("want 5 interfaces / 7 declarations, got %d / %d", analysis.Interfaces, analysis.Declared)
 	}
 	dead := map[string]bool{}
 	for _, m := range analysis.Dead {
@@ -246,7 +274,7 @@ func TestAnalyzeIsTypeBased(t *testing.T) {
 			t.Errorf("%s has a call site and must not be dead", alive)
 		}
 	}
-	for _, wantDead := range []string{"BStore.Ping", "BStore.Dead", "CStore.Ping", "XStore.Ping"} {
+	for _, wantDead := range []string{"BStore.Ping", "BStore.Dead", "CStore.Ping", "XStore.Ping", "NarrowStore.OnlyViaConsumer"} {
 		if !dead[wantDead] {
 			t.Errorf("%s has no attributable call site and must stay dead", wantDead)
 		}
