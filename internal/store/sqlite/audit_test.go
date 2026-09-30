@@ -19,7 +19,7 @@ func TestAuditEventQueryCursorPagination(t *testing.T) {
 	createdAt := time.Date(2026, 7, 16, 12, 0, 0, 123, time.UTC)
 
 	for _, id := range []string{"event-001", "event-002", "event-003", "event-004", "event-005"} {
-		require.NoError(t, st.AuditEvents().Create(ctx, &store.AuditEvent{
+		require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&store.AuditEvent{
 			ID:             id,
 			ActorKind:      store.AuditActorUser,
 			ActorID:        "user-001",
@@ -31,14 +31,14 @@ func TestAuditEventQueryCursorPagination(t *testing.T) {
 			Status:         "accepted",
 			Metadata:       map[string]string{"request_id": id},
 			CreatedAt:      createdAt,
-		}))
+		}}))
 	}
-	require.NoError(t, st.AuditEvents().Create(ctx, &store.AuditEvent{
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&store.AuditEvent{
 		ID:             "other-org",
 		OrganizationID: "org-002",
 		Metadata:       map[string]string{},
 		CreatedAt:      createdAt,
-	}))
+	}}))
 
 	filter := store.AuditEventFilter{OrganizationID: "org-001"}
 	seen := make(map[string]struct{})
@@ -74,7 +74,7 @@ func TestAuditEventQueryStableSnapshotUnderConcurrentInsert(t *testing.T) {
 	filter := store.AuditEventFilter{OrganizationID: "org-001"}
 
 	create := func(id string, at time.Time) error {
-		return st.AuditEvents().Create(ctx, &store.AuditEvent{
+		return st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&store.AuditEvent{
 			ID:             id,
 			ActorKind:      store.AuditActorUser,
 			ActorID:        "user-001",
@@ -86,7 +86,7 @@ func TestAuditEventQueryStableSnapshotUnderConcurrentInsert(t *testing.T) {
 			Status:         "accepted",
 			Metadata:       map[string]string{"request_id": id},
 			CreatedAt:      at,
-		})
+		}})
 	}
 
 	// 初始快照：created_at 严格递增，落在分页排序的稳定位置。
@@ -156,12 +156,12 @@ func TestAuditEventCountFiltersOrganizationAndTimeRange(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	for index, organizationID := range []string{"org-001", "org-001", "org-002"} {
-		require.NoError(t, st.AuditEvents().Create(ctx, &store.AuditEvent{
+		require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&store.AuditEvent{
 			ID:             organizationID + "-" + time.Duration(index).String(),
 			OrganizationID: organizationID,
 			Metadata:       map[string]string{},
 			CreatedAt:      base.Add(time.Duration(index) * time.Hour),
-		}))
+		}}))
 	}
 	since := base.Add(30 * time.Minute)
 	until := base.Add(3 * time.Hour)
@@ -188,11 +188,11 @@ func TestAuditEventInsertIsIdempotentByID(t *testing.T) {
 		Action: "operator.revoked", Status: "succeeded", CreatedAt: time.Now().UTC(),
 	}
 
-	require.NoError(t, st.AuditEvents().Create(ctx, event))
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event}))
 	// A replay with different content keeps the original row (first write wins).
 	replay := *event
 	replay.Action = "operator.revoked.again"
-	require.NoError(t, st.AuditEvents().Create(ctx, &replay), "a duplicate id must not fail the insert")
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&replay}), "a duplicate id must not fail the insert")
 
 	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event, event}),
 		"a batch containing duplicates must not fail")

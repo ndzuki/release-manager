@@ -14,20 +14,12 @@
 # the finding, not a regression.
 exceptions:
   - interface: AuditEventStore
-    method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: AuditEventStore
     method: DeleteByIDs
     reason: "[local-narrow-iface] 同为 internal/audit/archiver.go 的本地窄接口调用（archiver.go:124，归档完成后删除已导出事件）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: GetByID
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: AuditEventStore
-    method: ListByResource
-    reason: "[unwired-read] 按资源读取审计事件无调用者（查询走 List/Query）"
     review_by: "2026-12-31"
   - interface: AuditEventStore
     method: ListOlderThan
@@ -60,10 +52,6 @@ exceptions:
   - interface: ConvergenceTaskStore
     method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: ConvergenceTaskStore
-    method: HasPendingPromotionForDefinition
-    reason: "[unwired-read] 待收敛判定当前用 ListByDefinition(..., pending_promotion)，此便捷读取无调用者"
     review_by: "2026-12-31"
   - interface: ConvergenceTaskStore
     method: MarkConverged
@@ -102,10 +90,6 @@ exceptions:
     reason: "[unwired-write] 回退对账结果保存无调用者"
     review_by: "2026-12-31"
   - interface: EnrollmentTokenStore
-    method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
     method: ListByCluster
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
@@ -136,10 +120,6 @@ exceptions:
   - interface: OperationStore
     method: CreateIfAvailable
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: OperationStore
-    method: GetByIdempotencyKey
-    reason: "[unwired-read] 幂等键读取无调用者"
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Create
@@ -224,14 +204,6 @@ exceptions:
   - interface: ValuesStore
     method: GetLatestApproved
     reason: "[unwired-read] 最新已批准 revision 读取无调用者"
-    review_by: "2026-12-31"
-  - interface: ValuesStore
-    method: GetNextRevisionNumber
-    reason: "[unwired-read] revision 序号读取无调用者"
-    review_by: "2026-12-31"
-  - interface: ValuesStore
-    method: List
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get

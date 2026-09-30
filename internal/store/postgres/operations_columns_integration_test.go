@@ -31,12 +31,14 @@ func TestOperationReadsReturnEveryScannedColumn(t *testing.T) {
 	def := createTestDefinition(t, st)
 
 	op := &store.Operation{
-		ID:                    "operation-column-parity",
-		OperationType:         store.OperationInstall,
-		Status:                store.StatusQueued, // non-terminal: this is the trigger
-		ReleaseDefinitionID:   def.ID,
-		IdempotencyKey:        "operation-column-parity-key",
-		IdempotencyScope:      "org:def",
+		ID:                  "operation-column-parity",
+		OperationType:       store.OperationInstall,
+		Status:              store.StatusQueued, // non-terminal: this is the trigger
+		ReleaseDefinitionID: def.ID,
+		IdempotencyKey:      "operation-column-parity-key",
+		// Scope is "<orgID>:<definitionID>" (ADR-009): the definition segment is the
+		// relational key GetByIdempotencyScopeAndKey resolves on.
+		IdempotencyScope:      "org:" + def.ID,
 		RequestHash:           "request-hash",
 		StateVersion:          1,
 		BundleID:              "bundle-column-parity",
@@ -75,9 +77,9 @@ func TestOperationReadsReturnEveryScannedColumn(t *testing.T) {
 	require.NoError(t, err, "GetActiveForDefinition must not fail on a non-terminal operation")
 	assertColumns(t, "GetActiveForDefinition", active)
 
-	byKey, err := st.Operations().GetByIdempotencyKey(ctx, op.IdempotencyKey)
-	require.NoError(t, err, "GetByIdempotencyKey must not fail")
-	assertColumns(t, "GetByIdempotencyKey", byKey)
+	byKey, err := st.Operations().GetByIdempotencyScopeAndKey(ctx, op.IdempotencyScope, op.IdempotencyKey)
+	require.NoError(t, err, "GetByIdempotencyScopeAndKey must not fail")
+	assertColumns(t, "GetByIdempotencyScopeAndKey", byKey)
 
 	listed, err := st.Operations().List(ctx, def.ID)
 	require.NoError(t, err, "List must not fail")

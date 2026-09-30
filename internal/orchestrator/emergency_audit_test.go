@@ -48,14 +48,16 @@ func TestExecuteEmergencyChange_AuditsSuccessAndFailure(t *testing.T) {
 	require.Error(t, err)
 
 	require.NoError(t, emitter.Shutdown(context.Background()))
-	successEvents, err := st.AuditEvents().ListByResource(context.Background(), "operation", successResp.Msg.OperationId)
+	successEventsPage, err := st.AuditEvents().Query(context.Background(), store.AuditEventFilter{ResourceType: "operation", ResourceID: successResp.Msg.OperationId}, "", 100)
+	successEvents := successEventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, successEvents, 1)
 	assert.Equal(t, "succeeded", successEvents[0].Status)
 	assert.Equal(t, "emergency_change", successEvents[0].Action)
 	assert.Equal(t, "release-admin", successEvents[0].ActorID)
 
-	failureEvents, err := st.AuditEvents().ListByResource(context.Background(), "operation", "def-001")
+	failureEventsPage, err := st.AuditEvents().Query(context.Background(), store.AuditEventFilter{ResourceType: "operation", ResourceID: "def-001"}, "", 100)
+	failureEvents := failureEventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, failureEvents, 1)
 	assert.Equal(t, "failed", failureEvents[0].Status)
@@ -88,7 +90,8 @@ func TestExecuteEmergencyChangeSetReplicasAuditsResolvedAction(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, emitter.Shutdown(context.Background()))
 
-	events, err := st.AuditEvents().ListByResource(context.Background(), "operation", resp.Msg.OperationId)
+	eventsPage, err := st.AuditEvents().Query(context.Background(), store.AuditEventFilter{ResourceType: "operation", ResourceID: resp.Msg.OperationId}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "succeeded", events[0].Status)
@@ -142,7 +145,8 @@ func TestExecuteEmergencyChange_AuditDoesNotPersistRawPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, emitter.Shutdown(context.Background()))
 
-	events, err := st.AuditEvents().ListByResource(context.Background(), "operation", resp.Msg.OperationId)
+	eventsPage, err := st.AuditEvents().Query(context.Background(), store.AuditEventFilter{ResourceType: "operation", ResourceID: resp.Msg.OperationId}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	// The audit event carries identifiers only; no request payload fields

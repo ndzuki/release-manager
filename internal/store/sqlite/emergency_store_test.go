@@ -52,8 +52,9 @@ func TestConvergenceTaskStoreLifecycle(t *testing.T) {
 	result := createEmergencyViaUOW(t, st, command)
 	require.NotNil(t, result.ConvergenceTask)
 
-	hasPending, err := st.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, "def-convergence")
+	pendingTasks, err := st.ConvergenceTasks().ListByDefinition(ctx, "def-convergence", "pending_promotion")
 	require.NoError(t, err)
+	hasPending := len(pendingTasks) > 0
 	assert.True(t, hasPending)
 
 	hasPath, err := st.ConvergenceTasks().HasPendingPromotionPath(ctx, "def-convergence", []string{"image.digest"})

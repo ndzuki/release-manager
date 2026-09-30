@@ -220,7 +220,7 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 		TokenHash:    sha256HexTest("test-token-abc"),
 		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 	}
-	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
+	require.NoError(t, createEnrollmentTokenViaManagement(ctx, st, tok))
 
 	got, err := st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
@@ -624,7 +624,7 @@ func TestIdentityAndAuditAccessors(t *testing.T) {
 		ID: "audit-1", ActorKind: store.AuditActorUser, ActorID: user.ID,
 		ResourceType: "organization", ResourceID: org.ID, Action: "create", Status: "succeeded",
 	}
-	require.NoError(t, st.AuditEvents().Create(ctx, event))
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event}))
 
 	gotUser, err := st.Users().Get(ctx, user.ID)
 	require.NoError(t, err)
@@ -635,7 +635,8 @@ func TestIdentityAndAuditAccessors(t *testing.T) {
 	gotBinding, err := st.Bindings().GetByOrgAndCustomer(ctx, org.ID, binding.CustomerID)
 	require.NoError(t, err)
 	assert.Equal(t, store.BindingActive, gotBinding.Status)
-	events, err := st.AuditEvents().ListByResource(ctx, "organization", org.ID)
+	eventsPage, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "organization", ResourceID: org.ID}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, user.ID, events[0].ActorID)
@@ -773,24 +774,35 @@ func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
 
-	// First revision
-	n, err := st.Values().GetNextRevisionNumber(ctx, def.ID)
+	// First revision: CreateDraft owns version assignment (MAX(version)+1) inside its
+	// transaction; the superseded GetNextRevisionNumber was a standalone probe (TASK-226).
+	first, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.New().String(),
+			ReleaseDefinitionID: def.ID,
+			CanonicalDocument:   []byte(`{}`),
+			Digest:              "sha256:a",
+		},
+		ActorUserID: "creator",
+	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), n)
+	require.NotNil(t, first.Revision, "CreateDraft returns the persisted revision")
+	assert.Equal(t, int64(1), first.Revision.Version)
 
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: def.ID,
-		Version:             1,
-		Status:              store.ValuesStatusDraft,
-		CanonicalDocument:   []byte(`{}`),
-		Digest:              "sha256:a",
-	}
-	require.NoError(t, st.Values().Create(ctx, vr))
-
-	n, err = st.Values().GetNextRevisionNumber(ctx, def.ID)
+	// The next draft chains off the first revision and takes the next number.
+	second, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.New().String(),
+			ReleaseDefinitionID: def.ID,
+			ParentRevisionID:    first.Revision.ID,
+			CanonicalDocument:   []byte(`{}`),
+			Digest:              "sha256:b",
+		},
+		ExpectedParentVersion: 1,
+		ActorUserID:           "creator",
+	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), n)
+	assert.Equal(t, int64(2), second.Revision.Version)
 }
 
 func TestValuesLifecycleConcurrentIdempotentCreateReplaysFirstResult(t *testing.T) {
@@ -837,8 +849,9 @@ func TestValuesLifecycleConcurrentIdempotentCreateReplaysFirstResult(t *testing.
 	assert.Equal(t, created[0].Revision.ID, created[1].Revision.ID)
 	assert.NotEqual(t, created[0].Replayed, created[1].Replayed)
 
-	items, err := st.Values().List(ctx, def.ID)
+	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID})
 	require.NoError(t, err)
+	items := valuesPage.Items
 	assert.Len(t, items, 1)
 }
 
@@ -891,8 +904,9 @@ func TestValuesRevisionList(t *testing.T) {
 		parentRevisionID = vr.ID
 	}
 
-	revs, err := st.Values().List(ctx, def.ID)
+	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID})
 	require.NoError(t, err)
+	revs := valuesPage.Items
 	assert.Len(t, revs, 3)
 }
 
@@ -1844,4 +1858,12 @@ func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
 	// Cross-scope lookup must not surface the operator (AC-053-18).
 	_, err = st.OperatorManagement().RevokeOperator(ctx, customerID, "other-cluster", op.ID, "wrong scope", operatorAuditEvent("audit-revoke-3", op.ID, "operator.revoked"))
 	assert.ErrorIs(t, err, store.ErrOperatorNotFound)
+}
+
+// createEnrollmentTokenViaManagement persists a token through the canonical management
+// path: EnrollmentTokens().Create was a dead thin wrapper (TASK-226), and
+// CreateEnrollmentToken is the writer every production caller uses.
+func createEnrollmentTokenViaManagement(ctx context.Context, st store.Store, token *store.EnrollmentToken) error {
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, nil)
+	return err
 }

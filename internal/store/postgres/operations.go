@@ -230,15 +230,6 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 	return scanOperation(row)
 }
 
-func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*store.Operation, error) {
-	row := s.gorm.QueryRowContext(ctx, `
-		SELECT `+operationSelectColumns+`
-		FROM operations LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id
-		WHERE operations.idempotency_key = ?
-	`, key)
-	return scanOperation(row)
-}
-
 // GetByIdempotencyScopeAndKey resolves an operation by idempotency scope and key.
 // Scope is "<orgID>:<definitionID>" (ADR-009); a definition belongs to exactly
 // one organization, so the definitionID segment is the relational key.

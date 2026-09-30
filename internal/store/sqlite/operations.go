@@ -306,10 +306,6 @@ func (s *operationStore) Get(ctx context.Context, id string) (*store.Operation, 
 	row := s.db.QueryRowContext(ctx, `SELECT `+operationColumns+` FROM operations`+operationJoin+` WHERE operations.id = ?`, id)
 	return scanOperation(row)
 }
-func (s *operationStore) GetByIdempotencyKey(ctx context.Context, key string) (*store.Operation, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+operationColumns+` FROM operations`+operationJoin+` WHERE operations.idempotency_key = ?`, key)
-	return scanOperation(row)
-}
 func (s *operationStore) GetByIdempotencyScopeAndKey(ctx context.Context, scope, key string) (*store.Operation, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+operationColumns+` FROM operations`+operationJoin+` WHERE operations.idempotency_scope = ? AND operations.idempotency_key = ?`, scope, key)
 	return scanOperation(row)

@@ -29,13 +29,13 @@ func TestAuditEventInsertIsIdempotentByID_Postgres(t *testing.T) {
 		Action: "operator.revoked", Status: "succeeded", CreatedAt: time.Now().UTC(),
 	}
 
-	require.NoError(t, st.AuditEvents().Create(ctx, event))
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event}))
 
 	// A replay with different content must be a no-op, not an error and not an
 	// overwrite (ON CONFLICT (id) DO NOTHING).
 	replay := *event
 	replay.Action = "operator.revoked.again"
-	require.NoError(t, st.AuditEvents().Create(ctx, &replay), "a duplicate id must not fail the insert")
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&replay}), "a duplicate id must not fail the insert")
 
 	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event, event}),
 		"a batch containing duplicates must not fail")

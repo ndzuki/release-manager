@@ -61,7 +61,7 @@ func newGatewayStore(t *testing.T, token string) store.Store {
 	require.NoError(t, st.Customers().Create(ctx, cust))
 	clus := &store.Cluster{ID: "clus-1", Name: "test-cluster", CustomerID: "cust-1", Status: store.ClusterActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	require.NoError(t, st.Clusters().Create(ctx, clus))
-	require.NoError(t, st.EnrollmentTokens().Create(ctx, &store.EnrollmentToken{
+	require.NoError(t, createEnrollmentTokenViaManagement(ctx, st, &store.EnrollmentToken{
 		ID: "tok-1", CustomerID: "cust-1", ClusterID: "clus-1", TokenHash: sha256Hex(token),
 		OperatorName: "clus-1", // must match the CSR CommonName (REQ-053 token binding)
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
@@ -74,6 +74,14 @@ func newGatewayStore(t *testing.T, token string) store.Store {
 func sha256Hex(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+// createEnrollmentTokenViaManagement persists a token through the canonical management
+// path: EnrollmentTokens().Create was a dead thin wrapper (TASK-226), and
+// CreateEnrollmentToken is the writer every production caller uses.
+func createEnrollmentTokenViaManagement(ctx context.Context, st store.Store, token *store.EnrollmentToken) error {
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, nil)
+	return err
 }
 
 // newGatewayServer starts a TLS httptest server that mirrors the production

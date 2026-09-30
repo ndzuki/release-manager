@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -281,7 +282,7 @@ func seedEnrollmentToken(t *testing.T, st *sqlitestore.Store, expiresAt time.Tim
 		token.UsedAt = &usedAt
 		token.OperatorID = "used-operator"
 	}
-	require.NoError(t, st.EnrollmentTokens().Create(t.Context(), token))
+	require.NoError(t, createEnrollmentTokenViaManagement(t.Context(), st, token))
 	return rawToken
 }
 
@@ -292,4 +293,12 @@ func operatorReason(err error) string {
 		return connectErr.Meta().Get("X-Reason-Code")
 	}
 	return ""
+}
+
+// createEnrollmentTokenViaManagement persists a token through the canonical management
+// path: EnrollmentTokens().Create was a dead thin wrapper (TASK-226), and
+// CreateEnrollmentToken is the writer every production caller uses.
+func createEnrollmentTokenViaManagement(ctx context.Context, st store.Store, token *store.EnrollmentToken) error {
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, nil)
+	return err
 }
