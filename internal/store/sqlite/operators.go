@@ -715,27 +715,8 @@ func scanRowOperator(row interface{ Scan(...interface{}) error }) (*store.Operat
 }
 
 // ---------------------------------------------------------------------------
-// EnrollmentToken revoke & list methods (REQ-015)
+// EnrollmentToken list methods (REQ-015)
 // ---------------------------------------------------------------------------
-
-// Revoke marks an enrollment token as revoked.
-func (s *enrollmentTokenStore) Revoke(ctx context.Context, id string) error {
-	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `
-UPDATE enrollment_tokens SET state='revoked', revoked_at=? WHERE id=?
-`, now.Format(time.RFC3339), id)
-	if err != nil {
-		return fmt.Errorf("revoke enrollment token: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
-}
 
 // ListByCustomer returns all enrollment tokens for a customer.
 func (s *enrollmentTokenStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.EnrollmentToken, error) {

@@ -78,25 +78,6 @@ FROM enrollment_tokens WHERE token_hash = ?
 	return scanEnrollmentToken(row)
 }
 
-// Revoke marks an enrollment token as revoked.
-func (s *enrollmentTokenStore) Revoke(ctx context.Context, id string) error {
-	now := time.Now().UTC()
-	result, err := s.gorm.ExecContext(ctx, `
-UPDATE enrollment_tokens SET state='revoked', revoked_at=? WHERE id=?
-`, now.Format(time.RFC3339Nano), id)
-	if err != nil {
-		return fmt.Errorf("revoke enrollment token: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
-}
-
 // GetPendingByCluster returns the pending enrollment token for a given cluster, if any.
 func (s *enrollmentTokenStore) GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*store.EnrollmentToken, error) {
 	row := s.gorm.QueryRowContext(ctx, `SELECT `+enrollmentTokenSelect+`

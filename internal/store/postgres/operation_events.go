@@ -10,10 +10,8 @@ import (
 
 type operationEventStore struct{ gorm *DB }
 
-func (s *operationEventStore) Create(ctx context.Context, ev *store.OperationStateChangedEvent) error {
-	return insertOperationEvent(ctx, s.gorm, ev)
-}
-
+// insertOperationEvent is the only writer of operation events: the operation state
+// machine calls it inside its transitions (see operations.go and emergency_converge.go).
 func insertOperationEvent(ctx context.Context, execer operationExecer, ev *store.OperationStateChangedEvent) error {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now().UTC()

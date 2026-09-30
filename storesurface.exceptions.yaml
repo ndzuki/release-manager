@@ -37,17 +37,13 @@ exceptions:
     method: ListByCustomer
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
-  - interface: BindingStore
-    method: Update
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: BundleStore
     method: DeleteBefore
-    reason: "[unwired-write] 批量删除无调用者（GC 另有专用方法）"
+    reason: "[unwired-write] 非等价于 GC 的 DeleteExpiredBefore：sqlite 版多一条 status='rejected' 分支（AC-069-13，sqlite/bundles.go:236-247），DeleteExpiredBefore 只删 archived；postgres 版二者是同一实现（TASK-226 Batch A 取证，勿按已取代删除）"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: Create
@@ -117,32 +113,16 @@ exceptions:
     method: ListByCustomer
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
-    method: Revoke
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: IdempotencyStore
-    method: CreateOrGet
-    reason: "[unwired-write] idempotency 记录写入由提交 UoW 内部完成，方法本身无调用者"
-    review_by: "2026-12-31"
   - interface: IdempotencyStore
     method: DeleteExpired
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired] idempotency_records 的唯一批量清理路径，尚无调用者：GC Phase 5 走 CleanupIdempotency().DeleteExpiredBefore，清的是另一张表 cleanup_idempotency（TASK-226 Batch A 取证，勿按已取代删除）"
     review_by: "2026-12-31"
   - interface: IdempotencyStore
     method: GetExpired
-    reason: "[unwired-read] 过期记录清理读取无调用者（GC 走 DeleteOrphanBefore/DeleteBefore）"
+    reason: "[unwired-read] 过期记录清理的读侧，尚无调用者；GC Phase 5 不覆盖 idempotency_records（TASK-226 Batch A 取证，勿按已取代删除）"
     review_by: "2026-12-31"
   - interface: InventorySyncRequestStore
     method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: InventorySyncRequestStore
-    method: GetActiveByCluster
-    reason: "[unwired-read] 按集群读取活跃记录无调用者"
-    review_by: "2026-12-31"
-  - interface: OperationEventStore
-    method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: OperationExecutionResultStore
