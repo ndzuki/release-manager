@@ -38,13 +38,23 @@ func TestCreateCustomerWithOrgBinding_CommitsAtomically_Postgres(t *testing.T) {
 
 	require.NoError(t, st.Bindings().RequireActive(ctx, org.ID, customer.ID))
 
-	bindings, err := st.Bindings().ListByCustomer(ctx, customer.ID)
+	// Read directly: BindingStore.ListByCustomer was removed with the TASK-226 dead-surface
+	// batch (no shipping reader), so the fixture reads what it asserts.
+	var bindingIDs []string
+	bindingRows, err := st.SQLDB().QueryContext(ctx, `SELECT id FROM org_customer_bindings WHERE customer_id = $1`, customer.ID)
 	require.NoError(t, err)
-	require.Len(t, bindings, 1)
+	for bindingRows.Next() {
+		var id string
+		require.NoError(t, bindingRows.Scan(&id))
+		bindingIDs = append(bindingIDs, id)
+	}
+	defer bindingRows.Close() //nolint:errcheck // test fixture read
+	require.NoError(t, bindingRows.Err())
+	require.Len(t, bindingIDs, 1)
 
 	var eventCount int
 	require.NoError(t, st.SQLDB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM organization_customer_binding_events WHERE binding_id = $1`, bindings[0].ID,
+		`SELECT COUNT(*) FROM organization_customer_binding_events WHERE binding_id = $1`, bindingIDs[0],
 	).Scan(&eventCount))
 	assert.Equal(t, 1, eventCount)
 

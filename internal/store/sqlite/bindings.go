@@ -205,22 +205,3 @@ func scanBinding(row interface{ Scan(...interface{}) error }) (*store.OrgCustome
 	binding.UpdatedAt = parsedUpdatedAt
 	return &binding, nil
 }
-
-func (s *bindingStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.OrgCustomerBinding, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, org_id, customer_id, status, optimistic_version, created_at, updated_at
-		FROM org_customer_bindings WHERE customer_id = ? ORDER BY created_at`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list bindings by customer: %w", err)
-	}
-	defer rows.Close()
-	var bindings []*store.OrgCustomerBinding
-	for rows.Next() {
-		binding, scanErr := scanBinding(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		bindings = append(bindings, binding)
-	}
-	return bindings, rows.Err()
-}

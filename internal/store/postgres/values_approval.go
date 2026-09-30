@@ -581,10 +581,6 @@ func (s *valuesApprovalStore) ListAuditOutbox(ctx context.Context, revisionID st
 	return s.listValuesApprovalOutbox(ctx, auditApprovalOutbox, revisionID)
 }
 
-func (s *valuesApprovalStore) ListNotificationOutbox(ctx context.Context, revisionID string) ([]*store.ApprovalOutboxEntry, error) {
-	return s.listValuesApprovalOutbox(ctx, notificationApprovalOutbox, revisionID)
-}
-
 func (s *valuesApprovalStore) listValuesApprovalOutbox(
 	ctx context.Context,
 	table approvalOutboxTable,

@@ -1039,7 +1039,7 @@ func seedTestBundle(t *testing.T, st store.Store, id string) string {
 // reachability up front was a deadlock).
 func linkCurrentBundle(t *testing.T, st store.Store, definitionID, bundleID string) {
 	t.Helper()
-	_, err := st.Definitions().SetCurrentBundle(context.Background(), definitionID, bundleID)
+	err := writeCurrentBundleDirect(context.Background(), st, definitionID, bundleID)
 	require.NoError(t, err)
 }
 

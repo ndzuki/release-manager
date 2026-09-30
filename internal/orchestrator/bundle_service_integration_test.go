@@ -226,7 +226,7 @@ func bundleTenantFixture(t *testing.T, st store.Store, suffix string) *store.Rel
 // current_bundle_id, so a fixture that set the field directly would silently prove nothing.
 func setCurrentBundle(t *testing.T, st store.Store, definitionID, bundleID string) {
 	t.Helper()
-	_, err := st.Definitions().SetCurrentBundle(t.Context(), definitionID, bundleID)
+	err := writeCurrentBundleDirect(t.Context(), st, definitionID, bundleID)
 	require.NoError(t, err)
 }
 

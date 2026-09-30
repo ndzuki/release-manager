@@ -39,13 +39,24 @@ func TestCreateCustomerWithOrgBinding_CommitsAtomically(t *testing.T) {
 	require.NoError(t, st.Bindings().RequireActive(ctx, org.ID, customer.ID))
 
 	// Binding event and authorization source version are persisted.
-	bindings, err := st.Bindings().ListByCustomer(ctx, customer.ID)
+	// The binding rows are read directly: BindingStore.ListByCustomer was removed with the
+	// TASK-226 dead-surface batch (no shipping reader), so the fixture reads what it asserts.
+	bindingRows, err := st.DB().QueryContext(ctx,
+		`SELECT id FROM org_customer_bindings WHERE customer_id = ?`, customer.ID)
 	require.NoError(t, err)
-	require.Len(t, bindings, 1)
+	var bindingIDs []string
+	for bindingRows.Next() {
+		var id string
+		require.NoError(t, bindingRows.Scan(&id))
+		bindingIDs = append(bindingIDs, id)
+	}
+	defer bindingRows.Close() //nolint:errcheck // test fixture read
+	require.NoError(t, bindingRows.Err())
+	require.Len(t, bindingIDs, 1)
 
 	var eventCount int
 	require.NoError(t, st.DB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM organization_customer_binding_events WHERE binding_id = ?`, bindings[0].ID,
+		`SELECT COUNT(*) FROM organization_customer_binding_events WHERE binding_id = ?`, bindingIDs[0],
 	).Scan(&eventCount))
 	assert.Equal(t, 1, eventCount)
 

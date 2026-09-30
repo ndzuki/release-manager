@@ -2,6 +2,8 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -72,7 +74,7 @@ func TestReachableFromOrganizationBranches(t *testing.T) {
 	t.Run("an organization owns the definition that holds the bundle", func(t *testing.T) {
 		f := seedReachabilityFixture(t)
 		bundle := f.bundle(t)
-		_, err := f.store.Definitions().SetCurrentBundle(context.Background(), f.definition.ID, bundle.ID)
+		err := setCurrentBundleDirect(context.Background(), f.store, f.definition.ID, bundle.ID)
 		require.NoError(t, err)
 
 		assert.True(t, f.reachable(t, bundle.ID, f.orgID), "owner + current bundle")
@@ -82,7 +84,7 @@ func TestReachableFromOrganizationBranches(t *testing.T) {
 	t.Run("an active customer binding reaches the definition", func(t *testing.T) {
 		f := seedReachabilityFixture(t)
 		bundle := f.bundle(t)
-		_, err := f.store.Definitions().SetCurrentBundle(context.Background(), f.definition.ID, bundle.ID)
+		err := setCurrentBundleDirect(context.Background(), f.store, f.definition.ID, bundle.ID)
 		require.NoError(t, err)
 		require.NoError(t, f.store.Organizations().Create(context.Background(), &store.Organization{ID: "org-bound", Name: "org-bound"}))
 		require.NoError(t, f.store.Bindings().Create(context.Background(), &store.OrgCustomerBinding{
@@ -96,7 +98,7 @@ func TestReachableFromOrganizationBranches(t *testing.T) {
 	t.Run("a revoked binding does not", func(t *testing.T) {
 		f := seedReachabilityFixture(t)
 		bundle := f.bundle(t)
-		_, err := f.store.Definitions().SetCurrentBundle(context.Background(), f.definition.ID, bundle.ID)
+		err := setCurrentBundleDirect(context.Background(), f.store, f.definition.ID, bundle.ID)
 		require.NoError(t, err)
 		require.NoError(t, f.store.Organizations().Create(context.Background(), &store.Organization{ID: "org-revoked", Name: "org-revoked"}))
 		require.NoError(t, f.store.Bindings().Create(context.Background(), &store.OrgCustomerBinding{
@@ -156,7 +158,7 @@ func TestBundleClaimedOutsideOrganization(t *testing.T) {
 	assert.False(t, claimed, "an unclaimed bundle is not claimed by another organization")
 
 	// The fixture's definition (owned by f.orgID) adopts the bundle.
-	_, err = f.store.Definitions().SetCurrentBundle(ctx, f.definition.ID, unclaimed.ID)
+	err = setCurrentBundleDirect(ctx, f.store, f.definition.ID, unclaimed.ID)
 	require.NoError(t, err)
 
 	for name, org := range map[string]string{"owner": f.orgID, "stranger": "org-stranger"} {
@@ -168,4 +170,17 @@ func TestBundleClaimedOutsideOrganization(t *testing.T) {
 			assert.True(t, claimed, "another organization must see the claim")
 		}
 	}
+}
+
+// setCurrentBundleDirect writes the definition pointer the operation-creation UoW writes:
+// DefinitionStore.SetCurrentBundle was removed with the TASK-226 dead-surface batch (no
+// shipping caller), so fixtures that need the pointer write it themselves.
+func setCurrentBundleDirect(ctx context.Context, st store.Store, definitionID, bundleID string) error {
+	sqliteStore, ok := st.(interface{ DB() *sql.DB })
+	if !ok {
+		return fmt.Errorf("store has no DB accessor")
+	}
+	_, err := sqliteStore.DB().ExecContext(ctx,
+		`UPDATE release_definitions SET current_bundle_id = ? WHERE id = ?`, bundleID, definitionID)
+	return err
 }

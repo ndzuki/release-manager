@@ -259,30 +259,6 @@ func scanDefinition(row interface{ Scan(...interface{}) error }) (*store.Release
 	return &definition, nil
 }
 
-// SetCurrentBundle associates a bundle with a release definition.
-// If the bundle is archived, it is unarchived in the same transaction.
-// Returns true if the bundle was unarchived.
-func (s *definitionStore) SetCurrentBundle(ctx context.Context, defID, bundleID string) (bool, error) {
-	var restored bool
-	err := retryBusy(ctx, func() error {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin set current bundle: %w", err)
-		}
-		defer tx.Rollback() //nolint:errcheck // Rollback is a no-op after successful Commit.
-
-		restored, err = setCurrentBundle(ctx, tx, defID, bundleID)
-		if err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit set current bundle: %w", err)
-		}
-		return nil
-	})
-	return restored, err
-}
-
 //nolint:gocyclo // bundle state restoration and definition update form one transactional state machine
 func setCurrentBundle(ctx context.Context, tx *sql.Tx, defID, bundleID string) (bool, error) {
 	var status string

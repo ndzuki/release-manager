@@ -65,7 +65,7 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 	assert.NotEmpty(t, got.ID)
 
 	// Verify domain event persisted.
-	events, err := st.DefinitionEvents().List(context.Background(), def.Id)
+	events, err := definitionEventsByDefinition(t, st, def.Id)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "definition_created", events[0].EventType)
@@ -335,7 +335,7 @@ func TestDisableReleaseDefinition_Success(t *testing.T) {
 	assert.Equal(t, "disabled", disableResp.Msg.Definition.Status)
 
 	// Verify event persisted.
-	events, err := st.DefinitionEvents().List(context.Background(), defID)
+	events, err := definitionEventsByDefinition(t, st, defID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(events), 2) // create + disable
 	found := false
@@ -373,7 +373,7 @@ func TestDisableReleaseDefinition_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Events should still only have one disable.
-	events, err := st.DefinitionEvents().List(context.Background(), defID)
+	events, err := definitionEventsByDefinition(t, st, defID)
 	require.NoError(t, err)
 	disableCount := 0
 	for _, e := range events {
@@ -734,4 +734,33 @@ func TestUpdateReleaseDefinition_PresenceSurvivesTheWire(t *testing.T) {
 	// And the response has to say "empty list", not "null": the console treats a
 	// non-array JSON payload as a contract violation and would show an error banner.
 	assert.JSONEq(t, "[]", string(updateResp.Msg.Definition.PromotionMappings))
+}
+
+// definitionEventRow mirrors the columns these assertions use: DefinitionEventStore.List was
+// removed with the TASK-226 dead-surface batch (no shipping caller), so the fixture reads the
+// rows directly.
+type definitionEventRow struct {
+	DefinitionID string
+	EventType    string
+}
+
+func definitionEventsByDefinition(t *testing.T, st store.Store, definitionID string) ([]definitionEventRow, error) {
+	t.Helper()
+	rows, err := testSQLDB(t, st).QueryContext(context.Background(),
+		`SELECT definition_id, event_type FROM release_definition_events WHERE definition_id = ? ORDER BY created_at, id`,
+		definitionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []definitionEventRow
+	for rows.Next() {
+		var row definitionEventRow
+		if err := rows.Scan(&row.DefinitionID, &row.EventType); err != nil {
+			return nil, err
+		}
+		events = append(events, row)
+	}
+	return events, rows.Err()
 }

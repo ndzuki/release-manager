@@ -49,14 +49,6 @@ FROM customers WHERE id = ?
 	return scanCustomer(row)
 }
 
-func (s *customerStore) GetBySlug(ctx context.Context, slug string) (*store.Customer, error) {
-	row := s.db.QueryRowContext(ctx, `
-SELECT id, name, slug, status, version, created_at, updated_at
-FROM customers WHERE slug = ?
-`, slug)
-	return scanCustomer(row)
-}
-
 // Update applies changes with optimistic locking (AC-051-02): the stored
 // version must equal expectedVersion, otherwise ErrOptimisticLock is returned
 // and no row is modified.

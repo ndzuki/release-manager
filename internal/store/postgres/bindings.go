@@ -138,27 +138,6 @@ func (s *bindingStore) SetStatus(ctx context.Context, id string, status store.Bi
 	return nil
 }
 
-// ListByCustomer returns all bindings for a given customer.
-func (s *bindingStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.OrgCustomerBinding, error) {
-	rows, err := s.gorm.QueryContext(ctx, `
-		SELECT id, org_id, customer_id, status, optimistic_version, created_at, updated_at
-		FROM org_customer_bindings WHERE customer_id = ? ORDER BY created_at`, customerID)
-	if err != nil {
-		return nil, fmt.Errorf("list bindings by customer: %w", err)
-	}
-	defer rows.Close()
-
-	var bindings []*store.OrgCustomerBinding
-	for rows.Next() {
-		binding, err := scanBinding(rows)
-		if err != nil {
-			return nil, err
-		}
-		bindings = append(bindings, binding)
-	}
-	return bindings, rows.Err()
-}
-
 func (s *bindingStore) RequireActive(ctx context.Context, orgID, customerID string) error {
 	var status string
 	err := s.gorm.QueryRowContext(ctx, `

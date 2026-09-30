@@ -55,7 +55,9 @@ func TestBundleListMatchesReachability(t *testing.T) {
 	owned := seed("bundle-parity-owned")
 	byOperation := seed("bundle-parity-operation")
 	unclaimed := seed("bundle-parity-unclaimed")
-	_, err := st.Definitions().SetCurrentBundle(ctx, defA.ID, owned.ID)
+	// DefinitionStore.SetCurrentBundle was removed with the TASK-226 dead-surface batch (the
+	// operation-creation UoW owns the write), so the fixture writes the pointer directly.
+	err := st.GORM().Exec(`UPDATE release_definitions SET current_bundle_id = ? WHERE id = ?`, owned.ID, defA.ID).Error
 	require.NoError(t, err)
 	require.NoError(t, st.Operations().Create(ctx, &store.Operation{
 		ID: uuid.NewString(), ReleaseDefinitionID: defA.ID, BundleID: byOperation.ID,

@@ -789,10 +789,37 @@ func approvalAuditEntries(t *testing.T, f approvalFixture) []*store.ApprovalOutb
 	return entries
 }
 
-func approvalNotificationEntries(t *testing.T, f approvalFixture) []*store.ApprovalOutboxEntry {
+// approvalNotificationOutboxRow is the column subset the assertions below use.
+type approvalNotificationOutboxRow struct {
+	EventType   string
+	PayloadJSON []byte
+}
+
+// approvalNotificationEntries reads the notification outbox directly:
+// ValuesApprovalReader.ListNotificationOutbox was removed with the TASK-226 dead-surface batch
+// (no shipping caller). The filter mirrors the removed reader: payload_json.revision_id must
+// equal this revision.
+func approvalNotificationEntries(t *testing.T, f approvalFixture) []approvalNotificationOutboxRow {
 	t.Helper()
-	entries, err := f.st.ValuesApprovalEvidence().ListNotificationOutbox(f.ctx, f.revisionID)
+	rows, err := testSQLDB(t, f.st).QueryContext(f.ctx,
+		`SELECT event_type, payload_json FROM notification_outbox ORDER BY created_at, id`)
 	require.NoError(t, err)
+	defer rows.Close()
+
+	var entries []approvalNotificationOutboxRow
+	for rows.Next() {
+		var row approvalNotificationOutboxRow
+		require.NoError(t, rows.Scan(&row.EventType, &row.PayloadJSON))
+		var payload struct {
+			RevisionID string `json:"revision_id"`
+		}
+		require.NoError(t, json.Unmarshal(row.PayloadJSON, &payload))
+		if payload.RevisionID != f.revisionID {
+			continue
+		}
+		entries = append(entries, row)
+	}
+	require.NoError(t, rows.Err())
 	return entries
 }
 

@@ -1344,8 +1344,6 @@ type EmergencyIntentStore interface {
 	GetByID(ctx context.Context, id string) (*EmergencyIntent, error)
 	GetByOperationID(ctx context.Context, operationID string) (*EmergencyIntent, error)
 	GetByCommandID(ctx context.Context, commandID string) (*EmergencyIntent, error)
-	GetActiveLocksForDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
-	ListPendingDeliveryByDefinition(ctx context.Context, definitionID string) ([]*EmergencyIntent, error)
 	UpdateDeliveryStatus(ctx context.Context, id, status string) error
 	// PersistAck atomically marks a delivered emergency command as persisted and
 	// appends an ACK timeline entry in the same transaction (TASK-077 AC-077-01).
@@ -1383,8 +1381,6 @@ type ConvergenceTaskStore interface {
 	ListByDefinition(ctx context.Context, definitionID, statusFilter string) ([]*ConvergenceTask, error)
 	GetByOperationID(ctx context.Context, operationID string) (*ConvergenceTask, error)
 	HasPendingPromotionPath(ctx context.Context, definitionID string, promotionPaths []string) (bool, error)
-	MarkConverged(ctx context.Context, id, revisionID string) error
-	BindRevision(ctx context.Context, id, revisionID, revisionStatus string) error
 }
 
 // --- Emergency configuration (REQ-079) ---
@@ -1930,7 +1926,6 @@ type InventorySyncRequest struct {
 
 type InventorySyncRequestStore interface {
 	CreateIfAvailable(ctx context.Context, request *InventorySyncRequest, outbox *OutboxEntry) (*InventorySyncRequest, bool, error)
-	Get(ctx context.Context, id string) (*InventorySyncRequest, error)
 	UpdateStatus(ctx context.Context, id string, status InventorySyncRequestStatus, lastError string) error
 }
 
@@ -2042,7 +2037,6 @@ type DefinitionStore interface {
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
 	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
-	SetCurrentBundle(ctx context.Context, defID string, bundleID string) (bool, error)
 }
 
 // ReleaseDefinitionEvent is emitted for release definition lifecycle changes.
@@ -2051,11 +2045,6 @@ type ReleaseDefinitionEvent struct {
 	DefinitionID string    `json:"definition_id"`
 	EventType    string    `json:"event_type"`
 	CreatedAt    time.Time `json:"created_at"`
-}
-
-// DefinitionEventStore provides read access to persisted definition events.
-type DefinitionEventStore interface {
-	List(ctx context.Context, definitionID string) ([]*ReleaseDefinitionEvent, error)
 }
 
 // ValuesApprovalStore executes complete approval transitions atomically.
@@ -2070,15 +2059,12 @@ type ValuesApprovalStore interface {
 type ValuesApprovalReader interface {
 	ListDecisions(ctx context.Context, revisionID string) ([]*ValuesRevisionDecision, error)
 	ListAuditOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
-	ListNotificationOutbox(ctx context.Context, revisionID string) ([]*ApprovalOutboxEntry, error)
 }
 
 // ValuesStore defines immutable revision reads and stable listing.
 type ValuesStore interface {
 	Create(ctx context.Context, revision *ValuesRevision) error
 	Get(ctx context.Context, id string) (*ValuesRevision, error)
-	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
-	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetLatest(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	ListPage(ctx context.Context, filter ValuesListFilter) (*ValuesPage, error)
 }
@@ -2104,7 +2090,6 @@ type PrepareSessionStore interface {
 // CustomerCreates().CreateCustomerWithOrgBinding (REQ-051).
 type CustomerStore interface {
 	Get(ctx context.Context, id string) (*Customer, error)
-	GetBySlug(ctx context.Context, slug string) (*Customer, error)
 	// Update applies name/slug/status changes with optimistic locking:
 	// the write succeeds only when the stored version equals expectedVersion,
 	// otherwise ErrOptimisticLock is returned (AC-051-02).
@@ -2227,8 +2212,6 @@ type OperatorLifecycleStore interface {
 type EnrollmentTokenStore interface {
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
-	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
-	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
 }
 
 // OperatorPage is a cursor-based page of operators.
@@ -2246,7 +2229,6 @@ type OperatorStore interface {
 	GetActiveByName(ctx context.Context, customerID, name string) (*Operator, error)
 	Update(ctx context.Context, op *Operator) error
 	ListByClusterFilter(ctx context.Context, customerID, clusterID string, filter OperatorListFilter, pageSize int32, cursor *OperatorCursor) (*OperatorPage, error)
-	ListByCustomer(ctx context.Context, customerID string) ([]*Operator, error)
 	ListByCluster(ctx context.Context, clusterID string) ([]*Operator, error)
 }
 
@@ -2341,7 +2323,6 @@ type BindingStore interface {
 	Get(ctx context.Context, id string) (*OrgCustomerBinding, error)
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
-	ListByCustomer(ctx context.Context, customerID string) ([]*OrgCustomerBinding, error)
 	SetStatus(ctx context.Context, id string, s BindingStatus) error
 	RequireActive(ctx context.Context, orgID, customerID string) error
 }
@@ -2704,7 +2685,6 @@ type Store interface {
 	Operations() OperationStore
 	Timeline() TimelineStore
 	Definitions() DefinitionStore
-	DefinitionEvents() DefinitionEventStore
 	Values() ValuesStore
 	ValuesApproval() ValuesApprovalStore
 	ValuesApprovalEvidence() ValuesApprovalReader

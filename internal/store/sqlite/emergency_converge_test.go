@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -384,7 +385,7 @@ func TestEmergencyReleaseLock_ModesAndGuards(t *testing.T) {
 	// A released-but-UNKNOWN intent no longer blocks new operations
 	// (D7/AUDITED_OVERRIDE release semantics): it is excluded from
 	// GetActiveLocksForDefinition and HasUnresolvedForDefinition.
-	active, err := st.EmergencyIntents().GetActiveLocksForDefinition(ctx, "def-release")
+	active, err := activeLocksByDefinition(st, "def-release")
 	require.NoError(t, err)
 	releasedIDs := make([]string, 0)
 	for _, lock := range active {
@@ -578,7 +579,7 @@ func TestActiveLockFactSourceTerminalEffectAuthority(t *testing.T) {
 	assert.Equal(t, store.EmergencyEffectNotApplied, op.EffectStatus)
 
 	// Lock fact source: the intent no longer holds the target lock.
-	active, err := st.EmergencyIntents().GetActiveLocksForDefinition(ctx, "def-lock-fact")
+	active, err := activeLocksByDefinition(st, "def-lock-fact")
 	require.NoError(t, err)
 	for _, lock := range active {
 		assert.NotEqual(t, created.Intent.ID, lock.ID, "resolved terminal intent must not hold the lock")
@@ -616,8 +617,10 @@ func TestValuesRejectClearsConvergenceBinding(t *testing.T) {
 		CreatedByUserID:     "creator",
 	}
 	require.NoError(t, st.Values().Create(ctx, revision))
-	require.NoError(t, st.ConvergenceTasks().BindRevision(
-		ctx, result.ConvergenceTask.ID, revision.ID, string(store.ValuesStatusPendingApproval)))
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		revision.ID, string(store.ValuesStatusPendingApproval), result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
 
 	bound, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
 	require.NoError(t, err)
@@ -659,8 +662,10 @@ func TestValuesApproveConvergesBoundTasks(t *testing.T) {
 		CreatedByUserID:     "creator",
 	}
 	require.NoError(t, st.Values().Create(ctx, revision))
-	require.NoError(t, st.ConvergenceTasks().BindRevision(
-		ctx, result.ConvergenceTask.ID, revision.ID, string(store.ValuesStatusPendingApproval)))
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		revision.ID, string(store.ValuesStatusPendingApproval), result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
 
 	_, err := st.ValuesApproval().Approve(ctx, store.ValuesApprovalCommand{
 		RevisionID: revision.ID, ExpectedStateVersion: 1, ActorUserID: "approver", Authorized: true,
@@ -695,8 +700,10 @@ func TestValuesDiscardUnbindsConvergenceTasks(t *testing.T) {
 		ActorUserID: "creator",
 	})
 	require.NoError(t, err)
-	require.NoError(t, st.ConvergenceTasks().BindRevision(
-		ctx, result.ConvergenceTask.ID, created.Revision.ID, string(store.ValuesStatusDraft)))
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		created.Revision.ID, string(store.ValuesStatusDraft), result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
 
 	bound, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
 	require.NoError(t, err)
@@ -791,4 +798,39 @@ func TestConvergeEmergencyResult_NotAppliedAbandonsThePendingTask(t *testing.T) 
 	require.NoError(t, err)
 	hasPending := len(pendingTasks) > 0
 	assert.False(t, hasPending, "AC-058-31: the definition must no longer be blocked")
+}
+
+// activeLockRow mirrors the id column these assertions use. GetActiveLocksForDefinition was
+// removed with the TASK-226 dead-surface batch (no shipping caller). This query MIRRORS the
+// predicate of listActiveEmergencyIntents in the engine verified above:
+//
+//	JOIN operations ON operations.id = emergency_intents.operation_id
+//	WHERE release_definition_id = ?
+//	  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+//	       OR emergency_intents.effect_status = 'UNKNOWN')
+//	  AND lock_released_at IS NULL
+type activeLockRow struct{ ID string }
+
+func activeLocksByDefinition(st interface{ DB() *sql.DB }, definitionID string) ([]activeLockRow, error) {
+	rows, err := st.DB().QueryContext(context.Background(), `
+		SELECT emergency_intents.id FROM emergency_intents
+		JOIN operations ON operations.id = emergency_intents.operation_id
+		WHERE emergency_intents.release_definition_id = ?
+		  AND (operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+		       OR emergency_intents.effect_status = 'UNKNOWN')
+		  AND emergency_intents.lock_released_at IS NULL
+		ORDER BY emergency_intents.created_at ASC`, definitionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var locks []activeLockRow
+	for rows.Next() {
+		var row activeLockRow
+		if err := rows.Scan(&row.ID); err != nil {
+			return nil, err
+		}
+		locks = append(locks, row)
+	}
+	return locks, rows.Err()
 }

@@ -25,10 +25,6 @@ exceptions:
     method: ListOlderThan
     reason: "[local-narrow-iface] 生产经 internal/audit/archiver.go 的消费者本地窄接口 archiveEventStore 调用（archiver.go:71、:151）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
-  - interface: BindingStore
-    method: ListByCustomer
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
     reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 sqlite bundle transactions are unsupported（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
@@ -42,36 +38,8 @@ exceptions:
     reason: "[test-utility] 非事务版链接 API：两引擎现在都写链接表 bundle_candidate_artifacts（与生产同一关联），生产链路用 UoW 的 linkCandidateArtifacts / PG 的 LinkToBundleTx；本方法仅测试 fixture 使用（TASK-229）"
     review_by: "2026-12-31"
   - interface: ConvergenceTaskStore
-    method: BindRevision
-    reason: "[superseded] values_approval 的 store SQL 直接执行 revision 绑定，该方法无调用者"
-    review_by: "2026-12-31"
-  - interface: ConvergenceTaskStore
     method: Create
     reason: "[test-utility] 生产 0、测试 8；生产落库由操作创建 UoW 的 insertConvergenceTask 承担（sqlite/uow.go:132）——本方法供 fixture 播种任意收敛任务状态"
-    review_by: "2026-12-31"
-  - interface: ConvergenceTaskStore
-    method: MarkConverged
-    reason: "[superseded] values_approval 的 store SQL 直接执行收敛标记，该方法无调用者"
-    review_by: "2026-12-31"
-  - interface: CustomerStore
-    method: GetBySlug
-    reason: "[unwired-read] customer slug 读取无调用者（按 id 读取是当前路径）"
-    review_by: "2026-12-31"
-  - interface: DefinitionEventStore
-    method: List
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: DefinitionStore
-    method: SetCurrentBundle
-    reason: "[superseded] current_bundle_id 只由操作创建 UoW 写入（TASK-215 已记录），该方法无生产调用者"
-    review_by: "2026-12-31"
-  - interface: EmergencyIntentStore
-    method: GetActiveLocksForDefinition
-    reason: "[unwired-read] 按定义读取活跃锁无调用者（紧急锁走 emergency 查询）"
-    review_by: "2026-12-31"
-  - interface: EmergencyIntentStore
-    method: ListPendingDeliveryByDefinition
-    reason: "[unwired-read] 按定义读取待投递无调用者"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: ResolveEmergencyEffect
@@ -81,18 +49,6 @@ exceptions:
     method: SaveRevertReconciliation
     reason: "[unwired-write] 回退对账结果保存无调用者"
     review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
-    method: ListByCluster
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: EnrollmentTokenStore
-    method: ListByCustomer
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: InventorySyncRequestStore
-    method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
   - interface: OperationStore
     method: Create
     reason: "[test-utility] 87 个测试 fixture 调用点、生产 0；生产创建唯一入口是操作创建 UoW 与 CreateIdempotent（Lead 决策保留，见 TASK-226 卡内「OperationStore.Create 处置」：fixture 需播种任意状态/固定 ID，逐处改写会为 87 处构造授权栅栏且判别力下降）"
@@ -100,10 +56,6 @@ exceptions:
   - interface: OperatorStore
     method: Create
     reason: "[unwired] 保留（B-4a 2026-09-30 取证，0/66 可迁移）：名义替代 OperatorManagement().EnrollOperator 语义更窄——它要求传入 pending token 并在事务内消费、总是插入一条 session、还会 supersede 同 cluster 的 active operator；66 处调用全是 fixture（无一处是注册事务本身）：受影响文件里多数根本没有注册令牌播种；相当一部分站点固定 CertSerial 或 Status（fixture 需指定身份/证书/状态，含非 active）；2 处（sqlite/postgres 的 TestOperatorCreateAndGetByCertSerial）插入语义就是被测对象 ⇒ 整条保留。（原先写的 14/18、37/66、24/66 是单一计数口径下的近似，独立复核按另一口径得 11/18、41/66、15/66；口径差异 ±3~9 处，不影响保留结论，故改为不依赖口径的表述。）"
-    review_by: "2026-12-31"
-  - interface: OperatorStore
-    method: ListByCustomer
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Update
@@ -115,15 +67,11 @@ exceptions:
     review_by: "2026-12-31"
   - interface: RolloutTrackingStore
     method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: Store
-    method: DefinitionEvents
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    reason: "[unwired-read] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入、REQ-064:266 不定义发布 ⇒ 显式「只写不读」；该接口只有 Get ⇒ 无级联；保留供 TASK-232 的 rollout 读面"
     review_by: "2026-12-31"
   - interface: Store
     method: RolloutTrackings
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    reason: "[accessor-without-consumer] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入，REQ-064:266 明确不定义事件发布 ⇒ 显式「只写不读」；保留供 TASK-232 的 rollout 读面（upgrade_result 已合、rollout 计数未接）"
     review_by: "2026-12-31"
   - interface: Store
     method: ScanResults
@@ -131,7 +79,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: Store
     method: ValuesApprovalEvidence
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
+    reason: "[accessor-without-consumer] 保留（用户裁定 2026-09-30）：REQ-068:143/:563 承诺决策证据保留为审计轨迹，但**无读 RPC 契约**；TASK-231 只让 audit_outbox 经 drain 进入 audit_events（审计查询面可达），决策证据表本身仍无读面 ⇒ 显式「仅保留、不对外读」，要读面须先补 AC。访问器保留（其子接口仍有 ListDecisions/ListAuditOutbox）"
     review_by: "2026-12-31"
   - interface: Store
     method: VulnerabilityExceptions
@@ -143,23 +91,11 @@ exceptions:
     review_by: "2026-12-31"
   - interface: ValuesApprovalReader
     method: ListDecisions
-    reason: "[unwired-read] 决策记录读取无调用者"
-    review_by: "2026-12-31"
-  - interface: ValuesApprovalReader
-    method: ListNotificationOutbox
-    reason: "[unwired-read] 通知 outbox 读取无调用者（投递 worker 走 ClaimPending 一类方法）"
+    reason: "[unwired-read] 保留（用户裁定 2026-09-30）：决策证据读面无契约承诺（REQ-068 只承诺保留），TASK-231 未覆盖该表 ⇒ 显式「仅保留、不对外读」，待产品决定是否补读 RPC"
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: Create
     reason: "[unwired] 保留（B-3 取证）：40 处调用全是 fixture，其中 **≥18 处**（实现计 19、独立复核计 18，同一 6 个文件；任何 ≥1 处不可迁移即足以支持保留）需要 CreateDraft 表达不了的状态（Status=Approved / pending_approval、显式 state_version、历史链），分布在 6 个文件；改用测试内直插会绕过 Approve 对 approved_revision_id 指针/超集语义的维护（Approved 行直接插入不更新指针），其余 21 处虽可用 CreateDraft 但无收益 ⇒ 按『整条不干净则保留』判定"
-    review_by: "2026-12-31"
-  - interface: ValuesStore
-    method: GetByDigest
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: ValuesStore
-    method: GetLatestApproved
-    reason: "[unwired-read] 最新已批准 revision 读取无调用者"
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get

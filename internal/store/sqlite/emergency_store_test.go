@@ -61,8 +61,17 @@ func TestConvergenceTaskStoreLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, hasPath)
 
-	require.NoError(t, st.ConvergenceTasks().BindRevision(ctx, result.ConvergenceTask.ID, "revision-1", "pending_approval"))
-	require.NoError(t, st.ConvergenceTasks().MarkConverged(ctx, result.ConvergenceTask.ID, "revision-1"))
+	// BindRevision/MarkConverged were removed with the TASK-226 dead-surface batch (the
+	// production binding runs inside the values-approval transaction); the fixture writes the
+	// same columns the methods did.
+	_, bindErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET active_revision_id = ?, active_revision_status = ? WHERE id = ?`,
+		"revision-1", "pending_approval", result.ConvergenceTask.ID)
+	require.NoError(t, bindErr)
+	_, convergeErr := st.DB().ExecContext(ctx,
+		`UPDATE convergence_tasks SET status = 'converged', active_revision_id = ?, active_revision_status = 'approved', converged_at = ? WHERE id = ? AND status = 'pending_promotion'`,
+		"revision-1", time.Now().UTC().Format(time.RFC3339Nano), result.ConvergenceTask.ID)
+	require.NoError(t, convergeErr)
 
 	task, err := st.ConvergenceTasks().GetByOperationID(ctx, result.Operation.ID)
 	require.NoError(t, err)
