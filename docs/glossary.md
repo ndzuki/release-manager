@@ -117,7 +117,7 @@
 | REQUIRE_PROMOTION | 收敛策略：须创建并批准 ValuesRevision 才标记 converged；APPLIED 后原子创建唯一 task。 | 设计词汇表：REQ-058, ADR-011 |
 | REVERT_ON_NEXT_RECONCILE | EMERGENCY Operation 的收敛策略之一：紧急变更在下次标准操作/对账时被吸收覆盖，不创建 Convergence Task、不触发收敛门禁；标准 Operation succeeded 后，后端以实际 applied manifest/inventory 与该 Operation 使用的 approved rendered value 对 Emergency 目标字段对账，相等才标记 reconciled。（避免：当作持久收敛任务、跳过对账、与 REQUIRE_PROMOTION 混淆） | CONTEXT.md › Language；设计词汇表：ADR-011, REQ-058 |
 | EmergencyOpType | SET_CONTAINER_IMAGE / SET_REPLICAS / SET_APPROVED_ANNOTATIONS。 | 设计词汇表：REQ-058 |
-| AnnotationScope | 紧急 annotation 变更落点的元数据位置枚举：WORKLOAD_METADATA / POD_TEMPLATE_METADATA。实现现状：scope 只决定执行时写入哪一层元数据（`internal/operator/emergency_executor.go:286-291`），**不**进入目标锁重叠判定——锁按 workload + annotation key 判重叠、锁条目仅含 key（`internal/store/sqlite/emergency_intents.go:573-575`、`internal/store/sqlite/emergency_intents.go:578-605`；PostgreSQL 侧同构 `internal/store/postgres/emergency_intents.go:614`），与 CONTEXT.md（Emergency Target Lock）「annotation 按 workload/key 判定重叠」一致；设计词汇表「按 key+scope」为实现未采纳的设计意图，差异裁定见文末 D4。（避免：把 key+scope 当作现行锁语义） | 设计词汇表：REQ-058；CONTEXT.md › Language（Emergency Target Lock） |
+| AnnotationScope | 紧急 annotation 变更落点的元数据位置枚举：WORKLOAD_METADATA / POD_TEMPLATE_METADATA。实现现状：scope 只决定执行时写入哪一层元数据（`internal/operator/emergency_executor.go:286-291`），**不**进入目标锁重叠判定——锁按 workload + annotation key 判重叠、锁条目仅含 key（`internal/store/sqlite/emergency_intents.go:559-561`、`internal/store/sqlite/emergency_intents.go:564-591`；PostgreSQL 侧同构 `internal/store/postgres/emergency_intents.go:600-627`），与 CONTEXT.md（Emergency Target Lock）「annotation 按 workload/key 判定重叠」一致；设计词汇表「按 key+scope」为实现未采纳的设计意图，差异裁定见文末 D4。（避免：把 key+scope 当作现行锁语义） | 设计词汇表：REQ-058；CONTEXT.md › Language（Emergency Target Lock） |
 | WorkloadKind | DEPLOYMENT / STATEFUL_SET / DAEMON_SET。 | 设计词汇表：REQ-058 |
 
 ## Inventory 与审计
@@ -216,7 +216,7 @@
 ### D1. Convergence Task 绑定的 ValuesRevision 状态范围 — 裁定：无实质冲突（A）
 
 - 两侧说法：`Notes/CONTEXT.md`「至多绑定一个 active draft/pending ValuesRevision」；`Design/glossary.md`「至多绑定一个 active revision」。
-- 代码证据：生产代码唯一的绑定创建点在消费 Prepare Session 时写入 `active_revision_status='draft'`（`internal/store/sqlite/values_lifecycle.go:311`、`internal/store/postgres/values_lifecycle.go:308`）；draft 被丢弃即解绑（`internal/store/sqlite/values_lifecycle.go:170`、`internal/store/postgres/values_lifecycle.go:160`）；`'approved'` 只随任务收敛在同一语句写入（`internal/store/sqlite/convergence_tasks.go:151`、`internal/store/postgres/convergence_tasks.go:142`），且通用改写接口 `BindRevision`（`internal/store/store.go:1371`）在仓库生产代码中没有任何调用方（仅测试使用）。
+- 代码证据：生产代码唯一的绑定创建点在消费 Prepare Session 时写入 `active_revision_status='draft'`（`internal/store/sqlite/values_lifecycle.go:311`、`internal/store/postgres/values_lifecycle.go:308`）；draft 被丢弃即解绑（`internal/store/sqlite/values_lifecycle.go:170`、`internal/store/postgres/values_lifecycle.go:160`）；`'approved'` 只随任务收敛在同一语句写入（`internal/store/sqlite/convergence_tasks.go:36-46`、`internal/store/postgres/convergence_tasks.go:29-38`）；通用改写接口 `BindRevision` 已随 TASK-226 删除（PR #289，原 `internal/store/store.go:1371`）——它当时只有测试调用方，那些调用已迁移为测试内直写，生产绑定一直由 Prepare Session 与任务收敛这两处语句承担。
 - 结论：实现与 CONTEXT 一致——进行中绑定是 draft/pending，approved 仅是 converged 的终态戳而非长期驻留绑定；Design 侧「active revision」按此理解。表格条目维持 CONTEXT 定义，仓库侧无进一步改动。
 - 遗留：无实现分歧可裁；若需在 `Design/glossary.md` 给「active revision」补限定语，归 REQ-032/058 owner（知识库修改不在本任务范围）。
 
@@ -237,7 +237,7 @@
 ### D4. annotation 目标锁的判定粒度 — 裁定：仓库文档已对齐（A）+ 设计意图待确认（C）
 
 - 两侧说法：`Notes/CONTEXT.md`（Emergency Target Lock）annotation 按 workload/key 判定重叠；`Design/glossary.md`（AnnotationScope）锁按 key+scope。
-- 代码证据：锁条目结构仅含 `Key`（`internal/store/sqlite/emergency_intents.go:573-575`），重叠判定 = 同 workload（kind+name）且同 annotation key（`internal/store/sqlite/emergency_intents.go:578-605`，PostgreSQL 侧 `internal/store/postgres/emergency_intents.go:614`）；scope 只在执行期选择写入 workload metadata 还是 pod-template metadata（`internal/operator/emergency_executor.go:286-291`），不参与锁判定。
+- 代码证据：锁条目结构仅含 `Key`（`internal/store/sqlite/emergency_intents.go:559-561`），重叠判定 = 同 workload（kind+name）且同 annotation key（`internal/store/sqlite/emergency_intents.go:564-591`，PostgreSQL 侧 `internal/store/postgres/emergency_intents.go:600-627`）；scope 只在执行期选择写入 workload metadata 还是 pod-template metadata（`internal/operator/emergency_executor.go:286-291`），不参与锁判定。
 - 处理：实现与 CONTEXT 一致；原表格 AnnotationScope 条目照抄了设计侧「key+scope」的说法，与 CONTEXT 和实现都不符，已改为实现事实并标注差异。
 - 遗留（需人工裁定，可执行问题）：REQ-058 owner 需确认「scope 不计入锁重叠」是有意的实现简化还是缺陷——若是有意（同一 key 在 workload metadata 与 pod-template metadata 允许并发变更），回填 `Design/glossary.md` 措辞为 workload/key；若是缺陷，立 REQ 修正 `emergencyIntentsConflict` 的判定键。两种走向不能由仓库代码单方面裁定。
 
