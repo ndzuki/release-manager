@@ -43,13 +43,16 @@ func (s *CleanupService) runGCWithKey(ctx context.Context, key string) {
 	}
 }
 
-// runGC executes the ordered six-phase garbage collection. The returned error
+// runGC executes the ordered seven-phase garbage collection. The returned error
 // is non-nil only for pre-start failures (lock acquisition); phase-level
 // failures are accumulated in the response errors slice (AC-069-52).
 //
-//nolint:gocyclo // The six-phase pipeline is intentionally sequential; each phase is a bounded loop.
+//nolint:gocyclo // The seven-phase pipeline is intentionally sequential; each phase is a bounded loop.
 func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupResponse, []string, error) {
 	resp := &orchestratorv1.RunCleanupResponse{}
+	// Phase 6 rows have no field on the response (no proto change for TASK-233), so the count is
+	// reported in its own log line instead of being discarded.
+	deletedIdempotency := int64(0)
 	timeout := gcDefaultTimeout
 	if s.config.GCMaxDurationMinutes > 0 {
 		timeout = time.Duration(s.config.GCMaxDurationMinutes) * time.Minute
@@ -80,7 +83,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 		resp.Errors = errs
 		return resp, errs
 	}
-	errs := make([]string, 0, 6)
+	errs := make([]string, 0, 7)
 	if stopped, reason := guard(); stopped {
 		resp, errs := stop(append(errs, reason))
 		return resp, errs, nil
@@ -209,6 +212,36 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 			}
 		}
 	}
+
+	// Phase 6: purge expired request idempotency records (TASK-233). The rows carry
+	// their own expires_at, so "delete expired" needs no retention config key. Batched
+	// like every other phase: this table had no collector before TASK-233, so the first
+	// production run drains whatever accumulated, and bounded batches keep each
+	// transaction short while still making progress if an attempt is cancelled.
+	if stopped, reason := guard(); stopped {
+		resp, errs := stop(append(errs, reason))
+		return resp, errs, nil
+	}
+	if idem := s.store.Idempotency(); idem != nil {
+		for batch := 1; ; batch++ {
+			if stopped, reason := guard(); stopped {
+				resp, errs := stop(append(errs, reason))
+				return resp, errs, nil
+			}
+			n, err := idem.DeleteExpired(ctx, time.Now().UTC(), gcBatchLimit)
+			if err != nil {
+				errs = append(errs, s.phaseError(6, batch, err))
+				break
+			}
+			deletedIdempotency += n
+			if n < gcBatchLimit {
+				break
+			}
+		}
+	}
+	// Logged even at zero so operators can tell "ran, nothing had expired" from "never ran" --
+	// the other phases report unconditionally in the completion summary.
+	s.logger.Info("gc_idempotency_purged", "phase", 6, "deleted_idempotency", deletedIdempotency)
 
 	resp.Errors = errs
 	return resp, errs, nil

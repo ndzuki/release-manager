@@ -77,44 +77,25 @@ func createOrGetIdempotencyRecord(
 	}
 }
 
-func (s *idempotencyStore) GetExpired(
-	ctx context.Context,
-	before time.Time,
-	limit int,
-) ([]*store.IdempotencyRecord, error) {
-	if limit <= 0 {
-		limit = 100
+func (s *idempotencyStore) DeleteExpired(ctx context.Context, before time.Time, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT scope, text_key, request_hash, response_ref, expires_at
-		FROM idempotency_records
-		WHERE expires_at < ?
-		ORDER BY expires_at, scope, text_key
-		LIMIT ?
-	`, before.UTC(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("query expired idempotency records: %w", err)
-	}
-	defer rows.Close()
-
-	records := make([]*store.IdempotencyRecord, 0)
-	for rows.Next() {
-		record, scanErr := scanIdempotencyRecord(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		records = append(records, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate expired idempotency records: %w", err)
-	}
-	return records, nil
-}
-
-func (s *idempotencyStore) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
+	// Bounded on purpose: the caller (GC phase 6) loops until a batch comes back short. An
+	// unbounded delete would hold every matched row lock in one transaction, and on a first run
+	// over an accumulated backlog it either runs one very long statement or rolls the whole
+	// cleanup back on timeout, making no progress at all. The primary-key tuple keeps the
+	// statement portable instead of reaching for ctid.
 	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM idempotency_records WHERE expires_at < ?
-	`, before.UTC())
+		DELETE FROM idempotency_records
+		WHERE (scope, text_key) IN (
+			SELECT scope, text_key FROM idempotency_records
+			WHERE expires_at < ?
+			ORDER BY expires_at
+			LIMIT ?
+		)
+	`, before.UTC(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired idempotency records: %w", err)
 	}

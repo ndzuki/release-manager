@@ -523,11 +523,6 @@ func (s *bundleStore) Archive(ctx context.Context, ids []string) (int64, error) 
 	return result.RowsAffected, nil
 }
 
-// DeleteBefore deletes archived bundles past the supplied archive cutoff.
-func (s *bundleStore) DeleteBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
-	return s.deleteExpiredBundles(ctx, cutoff, limits...)
-}
-
 // DeleteExpiredBefore removes archived bundles past the archive grace period.
 func (s *bundleStore) DeleteExpiredBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
 	return s.deleteExpiredBundles(ctx, cutoff, limits...)

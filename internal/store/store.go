@@ -1673,7 +1673,6 @@ type BundleStore interface {
 	ListForArchive(ctx context.Context, retentionDays int, terminalStates []OperationStatus, limit ...int) ([]string, error)
 	Archive(ctx context.Context, ids []string) (int64, error)
 	Unarchive(ctx context.Context, id string) (previousStatus string, err error)
-	DeleteBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
 	DeleteExpiredBefore(ctx context.Context, cutoff time.Time, limit ...int) (int64, error)
 }
 
@@ -1964,12 +1963,12 @@ type IdempotencyRecord struct {
 
 // IdempotencyStore defines the shared persistence contract for scoped request replay.
 type IdempotencyStore interface {
-	// GetExpired returns records whose expiry is before the supplied time.
-	GetExpired(ctx context.Context, before time.Time, limit int) ([]*IdempotencyRecord, error)
 	// DeleteExpired removes records whose expiry is before the supplied time.
-	// NOTE: no shipping caller yet — the idempotency_records table has no GC
-	// phase, so this is the only bulk purge for it (TASK-226 B3 triage).
-	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+	// DeleteExpired removes records whose expiry has passed, at most limits[0] of them
+	// (default and ceiling 100, matching the garbage collector's batch discipline). The
+	// collector loops until it returns fewer rows than the batch, so a first run over an
+	// accumulated backlog makes bounded progress instead of one long transaction.
+	DeleteExpired(ctx context.Context, before time.Time, limits ...int) (int64, error)
 }
 
 // CleanupIdempotencyStore persists one-shot cleanup request keys independently

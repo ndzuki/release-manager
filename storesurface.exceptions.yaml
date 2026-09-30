@@ -33,10 +33,6 @@ exceptions:
     method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
-  - interface: BundleStore
-    method: DeleteBefore
-    reason: "[unwired-write] 非等价于 GC 的 DeleteExpiredBefore：sqlite 版多一条 status='rejected' 分支（AC-069-13，sqlite/bundles.go:236-247），DeleteExpiredBefore 只删 archived；postgres 版二者是同一实现（TASK-226 Batch A 取证，勿按已取代删除）"
-    review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: Create
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
@@ -93,14 +89,6 @@ exceptions:
     method: ListByCustomer
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
     review_by: "2026-12-31"
-  - interface: IdempotencyStore
-    method: DeleteExpired
-    reason: "[unwired] idempotency_records 的唯一批量清理路径，尚无调用者：GC Phase 5 走 CleanupIdempotency().DeleteExpiredBefore，清的是另一张表 cleanup_idempotency（TASK-226 Batch A 取证，勿按已取代删除）"
-    review_by: "2026-12-31"
-  - interface: IdempotencyStore
-    method: GetExpired
-    reason: "[unwired-read] 过期记录清理的读侧，尚无调用者；GC Phase 5 不覆盖 idempotency_records（TASK-226 Batch A 取证，勿按已取代删除）"
-    review_by: "2026-12-31"
   - interface: InventorySyncRequestStore
     method: Get
     reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
@@ -143,10 +131,6 @@ exceptions:
     review_by: "2026-12-31"
   - interface: Store
     method: DefinitionEvents
-    reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
-    review_by: "2026-12-31"
-  - interface: Store
-    method: Idempotency
     reason: "[accessor-without-consumer] Store 聚合访问器无调用者；删除需连同类子 store 的接线一起处理（TASK-226 批次）"
     review_by: "2026-12-31"
   - interface: Store
