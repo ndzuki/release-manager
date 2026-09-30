@@ -75,12 +75,13 @@ func TestIdempotencyStore_ExpiredRecordsCanBeReplacedAndPurged(t *testing.T) {
 		Scope: "scope", Key: "purge", RequestHash: "old", ExpiresAt: now.Add(-time.Minute),
 	}, now)
 	require.NoError(t, err)
-	expired, err := idem.GetExpired(ctx, now, 10)
-	require.NoError(t, err)
-	require.Len(t, expired, 1)
-	assert.Equal(t, "purge", expired[0].Key)
 
 	deleted, err := idem.DeleteExpired(ctx, now)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
+
+	// The purge removes exactly the expired row; the replaced, still-live record survives.
+	var remaining int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM idempotency_records`).Scan(&remaining))
+	assert.Equal(t, 1, remaining)
 }

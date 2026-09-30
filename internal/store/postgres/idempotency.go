@@ -77,40 +77,6 @@ func createOrGetIdempotencyRecord(
 	}
 }
 
-func (s *idempotencyStore) GetExpired(
-	ctx context.Context,
-	before time.Time,
-	limit int,
-) ([]*store.IdempotencyRecord, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT scope, text_key, request_hash, response_ref, expires_at
-		FROM idempotency_records
-		WHERE expires_at < ?
-		ORDER BY expires_at, scope, text_key
-		LIMIT ?
-	`, before.UTC(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("query expired idempotency records: %w", err)
-	}
-	defer rows.Close()
-
-	records := make([]*store.IdempotencyRecord, 0)
-	for rows.Next() {
-		record, scanErr := scanIdempotencyRecord(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		records = append(records, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate expired idempotency records: %w", err)
-	}
-	return records, nil
-}
-
 func (s *idempotencyStore) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM idempotency_records WHERE expires_at < ?

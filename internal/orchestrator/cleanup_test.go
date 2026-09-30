@@ -350,6 +350,37 @@ func TestRunGCPhase4PreflightLifecycle(t *testing.T) {
 	assert.Zero(t, orphanCount)
 }
 
+// TASK-233: Phase 6 purges expired request idempotency records
+// (idempotency_records — a different table from Phase 5's cleanup_idempotency);
+// rows whose expires_at has not passed survive.
+func TestRunGCPhase6IdempotencyRecords(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	ctx := context.Background()
+	service := newCleanupService(t, st)
+	now := time.Now().UTC()
+
+	// Seeded directly: the shipping idempotency surface exposes no creator (TASK-226
+	// removed CreateOrGet) and this fixture only needs rows with an expiry.
+	_, err := st.DB().ExecContext(ctx,
+		`INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
+		 VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+		"gc-phase6", "expired", "hash-expired", []byte(`{}`), now.Add(-time.Hour).Format(time.RFC3339Nano),
+		"gc-phase6", "live", "hash-live", []byte(`{}`), now.Add(time.Hour).Format(time.RFC3339Nano))
+	require.NoError(t, err)
+
+	resp, errs, err := service.runGC(ctx)
+	require.NoError(t, err)
+	require.Empty(t, errs)
+	assert.Zero(t, resp.GetDeletedBundles())
+
+	var remaining int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM idempotency_records`).Scan(&remaining))
+	require.Equal(t, 1, remaining, "only the expired idempotency record may be purged")
+	var liveKey string
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT text_key FROM idempotency_records`).Scan(&liveKey))
+	assert.Equal(t, "live", liveKey)
+}
+
 // AC-069-35: a pre-canceled context triggers the Phase 0 guard, skips every
 // phase, and must not update last_success_at.
 func TestRunGCTimeoutGuardSkipsAllPhases(t *testing.T) {

@@ -43,11 +43,11 @@ func (s *CleanupService) runGCWithKey(ctx context.Context, key string) {
 	}
 }
 
-// runGC executes the ordered six-phase garbage collection. The returned error
+// runGC executes the ordered seven-phase garbage collection. The returned error
 // is non-nil only for pre-start failures (lock acquisition); phase-level
 // failures are accumulated in the response errors slice (AC-069-52).
 //
-//nolint:gocyclo // The six-phase pipeline is intentionally sequential; each phase is a bounded loop.
+//nolint:gocyclo // The seven-phase pipeline is intentionally sequential; each phase is a bounded loop.
 func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupResponse, []string, error) {
 	resp := &orchestratorv1.RunCleanupResponse{}
 	timeout := gcDefaultTimeout
@@ -80,7 +80,7 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 		resp.Errors = errs
 		return resp, errs
 	}
-	errs := make([]string, 0, 6)
+	errs := make([]string, 0, 7)
 	if stopped, reason := guard(); stopped {
 		resp, errs := stop(append(errs, reason))
 		return resp, errs, nil
@@ -207,6 +207,21 @@ func (s *CleanupService) runGC(ctx context.Context) (*orchestratorv1.RunCleanupR
 			if n < gcBatchLimit {
 				break
 			}
+		}
+	}
+
+	// Phase 6: purge expired request idempotency records (TASK-233). The rows carry
+	// their own expires_at, so "delete expired" needs no retention config key. The
+	// store deletes every expired row in one statement on both engines (DeleteExpired
+	// takes no limit), so this phase is a single bounded call rather than a
+	// gcBatchLimit loop.
+	if stopped, reason := guard(); stopped {
+		resp, errs := stop(append(errs, reason))
+		return resp, errs, nil
+	}
+	if idem := s.store.Idempotency(); idem != nil {
+		if _, err := idem.DeleteExpired(ctx, time.Now().UTC()); err != nil {
+			errs = append(errs, s.phaseError(6, 1, err))
 		}
 	}
 

@@ -110,13 +110,18 @@ func TestBundleArchiveIdempotent(t *testing.T) {
 	assert.Equal(t, int64(0), n2) // already archived
 }
 
+// TASK-233: physical removal runs as the production two-phase GC — Phase 1 archives
+// eligible rows (status IN ('received','validated','rejected'), AC-069-13), Phase 2
+// deletes archived rows past the grace period. The superseded DeleteBefore collapsed
+// both branches into one statement.
 func TestBundleDeleteExpired(t *testing.T) {
 	st := setupStore(t)
 	ctx := context.Background()
 
 	now := time.Now().UTC()
+	agedCreatedAt := now.Add(-100 * 24 * time.Hour).Format(time.RFC3339)
 
-	// Create an archived bundle with old archived_at.
+	// Create an archived (once Phase 1 runs) bundle.
 	old := &store.ReleaseBundle{
 		ID:          uuid.New().String(),
 		Name:        "old-bundle",
@@ -126,13 +131,7 @@ func TestBundleDeleteExpired(t *testing.T) {
 	}
 	require.NoError(t, st.Bundles().Create(ctx, old))
 
-	// Manually set the bundle as archived with an old timestamp.
-	_, err := st.DB().ExecContext(ctx,
-		`UPDATE release_bundles SET status='archived', archived_at=? WHERE id=?`,
-		now.Add(-31*24*time.Hour).Format(time.RFC3339), old.ID)
-	require.NoError(t, err)
-
-	// Create a recently archived bundle (should survive).
+	// Create a bundle archived by the same pass that must survive the grace cutoff.
 	recent := &store.ReleaseBundle{
 		ID:          uuid.New().String(),
 		Name:        "recent-bundle",
@@ -142,12 +141,7 @@ func TestBundleDeleteExpired(t *testing.T) {
 	}
 	require.NoError(t, st.Bundles().Create(ctx, recent))
 
-	_, err = st.DB().ExecContext(ctx,
-		`UPDATE release_bundles SET status='archived', archived_at=? WHERE id=?`,
-		now.Add(-15*24*time.Hour).Format(time.RFC3339), recent.ID)
-	require.NoError(t, err)
-
-	// Create a rejected bundle with old created_at (AC-069-13).
+	// Rejected bundles are archive-eligible too (AC-069-13).
 	rejected := &store.ReleaseBundle{
 		ID:          uuid.New().String(),
 		Name:        "rejected-bundle",
@@ -157,16 +151,36 @@ func TestBundleDeleteExpired(t *testing.T) {
 	}
 	require.NoError(t, st.Bundles().Create(ctx, rejected))
 
-	_, err = st.DB().ExecContext(ctx,
-		`UPDATE release_bundles SET created_at=? WHERE id=?`,
-		now.Add(-100*24*time.Hour).Format(time.RFC3339), rejected.ID)
+	// Age every row past the archive retention window so Phase 1 selects all three.
+	_, err := st.DB().ExecContext(ctx,
+		`UPDATE release_bundles SET created_at=? WHERE id IN (?, ?, ?)`,
+		agedCreatedAt, old.ID, recent.ID, rejected.ID)
 	require.NoError(t, err)
 
-	// DeleteBefore: cutoff = now - 30 days.
-	// Old archived (31d ago) → deleted. Recent archived (15d ago) → kept.
-	// Rejected with old created_at → deleted.
+	// Phase 1: archive the eligible rows, rejected included.
+	terminalStates := []store.OperationStatus{
+		store.StatusSucceeded, store.StatusFailed, store.StatusCancelled, store.StatusTimeout,
+	}
+	ids, err := st.Bundles().ListForArchive(ctx, 90, terminalStates)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{old.ID, recent.ID, rejected.ID}, ids)
+	archived, err := st.Bundles().Archive(ctx, ids)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), archived)
+
+	// Age the two rows that must expire past the grace window; the third keeps its
+	// just-archived timestamp and must survive.
+	agedArchivedAt := now.Add(-31 * 24 * time.Hour).Format(time.RFC3339)
+	_, err = st.DB().ExecContext(ctx,
+		`UPDATE release_bundles SET archived_at=? WHERE id IN (?, ?)`,
+		agedArchivedAt, old.ID, rejected.ID)
+	require.NoError(t, err)
+
+	// Phase 2: cutoff = now - 30 days.
+	// Old archived (31d ago) → deleted. Recently archived → kept.
+	// Rejected, archived by Phase 1 and aged past grace → deleted.
 	cutoff := now.Add(-30 * 24 * time.Hour)
-	n, err := st.Bundles().DeleteBefore(ctx, cutoff)
+	n, err := st.Bundles().DeleteExpiredBefore(ctx, cutoff)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n) // old + rejected
 

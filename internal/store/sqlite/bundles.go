@@ -232,21 +232,6 @@ func (s *bundleStore) Archive(ctx context.Context, ids []string) (int64, error) 
 	return result.RowsAffected()
 }
 
-// DeleteBefore deletes bundles eligible for physical removal:
-// (status='archived' AND archived_at < cutoff) OR (status='rejected' AND created_at < cutoff).
-func (s *bundleStore) DeleteBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
-	limit := 100
-	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
-		limit = limits[0]
-	}
-	cutoffStr := cutoff.UTC().Format(time.RFC3339)
-	result, err := s.db.ExecContext(ctx, `DELETE FROM release_bundles WHERE rowid IN (SELECT rowid FROM release_bundles WHERE (status = 'archived' AND archived_at < ?) OR (status = 'rejected' AND created_at < ?) ORDER BY created_at, id LIMIT ?)`, cutoffStr, cutoffStr, limit)
-	if err != nil {
-		return 0, fmt.Errorf("delete bundles: %w", err)
-	}
-	return result.RowsAffected()
-}
-
 func (s *bundleStore) DeleteExpiredBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
 	limit := 100
 	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
