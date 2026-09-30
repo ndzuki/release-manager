@@ -52,6 +52,8 @@ type orchSvc struct {
 	pingDB     func(context.Context) error
 	bundleSvc  *orchestrator.BundleService
 	validation *orchestrator.ValidationWorker
+	// auditOutboxWorker drains the audit outbox into the audit query surface (TASK-231).
+	auditOutboxWorker *orchestrator.AuditOutboxWorker
 	// notificationWorker drains the terminal-notification outbox (REQ-031
 	// AC-031-12). Nil when no notifier address/recipient is configured.
 	notificationWorker *orchestrator.NotificationOutboxWorker
@@ -559,6 +561,15 @@ func (s *orchSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 		logger.Info("terminal notification worker disabled: notifier.url and notifier.recipient must both be set")
 	}
 
+	// TASK-231: the approval and bundle transitions write an audit outbox row in the same
+	// transaction as the decision; without a drain those rows never reach audit_events, so the
+	// audit trail stops at the outbox. Delivery goes through the audit emitter, which is the
+	// desensitization path (AGENTS.md hard constraint 6) -- never straight into the table.
+	s.auditOutboxWorker = orchestrator.NewAuditOutboxWorker(
+		s.store.AuditOutbox(), s.auditEmitter, logger, orchestrator.DefaultAuditOutboxWorkerConfig(),
+	)
+	logger.Info("audit outbox worker wired")
+
 	return nil
 }
 
@@ -845,6 +856,9 @@ func (s *orchSvc) startOrchestratorWorkers(ctx context.Context) {
 	}
 	if s.validation != nil {
 		go s.validation.Run(ctx)
+	}
+	if s.auditOutboxWorker != nil {
+		go s.auditOutboxWorker.Run(ctx)
 	}
 	if s.notificationWorker != nil {
 		go s.notificationWorker.Run(ctx)
