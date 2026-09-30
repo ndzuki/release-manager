@@ -10,47 +10,66 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-// notificationOutboxStore delivers queued terminal notifications (REQ-031
-// AC-031-12). The operation terminal transition writes the entries; this reads
-// and acknowledges them.
-type notificationOutboxStore struct {
-	db *sql.DB
+// Outbox tables this store reads. They share a shape on purpose: a row is written inside the
+// transition that owns it and delivered by exactly one drain.
+const (
+	notificationOutboxTable = "notification_outbox"
+	auditOutboxTable        = "audit_outbox"
+)
+
+// approvalOutboxStore delivers queued outbox entries: terminal notifications (REQ-031 AC-031-12) and,
+// since TASK-231, the audit rows that approval and bundle transitions write in their own
+// transaction.
+//
+// Both queues share ONE implementation on purpose. They are read the same way, acknowledged the
+// same way and must not diverge: the audit drain was missing entirely for a while precisely
+// because the audit side had no counterpart to this reader.
+type approvalOutboxStore struct {
+	db    *sql.DB
+	table string
 }
 
 // NotificationOutbox returns the terminal-notification outbox consumer.
 func (s *Store) NotificationOutbox() store.NotificationOutboxStore {
-	return &notificationOutboxStore{db: s.db}
+	return &approvalOutboxStore{db: s.db, table: notificationOutboxTable}
+}
+
+// AuditOutbox returns the audit-outbox consumer.
+func (s *Store) AuditOutbox() store.AuditOutboxStore {
+	return &approvalOutboxStore{db: s.db, table: auditOutboxTable}
 }
 
 // ListUndelivered returns the oldest undelivered entries. Ordering by
 // (created_at, id) keeps the order stable when several entries share a
 // timestamp, so a retry walks the queue in the same order.
-func (s *notificationOutboxStore) ListUndelivered(ctx context.Context, limit int) ([]*store.ApprovalOutboxEntry, error) {
+func (s *approvalOutboxStore) ListUndelivered(ctx context.Context, limit int) ([]*store.ApprovalOutboxEntry, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	//nolint:gosec // the table name is one of the internal constants above, never caller input.
+	query := `
 		SELECT id, event_type, payload_json, created_at, delivered, delivered_at
-		FROM notification_outbox
+		FROM ` + s.table + `
 		WHERE delivered = 0
 		ORDER BY created_at, id
 		LIMIT ?
-	`, limit)
+	`
+	rows, err := s.db.QueryContext(ctx, query, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list undelivered notification outbox: %w", err)
+		return nil, fmt.Errorf("list undelivered %s: %w", s.table, err)
 	}
 	defer rows.Close() //nolint:errcheck // Read-only query.
 
 	var out []*store.ApprovalOutboxEntry
 	for rows.Next() {
-		entry, scanErr := scanNotificationOutboxEntry(rows)
+		entry, scanErr := scanApprovalOutboxEntry(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
 		out = append(out, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate notification outbox: %w", err)
+		return nil, fmt.Errorf("iterate %s: %w", s.table, err)
 	}
 	return out, nil
 }
@@ -58,12 +77,12 @@ func (s *notificationOutboxStore) ListUndelivered(ctx context.Context, limit int
 // MarkDelivered acknowledges one entry. Acknowledging twice is not an error:
 // at-least-once delivery means the worker may repeat an acknowledgement after a
 // crash, and failing there would turn a duplicate into a stuck queue.
-func (s *notificationOutboxStore) MarkDelivered(ctx context.Context, id string, at time.Time) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE notification_outbox SET delivered = 1, delivered_at = ? WHERE id = ?
-	`, at.UTC().Format(time.RFC3339Nano), id)
+func (s *approvalOutboxStore) MarkDelivered(ctx context.Context, id string, at time.Time) error {
+	//nolint:gosec // the table name is one of the internal constants above, never caller input.
+	query := `UPDATE ` + s.table + ` SET delivered = 1, delivered_at = ? WHERE id = ?`
+	result, err := s.db.ExecContext(ctx, query, at.UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
-		return fmt.Errorf("mark notification outbox delivered: %w", err)
+		return fmt.Errorf("mark %s delivered: %w", s.table, err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
@@ -75,7 +94,7 @@ func (s *notificationOutboxStore) MarkDelivered(ctx context.Context, id string, 
 	return nil
 }
 
-func scanNotificationOutboxEntry(row interface{ Scan(...any) error }) (*store.ApprovalOutboxEntry, error) {
+func scanApprovalOutboxEntry(row interface{ Scan(...any) error }) (*store.ApprovalOutboxEntry, error) {
 	var (
 		id, eventType, createdAt string
 		payload                  []byte
@@ -86,7 +105,7 @@ func scanNotificationOutboxEntry(row interface{ Scan(...any) error }) (*store.Ap
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("scan notification outbox: %w", err)
+		return nil, fmt.Errorf("scan outbox entry: %w", err)
 	}
 	entry := &store.ApprovalOutboxEntry{
 		ID: id, EventType: eventType, PayloadJSON: payload, Delivered: delivered,

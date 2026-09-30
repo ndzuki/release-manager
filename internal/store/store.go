@@ -2670,6 +2670,19 @@ type NotificationOutboxStore interface {
 	MarkDelivered(ctx context.Context, id string, at time.Time) error
 }
 
+// AuditOutboxStore drains the audit outbox. REQ-068 requires a state transition to write the
+// immutable decision record, the audit outbox row and the notification outbox row in ONE
+// transaction; this is the delivery side of the audit row, and without it the approval audit
+// never reaches the audit query surface (REQ-029) -- the platform promised a complete audit
+// trail and only ever stored one (TASK-231).
+type AuditOutboxStore interface {
+	// ListUndelivered returns the oldest undelivered entries, up to limit.
+	ListUndelivered(ctx context.Context, limit int) ([]*ApprovalOutboxEntry, error)
+	// MarkDelivered acknowledges one entry. It is idempotent: acknowledging an
+	// already-delivered entry succeeds.
+	MarkDelivered(ctx context.Context, id string, at time.Time) error
+}
+
 // ── Preflight lifecycle domain types (REQ-069) ─────────────────────
 
 // PreflightLifecycle records the lifecycle of a preflight check (REQ-019).
@@ -2724,6 +2737,7 @@ type Store interface {
 	Sessions() SessionStore
 	Outbox() OutboxStore
 	NotificationOutbox() NotificationOutboxStore
+	AuditOutbox() AuditOutboxStore
 	Users() UserStore
 	AuthSessions() AuthSessionStore
 	Organizations() OrganizationStore
