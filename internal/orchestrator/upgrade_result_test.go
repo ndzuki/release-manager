@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"database/sql"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -11,6 +10,7 @@ import (
 
 	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/store"
 )
 
 // REQ-021:217 promises the GetOperation response an optional UpgradeResult read from
@@ -35,15 +35,18 @@ func TestGetOperationExposesTheStoredUpgradeResult(t *testing.T) {
 		ResourceSummary:   &operatorv1.ResourceSummary{ManifestDigest: "sha256:manifest", ResourceCount: 7},
 	})
 	require.NoError(t, err)
-	// The upgrade terminal writer only exists for PostgreSQL; the test store is the concrete
-	// SQLite engine, which exposes its handle for exactly this kind of seeding.
-	sqliteStore, ok := st.(interface{ DB() *sql.DB })
-	require.True(t, ok, "the test store must expose its database handle")
-	_, err = sqliteStore.DB().ExecContext(t.Context(), `
-		INSERT INTO operation_execution_results (operation_id, result_type, result_payload, created_at)
-		VALUES (?, 'upgrade', ?, ?)
-	`, operationID, string(payload), "2026-09-30T12:00:00Z")
+	// Write it through the production terminal transition, which is the only writer of this row
+	// (BOTH engines implement it: sqlite operations.go, postgres upgrade.go). Seeding by hand
+	// would leave the write side of the contract untested here.
+	op, err := st.Operations().Get(t.Context(), operationID)
 	require.NoError(t, err)
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(t.Context(), &store.UpgradeTerminalInput{
+		OperationID:          operationID,
+		ExpectedStateVersion: op.StateVersion,
+		Status:               store.StatusSucceeded,
+		ResultPayload:        payload,
+		ReleaseDefinitionID:  op.ReleaseDefinitionID,
+	}))
 
 	after, err := svc.GetOperation(emergencyAdminContext(), connect.NewRequest(&orchestratorv1.GetOperationRequest{OperationId: operationID}))
 	require.NoError(t, err)
@@ -68,16 +71,44 @@ func TestGetOperationSurvivesAnUndecodableUpgradeResult(t *testing.T) {
 	require.NoError(t, err)
 	operationID := created.Msg.GetOperationId()
 
-	sqliteStore, ok := st.(interface{ DB() *sql.DB })
-	require.True(t, ok, "the test store must expose its database handle")
-	_, err = sqliteStore.DB().ExecContext(t.Context(), `
-		INSERT INTO operation_execution_results (operation_id, result_type, result_payload, created_at)
-		VALUES (?, 'upgrade', ?, ?)
-	`, operationID, `{"from":`, "2026-09-30T12:00:00Z")
+	op, err := st.Operations().Get(t.Context(), operationID)
 	require.NoError(t, err)
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(t.Context(), &store.UpgradeTerminalInput{
+		OperationID:          operationID,
+		ExpectedStateVersion: op.StateVersion,
+		Status:               store.StatusSucceeded,
+		ResultPayload:        []byte(`{"from":`),
+		ReleaseDefinitionID:  op.ReleaseDefinitionID,
+	}))
 
 	resp, err := svc.GetOperation(emergencyAdminContext(), connect.NewRequest(&orchestratorv1.GetOperationRequest{OperationId: operationID}))
 	require.NoError(t, err, "a bad result payload must not fail the detail page")
 	assert.Nil(t, resp.Msg.GetUpgradeResult())
 	assert.NotNil(t, resp.Msg.GetOperation())
+}
+
+// The stored payload is a durable protojson document written by whichever operator version ran
+// the upgrade. A newer operator may add fields, so the reader must tolerate unknowns instead of
+// failing the detail page -- behaviour that had no case in the package until review pointed it
+// out.
+func TestGetOperationToleratesUnknownUpgradeResultFields(t *testing.T) {
+	svc, st, _ := emergencyTestService(t)
+	created, err := svc.ExecuteEmergencyChange(emergencyAdminContext(), emergencyImageRequest("upgrade-result-future"))
+	require.NoError(t, err)
+	operationID := created.Msg.GetOperationId()
+
+	op, err := st.Operations().Get(t.Context(), operationID)
+	require.NoError(t, err)
+	require.NoError(t, st.UpgradeResults().FinalizeUpgrade(t.Context(), &store.UpgradeTerminalInput{
+		OperationID:          operationID,
+		ExpectedStateVersion: op.StateVersion,
+		Status:               store.StatusSucceeded,
+		ResultPayload:        []byte(`{"from":{"helm_revision":"5","status":"deployed"},"future_field":{"anything":true}}`),
+		ReleaseDefinitionID:  op.ReleaseDefinitionID,
+	}))
+
+	resp, err := svc.GetOperation(emergencyAdminContext(), connect.NewRequest(&orchestratorv1.GetOperationRequest{OperationId: operationID}))
+	require.NoError(t, err, "an unknown field from a newer operator must not fail the read")
+	require.NotNil(t, resp.Msg.GetUpgradeResult())
+	assert.Equal(t, uint64(5), resp.Msg.GetUpgradeResult().GetFrom().GetHelmRevision())
 }
