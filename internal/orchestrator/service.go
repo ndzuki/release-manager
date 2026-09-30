@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
+	operatorv1 "github.com/ndzuki/release-manager/api/gen/operator/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
 	orchestratorv1connect "github.com/ndzuki/release-manager/api/gen/orchestrator/v1/orchestratorv1connect"
 	"github.com/ndzuki/release-manager/internal/audit"
@@ -687,6 +688,22 @@ func (s *Service) GetOperation(
 		return nil, err
 	}
 	response := &orchestratorv1.GetOperationResponse{Operation: toProtoOperation(op)}
+	// REQ-021:217: the typed terminal upgrade outcome, read from
+	// operation_execution_results and written by the operator's terminal transition. Like the
+	// preflight result below, a read or decode failure degrades to no result rather than failing
+	// the whole detail page; the column only exists once an upgrade has finished.
+	if stored, resultErr := s.store.ExecutionResults().Get(ctx, op.ID); resultErr != nil {
+		if !errors.Is(resultErr, store.ErrNotFound) {
+			s.logger.Error("read upgrade result", "operation_id", op.ID, "error", resultErr)
+		}
+	} else {
+		upgrade := &operatorv1.UpgradeResult{}
+		if decodeErr := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(stored.ResultPayload, upgrade); decodeErr != nil {
+			s.logger.Error("decode upgrade result", "operation_id", op.ID, "error", decodeErr)
+		} else {
+			response.UpgradeResult = upgrade
+		}
+	}
 	// TASK-149 / AC-056-03: the stage-level preflight outcome, once the pipeline
 	// has concluded. A read or decode failure degrades to no result rather than
 	// failing the whole detail page -- the same best-effort rule the write side
