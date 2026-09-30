@@ -204,12 +204,16 @@ func seedValuesRevision(
 	if status == store.ValuesStatusApproved {
 		initialStatus = store.ValuesStatusPendingApproval
 	}
-	nextVersion, err := st.Values().GetNextRevisionNumber(context.Background(), definitionID)
+	// GetNextRevisionNumber (MAX(version)+1) is reconstructed from the live read path:
+	// CreateDraft now owns version assignment inside its transaction (TASK-226).
+	valuesPage, err := st.Values().ListPage(context.Background(), store.ValuesListFilter{ReleaseDefinitionID: definitionID})
 	require.NoError(t, err)
+	nextVersion := int64(1)
 	parentRevisionID := ""
-	if nextVersion > 1 {
+	if len(valuesPage.Items) > 0 {
 		latest, latestErr := st.Values().GetLatest(context.Background(), definitionID)
 		require.NoError(t, latestErr)
+		nextVersion = latest.Version + 1
 		parentRevisionID = latest.ID
 	}
 	revision := &store.ValuesRevision{
@@ -1005,7 +1009,8 @@ func TestCreateOperation_NonTrustedResultsEmitAudit(t *testing.T) {
 			assert.Equal(t, tt.wantCode, connect.CodeOf(err))
 			require.NoError(t, emitter.Shutdown(context.Background()))
 
-			events, listErr := st.AuditEvents().ListByResource(t.Context(), "release_bundle", "bundle-001")
+			eventsPage, listErr := st.AuditEvents().Query(t.Context(), store.AuditEventFilter{ResourceType: "release_bundle", ResourceID: "bundle-001"}, "", 100)
+			events := eventsPage.Events
 			require.NoError(t, listErr)
 			require.Len(t, events, 1)
 			assert.Equal(t, "user-001", events[0].ActorID)
@@ -1181,7 +1186,8 @@ func TestOperatorManagementContracts(t *testing.T) {
 		assert.Equal(t, orchestratorv1.OperatorSessionStatus_OPERATOR_SESSION_STATUS_REVOKED, first.Msg.GetOperator().GetSessionStatus())
 		assert.Equal(t, op.ID, revoker.operatorID)
 
-		events, err := st.AuditEvents().ListByResource(ctx, "operator", op.ID)
+		eventsPage, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "operator", ResourceID: op.ID}, "", 100)
+		events := eventsPage.Events
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		assert.Equal(t, "operator.revoked", events[0].Action)
@@ -1207,7 +1213,8 @@ func TestOperatorManagementContracts(t *testing.T) {
 		}))
 		require.NoError(t, err)
 		assert.Equal(t, "security incident", detail.Msg.GetOperator().GetRevokeReason())
-		events, err = st.AuditEvents().ListByResource(ctx, "operator", op.ID)
+		eventsPage, err = st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "operator", ResourceID: op.ID}, "", 100)
+		events = eventsPage.Events
 		require.NoError(t, err)
 		require.Len(t, events, 2)
 		assert.Equal(t, "operator.revoked", events[1].Action)

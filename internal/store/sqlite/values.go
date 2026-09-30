@@ -97,17 +97,6 @@ func (s *valuesStore) GetLatest(ctx context.Context, definitionID string) (*stor
 	`, definitionID))
 }
 
-func (s *valuesStore) List(ctx context.Context, definitionID string) ([]*store.ValuesRevision, error) {
-	rows, err := s.db.QueryContext(ctx, valuesSelect+`
-		WHERE release_definition_id = ? ORDER BY version DESC, id DESC
-	`, definitionID)
-	if err != nil {
-		return nil, fmt.Errorf("list values revisions: %w", err)
-	}
-	defer rows.Close()
-	return scanValuesRows(rows)
-}
-
 func (s *valuesStore) ListPage(ctx context.Context, filter store.ValuesListFilter) (*store.ValuesPage, error) {
 	pageSize := filter.PageSize
 	if pageSize <= 0 {
@@ -155,19 +144,6 @@ func (s *valuesStore) ListPage(ctx context.Context, filter store.ValuesListFilte
 		}
 	}
 	return page, nil
-}
-
-func (s *valuesStore) GetNextRevisionNumber(ctx context.Context, definitionID string) (int64, error) {
-	var maxVersion sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT MAX(version) FROM values_revisions WHERE release_definition_id = ?
-	`, definitionID).Scan(&maxVersion); err != nil {
-		return 0, fmt.Errorf("get next values version: %w", err)
-	}
-	if maxVersion.Valid {
-		return maxVersion.Int64 + 1, nil
-	}
-	return 1, nil
 }
 
 const valuesSelect = `

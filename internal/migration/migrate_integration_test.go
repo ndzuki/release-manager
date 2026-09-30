@@ -197,10 +197,10 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 		ID: "auth-session-migrate", UserID: "user-migrate", TokenFamily: "family-migrate", RefreshTokenHash: "refresh-migrate",
 		ExpiresAt: now.Add(time.Hour),
 	}))
-	require.NoError(t, st.AuditEvents().Create(ctx, &store.AuditEvent{
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&store.AuditEvent{
 		ID: "audit-migrate", ActorKind: store.AuditActorUser, ActorID: "user-migrate", ResourceType: "migration",
 		ResourceID: "source", Action: "seed", Status: "succeeded", Metadata: map[string]string{"source": "sqlite"},
-	}))
+	}}))
 	require.NoError(t, st.Verifications().Create(ctx, &store.VerificationRecord{
 		ID: "verification-migrate", ArtifactDigest: "sha256:candidate", PolicyVersion: "policy-v1", Status: store.VerificationTrusted,
 		RootID: "root-migrate", KeyID: "key-migrate", RevocationEpoch: 2, Issuer: "issuer", Subject: "subject",

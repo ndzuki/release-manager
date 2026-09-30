@@ -1382,7 +1382,6 @@ type ConvergenceTaskStore interface {
 	Get(ctx context.Context, id string) (*ConvergenceTask, error)
 	ListByDefinition(ctx context.Context, definitionID, statusFilter string) ([]*ConvergenceTask, error)
 	GetByOperationID(ctx context.Context, operationID string) (*ConvergenceTask, error)
-	HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error)
 	HasPendingPromotionPath(ctx context.Context, definitionID string, promotionPaths []string) (bool, error)
 	MarkConverged(ctx context.Context, id, revisionID string) error
 	BindRevision(ctx context.Context, id, revisionID, revisionStatus string) error
@@ -2006,7 +2005,6 @@ type OperationStore interface {
 	CreateIfAvailable(ctx context.Context, op *Operation) error
 	CreateIdempotent(ctx context.Context, command OperationCreateCommand) (*OperationCreateResult, error)
 	Get(ctx context.Context, id string) (*Operation, error)
-	GetByIdempotencyKey(ctx context.Context, key string) (*Operation, error)
 	GetByIdempotencyScopeAndKey(ctx context.Context, scope, key string) (*Operation, error)
 	UpdateStatus(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
 	Transition(ctx context.Context, id string, status OperationStatus, stateVersion int, lastError string) (*Operation, error)
@@ -2091,9 +2089,7 @@ type ValuesStore interface {
 	GetByDigest(ctx context.Context, definitionID, digest string) (*ValuesRevision, error)
 	GetLatestApproved(ctx context.Context, definitionID string) (*ValuesRevision, error)
 	GetLatest(ctx context.Context, definitionID string) (*ValuesRevision, error)
-	List(ctx context.Context, definitionID string) ([]*ValuesRevision, error)
 	ListPage(ctx context.Context, filter ValuesListFilter) (*ValuesPage, error)
-	GetNextRevisionNumber(ctx context.Context, definitionID string) (int64, error)
 }
 
 // ValuesLifecycleStore executes complete create and discard transactions atomically.
@@ -2237,7 +2233,6 @@ type OperatorLifecycleStore interface {
 
 // EnrollmentTokenStore defines the persistence contract for enrollment tokens.
 type EnrollmentTokenStore interface {
-	Create(ctx context.Context, t *EnrollmentToken) error
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
 	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
 	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
@@ -2362,12 +2357,10 @@ type BindingStore interface {
 
 // AuditEventStore defines the persistence contract for audit events (REQ-050).
 type AuditEventStore interface {
-	Create(ctx context.Context, e *AuditEvent) error
 	CreateBatch(ctx context.Context, events []*AuditEvent) error
 	Query(ctx context.Context, filter AuditEventFilter, cursor string, limit int) (*AuditEventPage, error)
 	GetByID(ctx context.Context, id string) (*AuditEvent, error)
 	Count(ctx context.Context, filter AuditEventFilter) (int64, error)
-	ListByResource(ctx context.Context, resourceType, resourceID string) ([]*AuditEvent, error)
 	ListOlderThan(ctx context.Context, cutoff time.Time, batchSize int) ([]*AuditEvent, error)
 	DeleteByIDs(ctx context.Context, ids []string) (int64, error)
 }

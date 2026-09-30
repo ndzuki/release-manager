@@ -29,18 +29,25 @@ func TestAuditEventInsertIsIdempotentByID_Postgres(t *testing.T) {
 		Action: "operator.revoked", Status: "succeeded", CreatedAt: time.Now().UTC(),
 	}
 
-	require.NoError(t, st.AuditEvents().Create(ctx, event))
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event}))
 
 	// A replay with different content must be a no-op, not an error and not an
 	// overwrite (ON CONFLICT (id) DO NOTHING).
 	replay := *event
 	replay.Action = "operator.revoked.again"
-	require.NoError(t, st.AuditEvents().Create(ctx, &replay), "a duplicate id must not fail the insert")
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&replay}), "a duplicate id must not fail the insert")
+
+	// Read back HERE, before the batch below re-inserts the original value: a
+	// last-write-wins implementation would otherwise be masked by that batch restoring
+	// this field, which is how this assertion used to pass without discriminating.
+	afterReplay, err := st.AuditEvents().GetByID(ctx, event.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "operator.revoked", afterReplay.Action, "a replay must not overwrite the first write")
 
 	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{event, event}),
 		"a batch containing duplicates must not fail")
 
-	stored, err := st.AuditEvents().GetByID(ctx, "event-idempotent-pg")
+	stored, err := st.AuditEvents().GetByID(ctx, event.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "operator.revoked", stored.Action, "the first write wins; a replay does not overwrite")
 

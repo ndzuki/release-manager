@@ -170,7 +170,8 @@ func TestReleaseEmergencyLockHandler_NotAppliedProven(t *testing.T) {
 
 	// Audit event with actor/mode/evidence/reason/before-after effect.
 	require.NoError(t, emitter.Shutdown(t.Context()))
-	events, err := st.AuditEvents().ListByResource(t.Context(), "operation", stuck.Operation.ID)
+	eventsPage, err := st.AuditEvents().Query(t.Context(), store.AuditEventFilter{ResourceType: "operation", ResourceID: stuck.Operation.ID}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "emergency_lock_release", events[0].Action)
@@ -207,7 +208,8 @@ func TestReleaseEmergencyLockHandler_AuditedOverride(t *testing.T) {
 	require.NotNil(t, intent.LockReleasedAt)
 
 	require.NoError(t, emitter.Shutdown(t.Context()))
-	events, err := st.AuditEvents().ListByResource(t.Context(), "operation", stuck.Operation.ID)
+	eventsPage, err := st.AuditEvents().Query(t.Context(), store.AuditEventFilter{ResourceType: "operation", ResourceID: stuck.Operation.ID}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "AUDITED_OVERRIDE", events[0].Status)
@@ -297,7 +299,8 @@ func TestScanStuckEmergencyLocksAlertsOnce(t *testing.T) {
 	require.Equal(t, 1, service.ScanStuckEmergencyLocks(t.Context(), alerted), "second scan must not re-alert the same lock")
 	require.NoError(t, emitter.Shutdown(t.Context()))
 
-	events, err := st.AuditEvents().ListByResource(t.Context(), "operation", stuck.Operation.ID)
+	eventsPage, err := st.AuditEvents().Query(t.Context(), store.AuditEventFilter{ResourceType: "operation", ResourceID: stuck.Operation.ID}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1, "only one lock_stuck audit per stuck lock")
 	assert.Equal(t, "emergency_lock_stuck", events[0].Action)

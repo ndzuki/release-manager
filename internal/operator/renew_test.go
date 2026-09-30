@@ -180,9 +180,11 @@ func TestOperatorLifecycleAuditsEnrollmentSupersedeRenew(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, emitter.Shutdown(context.Background()))
 
-	firstEvents, err := st.AuditEvents().ListByResource(ctx, "operator", first.Msg.GetOperatorId())
+	firstEventsPage, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "operator", ResourceID: first.Msg.GetOperatorId()}, "", 100)
+	firstEvents := firstEventsPage.Events
 	require.NoError(t, err)
-	secondEvents, err := st.AuditEvents().ListByResource(ctx, "operator", second.Msg.GetOperatorId())
+	secondEventsPage, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "operator", ResourceID: second.Msg.GetOperatorId()}, "", 100)
+	secondEvents := secondEventsPage.Events
 	require.NoError(t, err)
 
 	assert.Contains(t, auditActions(firstEvents), "enrolled")
@@ -223,7 +225,7 @@ func newRenewFixture(t *testing.T) (*Service, *sqlitestore.Store, *store.Operato
 
 func seedLifecycleToken(t *testing.T, st *sqlitestore.Store, rawToken, operatorName string) string {
 	t.Helper()
-	require.NoError(t, st.EnrollmentTokens().Create(t.Context(), &store.EnrollmentToken{
+	require.NoError(t, createEnrollmentTokenViaManagement(t.Context(), st, &store.EnrollmentToken{
 		ID:                   rawToken,
 		CustomerID:           "customer-audit",
 		ClusterID:            "cluster-audit",

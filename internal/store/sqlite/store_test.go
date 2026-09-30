@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -191,7 +192,7 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 		TokenHash:    sha256Hex("test-token-abc"),
 		ExpiresAt:    time.Now().UTC().Add(time.Hour),
 	}
-	require.NoError(t, st.EnrollmentTokens().Create(ctx, tok))
+	require.NoError(t, createEnrollmentTokenViaManagement(ctx, st, tok))
 
 	got, err := st.EnrollmentTokens().GetByToken(ctx, "test-token-abc")
 	require.NoError(t, err)
@@ -903,24 +904,35 @@ func TestValuesRevisionGetNextRevisionNumber(t *testing.T) {
 	ctx := context.Background()
 	def := createTestDefinition(t, st)
 
-	// First revision
-	n, err := st.Values().GetNextRevisionNumber(ctx, def.ID)
+	// First revision: CreateDraft owns version assignment (MAX(version)+1) inside its
+	// transaction; the superseded GetNextRevisionNumber was a standalone probe (TASK-226).
+	first, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.New().String(),
+			ReleaseDefinitionID: def.ID,
+			CanonicalDocument:   []byte(`{}`),
+			Digest:              "sha256:a",
+		},
+		ActorUserID: "creator",
+	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), n)
+	require.NotNil(t, first.Revision, "CreateDraft returns the persisted revision")
+	assert.Equal(t, int64(1), first.Revision.Version)
 
-	vr := &store.ValuesRevision{
-		ID:                  uuid.New().String(),
-		ReleaseDefinitionID: def.ID,
-		Version:             1,
-		Status:              store.ValuesStatusDraft,
-		CanonicalDocument:   []byte(`{}`),
-		Digest:              "sha256:a",
-	}
-	require.NoError(t, st.Values().Create(ctx, vr))
-
-	n, err = st.Values().GetNextRevisionNumber(ctx, def.ID)
+	// The next draft chains off the first revision and takes the next number.
+	second, err := st.ValuesLifecycle().CreateDraft(ctx, store.CreateValuesDraftCommand{
+		Revision: &store.ValuesRevision{
+			ID:                  uuid.New().String(),
+			ReleaseDefinitionID: def.ID,
+			ParentRevisionID:    first.Revision.ID,
+			CanonicalDocument:   []byte(`{}`),
+			Digest:              "sha256:b",
+		},
+		ExpectedParentVersion: 1,
+		ActorUserID:           "creator",
+	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), n)
+	assert.Equal(t, int64(2), second.Revision.Version)
 }
 
 func TestValuesRevisionList(t *testing.T) {
@@ -943,8 +955,9 @@ func TestValuesRevisionList(t *testing.T) {
 		parentRevisionID = vr.ID
 	}
 
-	revs, err := st.Values().List(ctx, def.ID)
+	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID, PageSize: 100})
 	require.NoError(t, err)
+	revs := valuesPage.Items
 	assert.Len(t, revs, 3)
 }
 
@@ -1393,7 +1406,7 @@ func TestOperatorManagement_EnrollOperatorAtomic(t *testing.T) {
 		ID: "token-enroll", CustomerID: customerID, ClusterID: clusterID, OperatorName: "operator-new",
 		TokenHash: sha256Hex("plaintext-enroll"), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}
-	require.NoError(t, st.EnrollmentTokens().Create(ctx, token))
+	require.NoError(t, createEnrollmentTokenViaManagement(ctx, st, token))
 	next := &store.Operator{ID: "operator-new", Name: "operator-new", CustomerID: customerID, ClusterID: clusterID, CertSerial: "serial-new"}
 	session := &store.Session{ID: "session-new", Status: store.SessionOnline, Capabilities: map[string]string{"helm": "true"}, ExpiresAt: time.Now().UTC().Add(time.Hour)}
 
@@ -1524,9 +1537,12 @@ func TestOperatorManagement_RevokeOperatorAtomicAndIdempotent(t *testing.T) {
 	assert.False(t, again.Changed)
 	assert.Equal(t, "security incident", again.Operator.RevokeReason)
 	assert.Equal(t, result.Operator.RevokedAt, again.Operator.RevokedAt)
-	events, err := st.AuditEvents().ListByResource(ctx, "operator", op.ID)
+	eventsPage, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "operator", ResourceID: op.ID}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 2)
+	// Query returns newest-first; the superseded ListByResource returned oldest-first.
+	slices.Reverse(events)
 	assert.Equal(t, secondAudit.ID, events[1].ID)
 }
 
@@ -2443,4 +2459,12 @@ func TestReleaseBundleSubmitterAttributionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.SubmittedByOrganizationID, "pre-000032 rows are unattributed")
 	assert.Empty(t, got.SubmittedByUserID)
+}
+
+// createEnrollmentTokenViaManagement persists a token through the canonical management
+// path: EnrollmentTokens().Create was a dead thin wrapper (TASK-226), and
+// CreateEnrollmentToken is the writer every production caller uses.
+func createEnrollmentTokenViaManagement(ctx context.Context, st store.Store, token *store.EnrollmentToken) error {
+	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, nil)
+	return err
 }

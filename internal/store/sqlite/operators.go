@@ -15,17 +15,6 @@ import (
 
 type enrollmentTokenStore struct{ db *sql.DB }
 
-func (s *enrollmentTokenStore) Create(ctx context.Context, token *store.EnrollmentToken) error {
-	prepareEnrollmentToken(token)
-	if err := insertEnrollmentToken(ctx, s.db, token); err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrPendingTokenExists
-		}
-		return err
-	}
-	return nil
-}
-
 type enrollmentTokenExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }

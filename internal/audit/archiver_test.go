@@ -38,7 +38,7 @@ func seedArchiveEvents(t *testing.T, st *sqlitestore.Store, count int, base time
 	for i := range count {
 		id := fmt.Sprintf("archive-ev-%03d", i)
 		ids[i] = id
-		require.NoError(t, st.AuditEvents().Create(context.Background(), &store.AuditEvent{
+		require.NoError(t, st.AuditEvents().CreateBatch(context.Background(), []*store.AuditEvent{&store.AuditEvent{
 			ID:             id,
 			OrganizationID: "org-001",
 			ActorKind:      store.AuditActorSystem,
@@ -48,7 +48,7 @@ func seedArchiveEvents(t *testing.T, st *sqlitestore.Store, count int, base time
 			Status:         "accepted",
 			Metadata:       map[string]string{"idx": fmt.Sprintf("%d", i)},
 			CreatedAt:      base.Add(time.Duration(i) * time.Minute),
-		}))
+		}}))
 	}
 	return ids
 }
@@ -157,7 +157,7 @@ func TestArchiverPreservesRecentEvents(t *testing.T) {
 	arch, st, cleanup := setupArchiver(t)
 	defer cleanup()
 
-	require.NoError(t, st.AuditEvents().Create(context.Background(), &store.AuditEvent{
+	require.NoError(t, st.AuditEvents().CreateBatch(context.Background(), []*store.AuditEvent{&store.AuditEvent{
 		ID:             "recent-001",
 		OrganizationID: "org-001",
 		ActorKind:      store.AuditActorSystem,
@@ -167,7 +167,7 @@ func TestArchiverPreservesRecentEvents(t *testing.T) {
 		Status:         "accepted",
 		Metadata:       map[string]string{},
 		CreatedAt:      time.Now().Add(-1 * time.Hour),
-	}))
+	}}))
 
 	base := time.Now().Add(-200 * 24 * time.Hour)
 	oldIDs := seedArchiveEvents(t, st, 3, base)

@@ -781,7 +781,8 @@ func TestConvergeEmergencyResult_NotAppliedAbandonsThePendingTask(t *testing.T) 
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "AC-058-31: NOT_APPLIED must not leave a pending convergence task")
 
-	hasPending, err := st.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, "def-not-applied")
+	pendingTasks, err := st.ConvergenceTasks().ListByDefinition(ctx, "def-not-applied", "pending_promotion")
 	require.NoError(t, err)
+	hasPending := len(pendingTasks) > 0
 	assert.False(t, hasPending, "AC-058-31: the definition must no longer be blocked")
 }

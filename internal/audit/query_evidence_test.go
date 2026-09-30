@@ -37,10 +37,10 @@ func auditTestHandler(t *testing.T) (auditv1connect.AuditServiceHandler, *sqlite
 // keyset has a deterministic order.
 func seedAuditEvent(ctx context.Context, t *testing.T, st *sqlitestore.Store, id string, at time.Time) {
 	t.Helper()
-	require.NoError(t, st.AuditEvents().Create(ctx, &store.AuditEvent{
+	require.NoError(t, st.AuditEvents().CreateBatch(ctx, []*store.AuditEvent{&store.AuditEvent{
 		ID: id, ActorKind: store.AuditActorSystem, ActorID: "system", OrganizationID: "org-1",
 		Action: "create", Status: "success", CreatedAt: at,
-	}))
+	}}))
 }
 
 // AC-029-03: an event written between two pages must not shift the second page,
@@ -88,7 +88,8 @@ func TestExportAuditEventsWritesAnAuditEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, resp.Msg.GetExportId(), "the receipt carries the export id")
 
-	events, err := st.AuditEvents().ListByResource(ctx, "audit_export", resp.Msg.GetExportId())
+	eventsPage, err := st.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "audit_export", ResourceID: resp.Msg.GetExportId()}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1, "AC-029-04: the export must appear on the audit trail")
 	assert.Equal(t, "export.created", events[0].Action)

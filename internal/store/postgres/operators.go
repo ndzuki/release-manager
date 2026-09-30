@@ -59,17 +59,6 @@ const enrollmentTokenSelect = `
 id, customer_id, cluster_id, token_hash, operator_name, state, created_by_display_name,
 created_at, expires_at, used_at, operator_id, revoked_at, replaced_by_id`
 
-func (s *enrollmentTokenStore) Create(ctx context.Context, t *store.EnrollmentToken) error {
-	prepareEnrollmentToken(t)
-	if err := insertEnrollmentToken(ctx, s.gorm, t); err != nil {
-		if isUniqueConstraint(err) {
-			return store.ErrPendingTokenExists
-		}
-		return err
-	}
-	return nil
-}
-
 func (s *enrollmentTokenStore) GetByToken(ctx context.Context, token string) (*store.EnrollmentToken, error) {
 	tokenHash := sha256Hex(token)
 	row := s.gorm.QueryRowContext(ctx, `SELECT `+enrollmentTokenSelect+`

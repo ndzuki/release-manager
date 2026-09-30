@@ -68,7 +68,7 @@ func TestAuditServiceHandlerUsesReleaseAuthDecision(t *testing.T) {
 		{ID: "event-org-2", ActorKind: store.AuditActorUser, ActorID: "user-2", OrganizationID: "org-2",
 			ResourceType: "release", ResourceID: "rel-2", Action: "create", Status: "success", CreatedAt: now},
 	} {
-		require.NoError(t, st.AuditEvents().Create(t.Context(), event))
+		require.NoError(t, st.AuditEvents().CreateBatch(t.Context(), []*store.AuditEvent{event}))
 	}
 
 	emitted := 0

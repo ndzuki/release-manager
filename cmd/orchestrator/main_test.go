@@ -376,7 +376,8 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	assert.ErrorContains(t, err, "signature_invalid")
 
 	require.NoError(t, svc.Shutdown(context.Background()))
-	events, err := svc.store.AuditEvents().ListByResource(ctx, "trust_root", rootResponse.Msg.GetRoot().GetId())
+	eventsPage, err := svc.store.AuditEvents().Query(ctx, store.AuditEventFilter{ResourceType: "trust_root", ResourceID: rootResponse.Msg.GetRoot().GetId()}, "", 100)
+	events := eventsPage.Events
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, platformAdminID, events[0].ActorID)

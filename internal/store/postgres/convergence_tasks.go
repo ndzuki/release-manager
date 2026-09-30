@@ -88,17 +88,6 @@ func getConvergenceTaskByOperation(ctx context.Context, queryer operationQueryer
 	return scanConvergenceTask(queryer.QueryRowContext(ctx, convergenceTaskSelect+` WHERE operation_id = ?`, operationID))
 }
 
-func (s *convergenceTaskStore) HasPendingPromotionForDefinition(ctx context.Context, definitionID string) (bool, error) {
-	var count int
-	if err := s.gorm.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM convergence_tasks
-		WHERE release_definition_id = ? AND status = 'pending_promotion'
-	`, definitionID).Scan(&count); err != nil {
-		return false, fmt.Errorf("count pending convergence tasks: %w", err)
-	}
-	return count > 0, nil
-}
-
 func (s *convergenceTaskStore) HasPendingPromotionPath(ctx context.Context, definitionID string, promotionPaths []string) (bool, error) {
 	if len(promotionPaths) == 0 {
 		return false, nil

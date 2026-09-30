@@ -787,7 +787,8 @@ func TestConvergeEmergencyResult_NotAppliedAbandonsThePendingTask(t *testing.T) 
 	assert.Empty(t, remaining, "AC-058-31: NOT_APPLIED must not leave a pending convergence task")
 
 	// The standard-operation gate is exactly this query, so it now passes.
-	hasPending, err := st.ConvergenceTasks().HasPendingPromotionForDefinition(ctx, "def-not-applied")
+	pendingTasks, err := st.ConvergenceTasks().ListByDefinition(ctx, "def-not-applied", "pending_promotion")
 	require.NoError(t, err)
+	hasPending := len(pendingTasks) > 0
 	assert.False(t, hasPending, "AC-058-31: the definition must no longer be blocked")
 }

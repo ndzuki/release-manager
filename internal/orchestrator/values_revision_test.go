@@ -398,8 +398,9 @@ func TestCreateValuesRevision_RejectsStaleAuthorizationWithoutWrite(t *testing.T
 	_, err := f.svc.CreateValuesRevision(f.ctx, request)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
-	items, listErr := f.st.Values().List(f.ctx, f.defID)
+	valuesPage, listErr := f.st.Values().ListPage(f.ctx, store.ValuesListFilter{ReleaseDefinitionID: f.defID})
 	require.NoError(t, listErr)
+	items := valuesPage.Items
 	assert.Empty(t, items)
 }
 

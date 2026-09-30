@@ -58,7 +58,7 @@ func TestDisableCustomerCascade(t *testing.T) {
 		ID: uuid.NewString(), CustomerID: customerID, ClusterID: clusterID,
 		OperatorName: "cascade-op", TokenHash: sha256Hex("cascade-plaintext"), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}
-	require.NoError(t, st.EnrollmentTokens().Create(ctx, token))
+	require.NoError(t, createEnrollmentTokenViaManagement(ctx, st, token))
 	op := &store.Operator{
 		ID: "op-cascade", Name: "cascade-op", CustomerID: customerID, ClusterID: clusterID,
 		CertSerial: "cascade-serial-1", Status: store.OperatorActive,
@@ -112,7 +112,7 @@ func TestDisableClusterCascade(t *testing.T) {
 		ID: uuid.NewString(), CustomerID: customerID, ClusterID: clusterID,
 		OperatorName: "cluster-op", TokenHash: sha256Hex("cluster-plaintext"), ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}
-	require.NoError(t, st.EnrollmentTokens().Create(ctx, token))
+	require.NoError(t, createEnrollmentTokenViaManagement(ctx, st, token))
 	op := &store.Operator{
 		ID: "op-cluster-cascade", Name: "cluster-op", CustomerID: customerID, ClusterID: clusterID,
 		CertSerial: "cluster-serial-1", Status: store.OperatorActive,
