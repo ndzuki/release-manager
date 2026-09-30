@@ -686,3 +686,20 @@ jobs:
 
       - name: Check the store interface surface
         run: make check-store-surface
+
+  # Deliberately NOT a required check: the checker has one limit that can report a live method
+  # (a run-time assembled reflect.MethodByName name), so it is observed here before being made
+  # blocking. See internal/quality/deadmethods and docs/testing.md.
+  dead-methods:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
+
+      - name: Check for unreferenced concrete methods
+        run: make check-dead-methods
