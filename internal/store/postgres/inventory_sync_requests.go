@@ -89,10 +89,6 @@ func (s *inventorySyncRequestStore) Get(ctx context.Context, id string) (*store.
 	return s.scan(ctx, `WHERE id = ?`, id)
 }
 
-func (s *inventorySyncRequestStore) GetActiveByCluster(ctx context.Context, customerID, clusterID string) (*store.InventorySyncRequest, error) {
-	return s.scan(ctx, `WHERE customer_id = ? AND cluster_id = ? AND status IN ('pending', 'running') LIMIT 1`, customerID, clusterID)
-}
-
 func (s *inventorySyncRequestStore) scan(ctx context.Context, suffix string, args ...any) (*store.InventorySyncRequest, error) {
 	row := s.gorm.QueryRowContext(ctx, `
 		SELECT id, customer_id, cluster_id, operator_id, command_id, status, last_error, created_at, updated_at

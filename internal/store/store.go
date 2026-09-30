@@ -1933,7 +1933,6 @@ type InventorySyncRequest struct {
 type InventorySyncRequestStore interface {
 	CreateIfAvailable(ctx context.Context, request *InventorySyncRequest, outbox *OutboxEntry) (*InventorySyncRequest, bool, error)
 	Get(ctx context.Context, id string) (*InventorySyncRequest, error)
-	GetActiveByCluster(ctx context.Context, customerID, clusterID string) (*InventorySyncRequest, error)
 	UpdateStatus(ctx context.Context, id string, status InventorySyncRequestStatus, lastError string) error
 }
 
@@ -1966,13 +1965,11 @@ type IdempotencyRecord struct {
 
 // IdempotencyStore defines the shared persistence contract for scoped request replay.
 type IdempotencyStore interface {
-	// CreateOrGet inserts a new record or returns the existing unexpired record.
-	// Returns (record, true, nil) when created and (record, false, nil) for a replay.
-	// Returns ErrIdempotencyConflict when scope+key exists with a different request hash.
-	CreateOrGet(ctx context.Context, record *IdempotencyRecord) (*IdempotencyRecord, bool, error)
 	// GetExpired returns records whose expiry is before the supplied time.
 	GetExpired(ctx context.Context, before time.Time, limit int) ([]*IdempotencyRecord, error)
 	// DeleteExpired removes records whose expiry is before the supplied time.
+	// NOTE: no shipping caller yet — the idempotency_records table has no GC
+	// phase, so this is the only bulk purge for it (TASK-226 B3 triage).
 	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
 }
 
@@ -2043,10 +2040,12 @@ type OperationStateChangedEvent struct {
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
-// OperationEventStore persists operation state change events.
-type OperationEventStore interface {
-	Create(ctx context.Context, ev *OperationStateChangedEvent) error
-}
+// OperationEventStore persists operation state change events. Its only writer is the
+// package-private insertOperationEvent the operation state machine runs inside its
+// transitions (see internal/store/{sqlite,postgres}/operations.go), so the interface
+// declares no method of its own since TASK-226; the aggregate accessor is slated for
+// removal with the B2 batch.
+type OperationEventStore interface{}
 
 // DefinitionStore defines the persistence contract for release definitions.
 type DefinitionStore interface {
@@ -2240,7 +2239,6 @@ type OperatorLifecycleStore interface {
 type EnrollmentTokenStore interface {
 	Create(ctx context.Context, t *EnrollmentToken) error
 	GetByToken(ctx context.Context, token string) (*EnrollmentToken, error)
-	Revoke(ctx context.Context, id string) error
 	GetPendingByCluster(ctx context.Context, customerID, clusterID string) (*EnrollmentToken, error)
 	ListByCustomer(ctx context.Context, customerID string) ([]*EnrollmentToken, error)
 	ListByCluster(ctx context.Context, clusterID string) ([]*EnrollmentToken, error)
@@ -2358,7 +2356,6 @@ type BindingStore interface {
 	GetByOrgAndCustomer(ctx context.Context, orgID, customerID string) (*OrgCustomerBinding, error)
 	ListByOrg(ctx context.Context, orgID string) ([]*OrgCustomerBinding, error)
 	ListByCustomer(ctx context.Context, customerID string) ([]*OrgCustomerBinding, error)
-	Update(ctx context.Context, b *OrgCustomerBinding) error
 	SetStatus(ctx context.Context, id string, s BindingStatus) error
 	RequireActive(ctx context.Context, orgID, customerID string) error
 }

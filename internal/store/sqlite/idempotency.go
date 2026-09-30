@@ -25,13 +25,9 @@ type idempotencyDB interface {
 	idempotencyExecer
 }
 
-func (s *idempotencyStore) CreateOrGet(
-	ctx context.Context,
-	record *store.IdempotencyRecord,
-) (*store.IdempotencyRecord, bool, error) {
-	return createOrGetIdempotencyRecord(ctx, s.db, record, time.Now().UTC())
-}
-
+// createOrGetIdempotencyRecord is the only writer of request idempotency records:
+// the operation creation unit of work and CreateIdempotent call it inside their
+// transactions (see uow.go, operations.go and values_approval.go).
 func createOrGetIdempotencyRecord(
 	ctx context.Context,
 	db idempotencyDB,

@@ -21,12 +21,18 @@ import (
 
 const probeProcedure = "/fake.ProbeService/Call"
 
+// probeDefinitionID is the release definition the idempotent-operation probe
+// creates its operations against: operations.release_definition_id is a foreign
+// key, and the canonical idempotency writer runs inside operation creation.
+const probeDefinitionID = "probe-definition"
+
 // probeHandler exercises the full interceptor chain over HTTP:
 //   - X-Probe: "internal"  -> handler fails with a CodeInternal error whose
 //     message carries SQL text that must never reach the client (AC-010-04).
 //   - X-Probe: "notfound"  -> handler fails with a stable business error.
 //   - otherwise            -> handler records an idempotency record through
-//     the real sqlite store and returns a success response.
+//     the canonical idempotent-operation creation path on the real sqlite
+//     store and returns a success response.
 func probeHandler(t *testing.T, st store.Store) func(context.Context, *connect.Request[commonv1.Pagination]) (*connect.Response[commonv1.Pagination], error) {
 	t.Helper()
 	return func(ctx context.Context, req *connect.Request[commonv1.Pagination]) (*connect.Response[commonv1.Pagination], error) {
@@ -41,17 +47,29 @@ func probeHandler(t *testing.T, st store.Store) func(context.Context, *connect.R
 			if key == "" {
 				return connect.NewResponse(&commonv1.Pagination{PageSize: 20}), nil
 			}
-			record := &store.IdempotencyRecord{
-				Scope:       "integration",
-				Key:         "key-" + key,
-				RequestHash: "hash-1",
-				ExpiresAt:   time.Now().UTC().Add(time.Hour),
-			}
-			_, created, err := st.Idempotency().CreateOrGet(ctx, record)
+			now := time.Now().UTC()
+			result, err := st.Operations().CreateIdempotent(ctx, store.OperationCreateCommand{
+				Operation: &store.Operation{
+					ID:                  uuid.NewString(),
+					OperationType:       store.OperationInstall,
+					Status:              store.StatusPending,
+					ReleaseDefinitionID: probeDefinitionID,
+					IdempotencyKey:      "probe-" + key,
+					RequestHash:         "hash-1",
+					CreatedAt:           now,
+					UpdatedAt:           now,
+				},
+				Idempotency: &store.IdempotencyRecord{
+					Scope:       "integration",
+					Key:         "key-" + key,
+					RequestHash: "hash-1",
+					ExpiresAt:   now.Add(time.Hour),
+				},
+			})
 			if err != nil {
 				return nil, connect.NewError(connect.CodeInternal, err)
 			}
-			if !created {
+			if result.Replayed {
 				return nil, connect.NewError(connect.CodeAlreadyExists, errors.New("idempotency replay detected"))
 			}
 			return connect.NewResponse(&commonv1.Pagination{PageSize: 20}), nil
@@ -64,6 +82,11 @@ func probeHandler(t *testing.T, st store.Store) func(context.Context, *connect.R
 // in cmd/*/main.go. It returns the base URL.
 func newChainServer(t *testing.T, st store.Store) string {
 	t.Helper()
+
+	require.NoError(t, st.Definitions().Create(t.Context(), &store.ReleaseDefinition{
+		ID: probeDefinitionID, Name: probeDefinitionID, CustomerID: "probe-customer",
+		ClusterID: "probe-cluster", ReleaseName: probeDefinitionID, Status: store.DefStatusActive,
+	}, nil))
 
 	handler := connect.NewUnaryHandler[commonv1.Pagination, commonv1.Pagination](
 		probeProcedure,

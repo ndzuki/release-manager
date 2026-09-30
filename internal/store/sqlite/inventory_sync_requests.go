@@ -82,10 +82,6 @@ func (s *inventorySyncRequestStore) Get(ctx context.Context, id string) (*store.
 		FROM inventory_sync_requests WHERE id = ?`, id))
 }
 
-func (s *inventorySyncRequestStore) GetActiveByCluster(ctx context.Context, customerID, clusterID string) (*store.InventorySyncRequest, error) {
-	return getActiveInventorySyncRequest(ctx, s.db, customerID, clusterID)
-}
-
 func (s *inventorySyncRequestStore) UpdateStatus(ctx context.Context, id string, status store.InventorySyncRequestStatus, lastError string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE inventory_sync_requests SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`,
