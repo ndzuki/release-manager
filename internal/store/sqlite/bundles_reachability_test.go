@@ -32,7 +32,7 @@ func seedReachabilityFixture(t *testing.T) reachabilityFixture {
 	orgID := "org-" + suffix
 	customerID := "cust-" + suffix
 
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive,
 	}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{

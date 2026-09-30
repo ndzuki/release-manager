@@ -45,7 +45,7 @@ func newTestSvc(t *testing.T) store.Store {
 
 	ctx := context.Background()
 	cust := &store.Customer{ID: "cust-1", Name: "test-customer", Slug: "test", Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	clus := &store.Cluster{ID: "clus-1", Name: "test-cluster", CustomerID: "cust-1", Status: store.ClusterActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	require.NoError(t, st.Clusters().Create(ctx, clus))
 	op := &store.Operator{ID: "op-1", CustomerID: "cust-1", ClusterID: "clus-1", CertSerial: "cert-1", Status: store.OperatorActive, RegisteredAt: time.Now(), UpdatedAt: time.Now()}

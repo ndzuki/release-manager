@@ -41,10 +41,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 	return nil
 }
 
-func (s *customerStore) Create(ctx context.Context, c *store.Customer) error {
-	return insertCustomer(ctx, s.db, c)
-}
-
 func (s *customerStore) Get(ctx context.Context, id string) (*store.Customer, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, name, slug, status, version, created_at, updated_at

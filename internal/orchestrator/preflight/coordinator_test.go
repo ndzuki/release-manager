@@ -47,7 +47,7 @@ func seedPreflightFixtureWithOperator(t *testing.T, st *sqlitestore.Store, withO
 	ctx := context.Background()
 	now := time.Now().UTC()
 	cust := &store.Customer{ID: "cust-preflight", Name: "Preflight Customer", Slug: "preflight-cust", Status: store.CustomerActive}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cluster := &store.Cluster{ID: "cluster-preflight", Name: "Preflight Cluster", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cluster))
 	def := &store.ReleaseDefinition{
@@ -95,7 +95,7 @@ func seedRollbackFixture(t *testing.T, st *sqlitestore.Store) *store.Operation {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	cust := &store.Customer{ID: "cust-preflight", Name: "Preflight Customer", Slug: "preflight-cust", Status: store.CustomerActive}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cluster := &store.Cluster{ID: "cluster-preflight", Name: "Preflight Cluster", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cluster))
 	def := &store.ReleaseDefinition{
@@ -491,7 +491,7 @@ func TestCoordinatorRun_RevokedOnlyFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	cust := &store.Customer{ID: "cust-revoked", Name: "Revoked Customer", Slug: "revoked-cust", Status: store.CustomerActive}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cluster := &store.Cluster{ID: "cluster-revoked", Name: "Revoked Cluster", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cluster))
 	def := &store.ReleaseDefinition{
@@ -1020,4 +1020,27 @@ func TestQueueOperationLeavesNoDispatchWhenTheCasFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.CommandPending, entry.Status,
 		"the dispatch must be normalized like Create does, or GetNextPending never sees it")
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

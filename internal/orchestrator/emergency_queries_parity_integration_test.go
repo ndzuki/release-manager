@@ -101,7 +101,7 @@ func parityService(t *testing.T, st store.Store) *Service {
 func seedParityEmergencyScope(t *testing.T, st store.Store) {
 	t.Helper()
 	now := time.Now().UTC()
-	require.NoError(t, st.Customers().Create(t.Context(), &store.Customer{
+	require.NoError(t, createCustomerViaManagement(t.Context(), st, &store.Customer{
 		ID: "cust-001", Name: "cust-001", Slug: "cust-001", Status: store.CustomerActive,
 	}))
 	require.NoError(t, st.Organizations().Create(t.Context(), &store.Organization{ID: "org-001", Name: "org-001"}))

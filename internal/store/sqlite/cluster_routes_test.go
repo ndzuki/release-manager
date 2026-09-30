@@ -18,7 +18,7 @@ func setupClusterRouteFixture(t *testing.T, st *sqlitestore.Store) (customerID, 
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "RouteOwner", Slug: "route-owner"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "target-cluster", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))

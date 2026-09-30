@@ -36,7 +36,7 @@ func newFenceTestStore(t *testing.T) store.Store {
 	st := sqlitestore.OpenTest(t)
 	ctx := context.Background()
 	now := time.Now()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: "cust-1", Name: "test-customer", Slug: "test", Status: store.CustomerActive, CreatedAt: now, UpdatedAt: now,
 	}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{

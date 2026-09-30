@@ -132,7 +132,7 @@ func TestListOperationsRequiresActiveBinding(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	require.NoError(t, st.Customers().Create(t.Context(), &store.Customer{
+	require.NoError(t, createCustomerViaManagement(t.Context(), st, &store.Customer{
 		ID: "cust-unbound", Name: "Unbound", Slug: "unbound",
 	}))
 	require.NoError(t, st.Definitions().Create(t.Context(), &store.ReleaseDefinition{

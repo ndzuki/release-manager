@@ -145,7 +145,7 @@ func TestOperatorLifecycleAuditsEnrollmentSupersedeRenew(t *testing.T) {
 	st := sqlitestore.OpenTest(t)
 	ctx := t.Context()
 	now := time.Now().UTC()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "customer-audit", Name: "Audit Customer", Slug: "audit-customer", Status: store.CustomerActive, CreatedAt: now, UpdatedAt: now}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: "customer-audit", Name: "Audit Customer", Slug: "audit-customer", Status: store.CustomerActive, CreatedAt: now, UpdatedAt: now}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: "cluster-audit", Name: "Audit Cluster", CustomerID: "customer-audit", Status: store.ClusterActive, CreatedAt: now, UpdatedAt: now}))
 
 	logger := slog.New(slog.DiscardHandler)

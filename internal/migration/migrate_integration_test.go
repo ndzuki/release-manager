@@ -119,7 +119,7 @@ func TestRunFailurePreservesSQLiteRollbackSource(t *testing.T) {
 	rollbackStore, err := sqlitestore.Open(sourcePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, rollbackStore.Close()) })
-	require.NoError(t, rollbackStore.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, rollbackStore, &store.Customer{
 		ID: "customer-after-rollback", Name: "Rollback Customer", Slug: "rollback-customer",
 	}))
 	_, err = rollbackStore.Customers().Get(ctx, "customer-after-rollback")
@@ -163,7 +163,7 @@ func createMigrationSource(ctx context.Context, t *testing.T) string {
 	require.NoError(t, err)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "customer-migrate", Name: "Migration Customer", Slug: "migration-customer"}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: "customer-migrate", Name: "Migration Customer", Slug: "migration-customer"}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: "cluster-migrate", Name: "Migration Cluster", CustomerID: "customer-migrate"}))
 	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
 		ID: "definition-migrate", Name: "Migration Definition", CustomerID: "customer-migrate", ClusterID: "cluster-migrate",
@@ -232,4 +232,27 @@ func fileHash(t *testing.T, path string) [sha256.Size]byte {
 	contents, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return sha256.Sum256(contents)
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

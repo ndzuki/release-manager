@@ -80,7 +80,7 @@ func TestDisableCustomer_Idempotent(t *testing.T) {
 
 	custID := uuid.New().String()
 	cust := &store.Customer{ID: custID, Name: "Acme", Slug: custID}
-	require.NoError(t, st.Customers().Create(context.Background(), cust))
+	require.NoError(t, createCustomerViaManagement(context.Background(), st, cust))
 
 	// First disable — should emit event.
 	_, err := svc.DisableCustomer(context.Background(), connect.NewRequest(&orchestratorv1.DisableCustomerRequest{
@@ -109,10 +109,10 @@ func TestListCustomers_DisabledFiltering(t *testing.T) {
 	activeID := uuid.New().String()
 	disabledID := uuid.New().String()
 
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: activeID, Name: "ActiveCo", Slug: activeID,
 	}))
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: disabledID, Name: "DisabledCo", Slug: disabledID,
 	}))
 
@@ -172,8 +172,8 @@ func TestListCustomers_RespectsOrganizationBinding(t *testing.T) {
 
 	mine := &store.Customer{ID: "cust-mine", Name: "Mine Co", Slug: "mine-co"}
 	theirs := &store.Customer{ID: "cust-theirs", Name: "Theirs Co", Slug: "theirs-co"}
-	require.NoError(t, st.Customers().Create(ctx, mine))
-	require.NoError(t, st.Customers().Create(ctx, theirs))
+	require.NoError(t, createCustomerViaManagement(ctx, st, mine))
+	require.NoError(t, createCustomerViaManagement(ctx, st, theirs))
 
 	myOrg := "org-mine"
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: myOrg, Name: "Mine Org"}))
@@ -218,7 +218,7 @@ func TestDisableCustomer_EmitsEvent(t *testing.T) {
 	defer cleanup()
 
 	custID := uuid.New().String()
-	require.NoError(t, st.Customers().Create(context.Background(), &store.Customer{
+	require.NoError(t, createCustomerViaManagement(context.Background(), st, &store.Customer{
 		ID: custID, Name: "EventCo", Slug: custID,
 	}))
 
@@ -294,7 +294,7 @@ func TestUpdateCustomer_OptimisticLockConflict(t *testing.T) {
 
 	custID := uuid.New().String()
 	c := &store.Customer{ID: custID, Name: "Original", Slug: custID}
-	require.NoError(t, st.Customers().Create(ctx, c))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c))
 
 	// Another writer wins the race first.
 	winner := &store.Customer{ID: custID, Name: "Winner", Slug: custID}
@@ -323,7 +323,7 @@ func TestUpdateCustomer_CommitsWithFreshVersion(t *testing.T) {
 
 	custID := uuid.New().String()
 	c := &store.Customer{ID: custID, Name: "Original", Slug: custID}
-	require.NoError(t, st.Customers().Create(ctx, c))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c))
 
 	resp, err := svc.UpdateCustomer(ctx, connect.NewRequest(&orchestratorv1.UpdateCustomerRequest{
 		CustomerId:      custID,
@@ -356,7 +356,7 @@ func TestListCustomerEvents_NewestFirstAndDisabledReadable(t *testing.T) {
 	ctx := context.Background()
 
 	custID := uuid.New().String()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: custID, Name: "History Co", Slug: custID,
 	}))
 	// Seed an older created event so ordering is deterministic.
@@ -395,4 +395,27 @@ func TestListCustomerEvents_NotFound(t *testing.T) {
 	}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

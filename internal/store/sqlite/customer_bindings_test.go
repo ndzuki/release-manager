@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,9 +63,16 @@ func TestCreateCustomerWithOrgBinding_RollsBackOnFailure(t *testing.T) {
 	org := &store.Organization{ID: "org-rollback", Name: "Rollback Org"}
 	require.NoError(t, st.Organizations().Create(ctx, org))
 
-	// Seed a conflicting customer so the atomic insert fails mid-transaction.
+	// Seed a conflicting customer so the atomic insert fails mid-transaction. The row is
+	// inserted directly on purpose: the canonical seam always writes an organization
+	// binding and bumps the authorization source version, and this fixture must start
+	// from neither (Customers().Create was the binding-free insert removed in TASK-226).
 	seed := &store.Customer{ID: "cust-dup", Name: "Dup", Slug: "dup"}
-	require.NoError(t, st.Customers().Create(ctx, seed))
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, seedErr := st.DB().ExecContext(ctx,
+		`INSERT INTO customers (id, name, slug, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		seed.ID, seed.Name, seed.Slug, string(store.CustomerActive), now, now)
+	require.NoError(t, seedErr)
 
 	conflict := &store.Customer{ID: "cust-dup", Name: "Conflicting", Slug: "conflicting"}
 	err := st.CustomerCreates().CreateCustomerWithOrgBinding(ctx,
@@ -95,7 +103,7 @@ func TestCustomerUpdate_CASConflict(t *testing.T) {
 	ctx := context.Background()
 
 	c := &store.Customer{ID: "cust-cas", Name: "CAS Co", Slug: "cas-co"}
-	require.NoError(t, st.Customers().Create(ctx, c))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c))
 	require.EqualValues(t, 1, c.Version)
 
 	// Two writers race on the same expected version: only one wins.
@@ -111,4 +119,27 @@ func TestCustomerUpdate_CASConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "First Write", got.Name)
 	assert.EqualValues(t, 2, got.Version)
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

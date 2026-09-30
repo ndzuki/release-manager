@@ -60,7 +60,7 @@ func newIdentityOrderingFixture(t *testing.T) *identityOrderingFixture {
 	require.NoError(t, err)
 
 	now := time.Now()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: identityOrderingCustomerID, Name: "ordering-customer", Slug: "ordering-customer",
 		Status: store.CustomerActive, CreatedAt: now, UpdatedAt: now,
 	}))

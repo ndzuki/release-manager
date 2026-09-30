@@ -173,7 +173,7 @@ func seedInventoryObservationBinding(t *testing.T, st store.Store, id, customerI
 func seedInventoryObservationScope(t *testing.T, st store.Store, customerID, clusterID, customerName, clusterName string) {
 	t.Helper()
 	ctx := t.Context()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: customerName, Slug: customerID}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: customerName, Slug: customerID}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: clusterName, CustomerID: customerID}))
 }
 

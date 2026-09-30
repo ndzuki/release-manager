@@ -58,10 +58,6 @@ exceptions:
     reason: "[superseded] values_approval 的 store SQL 直接执行收敛标记，该方法无调用者"
     review_by: "2026-12-31"
   - interface: CustomerStore
-    method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
-    review_by: "2026-12-31"
-  - interface: CustomerStore
     method: GetBySlug
     reason: "[unwired-read] customer slug 读取无调用者（按 id 读取是当前路径）"
     review_by: "2026-12-31"

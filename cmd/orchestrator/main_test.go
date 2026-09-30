@@ -68,7 +68,7 @@ func TestOrchestratorValuesApprovalEndToEnd(t *testing.T) {
 		viewerID         = "viewer-068-smoke"
 	)
 	ownerOrganizationID := organizationID
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{
 		ID: customerID, Name: "Customer 068 Smoke", Slug: "customer-068-smoke",
 	}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{
@@ -208,7 +208,7 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Customer", Slug: "trust-customer"}))
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{ID: customerID, Name: "Trust Customer", Slug: "trust-customer"}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Organization"}))
 	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-live", OrgID: organizationID, CustomerID: customerID}))
 	for userID, role := range map[string]store.Role{platformAdminID: store.RolePlatformAdmin, deployerID: store.RoleDeployer} {
@@ -511,7 +511,7 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Unavailable Customer", Slug: "trust-unavailable"}))
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{ID: customerID, Name: "Trust Unavailable Customer", Slug: "trust-unavailable"}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Unavailable Organization"}))
 	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-unavailable", OrgID: organizationID, CustomerID: customerID}))
 	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: deployerID, Username: deployerID, PasswordHash: "unused", Status: store.UserActive}))
@@ -623,7 +623,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
 	require.NoError(t, err)
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Trust Epoch Customer", Slug: "trust-epoch"}))
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{ID: customerID, Name: "Trust Epoch Customer", Slug: "trust-epoch"}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Trust Epoch Organization"}))
 	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-trust-epoch", OrgID: organizationID, CustomerID: customerID}))
 	for userID, role := range map[string]store.Role{platformAdminID: store.RolePlatformAdmin, deployerID: store.RoleDeployer} {
@@ -814,7 +814,7 @@ func TestOrchestratorValuesRevisionManagementEndToEnd(t *testing.T) {
 		creatorID      = "creator-018-smoke"
 	)
 	ownerOrganizationID := organizationID
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{
 		ID: customerID, Name: "Customer 018 Smoke", Slug: "customer-018-smoke",
 	}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{
@@ -1085,11 +1085,11 @@ func TestOrchestratorPostgreSQLCutoverAuthority(t *testing.T) {
 	sqlitePath := t.TempDir() + "/rollback.db"
 	rollback, err := sqlitestore.Open(sqlitePath)
 	require.NoError(t, err)
-	require.NoError(t, rollback.Customers().Create(ctx, &store.Customer{ID: "sqlite-before-cutover", Name: "SQLite Snapshot", Slug: "sqlite-snapshot"}))
+	require.NoError(t, createCustomerViaManagement(ctx, rollback, &store.Customer{ID: "sqlite-before-cutover", Name: "SQLite Snapshot", Slug: "sqlite-snapshot"}))
 	require.NoError(t, rollback.Close())
 	before, err := os.ReadFile(sqlitePath)
 	require.NoError(t, err)
-	require.NoError(t, svc.store.Customers().Create(ctx, &store.Customer{ID: "postgres-after-cutover", Name: "PostgreSQL Only", Slug: "postgres-only"}))
+	require.NoError(t, createCustomerViaManagement(ctx, svc.store, &store.Customer{ID: "postgres-after-cutover", Name: "PostgreSQL Only", Slug: "postgres-only"}))
 	after, err := os.ReadFile(sqlitePath)
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "PostgreSQL writes must not modify the SQLite rollback snapshot")
@@ -1315,7 +1315,7 @@ func TestOperatorManagementPostgreSQLFlow(t *testing.T) {
 		viewerID       = "viewer-053-smoke"
 	)
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Operator Smoke Org"}))
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Operator Smoke Customer", Slug: customerID}))
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{ID: customerID, Name: "Operator Smoke Customer", Slug: customerID}))
 	require.NoError(t, seedStore.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: "Operator Smoke Cluster", CustomerID: customerID}))
 	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-053-smoke", OrgID: organizationID, CustomerID: customerID}))
 	for userID, role := range map[string]store.Role{adminID: store.RoleReleaseAdmin, viewerID: store.RoleViewer} {
@@ -1516,7 +1516,7 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 		convergenceTaskID = "task-071-convergence"
 	)
 	ownerOrganizationID := organizationID
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{
 		ID: customerID, Name: "Customer 071 Smoke", Slug: "customer-071-smoke",
 	}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{
@@ -1812,7 +1812,7 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		bundleID       = "bundle-preflight-e2e"
 		userID         = "user-preflight-e2e"
 	)
-	require.NoError(t, seedStore.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Preflight E2E", Slug: "preflight-e2e"}))
+	require.NoError(t, createCustomerViaManagement(ctx, seedStore, &store.Customer{ID: customerID, Name: "Preflight E2E", Slug: "preflight-e2e"}))
 	require.NoError(t, seedStore.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Preflight E2E Org"}))
 	require.NoError(t, seedStore.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-preflight-e2e", OrgID: organizationID, CustomerID: customerID}))
 	require.NoError(t, seedStore.Users().Create(ctx, &store.User{ID: userID, Username: userID, PasswordHash: "unused"}))
@@ -2040,7 +2040,7 @@ func TestBuildGatewayServerMountsSyncInventory(t *testing.T) {
 		customerID = "customer-080-gateway"
 		clusterID  = "cluster-080-gateway"
 	)
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: customerID, Name: "Gateway Sync Customer", Slug: "gateway-sync",
 		Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
@@ -2180,4 +2180,27 @@ func signOperatorIdentity(t *testing.T, caInst *ca.CA, commonName string) (keyPE
 	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
 	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privDER}), issuedCert
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

@@ -135,7 +135,7 @@ func seedDefinition(t *testing.T, st store.Store) {
 		Name: "Test Customer",
 		Slug: "test-customer",
 	}
-	require.NoError(t, st.Customers().Create(context.Background(), cust))
+	require.NoError(t, createCustomerViaManagement(context.Background(), st, cust))
 
 	org := &store.Organization{ID: "org-001", Name: "Test Organization"}
 	require.NoError(t, st.Organizations().Create(context.Background(), org))
@@ -1103,7 +1103,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: "org-operator", Name: "Operator Org"}))
 	require.NoError(t, st.Users().Create(ctx, &store.User{ID: "user-operator", Username: "operator-admin", PasswordHash: "unused"}))
 	require.NoError(t, st.OrgMembers().Create(ctx, &store.OrganizationMember{OrgID: "org-operator", UserID: "user-operator", Role: store.RoleReleaseAdmin}))
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "customer-operator", Name: "Operator Customer", Slug: "operator-customer"}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: "customer-operator", Name: "Operator Customer", Slug: "operator-customer"}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: "cluster-operator", Name: "Operator Cluster", CustomerID: "customer-operator"}))
 	actorCtx := auth.ContextWithActor(ctx, auth.Actor{UserID: "user-operator", OrganizationID: "org-operator", Roles: []string{string(store.RoleReleaseAdmin)}})
 
@@ -1260,7 +1260,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 				otherCustomerID := uuid.NewString()
 				otherClusterID := uuid.NewString()
-				require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: otherCustomerID, Name: test.name, Slug: otherCustomerID}))
+				require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: otherCustomerID, Name: test.name, Slug: otherCustomerID}))
 				require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: otherClusterID, Name: test.name, CustomerID: otherCustomerID}))
 				_, err := svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
 					CustomerId: otherCustomerID, ClusterId: otherClusterID, OperatorName: "operator-ttl", TtlMinutes: test.ttl,
@@ -1305,7 +1305,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 			otherCustomerID := uuid.NewString()
 			otherClusterID := uuid.NewString()
 			reusedName := "reusable-name-" + string(lifecycle)
-			require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: otherCustomerID, Name: reusedName, Slug: otherCustomerID}))
+			require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: otherCustomerID, Name: reusedName, Slug: otherCustomerID}))
 			require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: otherClusterID, Name: reusedName, CustomerID: otherCustomerID}))
 			require.NoError(t, st.Operators().Create(ctx, &store.Operator{
 				ID: uuid.NewString(), Name: reusedName, CustomerID: otherCustomerID, ClusterID: otherClusterID,
@@ -1343,7 +1343,7 @@ func TestOperatorManagementContracts(t *testing.T) {
 
 		revokeCustomerID := uuid.NewString()
 		revokeClusterID := uuid.NewString()
-		require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: revokeCustomerID, Name: "Revoke pending", Slug: revokeCustomerID}))
+		require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: revokeCustomerID, Name: "Revoke pending", Slug: revokeCustomerID}))
 		require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: revokeClusterID, Name: "Revoke pending", CustomerID: revokeCustomerID}))
 		_, err = svc.CreateEnrollmentToken(actorCtx, connect.NewRequest(&orchestratorv1.CreateEnrollmentTokenRequest{
 			CustomerId: revokeCustomerID, ClusterId: revokeClusterID, OperatorName: "operator-revoke-pending", TtlMinutes: 5,

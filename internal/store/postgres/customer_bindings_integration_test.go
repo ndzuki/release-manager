@@ -5,6 +5,7 @@ package postgres_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,8 +62,16 @@ func TestCreateCustomerWithOrgBinding_RollsBackOnFailure_Postgres(t *testing.T) 
 	org := &store.Organization{ID: "org-rollback-pg", Name: "Rollback Org PG"}
 	require.NoError(t, st.Organizations().Create(ctx, org))
 
+	// Seed a conflicting customer so the atomic insert fails mid-transaction. The row is
+	// inserted directly on purpose: the canonical seam always writes an organization
+	// binding and bumps the authorization source version, and this fixture must start
+	// from neither (Customers().Create was the binding-free insert removed in TASK-226).
 	seed := &store.Customer{ID: "cust-dup-pg", Name: "Dup PG", Slug: "dup-pg"}
-	require.NoError(t, st.Customers().Create(ctx, seed))
+	now := time.Now().UTC()
+	_, seedErr := st.SQLDB().ExecContext(ctx,
+		`INSERT INTO customers (id, name, slug, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		seed.ID, seed.Name, seed.Slug, string(store.CustomerActive), now, now)
+	require.NoError(t, seedErr)
 
 	conflict := &store.Customer{ID: "cust-dup-pg", Name: "Conflicting PG", Slug: "conflicting-pg"}
 	err := st.CustomerCreates().CreateCustomerWithOrgBinding(ctx,
@@ -92,7 +101,7 @@ func TestCustomerUpdate_CASConflict_Postgres(t *testing.T) {
 	ctx := context.Background()
 
 	c := &store.Customer{ID: "cust-cas-pg", Name: "CAS Co PG", Slug: "cas-co-pg"}
-	require.NoError(t, st.Customers().Create(ctx, c))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c))
 	require.EqualValues(t, 1, c.Version)
 
 	first := &store.Customer{ID: c.ID, Name: "First Write PG", Slug: "cas-co-pg"}
