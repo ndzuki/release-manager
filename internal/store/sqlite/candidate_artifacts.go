@@ -101,10 +101,22 @@ func (s *candidateArtifactStore) ListValidated(ctx context.Context) ([]*store.Ca
 	return artifacts, nil
 }
 
+// LinkToBundle writes the same link table PostgreSQL writes. It used to set the legacy
+// candidate_artifacts.bundle_id column instead, which nothing that reads the association ever
+// consulted -- the operation-creation unit of work links through bundle_candidate_artifacts on
+// both engines (TASK-229).
 func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, bundleID string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE candidate_artifacts SET bundle_id = ?, orphaned_at = NULL WHERE id = ?
-	`, bundleID, artifactID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin link candidate artifact to bundle: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // rollback after a successful commit is a no-op
+
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at)
+		SELECT ?, id, ? FROM candidate_artifacts WHERE id = ?
+		ON CONFLICT(bundle_id, artifact_id) DO NOTHING
+	`, bundleID, time.Now().UTC().Format(time.RFC3339), artifactID)
 	if err != nil {
 		return fmt.Errorf("link candidate artifact %s to bundle %s: %w", artifactID, bundleID, err)
 	}
@@ -113,7 +125,19 @@ func (s *candidateArtifactStore) LinkToBundle(ctx context.Context, artifactID, b
 		return fmt.Errorf("link rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("candidate artifact %s: %w", artifactID, store.ErrNotFound)
+		var count int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM candidate_artifacts WHERE id = ?`, artifactID).Scan(&count); err != nil {
+			return fmt.Errorf("check candidate artifact %s: %w", artifactID, err)
+		}
+		if count == 0 {
+			return fmt.Errorf("candidate artifact %s: %w", artifactID, store.ErrNotFound)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE candidate_artifacts SET orphaned_at = NULL WHERE id = ?`, artifactID); err != nil {
+		return fmt.Errorf("clear candidate artifact orphaned_at: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit link candidate artifact to bundle: %w", err)
 	}
 	return nil
 }
@@ -156,11 +180,22 @@ func linkCandidateArtifacts(ctx context.Context, tx *sql.Tx, bundleID string, di
 	return linked, nil
 }
 
-func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff time.Time, _ ...int) (int64, error) {
+// DeleteOrphanBefore honours the same guard as PostgreSQL: a candidate that still has a bundle
+// link is never deleted, even if it was marked orphaned before it was linked again (TASK-229).
+func (s *candidateArtifactStore) DeleteOrphanBefore(ctx context.Context, cutoff time.Time, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
+	}
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM candidate_artifacts
-		WHERE orphaned_at IS NOT NULL AND orphaned_at < ?
-	`, cutoff.UTC().Format(time.RFC3339))
+		WHERE id IN (
+			SELECT ca.id FROM candidate_artifacts ca
+			WHERE ca.orphaned_at IS NOT NULL AND ca.orphaned_at < ?
+			  AND NOT EXISTS (SELECT 1 FROM bundle_candidate_artifacts link WHERE link.artifact_id = ca.id)
+			ORDER BY ca.orphaned_at, ca.id LIMIT ?
+		)
+	`, cutoff.UTC().Format(time.RFC3339), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete orphan candidate artifacts: %w", err)
 	}
@@ -177,11 +212,13 @@ func (s *candidateArtifactStore) UpsertLocationTx(_ *gorm.DB, _, _, _ string, _ 
 
 // MarkValidatedForBundleTx: bundle ingestion (and therefore validation) only exists on
 // PostgreSQL in this engine, which is the same reason LinkToBundleTx is unsupported here.
-// BundlesForArtifact reads the legacy bundle_id column: bundle ingestion only exists on
-// PostgreSQL, and SQLite keeps the artifact->bundle pointer on the artifact row itself.
+// BundlesForArtifact reads the link table, exactly like PostgreSQL: candidate_artifacts.bundle_id
+// is the legacy column that nothing writes any more. Reading it here made the lookup return
+// nothing for production data, which silently disabled the emergency bundle trust fallback on
+// SQLite -- the operation-creation unit of work had linked the artifact all along (TASK-229).
 func (s *candidateArtifactStore) BundlesForArtifact(ctx context.Context, artifactID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT bundle_id FROM candidate_artifacts WHERE id = ? AND bundle_id IS NOT NULL AND bundle_id <> ''
+		SELECT bundle_id FROM bundle_candidate_artifacts WHERE artifact_id = ? ORDER BY bundle_id
 	`, artifactID)
 	if err != nil {
 		return nil, fmt.Errorf("list bundles for candidate artifact: %w", err)
