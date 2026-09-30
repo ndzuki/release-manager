@@ -163,8 +163,10 @@ func TestOperatorLifecycleAuditsEnrollmentSupersedeRenew(t *testing.T) {
 
 	secondOperator, err := st.Operators().Get(ctx, second.Msg.GetOperatorId())
 	require.NoError(t, err)
-	secondOperator.CertificateExpiresAt = new(now)
-	require.NoError(t, st.Operators().Update(ctx, secondOperator))
+	// Move the certificate into the renewal window through the production
+	// certificate seam (serial unchanged: only the expiry is rewritten).
+	require.NoError(t, st.OperatorLifecycle().UpdateCertificate(
+		ctx, secondOperator.ID, secondOperator.CertSerial, secondOperator.CertSerial, now))
 	certificate := parseLifecycleCertificate(t, second.Msg.GetCertificatePem())
 	renewContext := WithCertificateIdentity(ctx, certificateIdentity{
 		OperatorName: secondOperator.Name,
@@ -218,8 +220,9 @@ func newRenewFixture(t *testing.T) (*Service, *sqlitestore.Store, *store.Operato
 	operatorRecord, err := st.Operators().Get(t.Context(), response.Msg.GetOperatorId())
 	require.NoError(t, err)
 	expiresAt := time.Now().UTC()
-	operatorRecord.CertificateExpiresAt = &expiresAt
-	require.NoError(t, st.Operators().Update(t.Context(), operatorRecord))
+	// Expiry-only move, through the production certificate seam (serial unchanged).
+	require.NoError(t, st.OperatorLifecycle().UpdateCertificate(
+		t.Context(), operatorRecord.ID, operatorRecord.CertSerial, operatorRecord.CertSerial, expiresAt))
 	return svc, st, operatorRecord, parseLifecycleCertificate(t, response.Msg.GetCertificatePem())
 }
 

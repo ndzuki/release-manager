@@ -275,11 +275,16 @@ func TestGatewayStreamRejectsSerialMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate a renew that rotated the registered serial while the agent still
-	// holds the old certificate (ADR-018: old cert must be rejected).
+	// holds the old certificate (ADR-018: old cert must be rejected). Rotation goes
+	// through the production certificate seam (UpdateCertificate).
 	op, err := st.Operators().GetByClusterID(context.Background(), "clus-1")
 	require.NoError(t, err)
-	op.CertSerial = "deadbeef00"
-	require.NoError(t, st.Operators().Update(context.Background(), op))
+	expiresAt := time.Now().UTC()
+	if op.CertificateExpiresAt != nil {
+		expiresAt = *op.CertificateExpiresAt
+	}
+	require.NoError(t, st.OperatorLifecycle().UpdateCertificate(
+		context.Background(), op.ID, op.CertSerial, "deadbeef00", expiresAt))
 
 	_, err = openGatewayStream(t, baseURL, pool, agentCert, opID)
 	require.Error(t, err)
