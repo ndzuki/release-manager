@@ -61,9 +61,17 @@ func applyCreateTable(schema *Schema, stmt string) {
 		return
 	}
 	table := schema.AddTable(name)
+	var primaryKeyColumns []string
 	for _, item := range SplitTopLevel(body, ',') {
 		item = strings.TrimSpace(item)
-		if item == "" || isTableConstraint(item) {
+		if item == "" {
+			continue
+		}
+		if isTableConstraint(item) {
+			// A table-level PRIMARY KEY makes its columns NOT NULL, exactly like the
+			// inline form. Other table constraints (CHECK, UNIQUE, FOREIGN KEY) never
+			// imply non-nullability.
+			primaryKeyColumns = append(primaryKeyColumns, primaryKeyList(item)...)
 			continue
 		}
 		column, raw, ok := parseColumnDef(item)
@@ -71,7 +79,38 @@ func applyCreateTable(schema *Schema, stmt string) {
 			continue
 		}
 		table.SetColumnAccept(column, raw, PGStorageClass(raw), PGStorageClasses(raw))
+		nullable, hasDefault := columnNullability(item)
+		table.SetNullable(column, nullable)
+		table.SetHasDefault(column, hasDefault)
 	}
+	for _, column := range primaryKeyColumns {
+		table.SetNullable(column, false)
+	}
+}
+
+// primaryKeyList returns the columns of a table-level PRIMARY KEY item, or nil
+// when the item is not one. The parser stays textual because the item may be
+// written with or without a CONSTRAINT name and with no space before "(".
+func primaryKeyList(item string) []string {
+	// maskQuoted keeps the byte length, so the index found in the uppercased copy
+	// indexes the original text exactly.
+	masked := maskQuoted(item)
+	idx := strings.Index(strings.ToUpper(masked), "PRIMARY KEY")
+	if idx < 0 {
+		return nil
+	}
+	body, ok := extractParenBody(strings.TrimSpace(masked[idx+len("PRIMARY KEY"):]))
+	if !ok {
+		return nil
+	}
+	var columns []string
+	for _, part := range SplitTopLevel(body, ',') {
+		token, _ := splitFirstToken(strings.TrimSpace(part))
+		if token != "" {
+			columns = append(columns, unquoteIdent(token))
+		}
+	}
+	return columns
 }
 
 func applyAlterTable(schema *Schema, stmt string) {
@@ -120,8 +159,82 @@ func applyAlterTable(schema *Schema, stmt string) {
 			if table, ok := schema.Table(tableName); ok {
 				table.RenameColumn(unquoteIdent(from), unquoteIdent(toToken))
 			}
+		case strings.HasPrefix(upper, "ALTER COLUMN"), strings.HasPrefix(upper, "ALTER "):
+			// Postgres also accepts the short form "ALTER col ...". Nullability and
+			// defaults are applied in migration order, which is what makes
+			// migrations/000012's DROP NOT NULL + DROP DEFAULT on
+			// values_revisions.parent_revision_id visible instead of a false finding.
+			applyAlterColumn(schema, tableName, action)
 		}
 	}
+}
+
+// applyAlterColumn handles the per-column ALTER forms this project uses:
+// SET/DROP NOT NULL and SET/DROP DEFAULT. Type changes and other sub-actions are
+// ignored rather than guessed at.
+func applyAlterColumn(schema *Schema, tableName, action string) {
+	upper := strings.ToUpper(action)
+	prefix := "ALTER COLUMN"
+	if !strings.HasPrefix(upper, prefix) {
+		prefix = "ALTER"
+	}
+	rest := strings.TrimSpace(action[len(prefix):])
+	columnToken, remainder := splitFirstToken(rest)
+	if columnToken == "" {
+		return
+	}
+	column := unquoteIdent(columnToken)
+	sub := strings.ToUpper(strings.Join(strings.Fields(maskQuoted(remainder)), " "))
+	table, ok := schema.Table(tableName)
+	if !ok {
+		return
+	}
+	switch {
+	case strings.HasPrefix(sub, "SET NOT NULL"):
+		table.SetNullable(column, false)
+	case strings.HasPrefix(sub, "DROP NOT NULL"):
+		table.SetNullable(column, true)
+	case strings.HasPrefix(sub, "SET DEFAULT"):
+		table.SetHasDefault(column, true)
+	case strings.HasPrefix(sub, "DROP DEFAULT"):
+		table.SetHasDefault(column, false)
+	}
+}
+
+// columnNullability reports whether a column definition admits NULL and whether
+// it declares a DEFAULT. It is intentionally shallow: NOT NULL and an inline
+// PRIMARY KEY make a column non-nullable, CHECK never does (a CHECK can constrain
+// one column conditionally -- values_revisions.parent_revision_id is nullable
+// under `CHECK (parent_revision_id IS NOT NULL OR version = 1)`), and the default
+// is only a boolean because the engines render default expressions differently.
+func columnNullability(def string) (nullable, hasDefault bool) {
+	normalized := strings.ToUpper(strings.Join(strings.Fields(maskQuoted(def)), " "))
+	notNull := strings.Contains(normalized, "NOT NULL") || strings.Contains(normalized, "PRIMARY KEY")
+	return !notNull, strings.Contains(normalized, "DEFAULT")
+}
+
+// maskQuoted blanks out single-quoted string literals so a default like
+// DEFAULT 'a NOT NULL' cannot be read as a constraint. Doubled quotes inside a
+// literal are consumed as part of it.
+func maskQuoted(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '\'' && inQuote && i+1 < len(s) && s[i+1] == '\'':
+			b.WriteString("  ")
+			i++
+		case s[i] == '\'':
+			inQuote = !inQuote
+			b.WriteByte(' ')
+		case inQuote:
+			b.WriteByte(' ')
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func addColumn(schema *Schema, tableName, colDef string) {
@@ -137,6 +250,9 @@ func addColumn(schema *Schema, tableName, colDef string) {
 		return
 	}
 	table.SetColumnAccept(column, raw, PGStorageClass(raw), PGStorageClasses(raw))
+	nullable, hasDefault := columnNullability(colDef)
+	table.SetNullable(column, nullable)
+	table.SetHasDefault(column, hasDefault)
 }
 
 // columnConstraintKeywords terminate a column's type. "WITH" and "PRECISION"
