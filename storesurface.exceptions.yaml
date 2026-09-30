@@ -99,7 +99,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Create
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired] 保留（B-4a 2026-09-30 取证，0/66 可迁移）：名义替代 OperatorManagement().EnrollOperator 语义更窄——它要求传入 pending token 并在事务内消费、总是插入一条 session、还会 supersede 同 cluster 的 active operator；66 处调用全是 fixture（无一处是注册事务本身）：14/18 个文件根本没有注册令牌播种，37/66 固定 CertSerial，24/66 固定 Status（其中 3 处非 active），2 处（sqlite/postgres 的 TestOperatorCreateAndGetByCertSerial）插入语义就是被测对象 ⇒ 整条保留"
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: ListByCustomer
@@ -107,7 +107,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Update
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[unwired] 保留（B-4a 2026-09-30 取证，3/6 已迁移、3/6 不可迁移）：名义替代 OperatorLifecycle().UpdateCertificate 是按 cert_serial 的 CAS 且硬要求 status='active'，只能改证书两列。已迁移 3 处 expiry-only/serial 轮换（gateway_mtls_test.go 的 ADR-018 serial 轮换、renew_test.go 的两处 renew-window 移动）；剩余 3 处是 status 变更（renew_test.go:66/117 的 superseded/revoked 表用例、gateway_mtls_test.go:322 的 status 表用例）——superseded 无生产写者，revoked 只能走 RevokeOperator（附带 session 级联与审计副作用，会改变用例前提）⇒ 整条保留"
     review_by: "2026-12-31"
   - interface: OutboxStore
     method: Get
