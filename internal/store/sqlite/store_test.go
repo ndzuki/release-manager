@@ -56,7 +56,7 @@ func TestCustomerCreateAndGet(t *testing.T) {
 		Slug: "acme-corp",
 	}
 
-	err := st.Customers().Create(ctx, c)
+	err := createCustomerViaManagement(ctx, st, c)
 	require.NoError(t, err)
 
 	got, err := st.Customers().Get(ctx, c.ID)
@@ -72,7 +72,7 @@ func TestCustomerGetBySlug(t *testing.T) {
 	ctx := context.Background()
 
 	c := &store.Customer{ID: uuid.New().String(), Name: "Beta Inc", Slug: "beta-inc"}
-	require.NoError(t, st.Customers().Create(ctx, c))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c))
 
 	got, err := st.Customers().GetBySlug(ctx, "beta-inc")
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestCustomerDisable(t *testing.T) {
 	ctx := context.Background()
 
 	c := &store.Customer{ID: uuid.New().String(), Name: "Gamma", Slug: "gamma"}
-	require.NoError(t, st.Customers().Create(ctx, c))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c))
 
 	c.Status = store.CustomerDisabled
 	require.NoError(t, st.Customers().Update(ctx, c, c.Version))
@@ -108,8 +108,8 @@ func TestCustomerList(t *testing.T) {
 
 	c1 := &store.Customer{ID: uuid.New().String(), Name: "First", Slug: "first"}
 	c2 := &store.Customer{ID: uuid.New().String(), Name: "Second", Slug: "second"}
-	require.NoError(t, st.Customers().Create(ctx, c1))
-	require.NoError(t, st.Customers().Create(ctx, c2))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c1))
+	require.NoError(t, createCustomerViaManagement(ctx, st, c2))
 
 	list, err := st.Customers().List(ctx, false)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestClusterCreateAndGet(t *testing.T) {
 
 	// Need a customer first.
 	cust := &store.Customer{ID: uuid.New().String(), Name: "Parent", Slug: "parent"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	cl := &store.Cluster{
 		ID:            uuid.New().String(),
@@ -144,7 +144,7 @@ func TestClusterListByCustomer(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "Tenant", Slug: "tenant"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	c1 := &store.Cluster{ID: uuid.New().String(), Name: "c1", CustomerID: cust.ID}
 	c2 := &store.Cluster{ID: uuid.New().String(), Name: "c2", CustomerID: cust.ID}
@@ -161,7 +161,7 @@ func TestClusterDisable(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "X", Slug: "x"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "disabled-cluster", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
@@ -179,7 +179,7 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "EnrollCorp", Slug: "enroll"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "cluster1", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
@@ -217,7 +217,7 @@ func TestOperatorCreateAndGetByCertSerial(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "OpCorp", Slug: "opcorp"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
@@ -241,7 +241,7 @@ func TestOperatorCertSerialUnique(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "SerialCorp", Slug: "serialcorp"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	firstCluster := &store.Cluster{ID: uuid.New().String(), Name: "c1", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, firstCluster))
@@ -273,7 +273,7 @@ func TestSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "SessCorp", Slug: "sesscorp"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "S1"}
@@ -306,7 +306,7 @@ func TestSessionEstablish(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "Session Reconnect", Slug: "session-reconnect"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "SESSION-ESTABLISH"}
@@ -370,7 +370,7 @@ func TestOutboxStateMachine(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "OutboxCorp", Slug: "outbox"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "O1"}
@@ -607,7 +607,7 @@ func TestGetNextPendingMaxInflight(t *testing.T) {
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: uuid.New().String(), Name: "FifoCorp", Slug: "fifo"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 	cl := &store.Cluster{ID: uuid.New().String(), Name: "c", CustomerID: cust.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cl))
 	op := &store.Operator{ID: uuid.New().String(), CustomerID: cust.ID, ClusterID: cl.ID, CertSerial: "F1"}
@@ -1551,7 +1551,7 @@ func seedOperatorManagementScope(t *testing.T, st *sqlitestore.Store) (customerI
 	ctx := context.Background()
 	customerID = uuid.NewString()
 	clusterID = uuid.NewString()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Operator customer", Slug: customerID}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: "Operator customer", Slug: customerID}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: "Operator cluster", CustomerID: customerID}))
 	return customerID, clusterID
 }
@@ -2467,4 +2467,27 @@ func TestReleaseBundleSubmitterAttributionRoundTrip(t *testing.T) {
 func createEnrollmentTokenViaManagement(ctx context.Context, st store.Store, token *store.EnrollmentToken) error {
 	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, nil)
 	return err
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

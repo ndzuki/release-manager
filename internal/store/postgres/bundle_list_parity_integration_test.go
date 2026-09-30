@@ -30,7 +30,7 @@ func TestBundleListMatchesReachability(t *testing.T) {
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: orgA, Name: orgA}))
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: orgB, Name: orgB}))
 	customer := "cust-parity"
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: customer, Name: customer, Slug: customer, Status: store.CustomerActive,
 	}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{

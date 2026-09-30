@@ -123,7 +123,7 @@ func seedDefinitionForScope(t *testing.T, st store.Store) {
 	clusterID := "cluster-002"
 	ctx := t.Context()
 	if _, err := st.Customers().Get(ctx, customerID); err != nil {
-		require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive}))
+		require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive}))
 	}
 	if _, err := st.Clusters().Get(ctx, clusterID); err != nil {
 		require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, CustomerID: customerID, Name: clusterID, Status: store.ClusterActive}))

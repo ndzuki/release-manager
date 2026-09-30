@@ -25,7 +25,7 @@ func TestAuthorizationServiceSnapshotAndCapabilityLifecycle(t *testing.T) {
 	)
 	ctx := context.Background()
 	st := sqlitestore.OpenTest(t)
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Customer", Slug: "customer"}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: "Customer", Slug: "customer"}))
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: "Organization"}))
 	require.NoError(t, st.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding", OrgID: orgID, CustomerID: customerID}))
 	for userID, role := range map[string]store.Role{adminID: store.RolePlatformAdmin, deployerID: store.RoleDeployer} {

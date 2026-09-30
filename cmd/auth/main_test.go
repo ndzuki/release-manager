@@ -280,7 +280,7 @@ func TestAuthBindingServiceResolvesCustomersFromItsStore(t *testing.T) {
 	require.NotEmpty(t, orgs, "Initialize must return the organization it created")
 	orgID := orgs[0].GetId()
 	customer := &store.Customer{ID: uuid.New().String(), Name: "Acme", Slug: "acme", Status: store.CustomerActive}
-	require.NoError(t, svc.store.Customers().Create(ctx, customer))
+	require.NoError(t, createCustomerViaManagement(ctx, svc.store, customer))
 
 	bindingClient := authv1connect.NewBindingServiceClient(server.Client(), server.URL)
 	create := connect.NewRequest(&authv1.CreateBindingRequest{OrgId: orgID, CustomerId: customer.ID})
@@ -296,4 +296,27 @@ func TestAuthBindingServiceResolvesCustomersFromItsStore(t *testing.T) {
 	_, err = bindingClient.CreateBinding(ctx, again)
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }

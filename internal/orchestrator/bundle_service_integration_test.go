@@ -157,7 +157,7 @@ func TestGetBundleHidesEvidenceRefsFromNonAdmins(t *testing.T) {
 	now := time.Now().UTC()
 	// The binding and definition carry foreign keys, so the customer and the
 	// organization must exist first.
-	require.NoError(t, st.Customers().Create(t.Context(), &store.Customer{
+	require.NoError(t, createCustomerViaManagement(t.Context(), st, &store.Customer{
 		ID: "cust-1", Name: "cust-1", Slug: "cust-1", Status: store.CustomerActive,
 	}))
 	require.NoError(t, st.Clusters().Create(t.Context(), &store.Cluster{
@@ -200,7 +200,7 @@ func bundleTenantFixture(t *testing.T, st store.Store, suffix string) *store.Rel
 	ctx := t.Context()
 	orgID := "org-" + suffix
 	customerID := "cust-" + suffix
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive,
 	}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{
@@ -293,7 +293,7 @@ func TestReachableFromOrganizationAcceptsAnOwnedDefinition(t *testing.T) {
 	st := bundleServiceStore(t)
 	ctx := t.Context()
 	customerID := "cust-owned"
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: customerID, Name: customerID, Slug: customerID, Status: store.CustomerActive,
 	}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{

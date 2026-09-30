@@ -38,7 +38,7 @@ func TestAuthInterceptor_PreviouslyUnmappedProcedures(t *testing.T) {
 		viewer         = "user-viewer"
 	)
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Unmapped Team"}))
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Unmapped Customer", Slug: "unmapped-customer"}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: "Unmapped Customer", Slug: "unmapped-customer"}))
 	require.NoError(t, st.Bindings().Create(ctx, &store.OrgCustomerBinding{
 		ID: "binding-unmapped", OrgID: organizationID, CustomerID: customerID,
 	}))

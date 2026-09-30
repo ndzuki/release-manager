@@ -153,7 +153,7 @@ func TestAuthInterceptor_OperatorWritePermission(t *testing.T) {
 		viewerUserID   = "user-operator-viewer"
 	)
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: organizationID, Name: "Operator Team"}))
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: "Operator Customer", Slug: "operator-customer"}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: "Operator Customer", Slug: "operator-customer"}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: "Operator Cluster", CustomerID: customerID}))
 	require.NoError(t, st.Bindings().Create(ctx, &store.OrgCustomerBinding{ID: "binding-operator", OrgID: organizationID, CustomerID: customerID}))
 	for _, user := range []struct {

@@ -22,7 +22,7 @@ func TestSaveAndGetPreflightResult(t *testing.T) {
 	ctx := t.Context()
 
 	now := time.Now().UTC()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "cust-1", Name: "cust-1", Slug: "cust-1", Status: store.CustomerActive}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: "cust-1", Name: "cust-1", Slug: "cust-1", Status: store.CustomerActive}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: "cls-1", CustomerID: "cust-1", Name: "cls-1", Status: store.ClusterActive}))
 	require.NoError(t, st.Definitions().Create(ctx, &store.ReleaseDefinition{
 		ID: "def-preflight", Name: "def-preflight", CustomerID: "cust-1", ClusterID: "cls-1",

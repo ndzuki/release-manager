@@ -18,7 +18,7 @@ func clusterUpdateFixture(t *testing.T) (*Service, store.Store, *store.Cluster, 
 	svc, st, cleanup := setupService(t)
 	ctx := context.Background()
 	customer := &store.Customer{ID: "cust-cluster-update", Name: "Cluster Update", Slug: "cluster-update"}
-	require.NoError(t, st.Customers().Create(ctx, customer))
+	require.NoError(t, createCustomerViaManagement(ctx, st, customer))
 	cluster := &store.Cluster{ID: "cluster-update", Name: "staging", CustomerID: customer.ID}
 	require.NoError(t, st.Clusters().Create(ctx, cluster))
 	return svc, st, cluster, cleanup

@@ -18,7 +18,7 @@ import (
 func seedCustomer(t *testing.T, st store.Store, id, name string) {
 	t.Helper()
 	c := &store.Customer{ID: id, Name: name, Slug: id}
-	require.NoError(t, st.Customers().Create(context.Background(), c))
+	require.NoError(t, createCustomerViaManagement(context.Background(), st, c))
 }
 
 func seedCluster(t *testing.T, st store.Store, id, customerID string) {

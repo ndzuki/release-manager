@@ -2108,9 +2108,10 @@ type PrepareSessionStore interface {
 	DeleteExpired(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// CustomerStore defines the persistence contract for customers.
+// CustomerStore defines the persistence contract for customers. Creation is not part
+// of it: a customer and its active organization binding commit together through
+// CustomerCreates().CreateCustomerWithOrgBinding (REQ-051).
 type CustomerStore interface {
-	Create(ctx context.Context, c *Customer) error
 	Get(ctx context.Context, id string) (*Customer, error)
 	GetBySlug(ctx context.Context, slug string) (*Customer, error)
 	// Update applies name/slug/status changes with optimistic locking:

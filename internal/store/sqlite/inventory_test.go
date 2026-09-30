@@ -158,14 +158,17 @@ func TestInventoryUpsertPreservesWorkloadIdentity(t *testing.T) {
 // ── REQ-088 (TASK-088): pending workload identity buffer ──
 
 // seedPendingCustomerCluster creates the customer/cluster FK targets required
-// by pending_workload_identity (ON DELETE CASCADE).
+// by pending_workload_identity (ON DELETE CASCADE). The customer goes through the
+// canonical customer+org-binding seam, hence the two extra accessors.
 func seedPendingCustomerCluster(t *testing.T, st interface {
 	Customers() store.CustomerStore
 	Clusters() store.ClusterStore
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
 }) {
 	t.Helper()
 	ctx := t.Context()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "customer-1", Name: "test-customer", Slug: "test-pending", Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: "customer-1", Name: "test-customer", Slug: "test-pending", Status: store.CustomerActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: "cluster-1", Name: "test-cluster", CustomerID: "customer-1", Status: store.ClusterActive, CreatedAt: time.Now(), UpdatedAt: time.Now()}))
 }
 

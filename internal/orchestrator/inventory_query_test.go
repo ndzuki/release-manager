@@ -85,7 +85,7 @@ func TestListReleasesValidatesScopeAndCursor(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	seedInventoryScope(t, st, "customer-a", "cluster-a")
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: "customer-b", Name: "Other", Slug: "other"}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: "customer-b", Name: "Other", Slug: "other"}))
 
 	tests := []struct {
 		name       string
@@ -190,7 +190,7 @@ func TestTriggerInventorySyncRejectsOfflineOperator(t *testing.T) {
 func seedInventoryScope(t *testing.T, st store.Store, customerID, clusterID string) {
 	t.Helper()
 	ctx := context.Background()
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: clusterID, CustomerID: customerID}))
 }
 

@@ -70,7 +70,7 @@ func newApprovalFixture(t *testing.T) approvalFixture {
 	adminID := "admin-068"
 	owner := orgID
 
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{
 		ID: customerID, Name: "Customer 068", Slug: "customer-068",
 	}))
 	require.NoError(t, st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: "Organization 068"}))

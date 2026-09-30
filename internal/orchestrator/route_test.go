@@ -18,7 +18,7 @@ func seedCustomerAndCluster(t *testing.T, st store.Store) (customerID, clusterID
 	ctx := context.Background()
 
 	cust := &store.Customer{ID: "cust-route", Name: "Route Test", Slug: "route-test"}
-	require.NoError(t, st.Customers().Create(ctx, cust))
+	require.NoError(t, createCustomerViaManagement(ctx, st, cust))
 
 	cl := &store.Cluster{ID: "cls-route", Name: "route-target", CustomerID: cust.ID, KubeconfigRef: "kref"}
 	require.NoError(t, st.Clusters().Create(ctx, cl))

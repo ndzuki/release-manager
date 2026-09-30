@@ -30,7 +30,7 @@ func TestGetActiveOperatorSessionMapsOnlineAndSuspect(t *testing.T) {
 			sessionID := "sess-" + tt.name
 			customerID := "cust-" + tt.name
 			clusterID := "clus-" + tt.name
-			require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
+			require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
 			require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: clusterID, CustomerID: customerID}))
 			require.NoError(t, st.Operators().Create(ctx, &store.Operator{
 				ID:         operatorID,
@@ -118,7 +118,7 @@ func TestGetActiveOperatorSessionReadsPersistedSessionAfterServiceRecreation(t *
 	sessionID := "sess-recreated"
 	customerID := "cust-recreated"
 	clusterID := "clus-recreated"
-	require.NoError(t, st.Customers().Create(ctx, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
+	require.NoError(t, createCustomerViaManagement(ctx, st, &store.Customer{ID: customerID, Name: customerID, Slug: customerID}))
 	require.NoError(t, st.Clusters().Create(ctx, &store.Cluster{ID: clusterID, Name: clusterID, CustomerID: customerID}))
 	require.NoError(t, st.Operators().Create(ctx, &store.Operator{
 		ID:         operatorID,

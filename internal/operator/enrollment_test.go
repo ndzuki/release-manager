@@ -258,7 +258,7 @@ func newEnrollmentService(t *testing.T) (*Service, *sqlitestore.Store) {
 	t.Helper()
 	st := sqlitestore.OpenTest(t)
 	now := time.Now().UTC()
-	require.NoError(t, st.Customers().Create(t.Context(), &store.Customer{ID: "customer-1", Name: "Customer", Slug: "customer-1", Status: store.CustomerActive, CreatedAt: now, UpdatedAt: now}))
+	require.NoError(t, createCustomerViaManagement(t.Context(), st, &store.Customer{ID: "customer-1", Name: "Customer", Slug: "customer-1", Status: store.CustomerActive, CreatedAt: now, UpdatedAt: now}))
 	require.NoError(t, st.Clusters().Create(t.Context(), &store.Cluster{ID: "cluster-1", Name: "Cluster", CustomerID: "customer-1", Status: store.ClusterActive, CreatedAt: now, UpdatedAt: now}))
 	authority, err := ca.New(ca.Config{TTL: time.Hour})
 	require.NoError(t, err)
@@ -301,4 +301,27 @@ func operatorReason(err error) string {
 func createEnrollmentTokenViaManagement(ctx context.Context, st store.Store, token *store.EnrollmentToken) error {
 	_, err := st.OperatorManagement().CreateEnrollmentToken(ctx, token, false, nil)
 	return err
+}
+
+// createCustomerViaManagement creates a customer through the canonical atomic seam
+// (customer + its active organization binding commit together); the standalone
+// Customers().Create had no shipping caller (TASK-226). The synthetic organization is
+// derived from the customer id, so fixtures that manage their own organizations and
+// bindings are not perturbed.
+func createCustomerViaManagement(ctx context.Context, st interface {
+	Organizations() store.OrganizationStore
+	CustomerCreates() store.CustomerBindingCreateStore
+}, customer *store.Customer) error {
+	orgID := "org-managed:" + customer.ID
+	if err := st.Organizations().Create(ctx, &store.Organization{ID: orgID, Name: orgID}); err != nil {
+		// A synthetic organization created by an earlier fixture of the same test is fine.
+		if existing, getErr := st.Organizations().Get(ctx, orgID); getErr != nil || existing == nil {
+			return err
+		}
+	}
+	return st.CustomerCreates().CreateCustomerWithOrgBinding(ctx, store.CustomerBindingCreateCommand{
+		Customer:  customer,
+		OrgID:     orgID,
+		BindingID: "binding-managed:" + customer.ID,
+	})
 }
