@@ -225,25 +225,6 @@ FROM operators WHERE customer_id = ? AND operator_name = ? AND status = ?
 	return scanOperator(row)
 }
 
-// Revoke marks an operator as revoked with a timestamp.
-func (s *operatorStore) Revoke(ctx context.Context, id string) error {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `
-UPDATE operators SET status=?, revoked_at=?, updated_at=? WHERE id=?
-`, string(store.OperatorRevoked), now, now, id)
-	if err != nil {
-		return fmt.Errorf("revoke operator: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
-}
-
 // ListByCustomer returns all operators for a customer.
 func (s *operatorStore) ListByCustomer(ctx context.Context, customerID string) ([]*store.Operator, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+operatorSelect+`
@@ -799,24 +780,6 @@ WHERE o.customer_id = ? AND o.cluster_id = ?`
 		return nil, fmt.Errorf("count operators: %w", err)
 	}
 	return page, nil
-}
-
-// UpdateStatusReason updates a session's status and reason.
-func (s *sessionStore) UpdateStatusReason(ctx context.Context, id string, status store.SessionStatus, reason store.SessionStatusReason) error {
-	result, err := s.db.ExecContext(ctx, `
-UPDATE sessions SET status=?, status_reason=? WHERE id=?
-`, string(status), string(reason), id)
-	if err != nil {
-		return fmt.Errorf("update session status reason: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		return store.ErrNotFound
-	}
-	return nil
 }
 
 // GetLatestByOperator returns the most recent session for an operator regardless of status.
