@@ -31,11 +31,11 @@ exceptions:
     review_by: "2026-12-31"
   - interface: BundleStore
     method: Create
-    reason: "[sqlite-tx-only] 生产两引擎都走 UoW 的 CreateTx，但 SQLite 的 CreateTx 明确 unsupported（sqlite/bundles.go:385）⇒ 本方法是非事务创建在 SQLite 上的唯一路径，删除会让 SQLite 彻底无法建 bundle；69 个测试调用点、生产 0"
+    reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 "sqlite bundle transactions are unsupported"（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: Create
-    reason: "[sqlite-tx-only] 生产两引擎都走 UoW 的 UpsertTx/UpsertLocationTx，但 SQLite 的 Tx 变体明确 unsupported（sqlite/candidate_artifacts.go:206/:210）⇒ 本方法（及 Upsert）是 SQLite 上的唯一制品写入路径；51 个测试调用点、生产 0"
+    reason: "[sqlite-tx-only] PostgreSQL 生产走 ArtifactEventSubmissions → UpsertTx/UpsertLocationTx；SQLite 的摄取尚未支持（Record 是 stub），非事务 Create/Upsert 是 SQLite 上唯一的制品写入能力（SQLite 侧 INSERT INTO candidate_artifacts 仅此一处，sqlite/candidate_artifacts.go:51），两个 Tx 变体 unsupported（:206/:210）⇒ 为保住双引擎能力保留；51 个测试调用点"
     review_by: "2026-12-31"
   - interface: CandidateArtifactStore
     method: LinkToBundle
@@ -111,7 +111,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: OutboxStore
     method: Get
-    reason: "[test-utility] 生产 0、测试 14；生产派发走 GetNextPending/ClaimNext 一类（见清单中已删除的 GetPending 记录）"
+    reason: "[test-utility] 生产 0、测试 14；OutboxStore 的生产派发走 GetNextPending（operator/service.go:1393）与 UpdateStatus/PersistAck/GetByCommandID，本方法只被测试用来读取单条 outbox 记录"
     review_by: "2026-12-31"
   - interface: RolloutTrackingStore
     method: Get
