@@ -849,7 +849,7 @@ func TestValuesLifecycleConcurrentIdempotentCreateReplaysFirstResult(t *testing.
 	assert.Equal(t, created[0].Revision.ID, created[1].Revision.ID)
 	assert.NotEqual(t, created[0].Replayed, created[1].Replayed)
 
-	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID})
+	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID, PageSize: 100})
 	require.NoError(t, err)
 	items := valuesPage.Items
 	assert.Len(t, items, 1)
@@ -904,7 +904,7 @@ func TestValuesRevisionList(t *testing.T) {
 		parentRevisionID = vr.ID
 	}
 
-	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID})
+	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID, PageSize: 100})
 	require.NoError(t, err)
 	revs := valuesPage.Items
 	assert.Len(t, revs, 3)

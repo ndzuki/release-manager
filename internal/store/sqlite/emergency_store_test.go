@@ -68,6 +68,13 @@ func TestConvergenceTaskStoreLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "converged", task.Status)
 	assert.Equal(t, "revision-1", *task.ActiveRevisionID)
+
+	// Now the definition has a task, but none in pending_promotion: the status filter must
+	// exclude it. Without this case the list assertion above would also pass an
+	// implementation that dropped the status condition entirely.
+	afterConverge, err := st.ConvergenceTasks().ListByDefinition(ctx, "def-convergence", "pending_promotion")
+	require.NoError(t, err)
+	assert.Empty(t, afterConverge, "a converged task is not a pending promotion")
 }
 
 func seedEmergencyDefinition(t *testing.T, st *Store, id string) {

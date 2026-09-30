@@ -955,7 +955,7 @@ func TestValuesRevisionList(t *testing.T) {
 		parentRevisionID = vr.ID
 	}
 
-	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID})
+	valuesPage, err := st.Values().ListPage(ctx, store.ValuesListFilter{ReleaseDefinitionID: def.ID, PageSize: 100})
 	require.NoError(t, err)
 	revs := valuesPage.Items
 	assert.Len(t, revs, 3)
