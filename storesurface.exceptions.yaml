@@ -12,6 +12,10 @@
 # The first registry (TASK-224) listed 36 methods because it counted bare method names and
 # same-named methods masked each other; the type-based analysis found 67. That difference is
 # the finding, not a regression.
+# When counting by name, exclude THIS FILE: the reasons below spell identifiers out, so a naive
+# grep counts the registry itself as a hit (hit twice on 2026-09-30). Call forms are written
+# without the trailing parenthesis for the same reason.
+
 exceptions:
   - interface: AuditEventStore
     method: DeleteByIDs
@@ -43,7 +47,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: ResolveEmergencyEffect
-    reason: "[unwired-write] 保留（B-4b 2026-09-30 取证，0/4 可迁移；口径：strict `EmergencyIntents().ResolveEmergencyEffect(` 命中 4 处 = sqlite/emergency_store_test.go:163/182/204 + orchestrator/service_test.go:2514，全部为测试）：名义替代 ConvergeEmergencyResult（生产调用 internal/operator/service.go:881）是严格超集但语义不可替换——① EmergencyConvergeResult 无 Timeline 字段，而 :163 断言 resolveResult.Timeline 非空且 Kind=EMERGENCY_EFFECT_RESOLVED；② :204 断言「非终态 ⇒ ErrInvalidState」，而 Converge 对非终态会沿 EMERGENCY 链推进到终态而非报错；③ Converge 还要求 IntentID+终态 Status，NOT_APPLIED 时额外 abandonConvergenceTaskTx 并回写投影 EffectStatus；④ 已解析为「不同 effect」时 Resolve 返回 Resolved=false，Converge 返回 ErrInvalidState（幂等契约不同）⇒ 整条保留"
+    reason: "[test-utility] 保留（B-4b 2026-09-30 取证，0/4 可迁移；口径：strict `EmergencyIntents().ResolveEmergencyEffect 命中 4 处 = sqlite/emergency_store_test.go:163/182/204 + orchestrator/service_test.go:2514，全部为测试）：名义替代 ConvergeEmergencyResult（生产调用 internal/operator/service.go:881）是严格超集但语义不可替换——① EmergencyConvergeResult 无 Timeline 字段，而 :163 断言 resolveResult.Timeline 非空且 Kind=EMERGENCY_EFFECT_RESOLVED；② :204 断言「非终态 ⇒ ErrInvalidState」，而 Converge 对非终态会沿 EMERGENCY 链推进到终态而非报错；③ Converge 还要求 IntentID+终态 Status，NOT_APPLIED 时额外 abandonConvergenceTaskTx 并回写投影 EffectStatus；④ 已解析为「不同 effect」时 Resolve 返回 Resolved=false，Converge 返回 ErrInvalidState（幂等契约不同）⇒ 整条保留"
     review_by: "2026-12-31"
   - interface: EmergencyIntentStore
     method: SaveRevertReconciliation
@@ -55,11 +59,11 @@ exceptions:
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Create
-    reason: "[unwired] 保留（B-4a 2026-09-30 取证，0/66 可迁移）：名义替代 OperatorManagement().EnrollOperator 语义更窄——它要求传入 pending token 并在事务内消费、总是插入一条 session、还会 supersede 同 cluster 的 active operator；66 处调用全是 fixture（无一处是注册事务本身）：受影响文件里多数根本没有注册令牌播种；相当一部分站点固定 CertSerial 或 Status（fixture 需指定身份/证书/状态，含非 active）；2 处（sqlite/postgres 的 TestOperatorCreateAndGetByCertSerial）插入语义就是被测对象 ⇒ 整条保留。（原先写的 14/18、37/66、24/66 是单一计数口径下的近似，独立复核按另一口径得 11/18、41/66、15/66；口径差异 ±3~9 处，不影响保留结论，故改为不依赖口径的表述。）"
+    reason: "[test-utility] 保留（B-4a 2026-09-30 取证，0/66 可迁移；PR #289 后现行测试侧 68 处，同样全是 fixture）：名义替代 OperatorManagement().EnrollOperator 语义更窄——它要求传入 pending token 并在事务内消费、总是插入一条 session、还会 supersede 同 cluster 的 active operator；66 处（现行 68 处）调用全是 fixture（无一处是注册事务本身）：受影响文件里多数根本没有注册令牌播种；相当一部分站点固定 CertSerial 或 Status（fixture 需指定身份/证书/状态，含非 active）；2 处（sqlite/postgres 的 TestOperatorCreateAndGetByCertSerial）插入语义就是被测对象 ⇒ 整条保留。（原先写的 14/18、37/66、24/66 是单一计数口径下的近似，独立复核按另一口径得 11/18、41/66、15/66；口径差异 ±3~9 处，不影响保留结论，故改为不依赖口径的表述。）"
     review_by: "2026-12-31"
   - interface: OperatorStore
     method: Update
-    reason: "[unwired] 保留（B-4a 2026-09-30 取证，3/6 已迁移、3/6 不可迁移）：名义替代 OperatorLifecycle().UpdateCertificate 是按 cert_serial 的 CAS 且硬要求 status='active'，只能改证书两列。已迁移 3 处 expiry-only/serial 轮换（gateway_mtls_test.go 的 ADR-018 serial 轮换、renew_test.go 的两处 renew-window 移动；迁移前后两文件断言计数 delta 均为 0）；剩余 3 处是 status 变更（renew_test.go:66/117 的 superseded/revoked 表用例、gateway_mtls_test.go:322 的 status 表用例）——superseded 无生产写者，revoked 只能走 RevokeOperator（附带 session 级联与审计副作用，会改变用例前提）⇒ 整条保留"
+    reason: "[test-utility] 保留（B-4a 2026-09-30 取证，3/6 已迁移、3/6 不可迁移）：名义替代 OperatorLifecycle().UpdateCertificate 是按 cert_serial 的 CAS 且硬要求 status='active'，只能改证书两列。已迁移 3 处 expiry-only/serial 轮换（gateway_mtls_test.go 的 ADR-018 serial 轮换、renew_test.go 的两处 renew-window 移动；迁移前后两文件断言计数 delta 均为 0）；剩余 3 处是 status 变更（renew_test.go:66/117 的 superseded/revoked 表用例、gateway_mtls_test.go:322 的 status 表用例）——superseded 无生产写者，revoked 只能走 RevokeOperator（附带 session 级联与审计副作用，会改变用例前提）⇒ 整条保留"
     review_by: "2026-12-31"
   - interface: OutboxStore
     method: Get
@@ -95,9 +99,9 @@ exceptions:
     review_by: "2026-12-31"
   - interface: ValuesStore
     method: Create
-    reason: "[unwired] 保留（B-3 取证）：40 处调用全是 fixture，其中 **≥18 处**（实现计 19、独立复核计 18，同一 6 个文件；任何 ≥1 处不可迁移即足以支持保留）需要 CreateDraft 表达不了的状态（Status=Approved / pending_approval、显式 state_version、历史链），分布在 6 个文件；改用测试内直插会绕过 Approve 对 approved_revision_id 指针/超集语义的维护（Approved 行直接插入不更新指针），其余 21 处虽可用 CreateDraft 但无收益 ⇒ 按『整条不干净则保留』判定"
+    reason: "[test-utility] 保留（B-3 取证）：38 处（B-3 取证时为 40 处，PR #289 迁移了 2 处）调用全是 fixture，其中大多数（B-3 口径：40 处中 ≥18 处，实现计 19、独立复核计 18，同一 6 个文件；任何 ≥1 处不可迁移即足以支持保留）需要 CreateDraft 表达不了的状态（Status=Approved / pending_approval、显式 state_version、历史链），分布在 6 个文件；改用测试内直插会绕过 Approve 对 approved_revision_id 指针/超集语义的维护（Approved 行直接插入不更新指针），其余处虽可用 CreateDraft 但无收益 ⇒ 按『整条不干净则保留』判定"
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get
-    reason: "[unwired] 未通过接口、也未被实现该接口的具体类型调用；处置待 TASK-226 批次逐条判定（不得只续期）"
+    reason: "[deferred-unwired] 暂缓保留（用户裁定 2026-09-30「暂缓不得删」）：整个漏洞例外面**未装配**——vulnerability.NewService 在**生产无调用者**（仅测试 internal/orchestrator/vulnerability_test.go:48 构造未装配实例）、Service.SetVulnerabilityEvaluator **无任何调用点**（只有其声明、doc 注释，以及 SECURITY.md:501 与 docs/runbook.md:222 两处文档提及，两文都写着「尚无生产调用者」）；REQ-042 的 SBOM/漏洞准入扫描器方案未裁定（见 gotcha req042-vulnerability-admission）。本方法**生产 0 调用**（仅 1 处测试读取 internal/store/postgres/store_test.go:1193）⇒ 属「未装配」而非死代码，删除会抹掉未来接线的锚点。待 REQ-042 方案落定后重新裁定。"
     review_by: "2026-12-31"
