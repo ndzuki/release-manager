@@ -1964,8 +1964,11 @@ type IdempotencyRecord struct {
 // IdempotencyStore defines the shared persistence contract for scoped request replay.
 type IdempotencyStore interface {
 	// DeleteExpired removes records whose expiry is before the supplied time.
-	// The GC pipeline calls it once per cycle (TASK-233).
-	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+	// DeleteExpired removes records whose expiry has passed, at most limits[0] of them
+	// (default and ceiling 100, matching the garbage collector's batch discipline). The
+	// collector loops until it returns fewer rows than the batch, so a first run over an
+	// accumulated backlog makes bounded progress instead of one long transaction.
+	DeleteExpired(ctx context.Context, before time.Time, limits ...int) (int64, error)
 }
 
 // CleanupIdempotencyStore persists one-shot cleanup request keys independently

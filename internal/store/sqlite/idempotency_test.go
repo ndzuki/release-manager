@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,4 +86,37 @@ func TestIdempotencyStore_ExpiredRecordsCanBeReplacedAndPurged(t *testing.T) {
 	var remaining int
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM idempotency_records`).Scan(&remaining))
 	assert.Equal(t, 1, remaining)
+}
+
+// TASK-233: the collector is bounded. The garbage collector loops until a batch comes back
+// short, so a first run over an accumulated backlog makes progress in fixed-size transactions
+// instead of one long statement that a timeout would roll back entirely.
+func TestIdempotencyDeleteExpiredIsBounded(t *testing.T) {
+	st := OpenTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	placeholders := make([]string, 0, 251)
+	args := make([]any, 0, 251*5)
+	for i := range 250 {
+		placeholders = append(placeholders, "(?, ?, ?, ?, ?)")
+		args = append(args, "bounded", fmt.Sprintf("expired-%03d", i), "hash", []byte(`{}`),
+			now.Add(-time.Hour).Format(time.RFC3339Nano))
+	}
+	placeholders = append(placeholders, "(?, ?, ?, ?, ?)")
+	args = append(args, "bounded", "live", "hash-live", []byte(`{}`), now.Add(time.Hour).Format(time.RFC3339Nano))
+	_, err := st.DB().ExecContext(ctx,
+		`INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at) VALUES `+
+			strings.Join(placeholders, ", "), args...)
+	require.NoError(t, err)
+
+	for batch, want := range []int64{100, 100, 50, 0} {
+		deleted, err := st.Idempotency().DeleteExpired(ctx, now, 100)
+		require.NoError(t, err)
+		assert.Equal(t, want, deleted, "batch %d must delete at most one batch's worth", batch+1)
+	}
+
+	var remaining int
+	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM idempotency_records`).Scan(&remaining))
+	assert.Equal(t, 1, remaining, "the unexpired record survives")
 }

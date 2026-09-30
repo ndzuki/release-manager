@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -359,13 +361,25 @@ func TestRunGCPhase6IdempotencyRecords(t *testing.T) {
 	service := newCleanupService(t, st)
 	now := time.Now().UTC()
 
+	// More expired rows than one batch holds: the phase must LOOP. With a single unbounded (or
+	// single batch) statement this test would leave rows behind, which is exactly the shape the
+	// review of TASK-233 asked to pin.
+	const expiredCount = gcBatchLimit + 50
+	placeholders := make([]string, 0, expiredCount+1)
+	args := make([]any, 0, (expiredCount+1)*5)
+	for i := range expiredCount {
+		placeholders = append(placeholders, "(?, ?, ?, ?, ?)")
+		args = append(args, "gc-phase6", fmt.Sprintf("expired-%03d", i), "hash-expired",
+			[]byte(`{}`), now.Add(-time.Hour).Format(time.RFC3339Nano))
+	}
+	placeholders = append(placeholders, "(?, ?, ?, ?, ?)")
+	args = append(args, "gc-phase6", "live", "hash-live", []byte(`{}`), now.Add(time.Hour).Format(time.RFC3339Nano))
+
 	// Seeded directly: the shipping idempotency surface exposes no creator (TASK-226
 	// removed CreateOrGet) and this fixture only needs rows with an expiry.
 	_, err := st.DB().ExecContext(ctx,
-		`INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at)
-		 VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
-		"gc-phase6", "expired", "hash-expired", []byte(`{}`), now.Add(-time.Hour).Format(time.RFC3339Nano),
-		"gc-phase6", "live", "hash-live", []byte(`{}`), now.Add(time.Hour).Format(time.RFC3339Nano))
+		`INSERT INTO idempotency_records (scope, text_key, request_hash, response_ref, expires_at) VALUES `+
+			strings.Join(placeholders, ", "), args...)
 	require.NoError(t, err)
 
 	resp, errs, err := service.runGC(ctx)
@@ -375,7 +389,7 @@ func TestRunGCPhase6IdempotencyRecords(t *testing.T) {
 
 	var remaining int
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM idempotency_records`).Scan(&remaining))
-	require.Equal(t, 1, remaining, "only the expired idempotency record may be purged")
+	require.Equal(t, 1, remaining, "every expired idempotency record must be purged, across batches")
 	var liveKey string
 	require.NoError(t, st.DB().QueryRowContext(ctx, `SELECT text_key FROM idempotency_records`).Scan(&liveKey))
 	assert.Equal(t, "live", liveKey)

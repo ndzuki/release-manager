@@ -77,10 +77,24 @@ func createOrGetIdempotencyRecord(
 	}
 }
 
-func (s *idempotencyStore) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
+func (s *idempotencyStore) DeleteExpired(ctx context.Context, before time.Time, limits ...int) (int64, error) {
+	limit := 100
+	if len(limits) > 0 && limits[0] > 0 && limits[0] < limit {
+		limit = limits[0]
+	}
+	// Bounded on purpose: the caller (GC phase 6) loops until a batch comes back short. An
+	// unbounded delete would hold every matched row lock in one transaction, and on a first run
+	// over an accumulated backlog it either runs one very long statement or rolls the whole
+	// cleanup back on timeout, making no progress at all.
 	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM idempotency_records WHERE expires_at < ?
-	`, before.UTC().Format(time.RFC3339Nano))
+		DELETE FROM idempotency_records
+		WHERE rowid IN (
+			SELECT rowid FROM idempotency_records
+			WHERE expires_at < ?
+			ORDER BY expires_at
+			LIMIT ?
+		)
+	`, before.UTC().Format(time.RFC3339Nano), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired idempotency records: %w", err)
 	}
