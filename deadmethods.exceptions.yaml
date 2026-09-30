@@ -10,12 +10,15 @@
 # method is missing here, when an entry no longer matches one (stale), when a reason is missing,
 # or when review_by has passed.
 #
-# Wired into CI as the NON-required `dead-methods` job (a failing run is visible but does not
-# block a merge); it stays out of `make quality` on purpose, so a local `make quality` does not
-# depend on it. The one known limit that can report a LIVE method (a run-time assembled
+# Wired into CI as the `dead-methods` job, deliberately absent from any required set: this repo
+# has no branch protection today, so nothing blocks a merge, and when protection is introduced the
+# job should stay non-required. It also stays out of `make quality` on purpose, so a local
+# `make quality` does not depend on it. The one known limit that can report a LIVE method (a run-time assembled
 # reflect.MethodByName name) is recorded in the package comment and docs/testing.md.
 #
-# History: the first two entries were `internal/auth` storeAdapter.UpdatePolicy/UpdatePolicies.
+# History (comment-only: the machine-readable list is empty, so a reader of the data alone
+# cannot tell there ever were entries): the first two were `internal/auth`
+# storeAdapter.UpdatePolicy/UpdatePolicies.
 # They were unreachable because casbin only selects them through the UNGUARDED assertion
 # `e.adapter.(persist.UpdatableAdapter)` in enforcer_distributed.go, which this adapter cannot
 # satisfy (it lacks UpdateFilteredPolicies) AND because this repo builds a SyncedEnforcer rather

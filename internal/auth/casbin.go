@@ -351,10 +351,16 @@ func (a *storeAdapter) RemovePolicy(_, _ string, _ []string) error {
 
 // UpdatePolicy and UpdatePolicies are deliberately NOT implemented: casbin only reaches them
 // through persist.UpdatableAdapter, which this adapter does not satisfy, and this repo builds a
-// SyncedEnforcer rather than a DistributedEnforcer, so nothing selects them. Note for whoever
-// adopts a distributed enforcer: casbin asserts that interface WITHOUT the comma-ok form
+// SyncedEnforcer rather than a DistributedEnforcer, so nothing selects them.
+//
+// Two traps live here. First, casbin asserts that interface WITHOUT the comma-ok form
 // (enforcer_distributed.go), so an adapter that still does not satisfy it makes that path panic
-// rather than no-op -- implement persist.UpdatableAdapter in full if that day comes.
+// rather than no-op -- implement persist.UpdatableAdapter in full if a distributed enforcer is
+// ever adopted. Second, NOTHING here is checked at compile time: NewSyncedEnforcer takes
+// ...interface{} and type-asserts at run time, so deleting one of persist.Adapter's five methods
+// (LoadPolicy, SavePolicy, AddPolicy, RemovePolicy, RemoveFilteredPolicy) still builds and only
+// fails when the enforcer is constructed. Keep the adapter's method set aligned with that
+// interface by inspection, not by hoping the build catches it.
 func (a *storeAdapter) RemoveFilteredPolicy(_, _ string, _ int, _ ...string) error {
 	return errors.New("authorization policy writes use AuthorizationStore")
 }
