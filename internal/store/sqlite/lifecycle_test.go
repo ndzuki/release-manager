@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -1234,4 +1235,113 @@ func TestBundlesForArtifactReadsTheLinkTheUnitOfWorkWrites(t *testing.T) {
 	stored, err := st.CandidateArtifacts().Get(ctx, candidate.ID)
 	require.NoError(t, err)
 	assert.Empty(t, stored.BundleID, "the legacy column is not the association")
+}
+
+// TASK-229 shipped coverage for the GC orphan rule: an artifact that still has a LIVE link must
+// not be marked orphaned when another bundle it is linked to expires. Review found this was only
+// guarded by an ad-hoc probe, so the rule now has a case in the package.
+func TestDeleteExpiredBundlesKeepsArtifactsWithALiveLink(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	makeBundle := func(name, digest string) *store.ReleaseBundle {
+		bundle := &store.ReleaseBundle{
+			ID: uuid.New().String(), Name: name, DigestAlg: "sha256",
+			DigestValue: digest, Status: store.BundleValidated, CreatedAt: now,
+		}
+		require.NoError(t, st.Bundles().Create(ctx, bundle))
+		return bundle
+	}
+	expiring := makeBundle("expiring", strings.Repeat("a", 64))
+	live := makeBundle("live", strings.Repeat("b", 64))
+
+	candidate := &store.CandidateArtifact{
+		ID: uuid.New().String(), ArtifactType: store.ArtifactImage, Digest: strings.Repeat("c", 64),
+		Ref: "registry.example.com/team/api@" + strings.Repeat("c", 64), CreatedAt: now, LastSeenAt: now,
+	}
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, candidate))
+	require.NoError(t, st.CandidateArtifacts().LinkToBundle(ctx, candidate.ID, expiring.ID))
+	require.NoError(t, st.CandidateArtifacts().LinkToBundle(ctx, candidate.ID, live.ID))
+
+	// Age the first bundle past the retention window and let the GC delete it.
+	_, err := st.DB().ExecContext(ctx,
+		`UPDATE release_bundles SET status='archived', archived_at=? WHERE id=?`,
+		now.Add(-31*24*time.Hour).Format(time.RFC3339), expiring.ID)
+	require.NoError(t, err)
+
+	deleted, err := st.Bundles().DeleteExpiredBefore(ctx, now, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted, "only the expired bundle goes")
+
+	kept, err := st.CandidateArtifacts().Get(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Nil(t, kept.OrphanedAt, "a candidate with a live link is not an orphan")
+
+	remaining, err := st.CandidateArtifacts().BundlesForArtifact(ctx, candidate.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{live.ID}, remaining, "the expired bundle's link is gone with it")
+}
+
+// TASK-229 shipped coverage for the delete guard: DeleteOrphanBefore must never delete a
+// candidate that still has a link, and it must honour the batch limit like PostgreSQL does.
+func TestDeleteOrphanBeforeKeepsArtifactsWithActiveLinks(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	markedOld := now.Add(-48 * time.Hour)
+
+	bundle := &store.ReleaseBundle{
+		ID: uuid.New().String(), Name: "guard-bundle", DigestAlg: "sha256",
+		DigestValue: strings.Repeat("d", 64), Status: store.BundleValidated, CreatedAt: now,
+	}
+	require.NoError(t, st.Bundles().Create(ctx, bundle))
+
+	// SQLite derives orphaned_at from created_at on insert (an unlinked candidate is an orphan)
+	// and LinkToBundle clears it, so an orphan with an old timestamp is created with an old
+	// created_at.
+	newOrphan := func(name string) *store.CandidateArtifact {
+		candidate := &store.CandidateArtifact{
+			ID: uuid.New().String(), ArtifactType: store.ArtifactImage, Digest: uuid.NewString(),
+			Ref:       "registry.example.com/team/" + name + "@" + uuid.NewString(),
+			CreatedAt: markedOld, LastSeenAt: markedOld,
+		}
+		require.NoError(t, st.CandidateArtifacts().Create(ctx, candidate))
+		return candidate
+	}
+
+	// The guard's scenario: a candidate that is marked orphaned AND still linked. The normal
+	// API never leaves that state (linking clears the mark), so it is forced here -- the guard
+	// exists precisely for data that got there, and deleting such a row would break a live link.
+	linked := &store.CandidateArtifact{
+		ID: uuid.New().String(), ArtifactType: store.ArtifactImage, Digest: uuid.NewString(),
+		Ref: "registry.example.com/team/linked@" + uuid.NewString(), CreatedAt: now, LastSeenAt: now,
+	}
+	require.NoError(t, st.CandidateArtifacts().Create(ctx, linked))
+	require.NoError(t, st.CandidateArtifacts().LinkToBundle(ctx, linked.ID, bundle.ID))
+	_, err := st.DB().ExecContext(ctx,
+		`UPDATE candidate_artifacts SET orphaned_at=? WHERE id=?`,
+		markedOld.Format(time.RFC3339), linked.ID)
+	require.NoError(t, err)
+
+	orphanA := newOrphan("orphan-a")
+	orphanB := newOrphan("orphan-b")
+
+	// The limit is a batch size: one per call, and the linked candidate is never a candidate.
+	for _, want := range []int64{1, 1} {
+		deleted, err := st.CandidateArtifacts().DeleteOrphanBefore(ctx, now, 1)
+		require.NoError(t, err)
+		require.Equal(t, want, deleted)
+	}
+	deleted, err := st.CandidateArtifacts().DeleteOrphanBefore(ctx, now, 1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), deleted, "nothing left to delete")
+
+	_, err = st.CandidateArtifacts().Get(ctx, linked.ID)
+	require.NoError(t, err, "a linked candidate survives even when marked orphaned")
+	for _, gone := range []*store.CandidateArtifact{orphanA, orphanB} {
+		if _, err := st.CandidateArtifacts().Get(ctx, gone.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("unlinked candidate %s should be deleted, got err=%v", gone.ID, err)
+		}
+	}
 }
