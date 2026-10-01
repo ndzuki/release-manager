@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1797,7 +1798,32 @@ func TestValuesCreateListIdempotencyConnectEndToEnd(t *testing.T) {
 // through the real Connect server: CreateOperation (AC-019-04/05/06), stage
 // results via the outbox, first-dispatch consumption (D-87), and restart
 // recovery of operations left in preflight (ADR-009).
-func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
+// runPreflightLifecycleE2E drives the full preflight lifecycle against an in-process
+// orchestrator. failFirstSnapshot wraps http.DefaultTransport so the very first
+// GetAuthorizationSnapshot attempt fails with 503: that is the exact TASK-160 trigger,
+// where the authorization warm-up pull dies before it can persist its checkpoint.
+//
+// It returns how many snapshot attempts were failed and the state reported by the clean
+// CreateOperation, so a regression test can assert the transient failure really happened.
+func runPreflightLifecycleE2E(t *testing.T, failFirstSnapshot bool) (snapshotFailures int, state string) {
+	if failFirstSnapshot {
+		base := http.DefaultTransport
+		var attempts, failures atomic.Int64
+		http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.Contains(req.URL.Path, "GetAuthorizationSnapshot") && attempts.Add(1) == 1 {
+				failures.Add(1)
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Header:     make(http.Header),
+					Body:       http.NoBody,
+					Request:    req,
+				}, nil
+			}
+			return base.RoundTrip(req)
+		})
+		t.Cleanup(func() { http.DefaultTransport = base })
+		defer func() { snapshotFailures = int(failures.Load()) }()
+	}
 	ctx := context.Background()
 	dbPath := t.TempDir() + "/orchestrator.db"
 	seedStore, err := sqlitestore.Open(dbPath)
@@ -1881,14 +1907,32 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		return req
 	}
 
-	// The first call warms the authorization snapshot; on a stale-snapshot
-	// failure the identical request is retried once (same pattern as the
-	// values E2E tests).
+	// TASK-160 root cause: the Module's FIRST pull after a version bump is always stale
+	// (module.go derives `changed` from the previous checkpoint and only saves it after the
+	// authorization check), so a create issued straight after Apply is rejected once. The
+	// old single retry hid that: if the first pull died before SaveCheckpoint (snapshot RPC
+	// failure, the 200ms deadline, scope mismatch, ...) the one retry was still a warm-up
+	// and the request failed twice. Wait for the observable state the retry was guessing at
+	// — a checkpoint fresh at the applied version — then issue exactly one clean request.
+	// This waits on a signal; it does not extend any timeout or sleep, because the pulls
+	// themselves are the driver.
+	expectedVersion := authSnap.SourceVersion + 1
+	require.Eventually(t, func() bool {
+		checkpoint, err := svc.store.Authorization().GetCheckpoint(ctx, organizationID, customerID)
+		if err == nil && checkpoint.Fresh && checkpoint.SourceVersion >= expectedVersion {
+			return true
+		}
+		// Not fresh yet: drive one more pull. The probe's own outcome is irrelevant — the
+		// checkpoint is the signal — so the error is deliberately discarded. A distinct
+		// idempotency key keeps these probes from replaying the clean request below.
+		if _, warmupErr := client.CreateOperation(ctx, createRequest("warmup-"+uuid.NewString())); warmupErr != nil {
+			t.Logf("warm-up probe rejected: %v", warmupErr)
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond,
+		"authorization snapshot must warm up before the clean create (TASK-160)")
+
 	createResp, err := client.CreateOperation(ctx, createRequest("create-preflight-e2e"))
-	if err != nil {
-		require.Equal(t, connect.CodeUnavailable, connect.CodeOf(err), "first create should fail only on stale snapshot: %v", err)
-		createResp, err = client.CreateOperation(ctx, createRequest("create-preflight-e2e"))
-	}
 	require.NoErrorf(t, err, "create operation failed: code=%s err=%v", connect.CodeOf(err), err)
 	opID := createResp.Msg.GetOperationId()
 	assert.Equal(t, "preflight", createResp.Msg.GetState())
@@ -1982,6 +2026,25 @@ func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
 		pl, err := svc2.store.PreflightLifecycles().GetByOperationID(ctx, restartOpID)
 		return err == nil && pl.Overall == "running"
 	}, 5*time.Second, 50*time.Millisecond)
+
+	return snapshotFailures, createResp.Msg.GetState()
+}
+
+// TASK-160 flake regression: the authorization snapshot's first pull is always a warm-up,
+// so a transient failure of the snapshot RPC before its checkpoint is saved used to break
+// the flow even though the very next pull would have succeeded.
+func TestCreateOperationSurvivesATransientSnapshotFailure(t *testing.T) {
+	failures, state := runPreflightLifecycleE2E(t, true)
+	require.Equal(t, 1, failures, "the fixture must fail exactly the first snapshot attempt")
+	require.Equal(t, "preflight", state, "the flow must survive the transient snapshot failure")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestPreflightLifecycleConnectEndToEnd(t *testing.T) {
+	runPreflightLifecycleE2E(t, false)
 }
 
 // TestServiceTokensEnvLoading covers AC-065-33 (verifier side, REQ-011 §562):
