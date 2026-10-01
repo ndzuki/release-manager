@@ -105,8 +105,12 @@ describe('operation pages', () => {
     expect(wrapper.text()).toContain('当前 Revision');
 
     await wrapper.find('input[value="ROLLBACK"]').setValue(true);
-    expect(wrapper.text()).toContain('制品 Bundle');
+    // TASK-153 / AC-056-08: ROLLBACK collects a target revision instead of a bundle and a
+    // values revision, and it renders no patch editor.
     expect(wrapper.text()).toContain('当前 Revision');
+    expect(wrapper.text()).toContain('回滚目标 Revision');
+    expect(wrapper.text()).not.toContain('制品 Bundle');
+    expect(wrapper.text()).not.toContain('已审批 ValuesRevision ID');
     expect(wrapper.text()).not.toContain('Patch 覆盖');
     expect(wrapper.text()).not.toContain('回退目标 Operation');
   });

@@ -480,6 +480,7 @@ const zhCN = {
   'operation.form.selectArtifact': '请选择制品',
   'operation.form.approvedRevision': '已审批 ValuesRevision ID',
   'operation.form.currentRevision': '当前 Revision',
+  'operation.form.targetRevision': '回滚目标 Revision',
   'operation.form.checkAndConfirm': '检查并确认',
   'operation.form.valuesRevisionId': 'ValuesRevision 标识',
   'operation.patch.title': 'Patch 覆盖',

@@ -58,6 +58,16 @@ describe('operation form store', () => {
 
     store.setOperationType('ROLLBACK');
     store.fields.expectedCurrentRevision = 4;
+    // Canonical rollback (AC-056-08): the values revision is not collected, and a target
+    // revision that differs from the current one is required instead.
+    expect(store.fields.valuesRevisionId).toBeNull();
+    expect(store.fields.targetRevision).toBeNull();
+    expect(store.validate()).toEqual({ targetRevision: '请填写回滚目标 Revision' });
+
+    store.fields.targetRevision = 4;
+    expect(store.validate()).toEqual({ targetRevision: '目标 Revision 不能等于当前 Revision' });
+
+    store.fields.targetRevision = 3;
     expect(store.fields.bundleId).toBe('bundle-1');
     expect(store.fields.patch).toEqual([]);
     expect(store.validate()).toEqual({});

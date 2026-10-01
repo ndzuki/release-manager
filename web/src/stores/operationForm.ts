@@ -4,6 +4,7 @@ import {
   createOperation,
   loadOperationOptions,
   mapOperationError,
+  rollbackRelease,
   type OperationAPIError,
 } from '@/connect/operation-api';
 import type {
@@ -17,6 +18,7 @@ interface DraftPayload {
   bundleId: string | null;
   valuesRevisionId: string | null;
   patch: PatchOverride[];
+  targetRevision: number | null;
 }
 
 interface OperationFormFields {
@@ -25,9 +27,11 @@ interface OperationFormFields {
   valuesRevisionId: string | null;
   patch: PatchOverride[];
   expectedCurrentRevision: number | null;
+  targetRevision: number | null;
 }
 
 export interface OperationFormErrors {
+  targetRevision?: string;
   bundleId?: string;
   valuesRevisionId?: string;
   expectedCurrentRevision?: string;
@@ -45,6 +49,7 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     valuesRevisionId: null,
     patch: [],
     expectedCurrentRevision: null,
+    targetRevision: null,
   });
   const availableBundles = ref<BundleSummary[]>([]);
   const optionsLoading = ref(false);
@@ -70,6 +75,7 @@ export const useOperationFormStore = defineStore('operationForm', () => {
       fields.expectedCurrentRevision = null;
     } else if (operationType === 'ROLLBACK') {
       fields.patch = [];
+      fields.valuesRevisionId = null;
     }
   }
 
@@ -85,6 +91,7 @@ export const useOperationFormStore = defineStore('operationForm', () => {
         bundleId: fields.bundleId,
         valuesRevisionId: fields.valuesRevisionId,
         patch: safePatch,
+        targetRevision: fields.targetRevision,
       };
       sessionStorage.setItem(draftKey(releaseDefinitionId.value), JSON.stringify(draft));
     },
@@ -133,13 +140,29 @@ export const useOperationFormStore = defineStore('operationForm', () => {
 
   function validate(): OperationFormErrors {
     const errors: OperationFormErrors = {};
-    if (!fields.bundleId) errors.bundleId = '请选择制品';
-    else if (!selectedBundle.value) errors.bundleId = '所选制品未通过验证';
-    if (!fields.valuesRevisionId || fields.valuesRevisionId.trim() === '') {
-      errors.valuesRevisionId = '请填写已审批的配置版本 ID';
+    // Canonical rollback (REQ-067 / AC-056-08) renders neither a bundle nor a patch and does
+    // not require a values revision; it needs target_revision instead.
+    if (fields.operationType !== 'ROLLBACK') {
+      if (!fields.bundleId) errors.bundleId = '请选择制品';
+      else if (!selectedBundle.value) errors.bundleId = '所选制品未通过验证';
+      if (!fields.valuesRevisionId || fields.valuesRevisionId.trim() === '') {
+        errors.valuesRevisionId = '请填写已审批的配置版本 ID';
+      }
     }
     if (fields.operationType !== 'INSTALL' && (!fields.expectedCurrentRevision || fields.expectedCurrentRevision < 1)) {
       errors.expectedCurrentRevision = '无法确定当前 Revision';
+    }
+    if (fields.operationType === 'ROLLBACK') {
+      const target = fields.targetRevision;
+      if (target === null || target === undefined || `${target}`.trim() === '') {
+        errors.targetRevision = '请填写回滚目标 Revision';
+      } else if (!Number.isInteger(target)) {
+        errors.targetRevision = '目标 Revision 必须是整数';
+      } else if (target < 1) {
+        errors.targetRevision = '目标 Revision 必须不小于 1';
+      } else if (fields.expectedCurrentRevision !== null && target === fields.expectedCurrentRevision) {
+        errors.targetRevision = '目标 Revision 不能等于当前 Revision';
+      }
     }
     const paths = new Set<string>();
     for (const [index, override] of fields.patch.entries()) {
@@ -196,15 +219,27 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     submitError.value = null;
     idempotencyKey.value ??= crypto.randomUUID();
     try {
-      const created = await createOperation({
-        idempotencyKey: idempotencyKey.value,
-        releaseDefinitionId: releaseDefinitionId.value,
-        operationType: fields.operationType,
-        bundleId: fields.bundleId ?? undefined,
-        expectedCurrentRevision: fields.operationType === 'INSTALL' ? undefined : fields.expectedCurrentRevision ?? undefined,
-        valuesRevisionId: fields.valuesRevisionId ?? '',
-        patch: fields.operationType === 'ROLLBACK' ? [] : fields.patch,
-      });
+      // ROLLBACK has its own RPC: dispatching it through CreateOperation would fail the
+      // server's INSTALL/UPGRADE-only contract (TASK-153 negative control).
+      const created =
+        fields.operationType === 'ROLLBACK'
+          ? await rollbackRelease({
+              idempotencyKey: idempotencyKey.value,
+              releaseDefinitionId: releaseDefinitionId.value,
+              targetRevision: fields.targetRevision ?? 0,
+              expectedCurrentRevision: fields.expectedCurrentRevision ?? 0,
+              reason: 'rollback requested from the release console',
+            })
+          : await createOperation({
+              idempotencyKey: idempotencyKey.value,
+              releaseDefinitionId: releaseDefinitionId.value,
+              operationType: fields.operationType,
+              bundleId: fields.bundleId ?? undefined,
+              expectedCurrentRevision:
+                fields.operationType === 'INSTALL' ? undefined : (fields.expectedCurrentRevision ?? undefined),
+              valuesRevisionId: fields.valuesRevisionId ?? '',
+              patch: fields.patch,
+            });
       createdOperationId.value = created.operationId;
       clearDraft();
       return created.operationId;
@@ -232,6 +267,7 @@ export const useOperationFormStore = defineStore('operationForm', () => {
         }
         fields.bundleId = typeof draft.bundleId === 'string' ? draft.bundleId : null;
         fields.valuesRevisionId = typeof draft.valuesRevisionId === 'string' ? draft.valuesRevisionId : null;
+        fields.targetRevision = typeof draft.targetRevision === 'number' ? draft.targetRevision : null;
         fields.patch = Array.isArray(draft.patch)
           ? draft.patch.filter((override) => override.kind !== 'LITERAL' || !isSecretPath(override.path))
           : [];
@@ -256,6 +292,7 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     fields.valuesRevisionId = null;
     fields.patch = [];
     fields.expectedCurrentRevision = null;
+    fields.targetRevision = null;
   }
 
   return {
