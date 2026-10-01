@@ -80,7 +80,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 | --- | --- | --- | --- | --- |
 | `--config` | `configs/orchestrator.dev.yaml` | 否 | 配置文件（`http_port: 8083`，`configs/orchestrator.dev.yaml:1`） | `main.go:827` |
 | `--target-env` | `staging` | 否 | trust policy 的目标环境名（production/staging） | `main.go:828`；用于 `internal/orchestrator/service.go:56,96,252` |
-| `--signing-key` | `env JWT_SIGNING_KEY`，缺省 `change-me-in-production` | 否 | JWT 签名 key | `main.go:829-833` |
+| `--jwt-public-key` | `env JWT_PUBLIC_KEY` | 否 | JWT **校验公钥**（Ed25519；orchestrator 只校验、不签发） | `main.go:983` |
 
 - 无 `--db` flag：数据库来自配置文件 `database:` 段或环境变量覆盖
   （本地 dev 为 sqlite `data/management.db`——与 release-auth 共享的权威库，`configs/orchestrator.dev.yaml`）。
@@ -90,8 +90,8 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 - 鉴权快照拉取走配置 `authorization.auth_url`（`configs/orchestrator.dev.yaml:7`；
   默认 `http://localhost:8085`，`internal/config/config.go:251-266`——`--auth-url` flag **不存在**，
   `authURL` 字段没有任何赋值来源，见 `main.go:45,323-324`）。
-- 环境变量：`JWT_SIGNING_KEY`、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`
-  （`main.go:808-819`）。
+- 环境变量：`JWT_PUBLIC_KEY`（校验公钥，`main.go:983`）、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`。
+  （REQ-065 AC-065-01 的 Ed25519 迁移删除了原先的对称哨兵 `JWT_SIGNING_KEY`/`change-me-in-production`，见 `docs/configuration.md:338`。）
 - 前置：sqlite 文件目录可写（`make run-orchestrator` 会 `mkdir -p data`，`Makefile:84`）；
   auth 服务在线（否则鉴权快照拉取失败）；开 gateway 时须有 CA key/cert。
 - 退出码：同公共服务。
@@ -139,7 +139,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
 | `--config` | `configs/auth.dev.yaml` | 否 | 配置文件（`http_port: 8085`；sqlite `data/management.db`（与 release-orchestrator 共享的权威库），`configs/auth.dev.yaml`） | `main.go:232` |
-| `--signing-key` | `env JWT_SIGNING_KEY`，缺省 `change-me-in-production` | 否 | JWT 签名 key（TTL 15m / refresh 7d，`main.go:140`） | `main.go:233-237` |
+| `--jwt-private-key` | `env JWT_PRIVATE_KEY`，**无默认值** | **是**（机密；缺失或非 Ed25519 PEM 即**启动失败**） | JWT 签名私钥（PKCS#8 Ed25519 PEM；TTL 15m / refresh 7d，`main.go:145`） | `main.go:261` |
 
 - **没有** `--db` flag：数据库由配置 `database:` 或 `DATABASE_DRIVER`/`DATABASE_DSN` 决定；
   postgres 驱动时启动即跑 golang-migrate（`main.go:94-99`）。
@@ -178,7 +178,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 | --- | --- | --- | --- | --- |
 | `--config` | `configs/api.dev.yaml` | 否 | 配置文件（`http_port: 8087`，`configs/api.dev.yaml:1`） | `main.go:138` |
 | `--db` | `data/api.db` | 否 | SQLite 审计库 | `main.go:139` |
-| `--signing-key` | `change-me-in-production` | 否 | 校验审计 API JWT 的签名 key（须与 auth 一致） | `main.go:140` |
+| `--jwt-public-key` | `env JWT_PUBLIC_KEY`，**无默认值** | 否（缺省则拒绝所有令牌） | 校验审计/管理面 JWT 的**公钥**（Ed25519，须与 auth 同一密钥对） | `main.go:183` |
 
 - 退出码：同公共服务。
 - 调用：`make run-api`（`Makefile:100-101`）、`make dev-stage-audit`（`Makefile:342-349`）、

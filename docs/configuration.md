@@ -13,7 +13,7 @@
 3. **YAML 文件**（`--config` 指定路径）。
 4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:176/195/236/252`）。
 
-部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--jwt-private-key` 默认 `envOr("JWT_PRIVATE_KEY", "")`，`cmd/auth/main.go:248`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
+部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--jwt-private-key` 默认 `envOr("JWT_PRIVATE_KEY", "")`，`cmd/auth/main.go:261`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
 
 **例外（原始二次读取，env 不参与）**：`cmd/orchestrator` 在 `LoadService` 之外另起裸 viper 直接重读同一个 YAML 文件解析 `gc`（`cmd/orchestrator/main.go:555`）、`emergency`（`:625`）、`trust`（`:677`）三个块（`UnmarshalKey`）。这三块只能改文件，不能用环境变量覆盖。
 
@@ -23,27 +23,27 @@
 
 | 二进制 | flag | 默认值 | 用途 |
 |---|---|---|---|
-| release-webhook | `--config` | `configs/webhook.dev.yaml`（`cmd/webhook/main.go:57`） | 配置文件路径 |
-| | `--orchestrator-url` | ""（空则回退 `http://localhost:8083`，`cmd/webhook/main.go:79`） | BundleService 上游（Register 与 /readyz 检查同源） |
-| | `--service-token` | `envOr("DEV_WEBHOOK_SERVICE_TOKEN", "")`（`cmd/webhook/main.go:62`） | 包入库服务令牌 |
-| release-orchestrator | `--config` | `configs/orchestrator.dev.yaml`（`cmd/orchestrator/main.go:845`） | 配置文件路径 |
-| | `--target-env` | `staging`（`cmd/orchestrator/main.go:930`） | 目标环境标签（传入 `orchestrator.NewService`） |
-| | `--jwt-public-key` | `envOr("JWT_PUBLIC_KEY", "")`（`:969`） | JWT **校验公钥**（Ed25519；orchestrator 只校验、不签发） |
-| release-operator | `--config` | `configs/operator.dev.yaml`（`cmd/operator/main.go:359`） | 配置文件路径 |
+| release-webhook | `--config` | `configs/webhook.dev.yaml`（`cmd/webhook/main.go:87`） | 配置文件路径 |
+| | `--orchestrator-url` | ""（空则回退 `http://localhost:8083`，`cmd/webhook/main.go:88`） | BundleService 上游（Register 与 /readyz 检查同源） |
+| | `--service-token` | `envOr("DEV_WEBHOOK_SERVICE_TOKEN", "")`（`cmd/webhook/main.go:92`） | 包入库服务令牌 |
+| release-orchestrator | `--config` | `configs/orchestrator.dev.yaml`（`cmd/orchestrator/main.go:976`） | 配置文件路径 |
+| | `--target-env` | `staging`（`cmd/orchestrator/main.go:977`） | 目标环境标签（传入 `orchestrator.NewService`） |
+| | `--jwt-public-key` | `envOr("JWT_PUBLIC_KEY", "")`（`:983`） | JWT **校验公钥**（Ed25519；orchestrator 只校验、不签发） |
+| release-operator | `--config` | `configs/operator.dev.yaml`（`cmd/operator/main.go:431`） | 配置文件路径 |
 | | `--db` | `data/operator.db`（gateway 模式） | 本地 SQLite |
 | | `--command-db` | `data/operator-commands.db` | 命令/身份持久化（agent 与 gateway 都用） |
 | | `--orchestrator-addr` | `https://operator-gateway.dev.release-manager.local:30084` | agent 连管理面网关 |
 | | `--kubeconfig` | ""（空则 in-cluster 或默认配置） | Helm/k8s 客户端 |
 | | `--install-atomic` | true | Helm install atomic |
 | | `--install-timeout` | 5m | Helm 超时 |
-| release-auth | `--config` | `configs/auth.dev.yaml`（`cmd/auth/main.go:232`） | 配置文件路径 |
-| | `--jwt-private-key` | `envOr("JWT_PRIVATE_KEY", "")`（`:248`） | JWT 签名私钥（PKCS#8 Ed25519 PEM；唯一持有者） |
-| release-notifier | `--config` | `configs/notifier.dev.yaml`（`cmd/notifier/main.go:124`） | 配置文件路径（仅此一个） |
-| release-api | `--config` | `configs/api.dev.yaml`（`cmd/api/main.go:138`） | 配置文件路径 |
+| release-auth | `--config` | `configs/auth.dev.yaml`（`cmd/auth/main.go:251`） | 配置文件路径 |
+| | `--jwt-private-key` | `envOr("JWT_PRIVATE_KEY", "")`（`:261`） | JWT 签名私钥（PKCS#8 Ed25519 PEM；唯一持有者） |
+| release-notifier | `--config` | `configs/notifier.dev.yaml`（`cmd/notifier/main.go:201`） | 配置文件路径（仅此一个） |
+| release-api | `--config` | `configs/api.dev.yaml`（`cmd/api/main.go:178`） | 配置文件路径 |
 | | `--db` | `data/api.db` | SQLite |
-| | `--jwt-public-key` | `envOr("JWT_PUBLIC_KEY", "")`（`:175`） | JWT **校验公钥**（Ed25519） |
+| | `--jwt-public-key` | `envOr("JWT_PUBLIC_KEY", "")`（`:183`） | JWT **校验公钥**（Ed25519） |
 | release-notification-sink | `--config` | `deploy/kustomize/dev/configs/notification-sink.dev.yaml`（`cmd/notification-sink/main.go:140`） | 配置文件路径（注意默认值直接指向 kustomize 目录） |
-| e2e | `--env-config`（必填）、`--stages`（all）、`--timeout` 5m、`--total-timeout` 25m、`--output-dir` `./e2e-results`、`--parallel`、`--keep-on-failure`、`--snapshot-full`；cleanup 子命令 `--env-config`、`--output-dir`、`--baseline-file`（`cmd/e2e/main.go:637-680`） | | E2E harness |
+| e2e | `--env-config`（必填）、`--stages`（all）、`--timeout` 5m、`--total-timeout` 25m、`--output-dir` `./e2e-results`、`--parallel`、`--keep-on-failure`、`--snapshot-full`；cleanup 子命令 `--env-config`、`--output-dir`、`--baseline-file`（`cmd/e2e/main.go:648-680`） | | E2E harness |
 | devseed | 见 `cmd/devseed/main.go:36-58`（`-print-fixture-version`、`-ensure-mtls-ca`、`-mtls-ca-dir`、`-operator-timeout`、`-seed-retries`、`-stop-after`、`-reset`、`-orchestrator/-webhook/-auth`、`-admin-user`、`-admin-password`、`-deployer-user`、`-deployer-password`、`-reader-password`、`-e2e-runner-password`、`-trust-root-private-key`、`-data-dir`、`-database-dsn`） | 多个默认值取 `envOr`/`os.Getenv`（见 §4.2） | dev 播种 |
 | store-migrate | `--source`（必填）、`--target-dsn`（默认 `os.Getenv("RELEASE_MANAGER_DATABASE_DSN")`，仍为空则报错）、`--migrations`（`migrations`）（`cmd/store-migrate/main.go:18/35-39`） | | SQLite→PostgreSQL 搬迁 |
 | imagecheck | `--dockerfile`（`deploy/docker/Dockerfile.operator`）、`--policy`（`imagecheck.operator.yaml`）、`--archive`（`-`=stdin） | | 镜像门禁 |
@@ -271,9 +271,9 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 
 | 变量 | 读取点 | 用途 | 机密 |
 |---|---|---|---|
-| `JWT_PRIVATE_KEY` | `cmd/auth/main.go:248` | flag 默认值；**仅 auth 持有**（Ed25519 签名私钥） | 是 |
-| `JWT_PUBLIC_KEY` | `cmd/orchestrator/main.go:969`、`cmd/api/main.go:175` | flag 默认值（Ed25519 校验公钥） | 否（公钥） |
-| `DEV_WEBHOOK_SERVICE_TOKEN` | `cmd/webhook/main.go:62` | flag 默认值 | 是 |
+| `JWT_PRIVATE_KEY` | `cmd/auth/main.go:261` | flag 默认值；**仅 auth 持有**（Ed25519 签名私钥） | 是 |
+| `JWT_PUBLIC_KEY` | `cmd/orchestrator/main.go:983`、`cmd/api/main.go:183` | flag 默认值（Ed25519 校验公钥） | 否（公钥） |
+| `DEV_WEBHOOK_SERVICE_TOKEN` | `cmd/webhook/main.go:92` | flag 默认值 | 是 |
 | （orchestrator 侧）`DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS` | `cmd/orchestrator` serviceTokens | 校验入站服务令牌（双令牌=零停机轮换） | 是 |
 | `ENROLLMENT_TOKEN` | `internal/operator/bootstrap/token.go:24-27`（`TokenEnv`，`cmd/operator/main.go:161`） | 一次性注册令牌（文件缺位时） | 是 |
 | `E2E_RUNNER_PASSWORD` | `cmd/e2e` 经 `credentials.e2e_runner.password_env` 间接；Makefile/devseed 直接 | e2e-runner 口令 | 是 |

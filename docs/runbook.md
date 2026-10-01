@@ -282,7 +282,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **先查什么**
 
 1. 401 的具体 message（下表直接决定分支）。
-2. auth 与 orchestrator 两个 Deployment 的 `JWT_SIGNING_KEY` 是否同源。
+2. auth 的 `JWT_PRIVATE_KEY`（Secret `release-manager-jwt-private`）与 orchestrator/api 的 `JWT_PUBLIC_KEY`（Secret `release-manager-jwt-public`）是否来自**同一密钥对**（公钥必须是私钥的公钥半；dev 由 `make dev-jwt-keys` 生成）。
 3. `auth_policy_health` / `auth_snapshot_stale_total`（auth 与 orchestrator 的 `/metrics`）。
 4. `/readyz` 的 `redis` 检查项（auth）。
 
@@ -327,10 +327,14 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 curl -sS http://127.0.0.1:8085/readyz | head -c 400
 curl -sS http://127.0.0.1:8085/metrics | grep -E '^auth_(policy_health|snapshot_stale_total|source_version|decisions_total)'
 curl -sS http://127.0.0.1:8083/metrics | grep -E '^auth_(policy_health|source_version|checkpoint_version)'
-for d in auth orchestrator; do
+for d in auth; do
   KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n release-manager-dev \
-    get deploy $d -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="JWT_SIGNING_KEY")].valueFrom.secretKeyRef.name}{"\n"}'
-done   # 两行必须同名 Secret，且该 Secret 只存在一份
+    get deploy $d -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="JWT_PRIVATE_KEY")].valueFrom.secretKeyRef.name}{"\n"}'
+done   # auth 必须指向 release-manager-jwt-private
+for d in orchestrator api; do
+  KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n release-manager-dev \
+    get deploy $d -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="JWT_PUBLIC_KEY")].valueFrom.secretKeyRef.name}{"\n"}'
+done   # orchestrator/api 必须指向 release-manager-jwt-public（同一密钥对的公钥半）
 KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n release-manager-dev \
   get secret -o name | grep -E 'release-manager-jwt|webhook-service-token'
 ```
