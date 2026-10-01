@@ -9,7 +9,7 @@
 除 `cmd/e2e`、`cmd/devseed`、`cmd/store-migrate` 与各 CI 质量工具外，所有服务二进制都经 `internal/app/app.go` 的 `Run(configPath, svc)` 启动（`internal/app/app.go:122`），真实加载器是 `config.LoadService`（`internal/config/config.go:474`，基于 viper）。生效优先级：
 
 1. **CLI flag**（显式传入的 flag 值）——注意：flag 只决定「读哪个文件」和少量进程参数（signing key、db 路径等），**没有** `BindPFlag`，flag 不进 viper。
-2. **环境变量**——`LoadService` 内的 `bindDatabaseEnvironment`（`internal/config/config.go:440`）对 22 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
+2. **环境变量**——`bindDatabaseEnvironment`（`internal/config/config.go:502-537`，由 `LoadService` 在 `:544` 调用）对 22 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
 3. **YAML 文件**（`--config` 指定路径）。
 4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:176/195/236/252`）。
 
@@ -155,7 +155,7 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `log_level` | — | — | | 生效（§7-1 闭环） |
 | `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/orchestrator/main.go:525` 校验；postgres 路径跑 `migrations.FS` |
 | `database.dsn` | string | 无 | | 机密（含口令）；本地 `data/management.db`（与 release-auth 同一个文件，TASK-104 的共享权威库契约），集群 `postgres://...@postgres:5432/release_manager` |
-| `authorization.auth_url` | URL | `http://localhost:8085`（`internal/config/config.go:252`） | 授权快照拉取源（release-auth） | 集群 `http://auth:8085`；env `AUTHORIZATION_AUTH_URL` |
+| `authorization.auth_url` | URL | `http://localhost:8085`（`internal/config/config.go:483-484`） | 授权快照拉取源（release-auth） | 集群 `http://auth:8085`；env `AUTHORIZATION_AUTH_URL` |
 | `authorization.pull_interval` | duration | 1s | 授权快照轮询周期 | env `AUTHORIZATION_PULL_INTERVAL` |
 | `authorization.pull_backoff_max` | duration | 30s | 拉取失败退避上限 | env `AUTHORIZATION_PULL_BACKOFF_MAX` |
 | `values.max_document_bytes` | int | 1 MiB（`ValuesConfig.WithDefaults`，`internal/config/config.go:82`） | ValuesRevision 文档大小上限 | 必填性无——缺省安全；env `VALUES_MAX_DOCUMENT_BYTES` |
@@ -171,14 +171,14 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `gc.gc_max_duration_minutes` | int | 55 | 单轮 GC 时长预算 | min 5 |
 | `gc.cleanup_idempotency_retention_hours` | int | 24 | cleanup 幂等记录保留 | min 1 |
 | `gateway.enabled` | bool | false | 是否启 agent mTLS 网关（:8084） | dev 本地 false、集群 overlay true（agent 接入必需）；env `GATEWAY_ENABLED` |
-| `gateway.port` | int | 8084（`GatewayCfg.WithDefaults`，`internal/config/config.go:404`） | 网关端口 | 集群 NodePort 30084；env `GATEWAY_PORT` |
+| `gateway.port` | int | 8084（`GatewayCfg.WithDefaults`，`internal/config/config.go:466`） | 网关端口 | 集群 NodePort 30084；env `GATEWAY_PORT` |
 | `ca.key_path` | path | 无 | CA 私钥文件（dev 文件模式） | **机密**；与 `ca.cert_path` 成对，`ca.LoadConfigured` 缺失即 Register 失败（`cmd/orchestrator/main.go:89`、`CAConfig.Validate` `internal/config/config.go:204-216`）；集群由 Secret `release-manager-mtls-ca` 挂到 `/data/gateway-ca.key`（0600） |
 | `ca.cert_path` | path | 无 | CA 证书（网关信任锚） | 与 key_path 成对；网关启用时两者都必须可得 |
 | `ca.cert_ttl` | duration | 168h | 签发操作器证书有效期 | 消费方仅 orchestrator（`LoadConfigured`） |
 | `ca.renew_before_ratio` | float (0,1] | 0.5 | 到期前续租比例 | 越界报 `ca_invalid` 启动失败 |
 | `emergency.enabled` | bool | 缺块=fail-closed false | 紧急变更 kill switch | dev 本地与集群都 true（REQ-081 D2=A）；启动种入 app_settings（`cmd/orchestrator/main.go:305-309`）；仅文件 |
-| `emergency.operation_timeout` | duration | 30s（`store.DefaultEmergencyOperationTimeout`，`internal/store/store.go:1394`） | 非终态 EMERGENCY 操作时限 | 解析失败回落默认；仅文件 |
-| `emergency.effect_observe_timeout` | duration | 24h（`internal/store/store.go:1398`） | 卡锁观察窗 | 仅文件 |
+| `emergency.operation_timeout` | duration | 30s（`store.DefaultEmergencyOperationTimeout`，`internal/store/store.go:1406`） | 非终态 EMERGENCY 操作时限 | 解析失败回落默认；仅文件 |
+| `emergency.effect_observe_timeout` | duration | 24h（`internal/store/store.go:1410`） | 卡锁观察窗 | 仅文件 |
 | `operator_session.heartbeat_interval` | duration | 15s（`OperatorSessionCfg.WithDefaults`） | 下发给 agent 的心跳周期（`SessionEstablished` 里协商） | TASK-098；0 值回落默认 |
 | `operator_session.suspect_after` | duration | 45s | 超过该时长无心跳 → `suspect` | 容忍两次丢失（30s 周期） |
 | `operator_session.offline_after` | duration | 90s | 超过该时长无心跳 → `offline`（紧急路径的 `operator_offline`） | 容忍四次丢失；会话行心跳陈旧也按离线处理（重启窗口） |
@@ -216,7 +216,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `audit.archive.archive_dir` | path | data/archives | 归档输出目录 | 要求非空 |
 | `audit.archive.compression` | `gzip_jsonl` | gzip_jsonl | 归档编码 | 仅支持此值，其它值 Validate 报错 |
 | `audit.archive.checksum_algorithm` | `sha256` | sha256 | 校验算法 | 仅支持此值 |
-| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:420`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:283`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
+| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:482`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:283`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
 
 ### 3.8 release-notification-sink（kustomize 唯一副本，2 键）
 
@@ -275,12 +275,12 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `JWT_PUBLIC_KEY` | `cmd/orchestrator/main.go:983`、`cmd/api/main.go:183` | flag 默认值（Ed25519 校验公钥） | 否（公钥） |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `cmd/webhook/main.go:92` | flag 默认值 | 是 |
 | （orchestrator 侧）`DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS` | `cmd/orchestrator` serviceTokens | 校验入站服务令牌（双令牌=零停机轮换） | 是 |
-| `ENROLLMENT_TOKEN` | `internal/operator/bootstrap/token.go:24-27`（`TokenEnv`，`cmd/operator/main.go:161`） | 一次性注册令牌（文件缺位时） | 是 |
+| `ENROLLMENT_TOKEN` | `internal/operator/bootstrap/token.go:24-27`（`TokenEnv`，`cmd/operator/main.go:169`） | 一次性注册令牌（文件缺位时） | 是 |
 | `E2E_RUNNER_PASSWORD` | `cmd/e2e` 经 `credentials.e2e_runner.password_env` 间接；Makefile/devseed 直接 | e2e-runner 口令 | 是 |
 | `E2E_RUN_ID` | `cmd/e2e/main.go:748`（DNS-1123 校验）；`internal/app/app.go` environmentHandler | E2E 运行标识 | 否 |
-| `E2E_LOCK_FILE` | `cmd/e2e/main.go:730` | 可选锁文件 | 否 |
+| `E2E_LOCK_FILE` | `cmd/e2e/main.go:741` | 可选锁文件 | 否 |
 | `APP_ENVIRONMENT` / `ENVIRONMENT_ID` / `DEV_PROFILE` / `APP_PRODUCTION` | `internal/app/app.go:91-120`（GET /environment） | 环境自述端点 | 否；注意 kustomize 未给业务 Pod 注入这些（§7-7） |
-| `DEV_ADMIN_USER` / `DEV_DEPLOYER_USER`（及三个 `*_PASSWORD`、`DEV_TRUST_ROOT_PRIVATE_KEY`、`RELEASE_MANAGER_DATABASE_DSN`） | `cmd/devseed/main.go:50-58` | flag 默认值 | 口令与 trust root 机密 |
+| `DEV_ADMIN_USER` / `DEV_DEPLOYER_USER`（及三个 `*_PASSWORD`、`DEV_TRUST_ROOT_PRIVATE_KEY`、`RELEASE_MANAGER_DATABASE_DSN`） | `cmd/devseed/main.go:62-68` | flag 默认值 | 口令与 trust root 机密 |
 | `RELEASE_MANAGER_DATABASE_DSN` | `cmd/store-migrate/main.go:18/37` | postgres 目标 DSN | 是 |
 | `VAULT_ADDR`（及 Vault token） | `internal/operator/ca/vault.go:38` | 生产 CA 源 | 间接机密 |
 | `GOFLAGS` | `cmd/sdkcheck/main.go:27-33` 写回自身环境 | build tags 传递 | 否 |
@@ -369,7 +369,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `ca.renew_before_ratio` 越出 (0,1] | `ca_invalid` 启动失败 |
 | `agent.mode=agent` 而 `agent.customer_id`/`agent.cluster_id` 任一为空 | `agent mode requires agent.customer_id and agent.cluster_id` 退出（`cmd/operator/main.go:154`） |
 | agent 无令牌（文件与 `ENROLLMENT_TOKEN` 皆空）或网关不可达 | `operator bootstrap` 错误退出（`internal/operator/bootstrap/token.go:29`） |
-| `gc.*` 低于最小界（如 `interval` 非 0 且 <5m） | `loadRetentionConfig` → `Validate()` 失败，Register 报错退出（`cmd/orchestrator/main.go:457/547`） |
+| `gc.*` 低于最小界（如 `interval` 非 0 且 <5m） | `loadRetentionConfig` → `Validate()` 失败，Register 报错退出（`cmd/orchestrator/main.go:649/547`） |
 | notifier/auth 的 postgres 迁移失败 | 启动中止（迁移在 openStore 内跑 `migrations` FS） |
 | api 的 `audit.archive.*` 非法 | 仅 Warn 回落默认，不阻塞启动（`cmd/api/main.go:76-79` 的二次加载失败也只是 `logger.Warn`） |
 | `log_level` 非法（如 `verbose`） | 不阻塞启动：`applyLogLevel` Warn 一条后保持 debug（`internal/app/loglevel_test.go` 锁定）|
