@@ -10,8 +10,12 @@ import (
 
 // Metrics owns the stable REQ-027 authorization instruments.
 type Metrics struct {
-	Decisions           *prometheus.CounterVec
-	SnapshotStale       prometheus.Counter
+	Decisions     *prometheus.CounterVec
+	SnapshotStale prometheus.Counter
+	// SnapshotStaleCause breaks SnapshotStale down by a bounded cause enum. It is a
+	// separate instrument on purpose: auth_snapshot_stale_total is an ADR-016 fixed
+	// metric and must keep its name and (label-free) series (TASK-239).
+	SnapshotStaleCause  *prometheus.CounterVec
 	SourceVersion       prometheus.Gauge
 	CheckpointVersion   prometheus.Gauge
 	PolicyHealth        prometheus.Gauge
@@ -34,6 +38,10 @@ func NewMetrics(registry *prometheus.Registry) *Metrics {
 			Name: "auth_snapshot_stale_total",
 			Help: "Authorization requests rejected because the local snapshot was stale.",
 		}),
+		SnapshotStaleCause: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "auth_snapshot_stale_cause_total",
+			Help: "Authorization requests rejected because the local snapshot was stale, by bounded cause.",
+		}, []string{"cause"}),
 		SourceVersion: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "auth_source_version",
 			Help: "Latest authorization source version observed by this process.",
@@ -61,6 +69,7 @@ func NewMetrics(registry *prometheus.Registry) *Metrics {
 	registry.MustRegister(
 		metrics.Decisions,
 		metrics.SnapshotStale,
+		metrics.SnapshotStaleCause,
 		metrics.SourceVersion,
 		metrics.CheckpointVersion,
 		metrics.PolicyHealth,
