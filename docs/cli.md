@@ -57,9 +57,9 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/webhook.dev.yaml` | 否 | 配置文件（`http_port: 8082`，`configs/webhook.dev.yaml:1`） | `main.go:57` |
-| `--orchestrator-url` | `""`（空时代码回退 `http://localhost:8083`） | 否 | orchestrator Connect URL | `main.go:58`，回退 `main.go:79-85` |
-| `--service-token` | `env DEV_WEBHOOK_SERVICE_TOKEN`，缺省 `""` | 否 | dev bundle-ingress token（REQ-065 D-100 选项 B） | `main.go:62` |
+| `--config` | `configs/webhook.dev.yaml` | 否 | 配置文件（`http_port: 8082`，`configs/webhook.dev.yaml:1`） | `main.go:87` |
+| `--orchestrator-url` | `""`（空时代码回退 `http://localhost:8083`） | 否 | orchestrator Connect URL | `main.go:88`，回退 `main.go:130` |
+| `--service-token` | `env DEV_WEBHOOK_SERVICE_TOKEN`，缺省 `""` | 否 | dev bundle-ingress token（REQ-065 D-100 选项 B） | `main.go:92` |
 
 - 无数据库 flag（该服务不落库）。
 - 前置：orchestrator 可达；dev 里 token 由 `dev-up` 生成注入，orchestrator 侧以
@@ -78,8 +78,8 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/orchestrator.dev.yaml` | 否 | 配置文件（`http_port: 8083`，`configs/orchestrator.dev.yaml:1`） | `main.go:827` |
-| `--target-env` | `staging` | 否 | trust policy 的目标环境名（production/staging） | `main.go:828`；用于 `internal/orchestrator/service.go:56,96,252` |
+| `--config` | `configs/orchestrator.dev.yaml` | 否 | 配置文件（`http_port: 8083`，`configs/orchestrator.dev.yaml:1`） | `main.go:976` |
+| `--target-env` | `staging` | 否 | trust policy 的目标环境名（production/staging） | `main.go:977`；用于 `internal/orchestrator/service.go:56,96,252` |
 | `--jwt-public-key` | `env JWT_PUBLIC_KEY` | 否 | JWT **校验公钥**（Ed25519；orchestrator 只校验、不签发） | `main.go:983` |
 
 - 无 `--db` flag：数据库来自配置文件 `database:` 段或环境变量覆盖
@@ -109,18 +109,18 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/operator.dev.yaml` | 否 | 配置文件（`http_port: 8084`，`configs/operator.dev.yaml:1`） | `main.go:359` |
-| `--db` | `data/operator.db` | 否 | gateway 模式的 SQLite 权威库（agent 模式不用） | `main.go:360` |
-| `--command-db` | `data/operator-commands.db` | 否 | 持久 command/identity 库 | `main.go:361` |
-| `--orchestrator-addr` | `https://operator-gateway.dev.release-manager.local:30084` | 否 | agent 连的 gateway Connect URL | `main.go:362` |
-| `--kubeconfig` | `""` | 否 | 空则用 in-cluster 或默认 kubeconfig | `main.go:363`，解析 `main.go:338-356` |
-| `--install-atomic` | `true` | 否 | 失败时原子卸载 release | `main.go:364` |
-| `--install-timeout` | `5m` | 否 | Helm install 默认超时 | `main.go:365` |
+| `--config` | `configs/operator.dev.yaml` | 否 | 配置文件（`http_port: 8084`，`configs/operator.dev.yaml:1`） | `main.go:431` |
+| `--db` | `data/operator.db` | 否 | gateway 模式的 SQLite 权威库（agent 模式不用） | `main.go:432` |
+| `--command-db` | `data/operator-commands.db` | 否 | 持久 command/identity 库 | `main.go:433` |
+| `--orchestrator-addr` | `https://operator-gateway.dev.release-manager.local:30084` | 否 | agent 连的 gateway Connect URL | `main.go:434` |
+| `--kubeconfig` | `""` | 否 | 空则用 in-cluster 或默认 kubeconfig | `main.go:435`，解析 `main.go:360-362` |
+| `--install-atomic` | `true` | 否 | 失败时原子卸载 release | `main.go:436` |
+| `--install-timeout` | `5m` | 否 | Helm install 默认超时 | `main.go:437` |
 
 - agent 模式硬性前置：`agent.customer_id` 与 `agent.cluster_id` 必须非空，否则启动失败
-  （`main.go:152-155`；可用环境变量 `CUSTOMER_ID`/`CLUSTER_ID` 覆盖，`internal/config/config.go:289-290`）；
+  （`main.go:152-155`；可用环境变量 `CUSTOMER_ID`/`CLUSTER_ID` 覆盖，`internal/config/config.go:523`）；
   enrollment token 来自 `agent.enrollment_token_file`（dev 为 `data/enrollment.token`，
-  `configs/operator.dev.yaml:8`）或环境变量 `ENROLLMENT_TOKEN`（`cmd/operator/main.go:157-167`、
+  `configs/operator.dev.yaml:8`）或环境变量 `ENROLLMENT_TOKEN`（`cmd/operator/main.go:169`、
   `internal/operator/bootstrap/token.go:14-27`，用后删除 token 文件 `bootstrap.go:96-100`）；
   CA 证书 `data/gateway-ca.crt`（`configs/operator.dev.yaml:9-13`，校验 `main.go:158`）。
 - agent 模式的 `/readyz` 挂 `gateway_session` 检查（CommandStream 存活才 Ready，TASK-099，`main.go:382`）。
@@ -138,7 +138,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/auth.dev.yaml` | 否 | 配置文件（`http_port: 8085`；sqlite `data/management.db`（与 release-orchestrator 共享的权威库），`configs/auth.dev.yaml`） | `main.go:232` |
+| `--config` | `configs/auth.dev.yaml` | 否 | 配置文件（`http_port: 8085`；sqlite `data/management.db`（与 release-orchestrator 共享的权威库），`configs/auth.dev.yaml`） | `main.go:251` |
 | `--jwt-private-key` | `env JWT_PRIVATE_KEY`，**无默认值** | **是**（机密；缺失或非 Ed25519 PEM 即**启动失败**） | JWT 签名私钥（PKCS#8 Ed25519 PEM；TTL 15m / refresh 7d，`main.go:145`） | `main.go:261` |
 
 - **没有** `--db` flag：数据库由配置 `database:` 或 `DATABASE_DRIVER`/`DATABASE_DSN` 决定；
@@ -158,7 +158,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/notifier.dev.yaml` | 否 | 配置文件（`http_port: 8086`；sqlite `data/notifier.db`，`configs/notifier.dev.yaml:1-4`） | `main.go:124` |
+| `--config` | `configs/notifier.dev.yaml` | 否 | 配置文件（`http_port: 8086`；sqlite `data/notifier.db`，`configs/notifier.dev.yaml:1-4`） | `main.go:201` |
 
 - 无 `--db` flag；postgres 时对 `release_notifier` 库跑迁移（`main.go:94-109`）。
 - dev 里 webhook sender 未配置（`NewWebhookSender(nil)`，`main.go:80-81`），未配置渠道在投递时被拒绝；
@@ -176,8 +176,8 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
-| `--config` | `configs/api.dev.yaml` | 否 | 配置文件（`http_port: 8087`，`configs/api.dev.yaml:1`） | `main.go:138` |
-| `--db` | `data/api.db` | 否 | SQLite 审计库 | `main.go:139` |
+| `--config` | `configs/api.dev.yaml` | 否 | 配置文件（`http_port: 8087`，`configs/api.dev.yaml:1`） | `main.go:178` |
+| `--db` | `data/api.db` | 否 | SQLite 审计库 | `main.go:179` |
 | `--jwt-public-key` | `env JWT_PUBLIC_KEY`，**无默认值** | 否（缺省则拒绝所有令牌） | 校验审计/管理面 JWT 的**公钥**（Ed25519，须与 auth 同一密钥对） | `main.go:183` |
 
 - 退出码：同公共服务。
@@ -209,22 +209,22 @@ install verify`（`internal/devfixture/runner.go:68`），支持断点续跑（`
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
 | `-print-fixture-version` | `false` | 否 | 打印权威夹具版本常量后退出（dev.sh 用它取版本） | `main.go:36`；常量 `v2`（`internal/devfixture/devfixture.go:42`） |
-| `-ensure-mtls-ca` | `-mtls-ca-dir` | `-mtls-ca-dir` 必填（否则报错） | 否 | dev mTLS CA 生成/复用后退出（AC-065-36） | `main.go:41-42,70-75`；实现 `mtls_ca.go`；dev.sh 调用 `deploy/dev/dev.sh:410` |
+| `-ensure-mtls-ca` | `-mtls-ca-dir` | `-mtls-ca-dir` 必填（否则报错） | 否 | dev mTLS CA 生成/复用后退出（AC-065-36） | `main.go:44,70-75`；实现 `mtls_ca.go`；dev.sh 调用 `deploy/dev/dev.sh:410` |
 | `-operator-timeout` | `0`→包默认 180s（env `DEV_TIMEOUT_OPERATOR`） | 否 | 等待 operator 上线的秒数 | `main.go:43`；默认 `internal/devfixture/devfixture.go:50` |
 | `-seed-retries` | `0`→包默认 3（env `DEV_TIMEOUT_SEED_RETRIES`） | 否 | 阶段写入重试（1s/2s/4s 退避） | `main.go:44`；默认 `devfixture.go:51` |
 | `-stop-after` | `""` | 否 | 提交到该阶段为止干净退出（如 `enrollment`） | `main.go:45` |
-| `-reset` | `false` | 否 | 重建数据库并重播种（dev-reset-data） | `main.go:46`；`-reset` 需要 PostgreSQL DSN（`internal/devfixture/reset.go:30-33`） |
+| `-reset` | `false` | 否 | 重建数据库并重播种（dev-reset-data） | `main.go:57`；`-reset` 需要 PostgreSQL DSN（`internal/devfixture/reset.go:30-33`） |
 | `-orchestrator` / `-webhook` / `-auth` | `http://localhost:8083` / `:8082` / `:8085` | 否 | 三个 Connect 入口 | `main.go:47-49`，默认常量 `main.go:20-25` |
-| `-admin-user` / `-admin-password` | `dev-admin`（env `DEV_ADMIN_USER`）/ env `DEV_ADMIN_PASSWORD` | 否 | 平台管理员 | `main.go:50-51` |
-| `-deployer-user` / `-deployer-password` | `dev-deployer`（env `DEV_DEPLOYER_USER`）/ env `DEV_DEPLOYER_PASSWORD` | 否 | deployer 账号 | `main.go:52-53` |
-| `-reader-password` / `-e2e-runner-password` | env `DEV_READER_PASSWORD` / `E2E_RUNNER_PASSWORD` | 否 | reader 与 e2e-runner（release_admin） | `main.go:54-55` |
-| `-trust-root-private-key` | env `DEV_TRUST_ROOT_PRIVATE_KEY` | ci profile 必填 | Dev Trust Root Ed25519 key | `main.go:56` |
+| `-admin-user` / `-admin-password` | `dev-admin`（env `DEV_ADMIN_USER`）/ env `DEV_ADMIN_PASSWORD` | 否 | 平台管理员 | `main.go:62` |
+| `-deployer-user` / `-deployer-password` | `dev-deployer`（env `DEV_DEPLOYER_USER`）/ env `DEV_DEPLOYER_PASSWORD` | 否 | deployer 账号 | `main.go:64` |
+| `-reader-password` / `-e2e-runner-password` | env `DEV_READER_PASSWORD` / `E2E_RUNNER_PASSWORD` | 否 | reader 与 e2e-runner（release_admin） | `main.go:66` |
+| `-trust-root-private-key` | env `DEV_TRUST_ROOT_PRIVATE_KEY` | ci profile 必填 | Dev Trust Root Ed25519 key | `main.go:68` |
 | `-data-dir` | `data` | 否 | dev-fixture.json / 进度 / credentials 目录 | `main.go:57`；默认 `devfixture.go:43` |
 | `-database-dsn` | env `RELEASE_MANAGER_DATABASE_DSN` | `--reset` 时必填 | PostgreSQL DSN | `main.go:58` |
 
-- 环境变量：模式 `DEV_PROFILE`（仅 `local`/`ci`，非法值直接失败，`main.go:77-80`）；密码缺省时回读
+- 环境变量：模式 `DEV_PROFILE`（仅 `local`/`ci`，非法值直接失败，`main.go:98`）；密码缺省时回读
   `data/dev-credentials.env`（四键：`DEV_ADMIN_PASSWORD`、`DEV_DEPLOYER_PASSWORD`、
-  `DEV_READER_PASSWORD`、`E2E_RUNNER_PASSWORD`，`internal/devfixture/files.go:78-84`）。
+  `DEV_READER_PASSWORD`、`E2E_RUNNER_PASSWORD`，`internal/devfixture/files.go:118`）。
 - 前置：orchestrator/webhook/auth 服务在线（dev 集群里由 `dev-up` 保证；dev-seed 本身还要求 JWT key、
   service token、mTLS CA 已由 dev-up 生成，`deploy/dev/dev.sh:1538-1548`）。
 - 成功输出契约 `development seed complete` + `fixture_version/namespace/orchestrator/webhook/auth` 行
@@ -275,7 +275,7 @@ cleanup 只经正式 Connect API 回收（`main.go:471-473` 注释）。
   make 层从 `data/dev-credentials.env` source `E2E_RUNNER_PASSWORD`（`Makefile:202,232`）。
 - `E2E_RUN_ID` 可选：设定则做 run id（否则 `local-<UTC时间>-<pid>`，`cmd/e2e/main.go:747-756`；
   `test/e2e/config.go:431-440`）。
-- `E2E_LOCK_FILE` 可选：设置时进程内 advisory lock（`main.go:729-735`）；make 层另用
+- `E2E_LOCK_FILE` 可选：设置时进程内 advisory lock（`main.go:741`）；make 层另用
   `flock -s -n -E 3 data/dev.lock`（`Makefile:206-207,236-237`）。
 - dev 环境（`make dev-up dev-seed dev-status`）必须已就绪。
 
