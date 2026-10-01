@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -96,26 +97,25 @@ func TestCandidateArtifactLastSeenAtRoundTrip(t *testing.T) {
 // store re-runs it on every Open.
 func TestCandidateArtifactLastSeenAtBackfillsLegacyRows(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
-	first, err := sqlitestore.Open(path)
+	created, err := sqlitestore.Open(path)
 	require.NoError(t, err)
+	require.NoError(t, created.Close())
+
+	// Bring the table back to the pre-TASK-235 shape, where last_seen_at is nullable and
+	// a row written before the column existed holds NULL.
+	downgradeCandidateArtifactsNullable(t, path)
 
 	ctx := context.Background()
-	created := time.Date(2026, 9, 28, 9, 0, 0, 0, time.UTC)
-	artifact := &store.CandidateArtifact{
-		ID:           uuid.New().String(),
-		ArtifactType: store.ArtifactImage,
-		Digest:       "sha256:legacy-null",
-		CreatedAt:    created,
-		LastSeenAt:   created,
-	}
-	require.NoError(t, first.CandidateArtifacts().Create(ctx, artifact))
-
-	// Simulate a row written before the column existed: the column is there, the value is
-	// not.
-	db := first.DB()
-	_, err = db.ExecContext(ctx, `UPDATE candidate_artifacts SET last_seen_at = NULL WHERE id = ?`, artifact.ID)
+	createdAt := time.Date(2026, 9, 28, 9, 0, 0, 0, time.UTC)
+	artifactID := uuid.New().String()
+	db, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
-	require.NoError(t, first.Close())
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO candidate_artifacts (id, artifact_type, ref, digest, created_at)
+		VALUES (?, 'image', 'registry.example.com/team/api:1.0.0', 'sha256:legacy-null', ?)`,
+		artifactID, createdAt.Format(time.RFC3339Nano))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 
 	reopened, err := sqlitestore.Open(path)
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestCandidateArtifactLastSeenAtBackfillsLegacyRows(t *testing.T) {
 		`SELECT COUNT(*) FROM candidate_artifacts WHERE last_seen_at IS NULL`).Scan(&nulls))
 	assert.Zero(t, nulls, "every legacy row must be backfilled or the cutover hits NOT NULL")
 
-	got, err := reopened.CandidateArtifacts().Get(ctx, artifact.ID)
+	got, err := reopened.CandidateArtifacts().Get(ctx, artifactID)
 	require.NoError(t, err)
-	assert.WithinDuration(t, created, got.LastSeenAt, time.Second)
+	assert.WithinDuration(t, createdAt, got.LastSeenAt, time.Second)
 }
