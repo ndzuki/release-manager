@@ -171,7 +171,7 @@ operator → publish → auth → audit。tenancy / config / publish 三个 targ
 等价的常驻入口是 `make run-<service>`：它先 `go build` 到 `bin/` 再跑二进制，`dev-stage-*` 则用
 `go run` 并自动清端口。两者传参一致——只有定义了 `--db` 的服务才带该 flag：
 `run-operator`/`dev-stage-operator` 传 `--db data/release-manager.db`，
-`run-api`/`dev-stage-audit` 传 `--db data/api.db --jwt-public-key <DEV_JWT_DIR>/jwt-public-key.pem`（`DEV_JWT_DIR` 默认 `data/dev-jwt`，密钥对由 `make dev-jwt-keys` 生成；Ed25519 校验公钥，对称哨兵 `--signing-key`/`change-me-in-production` 已随 REQ-065 AC-065-01 删除）；
+`run-api`/`dev-stage-audit` 传 `--db data/api.db --jwt-public-key "$(cat <DEV_JWT_DIR>/jwt-public-key.pem)"`（传的是 **PEM 内容**而非路径；`DEV_JWT_DIR` 默认 `data/dev-jwt`，密钥对由 `make dev-jwt-keys` 生成；Ed25519 校验公钥，对称哨兵 `--signing-key`/`change-me-in-production` 已随 REQ-065 AC-065-01 删除）；
 orchestrator 与 auth 的 `run-*`/`dev-stage-*` 都只传 `--config`。
 
 ## 常见故障与边界
