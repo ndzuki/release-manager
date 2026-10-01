@@ -9,6 +9,7 @@ import {
   ListOperationsRequestSchema,
   ListBundlesRequestSchema,
   OrchestratorService,
+  RollbackReleaseRequestSchema,
   WatchOperationRequestSchema,
   type WatchOperationResponse,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
@@ -34,6 +35,21 @@ export interface CreateOperationInput {
   expectedCurrentRevision?: number;
   valuesRevisionId: string;
   patch: PatchOverride[];
+}
+
+export interface RollbackReleaseInput {
+  idempotencyKey: string;
+  releaseDefinitionId: string;
+  targetRevision: number;
+  expectedCurrentRevision: number;
+  reason: string;
+}
+
+export interface RolledBackOperation {
+  operationId: string;
+  fromRevision: number;
+  toRevision: number;
+  state: string;
 }
 
 export interface CreatedOperation {
@@ -141,6 +157,29 @@ function summaryState(raw: string): OperationState {
   return (OPERATION_STATES as string[]).includes(value) ? (value as OperationState) : 'pending';
 }
 
+
+// RollbackRelease is a standalone RPC, not a CreateOperation variant: CreateOperation accepts
+// INSTALL/UPGRADE only, and the canonical rollback request carries target_revision. The
+// deprecated values_revision_id/values_patch fields are deliberately never set here because
+// the server rejects them (rollback_values_not_allowed, AC-067-16).
+export async function rollbackRelease(input: RollbackReleaseInput): Promise<RolledBackOperation> {
+  const response = await operationClient.rollbackRelease(
+    create(RollbackReleaseRequestSchema, {
+      releaseDefinitionId: input.releaseDefinitionId,
+      targetRevision: input.targetRevision,
+      expectedCurrentRevision: input.expectedCurrentRevision,
+      reason: input.reason,
+    }),
+    { headers: new Headers({ 'Idempotency-Key': input.idempotencyKey }) },
+  );
+
+  return {
+    operationId: response.operationId,
+    fromRevision: response.fromRevision,
+    toRevision: response.toRevision,
+    state: response.state,
+  };
+}
 export interface OperationSummaryItem {
   operationId: string;
   operationType: OperationType;
@@ -242,6 +281,8 @@ export function mapOperationError(error: unknown): OperationAPIError {
     non_bundle_image: 'Patch 引用了 Bundle 外镜像',
     secret_literal_forbidden: 'Secret 类字段必须使用 Secret 引用',
     permission_denied: '无权执行该操作',
+    target_revision_not_found: '目标 Revision 不存在，请刷新后重试',
+    rollback_values_not_allowed: '回滚请求不能携带 values 覆盖',
     invalid_argument: '请求参数不合法，请检查后重试',
     not_found: '操作不存在或当前账号不可见',
     cancel_not_allowed: '当前状态不允许取消',

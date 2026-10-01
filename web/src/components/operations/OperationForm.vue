@@ -31,7 +31,7 @@ function prepareConfirmation(): void {
       </label>
     </fieldset>
 
-    <label class="operation-form__field">
+    <label v-if="store.fields.operationType !== 'ROLLBACK'" class="operation-form__field">
       {{ t('operation.form.bundle') }}
       <select v-model="store.fields.bundleId" required>
         <option :value="null">{{ t('operation.form.selectArtifact') }}</option>
@@ -42,7 +42,7 @@ function prepareConfirmation(): void {
       <span v-if="errors.bundleId" class="operation-form__error">{{ errors.bundleId }}</span>
     </label>
 
-    <label class="operation-form__field">
+    <label v-if="store.fields.operationType !== 'ROLLBACK'" class="operation-form__field">
       {{ t('operation.form.approvedRevision') }}
       <input
         v-model="store.fields.valuesRevisionId"
@@ -58,6 +58,12 @@ function prepareConfirmation(): void {
       {{ t('operation.form.currentRevision') }}
       <input v-model.number="store.fields.expectedCurrentRevision" type="number" min="1" required />
       <span v-if="errors.expectedCurrentRevision" class="operation-form__error">{{ errors.expectedCurrentRevision }}</span>
+    </label>
+
+    <label v-if="store.fields.operationType === 'ROLLBACK'" class="operation-form__field">
+      {{ t('operation.form.targetRevision') }}
+      <input v-model.number="store.fields.targetRevision" type="number" min="1" required />
+      <span v-if="errors.targetRevision" class="operation-form__error">{{ errors.targetRevision }}</span>
     </label>
 
     <PatchOverrideEditor
