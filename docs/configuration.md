@@ -13,7 +13,7 @@
 3. **YAML 文件**（`--config` 指定路径）。
 4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:176/195/236/252`）。
 
-部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--jwt-private-key` 默认 `envOr("JWT_PRIVATE_KEY", "")`，`cmd/auth/main.go:248`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
+部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--jwt-private-key` 默认 `envOr("JWT_PRIVATE_KEY", "")`，`cmd/auth/main.go:261`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
 
 **例外（原始二次读取，env 不参与）**：`cmd/orchestrator` 在 `LoadService` 之外另起裸 viper 直接重读同一个 YAML 文件解析 `gc`（`cmd/orchestrator/main.go:555`）、`emergency`（`:625`）、`trust`（`:677`）三个块（`UnmarshalKey`）。这三块只能改文件，不能用环境变量覆盖。
 
@@ -272,7 +272,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | 变量 | 读取点 | 用途 | 机密 |
 |---|---|---|---|
 | `JWT_PRIVATE_KEY` | `cmd/auth/main.go:248` | flag 默认值；**仅 auth 持有**（Ed25519 签名私钥） | 是 |
-| `JWT_PUBLIC_KEY` | `cmd/orchestrator/main.go:969`、`cmd/api/main.go:175` | flag 默认值（Ed25519 校验公钥） | 否（公钥） |
+| `JWT_PUBLIC_KEY` | `cmd/orchestrator/main.go:983`、`cmd/api/main.go:183` | flag 默认值（Ed25519 校验公钥） | 否（公钥） |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `cmd/webhook/main.go:62` | flag 默认值 | 是 |
 | （orchestrator 侧）`DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS` | `cmd/orchestrator` serviceTokens | 校验入站服务令牌（双令牌=零停机轮换） | 是 |
 | `ENROLLMENT_TOKEN` | `internal/operator/bootstrap/token.go:24-27`（`TokenEnv`，`cmd/operator/main.go:161`） | 一次性注册令牌（文件缺位时） | 是 |
