@@ -489,12 +489,23 @@ func migrateLegacy(db *sql.DB) error {
 	valuesSchemaMigrated := false
 	preflightSchemaMigrated := false
 	enrollmentTokenMigrated := false
+	candidateArtifactSchemaMigrated := false
 	for _, stmt := range migrationStatements {
 		if !valuesSchemaMigrated && strings.Contains(stmt, "ux_vr_def_version") {
 			if err := migrateValuesRevisionSchema(tx); err != nil {
 				return fmt.Errorf("migrate values revision schema: %w", err)
 			}
 			valuesSchemaMigrated = true
+		}
+		// Triggered by the CREATE that follows the last_seen_at backfill (see the
+		// migrationStatements comment): the rebuild copies COALESCE(last_seen_at,
+		// created_at), so it must not run before the backfill has repaired the rows the
+		// copy would otherwise still see as NULL.
+		if !candidateArtifactSchemaMigrated && strings.HasPrefix(strings.TrimSpace(stmt), "CREATE TABLE IF NOT EXISTS bundle_candidate_artifacts") {
+			if err := migrateCandidateArtifactNullability(tx); err != nil {
+				return fmt.Errorf("migrate candidate artifact nullability: %w", err)
+			}
+			candidateArtifactSchemaMigrated = true
 		}
 		if !preflightSchemaMigrated && strings.HasPrefix(strings.TrimSpace(stmt), "CREATE TABLE IF NOT EXISTS preflight_lifecycles") {
 			if err := migratePreflightLifecycleSchema(tx); err != nil {
@@ -929,6 +940,122 @@ func rebuildValuesRevisionDecisionsTable(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// migrateCandidateArtifactNullability brings candidate_artifacts.last_seen_at in line
+// with PostgreSQL, which declares the column NOT NULL (TASK-235). The trigger is the
+// effective schema, not a version marker: a fresh database already declares NOT NULL in
+// its CREATE TABLE, and a migrated one reports notnull==1, so both paths are no-ops.
+//
+// SQLite cannot add NOT NULL to an existing column, so the table is rebuilt. Two hazards
+// shape the sequence, and neither can be side-stepped with a pragma: foreign_keys is a
+// no-op inside a transaction, and legacy_alter_table does not reliably suppress the
+// rename rewrite here either (measured: the link rows were cascade-deleted). So the child
+// is rebuilt as well, exactly like migrateValuesRevisionSchema rebuilds the values
+// revision parent and child together:
+//
+//   - candidate_artifacts is referenced by bundle_candidate_artifacts.artifact_id
+//     (ON DELETE CASCADE), and candidate_artifact_locations is PostgreSQL-only, so that
+//     child is the only SQLite reference.
+//   - the child is renamed FIRST, before anything references candidate_artifacts_legacy,
+//     so the parent rename and DROP cannot delete live link rows through the child's FK.
+//   - BOTH copies (parent with COALESCE(last_seen_at, created_at), then the child) happen
+//     before either legacy table is dropped, so a cascade fired by the parent's DROP can
+//     only affect rows that were already copied.
+//   - the child is recreated against the new parent and its index is recreated, because
+//     rebuilding the table drops the old one and its indexes.
+func migrateCandidateArtifactNullability(tx *sql.Tx) error {
+	exists, notNull, err := sqliteColumnNotNull(tx, "candidate_artifacts", "last_seen_at")
+	if err != nil {
+		return err
+	}
+	if !exists || notNull {
+		return nil // fresh database, or already aligned
+	}
+	return rebuildCandidateArtifacts(tx)
+}
+
+// rebuildCandidateArtifacts performs the parent+child rebuild that
+// migrateCandidateArtifactNullability decided is needed.
+func rebuildCandidateArtifacts(tx *sql.Tx) error {
+	statements := []string{
+		// Detach the child first: nothing references bundle_candidate_artifacts, so this
+		// rename cannot rewrite another table's FK, and once it is out of the way no
+		// constraint references candidate_artifacts at all.
+		`ALTER TABLE bundle_candidate_artifacts RENAME TO bundle_candidate_artifacts_legacy`,
+		`ALTER TABLE candidate_artifacts RENAME TO candidate_artifacts_legacy`,
+		`CREATE TABLE candidate_artifacts (
+			id            TEXT PRIMARY KEY,
+			artifact_type TEXT NOT NULL CHECK (artifact_type IN ('image', 'chart')),
+			ref           TEXT NOT NULL,
+			digest        TEXT NOT NULL,
+			bundle_id     TEXT,
+			created_at    TEXT NOT NULL,
+			validated_at  TEXT,
+			source_id     TEXT NOT NULL DEFAULT '',
+			orphaned_at   TEXT,
+			last_seen_at  TEXT NOT NULL,
+			UNIQUE(digest, artifact_type)
+		)`,
+		`INSERT INTO candidate_artifacts (
+			id, artifact_type, ref, digest, bundle_id, created_at,
+			validated_at, source_id, orphaned_at, last_seen_at
+		) SELECT id, artifact_type, ref, digest, bundle_id, created_at,
+			validated_at, source_id, orphaned_at, COALESCE(last_seen_at, created_at)
+		  FROM candidate_artifacts_legacy`,
+		// Recreate the child against the new parent, then copy its rows. Both copies run
+		// before the legacy tables are dropped.
+		`CREATE TABLE bundle_candidate_artifacts (
+			bundle_id   TEXT NOT NULL REFERENCES release_bundles(id) ON DELETE CASCADE,
+			artifact_id TEXT NOT NULL REFERENCES candidate_artifacts(id) ON DELETE CASCADE,
+			linked_at   TEXT NOT NULL,
+			orphaned_at TEXT,
+			PRIMARY KEY (bundle_id, artifact_id)
+		)`,
+		`INSERT INTO bundle_candidate_artifacts (bundle_id, artifact_id, linked_at, orphaned_at)
+		 SELECT bundle_id, artifact_id, linked_at, orphaned_at FROM bundle_candidate_artifacts_legacy`,
+		`DROP TABLE candidate_artifacts_legacy`,
+		`DROP TABLE bundle_candidate_artifacts_legacy`,
+		`CREATE INDEX IF NOT EXISTS idx_bundle_candidate_artifacts_artifact ON bundle_candidate_artifacts(artifact_id)`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(context.Background(), statement); err != nil {
+			return fmt.Errorf("rebuild candidate artifacts for last_seen_at NOT NULL: %w\nstmt: %s", err, statement)
+		}
+	}
+	return nil
+}
+
+// sqliteColumnNotNull reports whether the named column exists and whether it is NOT NULL.
+// It reads pragma_table_info, so it sees the effective constraint rather than the
+// declaration text.
+func sqliteColumnNotNull(tx *sql.Tx, table, column string) (exists, notNull bool, err error) {
+	rows, err := tx.QueryContext(context.Background(), `PRAGMA table_info(`+table+`)`) //nolint:gosec // table is a fixed internal identifier.
+	if err != nil {
+		return false, false, fmt.Errorf("read %s columns: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			kind      string
+			notNullIn int
+			dflt      sql.NullString
+			primary   int
+		)
+		if err := rows.Scan(&cid, &name, &kind, &notNullIn, &dflt, &primary); err != nil {
+			return false, false, fmt.Errorf("scan %s columns: %w", table, err)
+		}
+		if name == column {
+			return true, notNullIn == 1, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, false, fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	return false, false, nil
 }
 
 func sqliteTableColumns(tx *sql.Tx, table string) (map[string]struct{}, error) {
@@ -1663,6 +1790,14 @@ var migrationStatements = []string{
 	`ALTER TABLE release_definitions ADD COLUMN current_bundle_id TEXT`,
 
 	// Candidate artifacts (REQ-069)
+	//
+	// last_seen_at is declared NOT NULL from the start (TASK-235): it matches
+	// PostgreSQL (migrations/000007_bundle_services.up.sql: last_seen_at TIMESTAMPTZ NOT
+	// NULL) and it is the value the write path always sets, so a fresh database never
+	// needs the rebuild below. Databases created before TASK-235 carry the column as
+	// nullable (see the ALTER + backfill right after) and are rebuilt by
+	// migrateCandidateArtifactNullability, which runs once the backfill has made every
+	// existing row non-NULL.
 	`CREATE TABLE IF NOT EXISTS candidate_artifacts (
 		id            TEXT PRIMARY KEY,
 		artifact_type TEXT NOT NULL CHECK (artifact_type IN ('image', 'chart')),
@@ -1670,6 +1805,7 @@ var migrationStatements = []string{
 		digest        TEXT NOT NULL,
 		bundle_id     TEXT,
 		created_at    TEXT NOT NULL,
+		last_seen_at  TEXT NOT NULL,
 		UNIQUE(digest, artifact_type)
 	)`,
 	`ALTER TABLE candidate_artifacts ADD COLUMN validated_at TEXT`,
@@ -1677,16 +1813,23 @@ var migrationStatements = []string{
 	`ALTER TABLE candidate_artifacts ADD COLUMN orphaned_at TEXT`,
 	// TASK-163: PostgreSQL has had last_seen_at since
 	// migrations/000003_create_lifecycle_tables.up.sql; SQLite dropped it. The ALTER must
-	// follow the CREATE above (buildFreshSchema folds statements in order).
+	// follow the CREATE above (buildFreshSchema folds statements in order) and is skipped
+	// on a fresh database, where the CREATE already declares the column.
 	//
 	// The column is added WITHOUT a default, so rows written before this change would keep
 	// NULL -- and PostgreSQL declares the column TIMESTAMPTZ NOT NULL
 	// (migrations/000007_bundle_services.up.sql), so a maintenance-window cutover would
 	// fail on those rows. Backfill from created_at, which is the value the cutover's
 	// derived default used to synthesize (internal/migration/copy.go). Idempotent: the
-	// WHERE clause makes the second run a no-op.
+	// WHERE clause makes the second run a no-op. TASK-235 then rebuilds the table so the
+	// column itself is NOT NULL on legacy databases too (SQLite cannot add that constraint
+	// to an existing column in place).
 	`ALTER TABLE candidate_artifacts ADD COLUMN last_seen_at TEXT`,
 	`UPDATE candidate_artifacts SET last_seen_at = created_at WHERE last_seen_at IS NULL`,
+	// The hook for migrateCandidateArtifactNullability triggers on the CREATE below, which
+	// MUST stay after the backfill above: the rebuild copies COALESCE(last_seen_at,
+	// created_at), and running it before the backfill would leave rows the copy could not
+	// repair in place.
 	`CREATE TABLE IF NOT EXISTS bundle_candidate_artifacts (
 		bundle_id   TEXT NOT NULL REFERENCES release_bundles(id) ON DELETE CASCADE,
 		artifact_id TEXT NOT NULL REFERENCES candidate_artifacts(id) ON DELETE CASCADE,
