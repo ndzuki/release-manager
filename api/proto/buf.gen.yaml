@@ -1,14 +1,21 @@
+# Remote plugins MUST carry an explicit version. Without one, `buf generate` resolves
+# whatever the BSR published most recently, so the `proto-check` job -- which regenerates
+# and demands that the committed output be reproducible -- turns red on every branch the
+# moment an upstream plugin ships a release, with no repository change involved (that is
+# exactly what happened on 2026-10-01: bufbuild/es went v2.15.0 -> v2.16.0 and 14 files
+# differed by one version-comment line each). Upgrading a generator is now a deliberate
+# act: bump the pin, run `make proto`, review the generated diff, commit both together.
 version: v2
 plugins:
-  - remote: buf.build/protocolbuffers/go
+  - remote: buf.build/protocolbuffers/go:v1.36.12
     out: api/gen
     opt:
       - paths=source_relative
-  - remote: buf.build/connectrpc/go
+  - remote: buf.build/connectrpc/go:v1.19.1
     out: api/gen
     opt:
       - paths=source_relative
-  - remote: buf.build/bufbuild/es
+  - remote: buf.build/bufbuild/es:v2.15.0
     out: web/src/gen
     opt:
       - target=ts
