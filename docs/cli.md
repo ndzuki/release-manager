@@ -35,7 +35,7 @@
 7 个服务共用 `internal/app.Run`（`internal/app/app.go:122`）：
 
 - 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:474-492`，viper）。
-  多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:272-303`）：
+  多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:502-537`）：
   `DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`MAINTENANCE`、`AUTHORIZATION_AUTH_URL`、
   `GATEWAY_ENABLED`、`GATEWAY_PORT`、`CUSTOMER_ID`、`CLUSTER_ID`、`OPERATOR_NAME`、
   `ENROLLMENT_TOKEN_FILE`、`CA_CERT_PATH`、`VALUES_MAX_DOCUMENT_BYTES` 等。
