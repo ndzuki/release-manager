@@ -1,14 +1,26 @@
+# Remote plugins MUST carry an explicit version. Without one, `buf generate` resolves
+# whatever the BSR published most recently, so a branch whose committed output came from
+# the older release turns red the moment an upstream plugin ships a new one -- with no
+# repository change involved. That is exactly what happened on 2026-10-01: bufbuild/es
+# went v2.15.0 -> v2.16.0 and 14 TS files differed by one version-comment line each,
+# failing the `proto-check` job on branches that never touch api/proto. Reproducibility
+# needs BOTH halves pinned: the buf CLI (already pinned in the proto-check workflow) and
+# these plugin versions. Upgrading a generator is now a deliberate act: bump the pin,
+# run `make proto`, review the generated diff, commit both together. Note that a pin buys
+# determinism, not provenance -- connectrpc/go v1.19.0 and v1.19.1 emit identical output
+# for this module, so the pin fixes which bytes to expect from now on rather than
+# identifying which release produced the committed files.
 version: v2
 plugins:
-  - remote: buf.build/protocolbuffers/go
+  - remote: buf.build/protocolbuffers/go:v1.36.12
     out: api/gen
     opt:
       - paths=source_relative
-  - remote: buf.build/connectrpc/go
+  - remote: buf.build/connectrpc/go:v1.19.1
     out: api/gen
     opt:
       - paths=source_relative
-  - remote: buf.build/bufbuild/es
+  - remote: buf.build/bufbuild/es:v2.15.0
     out: web/src/gen
     opt:
       - target=ts
