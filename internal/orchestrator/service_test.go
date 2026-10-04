@@ -2445,7 +2445,7 @@ func deferredDispatchService(t *testing.T) (*Service, store.Store, func()) {
 	}
 	svc := NewService(wrapped, verifier, "staging", nil, st.OperationCreationUnitOfWork(), authorization.NewStoreAuthorizer(st), logger)
 	for _, id := range []string{"bundle-001", "bundle-002", "bundle-upgrade"} {
-		seedTestBundle(t, st, id)
+		require.NotEmpty(t, seedTestBundle(t, st, id), "seeded bundle %s digest", id)
 	}
 
 	return svc, st, func() {
