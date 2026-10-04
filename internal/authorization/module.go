@@ -175,7 +175,11 @@ func (m *Module) AuthorizeWrite(ctx context.Context, actor authctx.Actor, custom
 		m.observeStaleCause(cause)
 		m.logger.Warn("authorization snapshot pull failed during authorize",
 			"organization_id", actor.OrganizationID, "customer_id", customerID,
-			"action", action, "reason", reasonCode(err), "stale_cause", string(cause), "error", err)
+			"action", action, "reason", reasonCode(err), "stale_cause", string(cause))
+		// TASK-243: the raw pull error is deliberately NOT logged. It can carry
+		// credential text, and the project forbids secret material in logs; the
+		// bounded stale cause above (plus the cause-labelled counter) keeps the
+		// failure diagnosable, and release-auth logs its own error server-side.
 		m.recordDecision(actorID, actorType, actor.OrganizationID, customerID, action, "deny", reasonCode(err), Snapshot{})
 		// Return a stable, non-leaking error. The raw pull failure can carry
 		// credential text — the browser used to read
