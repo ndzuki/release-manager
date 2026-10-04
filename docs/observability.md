@@ -51,19 +51,22 @@
   - `cmd/orchestrator/main.go:316-319`（**共享 registry**，同时注册授权与身份指标）。
   路径挂在既有 HTTP 监听上，符合 `docs/decisions/ADR-016-prometheus-otel.md` 的「现有单端口 ServeMux 上注册 /metrics」决策。
 - **webhook、notifier、notification-sink、operator agent、release-api 没有 `/metrics`**（同上 grep 结论）⇒ 这五类进程没有任何指标面。
-- 指标清单一（授权，ADR-016 规定，实现见 `internal/authorization/metrics.go:23-71`）：
+- 指标清单一（授权，ADR-016 规定，实现见 `internal/authorization/metrics.go:28-80`）：
 
   | 指标 | 类型/标签 | 定义位置 |
   | --- | --- | --- |
-  | `auth_decisions_total{result,actor_type}` | CounterVec | `internal/authorization/metrics.go:29-32` |
-  | `auth_snapshot_stale_total` | Counter | `internal/authorization/metrics.go:33-36` |
-  | `auth_source_version` | Gauge | `internal/authorization/metrics.go:37-40` |
-  | `auth_checkpoint_version` | Gauge | `internal/authorization/metrics.go:41-44` |
-  | `auth_policy_health` | Gauge（1 健康 / 0 不可用） | `internal/authorization/metrics.go:45-48` |
-  | `auth_enforce_duration_seconds` | Histogram（`ExponentialBuckets(0.00005,2,12)`） | `internal/authorization/metrics.go:49-53` |
-  | `auth_snapshot_rpc_duration_seconds` | Histogram（`ExponentialBuckets(0.0005,2,12)`） | `internal/authorization/metrics.go:54-58` |
+  | `auth_decisions_total{result,actor_type}` | CounterVec | `internal/authorization/metrics.go:33-36` |
+  | `auth_snapshot_stale_total` | Counter | `internal/authorization/metrics.go:37-40` |
+  | `auth_snapshot_stale_cause_total{cause}` | CounterVec（有界枚举，见下） | `internal/authorization/metrics.go:41-44` |
+  | `auth_source_version` | Gauge | `internal/authorization/metrics.go:45-48` |
+  | `auth_checkpoint_version` | Gauge | `internal/authorization/metrics.go:49-52` |
+  | `auth_policy_health` | Gauge（1 健康 / 0 不可用） | `internal/authorization/metrics.go:53-56` |
+  | `auth_enforce_duration_seconds` | Histogram（`ExponentialBuckets(0.00005,2,12)`） | `internal/authorization/metrics.go:57-61` |
+  | `auth_snapshot_rpc_duration_seconds` | Histogram（`ExponentialBuckets(0.0005,2,12)`） | `internal/authorization/metrics.go:62-70` |
 
-  写入点：裁决计数与 stale 计数（`internal/authorization/module.go:349-351`）、enforce 耗时（`internal/authorization/module.go:135`）、快照 RPC 耗时（`internal/authorization/module.go:219`）、版本/健康 gauge（`internal/authorization/module.go:286-291`）。含义：`auth_source_version` 与 `auth_checkpoint_version` 的差值就是「本地快照落后多少」，`auth_policy_health == 0` 是授权链路 fail-closed 的直接信号。
+  写入点：裁决计数与 stale 计数（`internal/authorization/module.go:382-388`）、stale 原因计数（`internal/authorization/module.go:414`，`observeStaleCause`）、enforce 耗时（`internal/authorization/module.go:139`）、快照 RPC 耗时（`internal/authorization/module.go:246`）、版本/健康 gauge（`internal/authorization/module.go:313-319`）。
+
+  `auth_snapshot_stale_cause_total{cause}` 的 `cause` 取值**只有枚举**（`internal/authorization/stale_cause.go`）：`warmup` / `gap` / `regression` / `not-fresh` / `snapshot-rpc-timeout` / `snapshot-rpc-error` / `snapshot-scope-mismatch` / `checkpoint-read-error` / `checkpoint-write-error` / `unknown`。**旧指标 `auth_snapshot_stale_total` 保持原名无标签**，两者同时递增；细分原因另经 `X-Stale-Cause` 元数据暴露，`X-Reason-Code: AUTHORIZATION_SNAPSHOT_STALE` 契约不变（TASK-239）。含义：`auth_source_version` 与 `auth_checkpoint_version` 的差值就是「本地快照落后多少」，`auth_policy_health == 0` 是授权链路 fail-closed 的直接信号。
 - 指标清单二（workload 身份收敛，REQ-088）：`identity_report_buffered_total`、`identity_bound_after_inventory_total`、`identity_conflict_total`、`identity_report_dropped_total`、`identity_pending_purged_total`（`internal/operator/identity_metrics.go:42-58`，结构体注释 `internal/operator/identity_metrics.go:13-30`）；与授权指标共用 orchestrator 的 registry（注册点 `cmd/orchestrator/main.go:318`，注入 operator service 经 `newGatewayOperatorService`，`cmd/orchestrator/main.go:364`）⇒ **在 orchestrator 的 `/metrics` 一条路径上同时可读**。
 - **没有 Go 运行时与进程指标**：全仓无 `collectors.NewGoCollector` / `NewProcessCollector` 调用（`grep 'collectors\.'` 零命中）⇒ `go_goroutines`、`go_memstats_*`、`process_resident_memory_bytes` 全都不可得。两个 Deployment 的内存 limit 只有 256Mi（`deploy/kustomize/services/orchestrator.yaml:76-82`）、notification-sink 128Mi（`deploy/kustomize/services/notification-sink.yaml:49`）⇒ **OOM 前兆在指标面完全不可见**。
 - **没有采集侧配置**：`deploy/kustomize/` 下无 `ServiceMonitor`/`PodMonitor`/Prometheus 部署，也没有任何 scrape 配置（`grep monitoring.coreos.com` 零命中）⇒ `/metrics` 只是「可被抓」，当前没有任何东西在抓。可达性现状：web 的 nginx 没有 `/metrics` location（`web/nginx.conf:17-101`），所以宿主侧只能直连服务端口（`http://127.0.0.1:8083/metrics`、`http://127.0.0.1:8085/metrics`，映射依据 `deploy/dev/lib/host.sh:16`）。

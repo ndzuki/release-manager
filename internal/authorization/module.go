@@ -171,16 +171,20 @@ func (m *Module) AuthorizeWrite(ctx context.Context, actor authctx.Actor, custom
 	m.mu.Unlock()
 
 	if err := m.pull(ctx, key); err != nil {
+		cause, _ := staleCauseOf(err)
+		m.observeStaleCause(cause)
 		m.logger.Warn("authorization snapshot pull failed during authorize",
 			"organization_id", actor.OrganizationID, "customer_id", customerID,
-			"action", action, "reason", reasonCode(err), "error", err)
+			"action", action, "reason", reasonCode(err), "stale_cause", string(cause), "error", err)
 		m.recordDecision(actorID, actorType, actor.OrganizationID, customerID, action, "deny", reasonCode(err), Snapshot{})
 		// Return a stable, non-leaking error. The raw pull failure can carry
 		// credential text — the browser used to read
 		// "invalid token: parse access token: token is expired" while its own
 		// session was healthy. The cause stays in the WARN above and in the
-		// decision record.
-		return staleError(0, 0, 0)
+		// decision record; only the bounded enum is exposed on the wire.
+		stale := staleError(0, 0, 0)
+		setStaleCauseMeta(stale, cause)
+		return stale
 	}
 
 	m.mu.RLock()
@@ -189,7 +193,14 @@ func (m *Module) AuthorizeWrite(ctx context.Context, actor authctx.Actor, custom
 	initialized := entry.initialized
 	m.mu.RUnlock()
 	if !initialized || !snapshot.Fresh || snapshot.Checkpoint < snapshot.SourceVersion {
+		cause := StaleCauseNotFresh
+		m.observeStaleCause(cause)
+		m.logger.Warn("authorization snapshot not fresh during authorize",
+			"organization_id", actor.OrganizationID, "customer_id", customerID, "action", action,
+			"stale_cause", string(cause), "source_version", snapshot.SourceVersion,
+			"checkpoint", snapshot.Checkpoint, "initialized", initialized, "fresh", snapshot.Fresh)
 		err := staleError(snapshot.SourceVersion, snapshot.Checkpoint, snapshot.PolicyVersion)
+		setStaleCauseMeta(err, cause)
 		m.recordDecision(actorID, actorType, actor.OrganizationID, customerID, action, "deny", reasonCode(err), snapshot)
 		return err
 	}
@@ -209,7 +220,7 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 	entry := m.entries[key]
 	m.mu.RUnlock()
 	if entry == nil {
-		return staleError(0, 0, 0)
+		return withStaleCause(staleError(0, 0, 0), StaleCauseNotFresh)
 	}
 	entry.pullMu.Lock()
 	defer entry.pullMu.Unlock()
@@ -217,7 +228,7 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 	credential := entry.credential
 	m.mu.RUnlock()
 	if m.client == nil {
-		return staleError(0, 0, 0)
+		return withStaleCause(staleError(0, 0, 0), StaleCauseSnapshotRPCError)
 	}
 
 	request := connect.NewRequest(&authv1.GetAuthorizationSnapshotRequest{
@@ -236,7 +247,7 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 	}
 	if err != nil {
 		m.markPullFailure(key)
-		return translateSnapshotError(err)
+		return withStaleCause(translateSnapshotError(err), snapshotRPCCause(err))
 	}
 
 	msg := response.Msg
@@ -255,7 +266,7 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 		Fresh:                    msg.GetFresh(),
 	}
 	if remote.OrganizationID != key.organizationID || remote.CustomerID != key.customerID || remote.ActorID != key.actorID {
-		return staleError(remote.SourceVersion, 0, remote.PolicyVersion)
+		return withStaleCause(staleError(remote.SourceVersion, 0, remote.PolicyVersion), StaleCauseScopeMismatch)
 	}
 
 	previous := uint64(0)
@@ -263,13 +274,13 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 	if m.checkpoints != nil {
 		checkpoint, checkpointErr := m.checkpoints.GetCheckpoint(ctx, key.organizationID, key.customerID)
 		if checkpointErr != nil && !errors.Is(checkpointErr, store.ErrNotFound) {
-			return staleError(remote.SourceVersion, 0, remote.PolicyVersion)
+			return withStaleCause(staleError(remote.SourceVersion, 0, remote.PolicyVersion), StaleCauseCheckpointRead)
 		}
 		if checkpointErr == nil {
 			previous = checkpoint.SourceVersion
 			previousPolicy = checkpoint.PolicyVersion
 			if remote.SourceVersion < previous || remote.Checkpoint < previous || remote.PolicyVersion < previousPolicy {
-				return staleError(remote.SourceVersion, previous, remote.PolicyVersion)
+				return withStaleCause(staleError(remote.SourceVersion, previous, remote.PolicyVersion), StaleCauseRegression)
 			}
 		}
 	}
@@ -285,7 +296,7 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 			PolicyVersion:  remote.PolicyVersion,
 			Fresh:          checkpointFresh,
 		}); err != nil {
-			return staleError(remote.SourceVersion, previous, remote.PolicyVersion)
+			return withStaleCause(staleError(remote.SourceVersion, previous, remote.PolicyVersion), StaleCauseCheckpointWrite)
 		}
 	}
 	remote.Fresh = checkpointFresh
@@ -308,7 +319,15 @@ func (m *Module) pull(ctx context.Context, key cacheKey) error {
 		}
 	}
 	if changed || gap || !remote.Fresh {
-		return staleError(remote.SourceVersion, remote.Checkpoint, remote.PolicyVersion)
+		// gap is the most specific signal; a plain `changed` on a version the module has
+		// never persisted is the healthy warm-up.
+		cause := StaleCauseNotFresh
+		if gap {
+			cause = StaleCauseGap
+		} else if changed {
+			cause = StaleCauseWarmup
+		}
+		return withStaleCause(staleError(remote.SourceVersion, remote.Checkpoint, remote.PolicyVersion), cause)
 	}
 	return nil
 }
@@ -379,6 +398,40 @@ func authorizationSubject(actor authctx.Actor) string {
 		return "service:" + actor.Service
 	}
 	return actor.UserID
+}
+
+// snapshotRPCCause classifies a failed snapshot RPC without ever looking at its message.
+func snapshotRPCCause(err error) StaleCause {
+	if errors.Is(err, context.DeadlineExceeded) || connect.CodeOf(err) == connect.CodeDeadlineExceeded {
+		return StaleCauseSnapshotRPCTimeout
+	}
+	return StaleCauseSnapshotRPCError
+}
+
+// observeStaleCause increments the bounded cause counter. The legacy
+// auth_snapshot_stale_total keeps incrementing from recordDecision, so this only adds a
+// breakdown (ADR-016 fixed metric stays untouched).
+func (m *Module) observeStaleCause(cause StaleCause) {
+	if m.metrics == nil {
+		return
+	}
+	if !cause.Valid() {
+		cause = StaleCauseUnknown
+	}
+	m.metrics.SnapshotStaleCause.WithLabelValues(string(cause)).Inc()
+}
+
+// setStaleCauseMeta exposes the bounded cause to callers that already read the other
+// X-* metadata. It never replaces X-Reason-Code.
+func setStaleCauseMeta(err error, cause StaleCause) {
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		return
+	}
+	if !cause.Valid() {
+		cause = StaleCauseUnknown
+	}
+	connectErr.Meta().Set("X-Stale-Cause", string(cause))
 }
 
 func staleError(source, checkpoint, policy uint64) error {
