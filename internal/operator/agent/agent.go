@@ -105,6 +105,13 @@ type Agent struct {
 	// the observation path then reports no annotations at all (fail closed).
 	approvedAnnotations   map[string][]store.ApprovedAnnotationKey
 	approvedAnnotationsMu sync.RWMutex
+	// annotationWhitelistStore persists the whitelist cache across restarts
+	// (TASK-244) so a restarted operator does not silently stop reporting
+	// annotations until the next release write. It is nil when the configured
+	// Store does not implement localstore.AnnotationWhitelistStore; the cache
+	// then stays in-memory only and observation remains fail-closed after a
+	// restart, but nothing panics or fails.
+	annotationWhitelistStore localstore.AnnotationWhitelistStore
 	// connected tracks whether a gateway command stream is currently live
 	// (TASK-099): the agent Pod must not report Ready while its reconnect loop
 	// is between sessions.
@@ -198,7 +205,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg.InstallFlags.Timeout = defaultInstallTimeout
 	}
 
-	return &Agent{
+	agent := &Agent{
 		client:              cfg.Client,
 		engine:              cfg.Engine,
 		store:               cfg.Store,
@@ -217,7 +224,15 @@ func New(cfg Config) (*Agent, error) {
 		registryPlainHTTP:   cfg.RegistryPlainHTTP,
 		observationInterval: cfg.ObservationInterval,
 		approvedAnnotations: make(map[string][]store.ApprovedAnnotationKey),
-	}, nil
+	}
+	// TASK-244: hydrate the approved-annotation cache from the durable store so
+	// a restarted operator keeps reporting annotations without waiting for the
+	// next release write. A load FAILURE degrades to "whitelist unknown"
+	// (fail closed) and does not stop the operator from starting; note the load
+	// itself is synchronous and has no timeout, so a slow store delays startup
+	// rather than being skipped.
+	agent.hydrateApprovedAnnotations(cfg.Store)
+	return agent, nil
 }
 
 // Connected reports whether a gateway command session is currently streaming
@@ -570,7 +585,7 @@ func (a *Agent) handleCommand(ctx context.Context, stream Stream, command *opera
 	// TASK-241 U1=A: the command is the only source of the approved annotation
 	// whitelist. Cache it before any early return so a redelivered terminal
 	// command still refreshes what the periodic observation scan may report.
-	a.rememberApprovedAnnotations(command)
+	a.rememberApprovedAnnotations(ctx, command)
 
 	existing, err := a.store.Get(ctx, command.GetCommandId())
 	if err == nil {
@@ -627,7 +642,7 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 	// The replay path never went through handleCommand, so refresh the
 	// annotation whitelist from the persisted payload too (TASK-241 U1=A). The
 	// payload preserved Command.approved_annotation_keys when it was stored.
-	a.rememberApprovedAnnotations(&command)
+	a.rememberApprovedAnnotations(ctx, &command)
 
 	reporter := newRolloutReporter(stream, command.GetOperationId(), a.logger)
 	result := a.executeCommand(ctx, &command, reporter)
@@ -817,14 +832,15 @@ func annotationWhitelistKey(namespace, releaseName string) string {
 }
 
 // rememberApprovedAnnotations caches the annotation whitelist a release-write
-// command carries for its release (TASK-241 U1=A). The command is the only
-// source. Only release writes update the cache: an inventory-sync or
-// secret-metadata command does not describe the release's definition, and
-// letting it clear the cache would make a healthy whitelist flap to unknown. A
-// release write that carries no whitelist clears the entry — the center is
-// saying the definition approves no annotation (or is too old to send one), and
-// both cases must fail closed to "report nothing".
-func (a *Agent) rememberApprovedAnnotations(command *operatorv1.Command) {
+// command carries for its release (TASK-241 U1=A) and mirrors that update to
+// the durable store (TASK-244). The command is the only source. Only release
+// writes update the cache: an inventory-sync or secret-metadata command does
+// not describe the release's definition, and letting it clear the cache would
+// make a healthy whitelist flap to unknown. A release write that carries no
+// whitelist clears the entry — the center is saying the definition approves no
+// annotation (or is too old to send one), and both cases must fail closed to
+// "report nothing".
+func (a *Agent) rememberApprovedAnnotations(ctx context.Context, command *operatorv1.Command) {
 	if command == nil || !isReleaseWrite(command.GetOperationType()) {
 		return
 	}
@@ -840,6 +856,93 @@ func (a *Agent) rememberApprovedAnnotations(command *operatorv1.Command) {
 		a.approvedAnnotations[key] = approved
 	}
 	a.approvedAnnotationsMu.Unlock()
+	a.persistApprovedAnnotations(ctx, key, approved)
+}
+
+// persistApprovedAnnotations mirrors one cache update to the durable store so
+// the whitelist survives a restart (TASK-244). It is best-effort: the
+// in-memory cache stays authoritative for this process, and a store that does
+// not support persistence is a silent no-op (in-memory only, still
+// fail-closed). A write failure is logged rather than returned — failing the
+// command would not make annotation observation any safer, but the operator
+// must not degrade silently either.
+func (a *Agent) persistApprovedAnnotations(ctx context.Context, key string, approved []store.ApprovedAnnotationKey) {
+	if a.annotationWhitelistStore == nil {
+		return
+	}
+	var err error
+	if len(approved) == 0 {
+		err = a.annotationWhitelistStore.DeleteAnnotationWhitelist(ctx, key)
+	} else {
+		err = a.annotationWhitelistStore.SaveAnnotationWhitelist(ctx, key, approvedAnnotationKeysToLocal(approved))
+	}
+	if err != nil {
+		a.logger.Warn("persist approved annotation whitelist failed; a restart would drop annotation observation until the next release write",
+			"release_key", key,
+			"error", err,
+		)
+	}
+}
+
+// hydrateApprovedAnnotations binds the optional persistence seam and loads any
+// whitelists persisted by a previous process (TASK-244). A store without the
+// interface leaves the cache in-memory only; a load failure logs and leaves the
+// cache empty (fail closed). Neither is fatal.
+func (a *Agent) hydrateApprovedAnnotations(backing localstore.Store) {
+	whitelistStore, ok := backing.(localstore.AnnotationWhitelistStore)
+	if !ok {
+		return
+	}
+	a.annotationWhitelistStore = whitelistStore
+
+	persisted, err := whitelistStore.LoadAnnotationWhitelists(context.Background())
+	if err != nil {
+		a.logger.Warn("load persisted annotation whitelists failed; observation stays fail-closed until the next release write",
+			"error", err,
+		)
+		return
+	}
+	if len(persisted) == 0 {
+		return
+	}
+	hydrated := make(map[string][]store.ApprovedAnnotationKey, len(persisted))
+	for key, keys := range persisted {
+		hydrated[key] = approvedAnnotationKeysFromLocal(keys)
+	}
+	a.approvedAnnotationsMu.Lock()
+	a.approvedAnnotations = hydrated
+	a.approvedAnnotationsMu.Unlock()
+}
+
+// approvedAnnotationKeysToLocal converts the agent's whitelist entries into the
+// localstore persistence shape. It returns nil for an empty input so "no
+// approved keys" has one representation across the seam.
+func approvedAnnotationKeysToLocal(keys []store.ApprovedAnnotationKey) []localstore.ApprovedAnnotationKey {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([]localstore.ApprovedAnnotationKey, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, localstore.ApprovedAnnotationKey{
+			Key: key.Key, Scope: key.Scope, PromotionValuesPath: key.PromotionValuesPath,
+		})
+	}
+	return out
+}
+
+// approvedAnnotationKeysFromLocal converts a persisted whitelist back into the
+// agent's in-memory shape.
+func approvedAnnotationKeysFromLocal(keys []localstore.ApprovedAnnotationKey) []store.ApprovedAnnotationKey {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make([]store.ApprovedAnnotationKey, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, store.ApprovedAnnotationKey{
+			Key: key.Key, Scope: key.Scope, PromotionValuesPath: key.PromotionValuesPath,
+		})
+	}
+	return out
 }
 
 // approvedAnnotationsFor returns the cached whitelist for one release, or nil

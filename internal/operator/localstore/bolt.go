@@ -15,11 +15,12 @@ import (
 
 // bucket names
 var (
-	commandsBucket = []byte("commands")
-	byOutboxBucket = []byte("by_outbox")
-	identityBucket = []byte("identity")
-	sequenceKey    = []byte("__last_sequence__")
-	identityKey    = []byte("__identity__")
+	commandsBucket             = []byte("commands")
+	byOutboxBucket             = []byte("by_outbox")
+	identityBucket             = []byte("identity")
+	annotationWhitelistsBucket = []byte("annotation_whitelists")
+	sequenceKey                = []byte("__last_sequence__")
+	identityKey                = []byte("__identity__")
 )
 
 // boltLockTimeout bounds how long OpenBolt waits for the store's file lock.
@@ -38,9 +39,10 @@ var boltLockTimeout = 5 * time.Second
 // ErrStoreLocked reports that another process holds the store's file lock.
 var ErrStoreLocked = errors.New("localstore: store is locked by another process")
 
-// OpenBolt opens (or creates) a BoltDB-backed command + identity store at the
-// given path. The returned store implements both Store (commands) and
-// IdentityStore (bootstrap identity).
+// OpenBolt opens (or creates) a BoltDB-backed command + identity + annotation
+// whitelist store at the given path. The returned store implements Store
+// (commands), IdentityStore (bootstrap identity) and AnnotationWhitelistStore
+// (the TASK-244 approved-annotation cache).
 func OpenBolt(path string) (*BoltStore, error) {
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: boltLockTimeout})
 	if err != nil {
@@ -62,6 +64,9 @@ func OpenBolt(path string) (*BoltStore, error) {
 		if _, err := tx.CreateBucketIfNotExists(identityBucket); err != nil {
 			return fmt.Errorf("create identity bucket: %w", err)
 		}
+		if _, err := tx.CreateBucketIfNotExists(annotationWhitelistsBucket); err != nil {
+			return fmt.Errorf("create annotation_whitelists bucket: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
@@ -72,8 +77,9 @@ func OpenBolt(path string) (*BoltStore, error) {
 	return &BoltStore{db: db}, nil
 }
 
-// BoltStore implements Store and IdentityStore backed by a single BoltDB file
-// (commands and identity share one database with separate buckets).
+// BoltStore implements Store, IdentityStore and AnnotationWhitelistStore
+// backed by a single BoltDB file (commands, identity and annotation
+// whitelists share one database with separate buckets).
 type BoltStore struct {
 	db *bolt.DB
 }
@@ -114,6 +120,61 @@ func (s *BoltStore) LoadIdentity(_ context.Context) (*Identity, error) {
 		return nil, fmt.Errorf("unmarshal identity: %w", err)
 	}
 	return &identity, nil
+}
+
+// SaveAnnotationWhitelist overwrites the persisted whitelist for one release
+// key. An empty key is rejected: it would be unreachable from the release
+// identity the observation path uses.
+func (s *BoltStore) SaveAnnotationWhitelist(_ context.Context, releaseKey string, keys []ApprovedAnnotationKey) error {
+	if releaseKey == "" {
+		return fmt.Errorf("annotation whitelist release key is required")
+	}
+	encoded, err := json.Marshal(keys)
+	if err != nil {
+		return fmt.Errorf("marshal annotation whitelist: %w", err)
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.Bucket(annotationWhitelistsBucket).Put([]byte(releaseKey), encoded); err != nil {
+			return fmt.Errorf("put annotation whitelist: %w", err)
+		}
+		return nil
+	})
+}
+
+// DeleteAnnotationWhitelist removes the persisted whitelist for one release
+// key. Deleting an absent key is a no-op, so a release write that clears the
+// whitelist is idempotent.
+func (s *BoltStore) DeleteAnnotationWhitelist(_ context.Context, releaseKey string) error {
+	if releaseKey == "" {
+		return fmt.Errorf("annotation whitelist release key is required")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.Bucket(annotationWhitelistsBucket).Delete([]byte(releaseKey)); err != nil {
+			return fmt.Errorf("delete annotation whitelist: %w", err)
+		}
+		return nil
+	})
+}
+
+// LoadAnnotationWhitelists returns every persisted whitelist keyed by release
+// key, for hydrating the agent's in-memory cache at startup.
+func (s *BoltStore) LoadAnnotationWhitelists(_ context.Context) (map[string][]ApprovedAnnotationKey, error) {
+	out := map[string][]ApprovedAnnotationKey{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(annotationWhitelistsBucket).Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var keys []ApprovedAnnotationKey
+			if err := json.Unmarshal(v, &keys); err != nil {
+				return fmt.Errorf("unmarshal annotation whitelist %s: %w", string(k), err)
+			}
+			out[string(k)] = keys
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("load annotation whitelists: %w", err)
+	}
+	return out, nil
 }
 
 // Save persists a command entry with fsync.

@@ -84,3 +84,33 @@ type IdentityStore interface {
 	// agent has never bootstrapped.
 	LoadIdentity(ctx context.Context) (*Identity, error)
 }
+
+// ApprovedAnnotationKey is one entry of a release's center-approved annotation
+// whitelist as persisted locally. It mirrors the centre's downlink shape
+// (Command.approved_annotation_keys) but is declared here so this package stays
+// independent of internal/store; the agent converts between the two.
+type ApprovedAnnotationKey struct {
+	Key                 string `json:"key"`
+	Scope               string `json:"scope"`
+	PromotionValuesPath string `json:"promotion_values_path,omitempty"`
+}
+
+// AnnotationWhitelistStore persists the center-approved annotation whitelist
+// per release key (namespace/release_name) so a restarted operator can keep
+// reporting annotation observations without waiting for a new release-write
+// command (TASK-244). It is a separate interface beside Store and
+// IdentityStore: callers that only need commands or identity are unaffected,
+// and a Store implementation without it degrades to an in-memory-only cache.
+type AnnotationWhitelistStore interface {
+	// SaveAnnotationWhitelist overwrites the whitelist for one release key
+	// (fsync before returning). An empty slice persists "no approved keys".
+	SaveAnnotationWhitelist(ctx context.Context, releaseKey string, keys []ApprovedAnnotationKey) error
+
+	// DeleteAnnotationWhitelist removes the persisted whitelist for one release
+	// key. Deleting an absent key is not an error.
+	DeleteAnnotationWhitelist(ctx context.Context, releaseKey string) error
+
+	// LoadAnnotationWhitelists returns every persisted whitelist keyed by
+	// release key. It returns an empty (non-nil) map when nothing is persisted.
+	LoadAnnotationWhitelists(ctx context.Context) (map[string][]ApprovedAnnotationKey, error)
+}

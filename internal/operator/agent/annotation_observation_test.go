@@ -76,11 +76,11 @@ func annotationAgentWithEngine(t *testing.T, engine helmengine.Engine) *Agent {
 }
 
 // annotationReleaseNamed returns annotationRelease() under a different release
-// identity, keeping the same live workload (namespace apps, deployment api) so
-// only the cache key varies between releases.
-func annotationReleaseNamed(namespace, name string) *helmengine.Release {
+// name, keeping the same live workload (namespace apps, deployment api) so only
+// the cache key varies between releases.
+func annotationReleaseNamed(name string) *helmengine.Release {
 	release := annotationRelease()
-	release.Namespace = namespace
+	release.Namespace = "apps"
 	release.Name = name
 	return release
 }
@@ -321,13 +321,13 @@ func TestAgent_AnnotationObservationIsolatesWhitelistPerRelease(t *testing.T) {
 	beta.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "tier", Scope: "WORKLOAD_METADATA"}}
 	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), beta))
 
-	alphaItems := agent.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("apps", "alpha"))
+	alphaItems := agent.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("alpha"))
 	require.Len(t, alphaItems, 1)
 	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}},
 		flattenScopedAnnotations(alphaItems[0].GetCurrentAnnotations()),
 		"release alpha must observe through its own whitelist")
 
-	betaItems := agent.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("apps", "beta"))
+	betaItems := agent.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("beta"))
 	require.Len(t, betaItems, 1)
 	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"tier": "web"}},
 		flattenScopedAnnotations(betaItems[0].GetCurrentAnnotations()),
