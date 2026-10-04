@@ -76,6 +76,23 @@ function deferred<T>() {
 }
 
 describe('emergencyChange store', () => {
+  // TASK-242: the store used to carry a write-only `selectedOpType` state pinned
+  // to SET_CONTAINER_IMAGE. Nothing read it — no component referenced it, and the
+  // submit path never sends an operation type (the request carries container /
+  // artifactRef and the server derives the operation), while this card's original
+  // premise had assumed it could let an unsupported operation through. It was a
+  // misleading hardcode, so it was removed.
+  //
+  // Scope of this guard (review finding): it protects the store's PUBLIC SURFACE
+  // only. A future internal `selectedOpType` that is never exposed would not trip
+  // it, so it is a reintroduction tripwire, not a proof that no hardcoded
+  // operation type exists anywhere in the module.
+  it('does not expose the removed write-only operation-type state (TASK-242)', () => {
+    setActivePinia(createPinia());
+    const store = useEmergencyChangeStore();
+    expect('selectedOpType' in store).toBe(false);
+  });
+
   it('blocks the page when CheckEmergencyConflict reports a running standard operation (AC-058-08)', async () => {
     setActivePinia(createPinia());
     const store = useEmergencyChangeStore();
