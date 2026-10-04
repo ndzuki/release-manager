@@ -227,8 +227,10 @@ func New(cfg Config) (*Agent, error) {
 	}
 	// TASK-244: hydrate the approved-annotation cache from the durable store so
 	// a restarted operator keeps reporting annotations without waiting for the
-	// next release write. Best-effort: a load failure degrades to "whitelist
-	// unknown" (fail closed) and must never stop the operator from starting.
+	// next release write. A load FAILURE degrades to "whitelist unknown"
+	// (fail closed) and does not stop the operator from starting; note the load
+	// itself is synchronous and has no timeout, so a slow store delays startup
+	// rather than being skipped.
 	agent.hydrateApprovedAnnotations(cfg.Store)
 	return agent, nil
 }

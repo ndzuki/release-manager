@@ -210,6 +210,7 @@ KUBECONFIG=data/kubeconfigs/dev-customer-a-direct.yaml kubectl -n release-manage
 - **失效规则与内存语义一致**（`internal/operator/agent/agent.go:841`）：release write 带白名单 ⇒ 覆盖；release write 不带白名单（中心删光了 approved keys）⇒ 删除；非 release 命令（`INVENTORY_SYNC`、secret metadata）⇒ 不动。
 - **仍需一次 release write 才恢复的情形**：① 落盘失败（agent 日志含 `persist approved annotation whitelist failed`）；② 水合失败（日志含 `load persisted annotation whitelists failed`，此后 fail-closed、不报任何注解）；③ 本地库丢失（Pod 换盘、`data` 卷没保留）。三者都不影响命令执行，只影响注解观测。
 - **不支持该接口的 Store 实现**：优雅降级为纯内存（等价 TASK-244 之前的行为），不 panic、不报错。
+- **陈旧白名单的边界（复核提示，非缺陷）**：删除只发生在**后续同 release 的 release write** 上（`UNINSTALL` 不属于 release write，且没有 GC/卸载清理）。因此若中心把一个 key 从 definition 移除却**不再**为这个 release 下发任何命令，operator 会继续用盘上的旧白名单上报，而中心侧的 ingest **不按当前 definition 二次过滤**。进程内本就存在这个陈旧窗口（TASK-241 有意不 flap），持久化只是把寿命延长到跨重启；任何后续 operation 的 preflight stage 都会带上最新白名单把它刷新。收敛方案见 TASK-247（版本/GC）。
 
 ## 3bis. 制品准入（漏洞）从 shadow 切到 enforce
 
