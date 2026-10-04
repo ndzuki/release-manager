@@ -5,7 +5,8 @@
 -- persists them here as a scope -> key -> value JSON object.
 --
 -- Additive and defaulted, so existing rows and inventory syncs stay compatible:
--- an empty object (and a NULL, defensively) means "not observed" or "whitelist
--- unknown" and must be read as absent (fail closed). Migration
+-- the column cannot hold NULL after this migration; an empty object means "not
+-- observed" or "whitelist unknown" and must be read as absent (fail closed), and
+-- the reader still treats unparsable or missing payloads the same way. Migration
 -- 000030_observed_workload is the precedent for the same additive-boundary shape.
 ALTER TABLE release_inventory ADD COLUMN IF NOT EXISTS observed_annotations JSONB NOT NULL DEFAULT '{}'::jsonb;
