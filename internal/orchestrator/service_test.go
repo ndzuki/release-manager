@@ -2400,6 +2400,117 @@ func TestCreateOperation_CoordinatorUnavailablePersistsDispatch(t *testing.T) {
 	require.NoError(t, err, "preflight dispatch must be durably persisted")
 }
 
+// definitionsOnlyStore forwards every store call to the embedded store except
+// Definitions(), which a test supplies. Test-only: it lets the coordinator share
+// the real store for every dependency while one lookup is scripted.
+type definitionsOnlyStore struct {
+	store.Store
+	defs store.DefinitionStore
+}
+
+func (s *definitionsOnlyStore) Definitions() store.DefinitionStore { return s.defs }
+
+// failAfterDefinitionStore delegates definition reads but fails every Get after
+// the configured ordinal, so a test can force the coordinator's definition
+// lookup to fail after CreateOperation already resolved the definition.
+type failAfterDefinitionStore struct {
+	store.DefinitionStore
+	failAfter int
+	calls     int
+}
+
+func (s *failAfterDefinitionStore) Get(ctx context.Context, id string) (*store.ReleaseDefinition, error) {
+	s.calls++
+	if s.calls > s.failAfter {
+		return nil, store.ErrNotFound
+	}
+	return s.DefinitionStore.Get(ctx, id)
+}
+
+// deferredDispatchService mirrors setupService but wraps the store so the
+// coordinator's definition lookup fails after the first read. That is the only
+// way to reach CreateOperation's deferred-payload branch (service.go): the
+// no-operator case returns a usable entry from Dispatch instead.
+func deferredDispatchService(t *testing.T) (*Service, store.Store, func()) {
+	t.Helper()
+	dbPath := t.TempDir() + "/test.db"
+	st, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	verifier := trust.NewStubVerifier(st.Verifications(), nil, logger)
+	wrapped := &definitionsOnlyStore{
+		Store: st,
+		defs:  &failAfterDefinitionStore{DefinitionStore: st.Definitions(), failAfter: 1},
+	}
+	svc := NewService(wrapped, verifier, "staging", nil, st.OperationCreationUnitOfWork(), authorization.NewStoreAuthorizer(st), logger)
+	for _, id := range []string{"bundle-001", "bundle-002", "bundle-upgrade"} {
+		seedTestBundle(t, st, id)
+	}
+
+	return svc, st, func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, svc.Shutdown(shutdownCtx))
+		require.NoError(t, st.Close())
+	}
+}
+
+// TASK-245 (c): the deferred :artifact payload (service.go) is a real carrier of
+// the definition's annotation whitelist, so the operator can filter observations
+// even for a dispatch the coordinator could not build.
+func TestCreateOperation_DeferredArtifactPayloadCarriesAnnotationWhitelist(t *testing.T) {
+	svc, st, cleanup := deferredDispatchService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	def, err := st.Definitions().Get(context.Background(), "def-001")
+	require.NoError(t, err)
+	def.ApprovedAnnotationKeys = []store.ApprovedAnnotationKey{
+		{Key: "team", Scope: "WORKLOAD_METADATA"},
+		{Key: "prometheus.io/scrape", Scope: "POD_TEMPLATE_METADATA"},
+	}
+	def, err = st.Definitions().Update(context.Background(), def, nil)
+	require.NoError(t, err)
+
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-annotation-whitelist"))
+	require.NoError(t, err)
+
+	entry, err := st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
+	require.NoError(t, err, "the deferred artifact dispatch must be durably persisted")
+
+	var payload preflight.CommandPayload
+	require.NoError(t, json.Unmarshal(entry.Payload, &payload))
+	assert.Equal(t, def.ApprovedAnnotationKeys, payload.ApprovedAnnotationKeys,
+		"the deferred artifact payload must carry the definition's annotation whitelist")
+}
+
+// TASK-245 (c): an empty whitelist stays absent from the deferred payload
+// (omitempty), which the operator reads as "whitelist unknown" and fails closed.
+func TestCreateOperation_DeferredArtifactPayloadOmitsEmptyAnnotationWhitelist(t *testing.T) {
+	svc, st, cleanup := deferredDispatchService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-annotation-empty"))
+	require.NoError(t, err)
+
+	entry, err := st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
+	require.NoError(t, err, "the deferred artifact dispatch must be durably persisted")
+	assert.NotContains(t, string(entry.Payload), "approved_annotation_keys",
+		"an empty whitelist must stay absent from the deferred payload (omitempty)")
+}
+
 // ── AC-077-04/13: effect_status projection matrix ──
 
 // emergencyProjectionOp creates an EMERGENCY operation with an intent in the
