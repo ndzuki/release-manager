@@ -223,7 +223,11 @@ func TestStaleCauseMetricStaysBounded(t *testing.T) {
 // cause in a WARN record, so CI artifacts (and the runbook's reading recipe) can tell the
 // causes apart. A healthy warm-up must stay below Error level.
 func TestStaleCauseIsLoggedAtWarn(t *testing.T) {
-	handler := &snapshotHandler{err: connect.NewError(connect.CodeUnavailable, errors.New("auth load shed"))}
+	// TASK-243: the marker stands for credential text a raw pull error can carry.
+	// It must reach neither the log nor the returned error, while the bounded
+	// fields keep the failure diagnosable.
+	const sensitive = "bearer secret-token-abc123"
+	handler := &snapshotHandler{err: connect.NewError(connect.CodeUnavailable, errors.New(sensitive))}
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	module := newModuleWithLogger(t, handler, logger)
@@ -237,8 +241,12 @@ func TestStaleCauseIsLoggedAtWarn(t *testing.T) {
 	assert.Contains(t, logged, `"stale_cause":"snapshot-rpc-error"`)
 	assert.Contains(t, logged, `"reason":"AUTHORIZATION_SNAPSHOT_STALE"`)
 	assert.NotContains(t, logged, `"level":"ERROR"`, "a rejection is not an application error")
+	// TASK-243: the raw pull text stays out of the log; the bounded cause carries
+	// the diagnosis instead.
+	assert.NotContains(t, logged, sensitive)
+	assert.NotContains(t, logged, `"error":`)
 	// The raw pull error must still not leak through the returned error.
-	assert.NotContains(t, err.Error(), "auth load shed")
+	assert.NotContains(t, err.Error(), sensitive)
 }
 
 // TestWarmupStaleCauseIsWarnNotError pins the healthy-path level: the first pull of a
