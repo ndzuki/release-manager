@@ -1,0 +1,12 @@
+-- TASK-241 (REQ-058 C1/R1): approved annotation projection on release_inventory,
+-- grouped by scope (U2=B). The operator filters the live workload metadata and
+-- pod-template annotations against the center-approved whitelist inside the
+-- cluster (U1=A) and reports only the approved entries; the orchestrator
+-- persists them here as a scope -> key -> value JSON object.
+--
+-- Additive and defaulted, so existing rows and inventory syncs stay compatible:
+-- the column cannot hold NULL after this migration; an empty object means "not
+-- observed" or "whitelist unknown" and must be read as absent (fail closed), and
+-- the reader still treats unparsable or missing payloads the same way. Migration
+-- 000030_observed_workload is the precedent for the same additive-boundary shape.
+ALTER TABLE release_inventory ADD COLUMN IF NOT EXISTS observed_annotations JSONB NOT NULL DEFAULT '{}'::jsonb;

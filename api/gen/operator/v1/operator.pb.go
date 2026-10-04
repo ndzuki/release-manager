@@ -549,9 +549,13 @@ type WorkloadIdentityItem struct {
 	// "not observed" (absent) apart from a real zero (e.g. a scaled-to-zero
 	// Deployment); DaemonSets have no replica count and leave it absent.
 	CurrentReplicas *int32 `protobuf:"varint,9,opt,name=current_replicas,json=currentReplicas,proto3,oneof" json:"current_replicas,omitempty"`
-	// Field 10 is intentionally unused: it is reserved for
-	// current_annotations, whose data plane is deferred (annotation values may
-	// carry sensitive data and need a whitelist decision first — TASK-168).
+	// Annotations observed on the workload, grouped by scope (TASK-241 U2=B): the
+	// same key may appear under two scopes, so keys are not globally unique and the
+	// existing definition contract is unchanged. Only keys the center approved for
+	// this release may appear here (TASK-241 U1=A); an empty list means either "not
+	// observed" or "whitelist unknown", and a consumer must treat both as absent
+	// rather than as "no annotations configured".
+	CurrentAnnotations []*ScopedAnnotations `protobuf:"bytes,10,rep,name=current_annotations,json=currentAnnotations,proto3" json:"current_annotations,omitempty"`
 	// Time the operator took this observation, used for staleness decisions.
 	// Absent means "not observed".
 	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
@@ -652,11 +656,188 @@ func (x *WorkloadIdentityItem) GetCurrentReplicas() int32 {
 	return 0
 }
 
+func (x *WorkloadIdentityItem) GetCurrentAnnotations() []*ScopedAnnotations {
+	if x != nil {
+		return x.CurrentAnnotations
+	}
+	return nil
+}
+
 func (x *WorkloadIdentityItem) GetObservedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ObservedAt
 	}
 	return nil
+}
+
+// AnnotationEntry is one approved annotation key/value pair.
+type AnnotationEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnnotationEntry) Reset() {
+	*x = AnnotationEntry{}
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnnotationEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnnotationEntry) ProtoMessage() {}
+
+func (x *AnnotationEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnnotationEntry.ProtoReflect.Descriptor instead.
+func (*AnnotationEntry) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AnnotationEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *AnnotationEntry) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+// ScopedAnnotations carries the approved annotation entries observed for one scope.
+type ScopedAnnotations struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Scope         string                 `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	Entries       []*AnnotationEntry     `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScopedAnnotations) Reset() {
+	*x = ScopedAnnotations{}
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScopedAnnotations) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScopedAnnotations) ProtoMessage() {}
+
+func (x *ScopedAnnotations) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScopedAnnotations.ProtoReflect.Descriptor instead.
+func (*ScopedAnnotations) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ScopedAnnotations) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ScopedAnnotations) GetEntries() []*AnnotationEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+// ApprovedAnnotationKey mirrors one center-side whitelist entry
+// (store.ApprovedAnnotationKeys). It travels down with a command so the operator can
+// filter annotations inside the cluster: unapproved values never reach the wire
+// (TASK-241 U1=A, ADR-001 keeps the center from dialing the operator).
+type ApprovedAnnotationKey struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Key                 string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Scope               string                 `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"`
+	PromotionValuesPath string                 `protobuf:"bytes,3,opt,name=promotion_values_path,json=promotionValuesPath,proto3" json:"promotion_values_path,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ApprovedAnnotationKey) Reset() {
+	*x = ApprovedAnnotationKey{}
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApprovedAnnotationKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApprovedAnnotationKey) ProtoMessage() {}
+
+func (x *ApprovedAnnotationKey) ProtoReflect() protoreflect.Message {
+	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApprovedAnnotationKey.ProtoReflect.Descriptor instead.
+func (*ApprovedAnnotationKey) Descriptor() ([]byte, []int) {
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ApprovedAnnotationKey) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *ApprovedAnnotationKey) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
+func (x *ApprovedAnnotationKey) GetPromotionValuesPath() string {
+	if x != nil {
+		return x.PromotionValuesPath
+	}
+	return ""
 }
 
 // RolloutProgress reports observed workload readiness during a standard operation.
@@ -672,7 +853,7 @@ type RolloutProgress struct {
 
 func (x *RolloutProgress) Reset() {
 	*x = RolloutProgress{}
-	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -684,7 +865,7 @@ func (x *RolloutProgress) String() string {
 func (*RolloutProgress) ProtoMessage() {}
 
 func (x *RolloutProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[5]
+	mi := &file_operator_v1_operator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -697,7 +878,7 @@ func (x *RolloutProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RolloutProgress.ProtoReflect.Descriptor instead.
 func (*RolloutProgress) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{5}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RolloutProgress) GetOperationId() string {
@@ -743,7 +924,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -755,7 +936,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[6]
+	mi := &file_operator_v1_operator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -768,7 +949,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{6}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Hello) GetSessionId() string {
@@ -826,7 +1007,7 @@ type SessionEstablished struct {
 
 func (x *SessionEstablished) Reset() {
 	*x = SessionEstablished{}
-	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -838,7 +1019,7 @@ func (x *SessionEstablished) String() string {
 func (*SessionEstablished) ProtoMessage() {}
 
 func (x *SessionEstablished) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[7]
+	mi := &file_operator_v1_operator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -851,7 +1032,7 @@ func (x *SessionEstablished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEstablished.ProtoReflect.Descriptor instead.
 func (*SessionEstablished) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{7}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SessionEstablished) GetSessionId() string {
@@ -895,7 +1076,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -907,7 +1088,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[8]
+	mi := &file_operator_v1_operator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -920,7 +1101,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{8}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Ack) GetOutboxId() string {
@@ -961,7 +1142,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -973,7 +1154,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[9]
+	mi := &file_operator_v1_operator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1167,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{9}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Heartbeat) GetSessionId() string {
@@ -1012,7 +1193,7 @@ type Result struct {
 
 func (x *Result) Reset() {
 	*x = Result{}
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1024,7 +1205,7 @@ func (x *Result) String() string {
 func (*Result) ProtoMessage() {}
 
 func (x *Result) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[10]
+	mi := &file_operator_v1_operator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1037,7 +1218,7 @@ func (x *Result) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Result.ProtoReflect.Descriptor instead.
 func (*Result) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{10}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Result) GetOutboxId() string {
@@ -1099,7 +1280,7 @@ type EmergencyAck struct {
 
 func (x *EmergencyAck) Reset() {
 	*x = EmergencyAck{}
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1111,7 +1292,7 @@ func (x *EmergencyAck) String() string {
 func (*EmergencyAck) ProtoMessage() {}
 
 func (x *EmergencyAck) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[11]
+	mi := &file_operator_v1_operator_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1124,7 +1305,7 @@ func (x *EmergencyAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyAck.ProtoReflect.Descriptor instead.
 func (*EmergencyAck) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{11}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *EmergencyAck) GetEmergencyCommandId() string {
@@ -1155,7 +1336,7 @@ type EmergencyResult struct {
 
 func (x *EmergencyResult) Reset() {
 	*x = EmergencyResult{}
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1167,7 +1348,7 @@ func (x *EmergencyResult) String() string {
 func (*EmergencyResult) ProtoMessage() {}
 
 func (x *EmergencyResult) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[12]
+	mi := &file_operator_v1_operator_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1180,7 +1361,7 @@ func (x *EmergencyResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyResult.ProtoReflect.Descriptor instead.
 func (*EmergencyResult) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{12}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *EmergencyResult) GetEmergencyCommandId() string {
@@ -1249,7 +1430,7 @@ type CommandStreamResponse struct {
 
 func (x *CommandStreamResponse) Reset() {
 	*x = CommandStreamResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1261,7 +1442,7 @@ func (x *CommandStreamResponse) String() string {
 func (*CommandStreamResponse) ProtoMessage() {}
 
 func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[13]
+	mi := &file_operator_v1_operator_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1274,7 +1455,7 @@ func (x *CommandStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandStreamResponse.ProtoReflect.Descriptor instead.
 func (*CommandStreamResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{13}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CommandStreamResponse) GetPayload() isCommandStreamResponse_Payload {
@@ -1399,6 +1580,10 @@ type Command struct {
 	ValuesPatch             []byte                 `protobuf:"bytes,16,opt,name=values_patch,json=valuesPatch,proto3" json:"values_patch,omitempty"`           // JSON merge patch
 	TargetRevision          int64                  `protobuf:"varint,17,opt,name=target_revision,json=targetRevision,proto3" json:"target_revision,omitempty"` // target revision for ROLLBACK
 	PayloadVersion          uint32                 `protobuf:"varint,18,opt,name=payload_version,json=payloadVersion,proto3" json:"payload_version,omitempty"`
+	// Annotation keys this release is allowed to observe and report, with their scope.
+	// The agent caches them per release; absence means the whitelist is unknown, in
+	// which case the agent reports no annotations at all (fail-closed, TASK-241 U1=A).
+	ApprovedAnnotationKeys []*ApprovedAnnotationKey `protobuf:"bytes,19,rep,name=approved_annotation_keys,json=approvedAnnotationKeys,proto3" json:"approved_annotation_keys,omitempty"`
 	// Preflight stage this command executes (REQ-019 artifact/render/cluster/runtime_pull).
 	// Empty for a normal execution command. When set, the agent runs that stage's
 	// validation and reports its result instead of installing or upgrading: a stage
@@ -1423,7 +1608,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1435,7 +1620,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[14]
+	mi := &file_operator_v1_operator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1448,7 +1633,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{14}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Command) GetOutboxId() string {
@@ -1577,6 +1762,13 @@ func (x *Command) GetPayloadVersion() uint32 {
 	return 0
 }
 
+func (x *Command) GetApprovedAnnotationKeys() []*ApprovedAnnotationKey {
+	if x != nil {
+		return x.ApprovedAnnotationKeys
+	}
+	return nil
+}
+
 func (x *Command) GetStage() string {
 	if x != nil {
 		return x.Stage
@@ -1635,7 +1827,7 @@ type EmergencyCommand struct {
 
 func (x *EmergencyCommand) Reset() {
 	*x = EmergencyCommand{}
-	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	mi := &file_operator_v1_operator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1647,7 +1839,7 @@ func (x *EmergencyCommand) String() string {
 func (*EmergencyCommand) ProtoMessage() {}
 
 func (x *EmergencyCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[15]
+	mi := &file_operator_v1_operator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1660,7 +1852,7 @@ func (x *EmergencyCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyCommand.ProtoReflect.Descriptor instead.
 func (*EmergencyCommand) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{15}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *EmergencyCommand) GetCommandId() string {
@@ -1778,7 +1970,7 @@ type EmergencySetContainerImage struct {
 
 func (x *EmergencySetContainerImage) Reset() {
 	*x = EmergencySetContainerImage{}
-	mi := &file_operator_v1_operator_proto_msgTypes[16]
+	mi := &file_operator_v1_operator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1790,7 +1982,7 @@ func (x *EmergencySetContainerImage) String() string {
 func (*EmergencySetContainerImage) ProtoMessage() {}
 
 func (x *EmergencySetContainerImage) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[16]
+	mi := &file_operator_v1_operator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1803,7 +1995,7 @@ func (x *EmergencySetContainerImage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencySetContainerImage.ProtoReflect.Descriptor instead.
 func (*EmergencySetContainerImage) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{16}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *EmergencySetContainerImage) GetContainer() string {
@@ -1829,7 +2021,7 @@ type EmergencySetReplicas struct {
 
 func (x *EmergencySetReplicas) Reset() {
 	*x = EmergencySetReplicas{}
-	mi := &file_operator_v1_operator_proto_msgTypes[17]
+	mi := &file_operator_v1_operator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1841,7 +2033,7 @@ func (x *EmergencySetReplicas) String() string {
 func (*EmergencySetReplicas) ProtoMessage() {}
 
 func (x *EmergencySetReplicas) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[17]
+	mi := &file_operator_v1_operator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1854,7 +2046,7 @@ func (x *EmergencySetReplicas) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencySetReplicas.ProtoReflect.Descriptor instead.
 func (*EmergencySetReplicas) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{17}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *EmergencySetReplicas) GetReplicas() int32 {
@@ -1874,7 +2066,7 @@ type EmergencySetApprovedAnnotations struct {
 
 func (x *EmergencySetApprovedAnnotations) Reset() {
 	*x = EmergencySetApprovedAnnotations{}
-	mi := &file_operator_v1_operator_proto_msgTypes[18]
+	mi := &file_operator_v1_operator_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1886,7 +2078,7 @@ func (x *EmergencySetApprovedAnnotations) String() string {
 func (*EmergencySetApprovedAnnotations) ProtoMessage() {}
 
 func (x *EmergencySetApprovedAnnotations) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[18]
+	mi := &file_operator_v1_operator_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1899,7 +2091,7 @@ func (x *EmergencySetApprovedAnnotations) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencySetApprovedAnnotations.ProtoReflect.Descriptor instead.
 func (*EmergencySetApprovedAnnotations) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{18}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *EmergencySetApprovedAnnotations) GetEntries() []*EmergencyAnnotationEntry {
@@ -1926,7 +2118,7 @@ type EmergencyAnnotationEntry struct {
 
 func (x *EmergencyAnnotationEntry) Reset() {
 	*x = EmergencyAnnotationEntry{}
-	mi := &file_operator_v1_operator_proto_msgTypes[19]
+	mi := &file_operator_v1_operator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1938,7 +2130,7 @@ func (x *EmergencyAnnotationEntry) String() string {
 func (*EmergencyAnnotationEntry) ProtoMessage() {}
 
 func (x *EmergencyAnnotationEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[19]
+	mi := &file_operator_v1_operator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1951,7 +2143,7 @@ func (x *EmergencyAnnotationEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmergencyAnnotationEntry.ProtoReflect.Descriptor instead.
 func (*EmergencyAnnotationEntry) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{19}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *EmergencyAnnotationEntry) GetKey() string {
@@ -1979,7 +2171,7 @@ type ResyncRequest struct {
 
 func (x *ResyncRequest) Reset() {
 	*x = ResyncRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[20]
+	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1991,7 +2183,7 @@ func (x *ResyncRequest) String() string {
 func (*ResyncRequest) ProtoMessage() {}
 
 func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[20]
+	mi := &file_operator_v1_operator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2004,7 +2196,7 @@ func (x *ResyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncRequest.ProtoReflect.Descriptor instead.
 func (*ResyncRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{20}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ResyncRequest) GetOrchestratorLastSequence() int64 {
@@ -2031,7 +2223,7 @@ type ResyncResponse struct {
 
 func (x *ResyncResponse) Reset() {
 	*x = ResyncResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[21]
+	mi := &file_operator_v1_operator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2043,7 +2235,7 @@ func (x *ResyncResponse) String() string {
 func (*ResyncResponse) ProtoMessage() {}
 
 func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[21]
+	mi := &file_operator_v1_operator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2056,7 +2248,7 @@ func (x *ResyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResyncResponse.ProtoReflect.Descriptor instead.
 func (*ResyncResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{21}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ResyncResponse) GetOperatorLastSequence() int64 {
@@ -2077,7 +2269,7 @@ type DuplicateResponse struct {
 
 func (x *DuplicateResponse) Reset() {
 	*x = DuplicateResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[22]
+	mi := &file_operator_v1_operator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2089,7 +2281,7 @@ func (x *DuplicateResponse) String() string {
 func (*DuplicateResponse) ProtoMessage() {}
 
 func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[22]
+	mi := &file_operator_v1_operator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2102,7 +2294,7 @@ func (x *DuplicateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DuplicateResponse.ProtoReflect.Descriptor instead.
 func (*DuplicateResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{22}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DuplicateResponse) GetCommandId() string {
@@ -2130,7 +2322,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_operator_v1_operator_proto_msgTypes[23]
+	mi := &file_operator_v1_operator_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2142,7 +2334,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[23]
+	mi := &file_operator_v1_operator_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2155,7 +2347,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{23}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SessionEvent) GetType() string {
@@ -2186,7 +2378,7 @@ type RenewCertificateRequest struct {
 
 func (x *RenewCertificateRequest) Reset() {
 	*x = RenewCertificateRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[24]
+	mi := &file_operator_v1_operator_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2198,7 +2390,7 @@ func (x *RenewCertificateRequest) String() string {
 func (*RenewCertificateRequest) ProtoMessage() {}
 
 func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[24]
+	mi := &file_operator_v1_operator_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2211,7 +2403,7 @@ func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewCertificateRequest.ProtoReflect.Descriptor instead.
 func (*RenewCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{24}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RenewCertificateRequest) GetOperatorId() string {
@@ -2241,7 +2433,7 @@ type RenewCertificateResponse struct {
 
 func (x *RenewCertificateResponse) Reset() {
 	*x = RenewCertificateResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[25]
+	mi := &file_operator_v1_operator_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2253,7 +2445,7 @@ func (x *RenewCertificateResponse) String() string {
 func (*RenewCertificateResponse) ProtoMessage() {}
 
 func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[25]
+	mi := &file_operator_v1_operator_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2266,7 +2458,7 @@ func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewCertificateResponse.ProtoReflect.Descriptor instead.
 func (*RenewCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{25}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RenewCertificateResponse) GetCertificatePem() []byte {
@@ -2294,7 +2486,7 @@ type GetActiveOperatorSessionRequest struct {
 
 func (x *GetActiveOperatorSessionRequest) Reset() {
 	*x = GetActiveOperatorSessionRequest{}
-	mi := &file_operator_v1_operator_proto_msgTypes[26]
+	mi := &file_operator_v1_operator_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2306,7 +2498,7 @@ func (x *GetActiveOperatorSessionRequest) String() string {
 func (*GetActiveOperatorSessionRequest) ProtoMessage() {}
 
 func (x *GetActiveOperatorSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[26]
+	mi := &file_operator_v1_operator_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2319,7 +2511,7 @@ func (x *GetActiveOperatorSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveOperatorSessionRequest.ProtoReflect.Descriptor instead.
 func (*GetActiveOperatorSessionRequest) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{26}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetActiveOperatorSessionRequest) GetOperatorId() string {
@@ -2340,7 +2532,7 @@ type GetActiveOperatorSessionResponse struct {
 
 func (x *GetActiveOperatorSessionResponse) Reset() {
 	*x = GetActiveOperatorSessionResponse{}
-	mi := &file_operator_v1_operator_proto_msgTypes[27]
+	mi := &file_operator_v1_operator_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2352,7 +2544,7 @@ func (x *GetActiveOperatorSessionResponse) String() string {
 func (*GetActiveOperatorSessionResponse) ProtoMessage() {}
 
 func (x *GetActiveOperatorSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[27]
+	mi := &file_operator_v1_operator_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2365,7 +2557,7 @@ func (x *GetActiveOperatorSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActiveOperatorSessionResponse.ProtoReflect.Descriptor instead.
 func (*GetActiveOperatorSessionResponse) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{27}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *GetActiveOperatorSessionResponse) GetSession() *OperatorSession {
@@ -2392,7 +2584,7 @@ type OperatorSession struct {
 
 func (x *OperatorSession) Reset() {
 	*x = OperatorSession{}
-	mi := &file_operator_v1_operator_proto_msgTypes[28]
+	mi := &file_operator_v1_operator_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2404,7 +2596,7 @@ func (x *OperatorSession) String() string {
 func (*OperatorSession) ProtoMessage() {}
 
 func (x *OperatorSession) ProtoReflect() protoreflect.Message {
-	mi := &file_operator_v1_operator_proto_msgTypes[28]
+	mi := &file_operator_v1_operator_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2417,7 +2609,7 @@ func (x *OperatorSession) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperatorSession.ProtoReflect.Descriptor instead.
 func (*OperatorSession) Descriptor() ([]byte, []int) {
-	return file_operator_v1_operator_proto_rawDescGZIP(), []int{28}
+	return file_operator_v1_operator_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *OperatorSession) GetSessionId() string {
@@ -2522,7 +2714,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	" \x01(\v2#.operator.v1.WorkloadIdentityReportH\x00R\x16workloadIdentityReportB\t\n" +
 	"\apayload\"Q\n" +
 	"\x16WorkloadIdentityReport\x127\n" +
-	"\x05items\x18\x01 \x03(\v2!.operator.v1.WorkloadIdentityItemR\x05items\"\x8c\x04\n" +
+	"\x05items\x18\x01 \x03(\v2!.operator.v1.WorkloadIdentityItemR\x05items\"\xdd\x04\n" +
 	"\x14WorkloadIdentityItem\x12+\n" +
 	"\x11release_namespace\x18\x01 \x01(\tR\x10releaseNamespace\x12!\n" +
 	"\frelease_name\x18\x02 \x01(\tR\vreleaseName\x12\x12\n" +
@@ -2534,13 +2726,25 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"containers\x18\a \x03(\tR\n" +
 	"containers\x12e\n" +
 	"\x12current_image_refs\x18\b \x03(\v27.operator.v1.WorkloadIdentityItem.CurrentImageRefsEntryR\x10currentImageRefs\x12.\n" +
-	"\x10current_replicas\x18\t \x01(\x05H\x00R\x0fcurrentReplicas\x88\x01\x01\x12;\n" +
+	"\x10current_replicas\x18\t \x01(\x05H\x00R\x0fcurrentReplicas\x88\x01\x01\x12O\n" +
+	"\x13current_annotations\x18\n" +
+	" \x03(\v2\x1e.operator.v1.ScopedAnnotationsR\x12currentAnnotations\x12;\n" +
 	"\vobserved_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"observedAt\x1aC\n" +
 	"\x15CurrentImageRefsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x13\n" +
-	"\x11_current_replicas\"\x87\x01\n" +
+	"\x11_current_replicas\"9\n" +
+	"\x0fAnnotationEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"a\n" +
+	"\x11ScopedAnnotations\x12\x14\n" +
+	"\x05scope\x18\x01 \x01(\tR\x05scope\x126\n" +
+	"\aentries\x18\x02 \x03(\v2\x1c.operator.v1.AnnotationEntryR\aentries\"s\n" +
+	"\x15ApprovedAnnotationKey\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05scope\x18\x02 \x01(\tR\x05scope\x122\n" +
+	"\x15promotion_values_path\x18\x03 \x01(\tR\x13promotionValuesPath\"\x87\x01\n" +
 	"\x0fRolloutProgress\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12!\n" +
 	"\fworkload_ref\x18\x02 \x01(\tR\vworkloadRef\x12\x14\n" +
@@ -2603,7 +2807,7 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x12duplicate_response\x18\x04 \x01(\v2\x1e.operator.v1.DuplicateResponseH\x00R\x11duplicateResponse\x12R\n" +
 	"\x13session_established\x18\x05 \x01(\v2\x1f.operator.v1.SessionEstablishedH\x00R\x12sessionEstablished\x12L\n" +
 	"\x11emergency_command\x18\x06 \x01(\v2\x1d.operator.v1.EmergencyCommandH\x00R\x10emergencyCommandB\t\n" +
-	"\apayload\"\x86\x06\n" +
+	"\apayload\"\xe4\x06\n" +
 	"\aCommand\x12\x1b\n" +
 	"\toutbox_id\x18\x01 \x01(\tR\boutboxId\x12\x1d\n" +
 	"\n" +
@@ -2624,7 +2828,8 @@ const file_operator_v1_operator_proto_rawDesc = "" +
 	"\x06atomic\x18\x0f \x01(\bR\x06atomic\x12!\n" +
 	"\fvalues_patch\x18\x10 \x01(\fR\vvaluesPatch\x12'\n" +
 	"\x0ftarget_revision\x18\x11 \x01(\x03R\x0etargetRevision\x12'\n" +
-	"\x0fpayload_version\x18\x12 \x01(\rR\x0epayloadVersion\x12\x14\n" +
+	"\x0fpayload_version\x18\x12 \x01(\rR\x0epayloadVersion\x12\\\n" +
+	"\x18approved_annotation_keys\x18\x13 \x03(\v2\".operator.v1.ApprovedAnnotationKeyR\x16approvedAnnotationKeys\x12\x14\n" +
 	"\x05stage\x18\x15 \x01(\tR\x05stage\x127\n" +
 	"\aupgrade\x18\x14 \x01(\v2\x1b.operator.v1.UpgradeCommandH\x00R\aupgradeB\x0f\n" +
 	"\rtyped_payload\"\x9f\x04\n" +
@@ -2717,7 +2922,7 @@ func file_operator_v1_operator_proto_rawDescGZIP() []byte {
 }
 
 var file_operator_v1_operator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_operator_v1_operator_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_operator_v1_operator_proto_goTypes = []any{
 	(AckType)(0),                             // 0: operator.v1.AckType
 	(*EnrollRequest)(nil),                    // 1: operator.v1.EnrollRequest
@@ -2725,85 +2930,91 @@ var file_operator_v1_operator_proto_goTypes = []any{
 	(*CommandStreamRequest)(nil),             // 3: operator.v1.CommandStreamRequest
 	(*WorkloadIdentityReport)(nil),           // 4: operator.v1.WorkloadIdentityReport
 	(*WorkloadIdentityItem)(nil),             // 5: operator.v1.WorkloadIdentityItem
-	(*RolloutProgress)(nil),                  // 6: operator.v1.RolloutProgress
-	(*Hello)(nil),                            // 7: operator.v1.Hello
-	(*SessionEstablished)(nil),               // 8: operator.v1.SessionEstablished
-	(*Ack)(nil),                              // 9: operator.v1.Ack
-	(*Heartbeat)(nil),                        // 10: operator.v1.Heartbeat
-	(*Result)(nil),                           // 11: operator.v1.Result
-	(*EmergencyAck)(nil),                     // 12: operator.v1.EmergencyAck
-	(*EmergencyResult)(nil),                  // 13: operator.v1.EmergencyResult
-	(*CommandStreamResponse)(nil),            // 14: operator.v1.CommandStreamResponse
-	(*Command)(nil),                          // 15: operator.v1.Command
-	(*EmergencyCommand)(nil),                 // 16: operator.v1.EmergencyCommand
-	(*EmergencySetContainerImage)(nil),       // 17: operator.v1.EmergencySetContainerImage
-	(*EmergencySetReplicas)(nil),             // 18: operator.v1.EmergencySetReplicas
-	(*EmergencySetApprovedAnnotations)(nil),  // 19: operator.v1.EmergencySetApprovedAnnotations
-	(*EmergencyAnnotationEntry)(nil),         // 20: operator.v1.EmergencyAnnotationEntry
-	(*ResyncRequest)(nil),                    // 21: operator.v1.ResyncRequest
-	(*ResyncResponse)(nil),                   // 22: operator.v1.ResyncResponse
-	(*DuplicateResponse)(nil),                // 23: operator.v1.DuplicateResponse
-	(*SessionEvent)(nil),                     // 24: operator.v1.SessionEvent
-	(*RenewCertificateRequest)(nil),          // 25: operator.v1.RenewCertificateRequest
-	(*RenewCertificateResponse)(nil),         // 26: operator.v1.RenewCertificateResponse
-	(*GetActiveOperatorSessionRequest)(nil),  // 27: operator.v1.GetActiveOperatorSessionRequest
-	(*GetActiveOperatorSessionResponse)(nil), // 28: operator.v1.GetActiveOperatorSessionResponse
-	(*OperatorSession)(nil),                  // 29: operator.v1.OperatorSession
-	nil,                                      // 30: operator.v1.EnrollRequest.CapabilitiesEntry
-	nil,                                      // 31: operator.v1.WorkloadIdentityItem.CurrentImageRefsEntry
-	nil,                                      // 32: operator.v1.Hello.CapabilitiesEntry
-	(*CommandResult)(nil),                    // 33: operator.v1.CommandResult
-	(*timestamppb.Timestamp)(nil),            // 34: google.protobuf.Timestamp
-	(*v1.ReleaseBundle)(nil),                 // 35: common.v1.ReleaseBundle
-	(*UpgradeCommand)(nil),                   // 36: operator.v1.UpgradeCommand
+	(*AnnotationEntry)(nil),                  // 6: operator.v1.AnnotationEntry
+	(*ScopedAnnotations)(nil),                // 7: operator.v1.ScopedAnnotations
+	(*ApprovedAnnotationKey)(nil),            // 8: operator.v1.ApprovedAnnotationKey
+	(*RolloutProgress)(nil),                  // 9: operator.v1.RolloutProgress
+	(*Hello)(nil),                            // 10: operator.v1.Hello
+	(*SessionEstablished)(nil),               // 11: operator.v1.SessionEstablished
+	(*Ack)(nil),                              // 12: operator.v1.Ack
+	(*Heartbeat)(nil),                        // 13: operator.v1.Heartbeat
+	(*Result)(nil),                           // 14: operator.v1.Result
+	(*EmergencyAck)(nil),                     // 15: operator.v1.EmergencyAck
+	(*EmergencyResult)(nil),                  // 16: operator.v1.EmergencyResult
+	(*CommandStreamResponse)(nil),            // 17: operator.v1.CommandStreamResponse
+	(*Command)(nil),                          // 18: operator.v1.Command
+	(*EmergencyCommand)(nil),                 // 19: operator.v1.EmergencyCommand
+	(*EmergencySetContainerImage)(nil),       // 20: operator.v1.EmergencySetContainerImage
+	(*EmergencySetReplicas)(nil),             // 21: operator.v1.EmergencySetReplicas
+	(*EmergencySetApprovedAnnotations)(nil),  // 22: operator.v1.EmergencySetApprovedAnnotations
+	(*EmergencyAnnotationEntry)(nil),         // 23: operator.v1.EmergencyAnnotationEntry
+	(*ResyncRequest)(nil),                    // 24: operator.v1.ResyncRequest
+	(*ResyncResponse)(nil),                   // 25: operator.v1.ResyncResponse
+	(*DuplicateResponse)(nil),                // 26: operator.v1.DuplicateResponse
+	(*SessionEvent)(nil),                     // 27: operator.v1.SessionEvent
+	(*RenewCertificateRequest)(nil),          // 28: operator.v1.RenewCertificateRequest
+	(*RenewCertificateResponse)(nil),         // 29: operator.v1.RenewCertificateResponse
+	(*GetActiveOperatorSessionRequest)(nil),  // 30: operator.v1.GetActiveOperatorSessionRequest
+	(*GetActiveOperatorSessionResponse)(nil), // 31: operator.v1.GetActiveOperatorSessionResponse
+	(*OperatorSession)(nil),                  // 32: operator.v1.OperatorSession
+	nil,                                      // 33: operator.v1.EnrollRequest.CapabilitiesEntry
+	nil,                                      // 34: operator.v1.WorkloadIdentityItem.CurrentImageRefsEntry
+	nil,                                      // 35: operator.v1.Hello.CapabilitiesEntry
+	(*CommandResult)(nil),                    // 36: operator.v1.CommandResult
+	(*timestamppb.Timestamp)(nil),            // 37: google.protobuf.Timestamp
+	(*v1.ReleaseBundle)(nil),                 // 38: common.v1.ReleaseBundle
+	(*UpgradeCommand)(nil),                   // 39: operator.v1.UpgradeCommand
 }
 var file_operator_v1_operator_proto_depIdxs = []int32{
-	30, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
-	7,  // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
-	9,  // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
-	10, // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
-	11, // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
-	22, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
-	12, // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
-	13, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
-	33, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
-	6,  // 9: operator.v1.CommandStreamRequest.rollout_progress:type_name -> operator.v1.RolloutProgress
+	33, // 0: operator.v1.EnrollRequest.capabilities:type_name -> operator.v1.EnrollRequest.CapabilitiesEntry
+	10, // 1: operator.v1.CommandStreamRequest.hello:type_name -> operator.v1.Hello
+	12, // 2: operator.v1.CommandStreamRequest.ack:type_name -> operator.v1.Ack
+	13, // 3: operator.v1.CommandStreamRequest.heartbeat:type_name -> operator.v1.Heartbeat
+	14, // 4: operator.v1.CommandStreamRequest.result:type_name -> operator.v1.Result
+	25, // 5: operator.v1.CommandStreamRequest.resync_response:type_name -> operator.v1.ResyncResponse
+	15, // 6: operator.v1.CommandStreamRequest.emergency_ack:type_name -> operator.v1.EmergencyAck
+	16, // 7: operator.v1.CommandStreamRequest.emergency_result:type_name -> operator.v1.EmergencyResult
+	36, // 8: operator.v1.CommandStreamRequest.command_result:type_name -> operator.v1.CommandResult
+	9,  // 9: operator.v1.CommandStreamRequest.rollout_progress:type_name -> operator.v1.RolloutProgress
 	4,  // 10: operator.v1.CommandStreamRequest.workload_identity_report:type_name -> operator.v1.WorkloadIdentityReport
 	5,  // 11: operator.v1.WorkloadIdentityReport.items:type_name -> operator.v1.WorkloadIdentityItem
-	31, // 12: operator.v1.WorkloadIdentityItem.current_image_refs:type_name -> operator.v1.WorkloadIdentityItem.CurrentImageRefsEntry
-	34, // 13: operator.v1.WorkloadIdentityItem.observed_at:type_name -> google.protobuf.Timestamp
-	32, // 14: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
-	0,  // 15: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
-	0,  // 16: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
-	15, // 17: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
-	24, // 18: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
-	21, // 19: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
-	23, // 20: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
-	8,  // 21: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
-	16, // 22: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
-	35, // 23: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
-	36, // 24: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
-	17, // 25: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
-	18, // 26: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
-	19, // 27: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
-	20, // 28: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
-	29, // 29: operator.v1.GetActiveOperatorSessionResponse.session:type_name -> operator.v1.OperatorSession
-	34, // 30: operator.v1.OperatorSession.started_at:type_name -> google.protobuf.Timestamp
-	34, // 31: operator.v1.OperatorSession.last_heartbeat:type_name -> google.protobuf.Timestamp
-	34, // 32: operator.v1.OperatorSession.expires_at:type_name -> google.protobuf.Timestamp
-	1,  // 33: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
-	25, // 34: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
-	3,  // 35: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
-	27, // 36: operator.v1.OperatorService.GetActiveOperatorSession:input_type -> operator.v1.GetActiveOperatorSessionRequest
-	2,  // 37: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
-	26, // 38: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
-	14, // 39: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
-	28, // 40: operator.v1.OperatorService.GetActiveOperatorSession:output_type -> operator.v1.GetActiveOperatorSessionResponse
-	37, // [37:41] is the sub-list for method output_type
-	33, // [33:37] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	34, // 12: operator.v1.WorkloadIdentityItem.current_image_refs:type_name -> operator.v1.WorkloadIdentityItem.CurrentImageRefsEntry
+	7,  // 13: operator.v1.WorkloadIdentityItem.current_annotations:type_name -> operator.v1.ScopedAnnotations
+	37, // 14: operator.v1.WorkloadIdentityItem.observed_at:type_name -> google.protobuf.Timestamp
+	6,  // 15: operator.v1.ScopedAnnotations.entries:type_name -> operator.v1.AnnotationEntry
+	35, // 16: operator.v1.Hello.capabilities:type_name -> operator.v1.Hello.CapabilitiesEntry
+	0,  // 17: operator.v1.Ack.ack_type:type_name -> operator.v1.AckType
+	0,  // 18: operator.v1.EmergencyAck.ack_type:type_name -> operator.v1.AckType
+	18, // 19: operator.v1.CommandStreamResponse.command:type_name -> operator.v1.Command
+	27, // 20: operator.v1.CommandStreamResponse.session_event:type_name -> operator.v1.SessionEvent
+	24, // 21: operator.v1.CommandStreamResponse.resync_request:type_name -> operator.v1.ResyncRequest
+	26, // 22: operator.v1.CommandStreamResponse.duplicate_response:type_name -> operator.v1.DuplicateResponse
+	11, // 23: operator.v1.CommandStreamResponse.session_established:type_name -> operator.v1.SessionEstablished
+	19, // 24: operator.v1.CommandStreamResponse.emergency_command:type_name -> operator.v1.EmergencyCommand
+	38, // 25: operator.v1.Command.bundle:type_name -> common.v1.ReleaseBundle
+	8,  // 26: operator.v1.Command.approved_annotation_keys:type_name -> operator.v1.ApprovedAnnotationKey
+	39, // 27: operator.v1.Command.upgrade:type_name -> operator.v1.UpgradeCommand
+	20, // 28: operator.v1.EmergencyCommand.set_container_image:type_name -> operator.v1.EmergencySetContainerImage
+	21, // 29: operator.v1.EmergencyCommand.set_replicas:type_name -> operator.v1.EmergencySetReplicas
+	22, // 30: operator.v1.EmergencyCommand.set_approved_annotations:type_name -> operator.v1.EmergencySetApprovedAnnotations
+	23, // 31: operator.v1.EmergencySetApprovedAnnotations.entries:type_name -> operator.v1.EmergencyAnnotationEntry
+	32, // 32: operator.v1.GetActiveOperatorSessionResponse.session:type_name -> operator.v1.OperatorSession
+	37, // 33: operator.v1.OperatorSession.started_at:type_name -> google.protobuf.Timestamp
+	37, // 34: operator.v1.OperatorSession.last_heartbeat:type_name -> google.protobuf.Timestamp
+	37, // 35: operator.v1.OperatorSession.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 36: operator.v1.OperatorService.Enroll:input_type -> operator.v1.EnrollRequest
+	28, // 37: operator.v1.OperatorService.RenewCertificate:input_type -> operator.v1.RenewCertificateRequest
+	3,  // 38: operator.v1.OperatorService.CommandStream:input_type -> operator.v1.CommandStreamRequest
+	30, // 39: operator.v1.OperatorService.GetActiveOperatorSession:input_type -> operator.v1.GetActiveOperatorSessionRequest
+	2,  // 40: operator.v1.OperatorService.Enroll:output_type -> operator.v1.EnrollResponse
+	29, // 41: operator.v1.OperatorService.RenewCertificate:output_type -> operator.v1.RenewCertificateResponse
+	17, // 42: operator.v1.OperatorService.CommandStream:output_type -> operator.v1.CommandStreamResponse
+	31, // 43: operator.v1.OperatorService.GetActiveOperatorSession:output_type -> operator.v1.GetActiveOperatorSessionResponse
+	40, // [40:44] is the sub-list for method output_type
+	36, // [36:40] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_operator_v1_operator_proto_init() }
@@ -2825,7 +3036,7 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamRequest_WorkloadIdentityReport)(nil),
 	}
 	file_operator_v1_operator_proto_msgTypes[4].OneofWrappers = []any{}
-	file_operator_v1_operator_proto_msgTypes[13].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[16].OneofWrappers = []any{
 		(*CommandStreamResponse_Command)(nil),
 		(*CommandStreamResponse_SessionEvent)(nil),
 		(*CommandStreamResponse_ResyncRequest)(nil),
@@ -2833,10 +3044,10 @@ func file_operator_v1_operator_proto_init() {
 		(*CommandStreamResponse_SessionEstablished)(nil),
 		(*CommandStreamResponse_EmergencyCommand)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[14].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[17].OneofWrappers = []any{
 		(*Command_Upgrade)(nil),
 	}
-	file_operator_v1_operator_proto_msgTypes[15].OneofWrappers = []any{
+	file_operator_v1_operator_proto_msgTypes[18].OneofWrappers = []any{
 		(*EmergencyCommand_SetContainerImage)(nil),
 		(*EmergencyCommand_SetReplicas)(nil),
 		(*EmergencyCommand_SetApprovedAnnotations)(nil),
@@ -2847,7 +3058,7 @@ func file_operator_v1_operator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_operator_v1_operator_proto_rawDesc), len(file_operator_v1_operator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   32,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

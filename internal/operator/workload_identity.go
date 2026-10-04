@@ -75,26 +75,40 @@ func readWorkloadObject(ctx context.Context, client kubernetes.Interface, kind, 
 	}
 }
 
+// Annotation scope vocabulary (TASK-241 U2=B). It matches the emergency
+// executor's scope vocabulary (applyEmergencyAnnotations in
+// emergency_executor.go): WORKLOAD_METADATA targets the workload object's own
+// metadata, POD_TEMPLATE_METADATA its pod template.
+const (
+	AnnotationScopeWorkloadMetadata    = "WORKLOAD_METADATA"
+	AnnotationScopePodTemplateMetadata = "POD_TEMPLATE_METADATA"
+)
+
 // WorkloadUID reads the live workload object for the given enum-style kind
 // and returns its Kubernetes UID (REQ-085 D-110 ①). Unsupported kinds yield
 // the workload_kind_not_supported error code; callers treat any error as
 // "identity not observable" and fail closed (skip the report item).
 func WorkloadUID(ctx context.Context, client kubernetes.Interface, kind, namespace, name string) (string, error) {
-	uid, _, err := WorkloadObservation(ctx, client, kind, namespace, name)
+	uid, _, err := WorkloadObservation(ctx, client, kind, namespace, name, nil)
 	return uid, err
 }
 
 // WorkloadObservation reads the live workload object once and returns both the
 // authoritative UID (REQ-085) and the observed field projection (TASK-168,
-// REQ-058 C1/R1) that travels on the same identity report. It reuses
-// readWorkloadObject, so the kind→resource dispatch stays single-sourced
-// (D-110 ①) and the projection costs no extra cluster API call.
+// REQ-058 C1/R1; TASK-241 adds annotations) that travels on the same identity
+// report. It reuses readWorkloadObject, so the kind→resource dispatch stays
+// single-sourced (D-110 ①) and the projection costs no extra cluster API call.
+//
+// approved is the center-approved annotation whitelist for the release
+// (TASK-241 U1=A). It is the only filter on the annotation projection: an
+// unknown (nil or empty) whitelist yields no annotations at all, so an
+// unapproved value can never leave the cluster (fail closed).
 //
 // ObservedAt is stamped from the local clock at read time. Absent replicas
 // (DaemonSet, or a Deployment whose spec.replicas the API server never
 // defaulted) stay nil — the store contract reads nil as "not observed" and must
 // never confuse it with a real zero.
-func WorkloadObservation(ctx context.Context, client kubernetes.Interface, kind, namespace, name string) (string, store.WorkloadObservation, error) {
+func WorkloadObservation(ctx context.Context, client kubernetes.Interface, kind, namespace, name string, approved []store.ApprovedAnnotationKey) (string, store.WorkloadObservation, error) {
 	if client == nil {
 		return "", store.WorkloadObservation{}, errors.New("kubernetes client is unavailable")
 	}
@@ -102,7 +116,7 @@ func WorkloadObservation(ctx context.Context, client kubernetes.Interface, kind,
 	if err != nil {
 		return "", store.WorkloadObservation{}, err
 	}
-	return object.uid, object.observation(time.Now().UTC()), nil
+	return object.uid, object.observation(time.Now().UTC(), approved), nil
 }
 
 // observation projects the live object's mutable field values into the
@@ -110,20 +124,67 @@ func WorkloadObservation(ctx context.Context, client kubernetes.Interface, kind,
 // carries no pod template containers still reports its observation time: the
 // read succeeded, and the per-field sentinels ("no containers", "no replica
 // count") keep the central read model fail-closed.
-func (o *workloadObject) observation(observedAt time.Time) store.WorkloadObservation {
+func (o *workloadObject) observation(observedAt time.Time, approved []store.ApprovedAnnotationKey) store.WorkloadObservation {
 	observation := store.WorkloadObservation{ObservedAt: observedAt}
 	switch {
 	case o.deployment != nil:
 		observation.Containers, observation.ImageRefs = projectContainers(o.deployment.Spec.Template.Spec.Containers)
 		observation.Replicas = cloneReplicas(o.deployment.Spec.Replicas)
+		observation.Annotations = projectApprovedAnnotations(approved, o.deployment.Annotations, o.deployment.Spec.Template.Annotations)
 	case o.statefulSet != nil:
 		observation.Containers, observation.ImageRefs = projectContainers(o.statefulSet.Spec.Template.Spec.Containers)
 		observation.Replicas = cloneReplicas(o.statefulSet.Spec.Replicas)
+		observation.Annotations = projectApprovedAnnotations(approved, o.statefulSet.Annotations, o.statefulSet.Spec.Template.Annotations)
 	case o.daemonSet != nil:
 		observation.Containers, observation.ImageRefs = projectContainers(o.daemonSet.Spec.Template.Spec.Containers)
 		// A DaemonSet has no replica count: Replicas stays nil ("not observed").
+		observation.Annotations = projectApprovedAnnotations(approved, o.daemonSet.Annotations, o.daemonSet.Spec.Template.Annotations)
 	}
 	return observation
+}
+
+// projectApprovedAnnotations keeps only the live annotation entries the center
+// approved for this release (TASK-241 U1=A), grouped by scope (TASK-241 U2=B):
+// scope → key → value. The whitelist is the sole filter, so an unapproved key
+// never leaves the cluster; an unknown (nil or empty) whitelist yields no
+// annotations at all (fail closed). A whitelisted key that the live object does
+// not carry is not fabricated — only real live values are reported.
+//
+// The result is nil when nothing matched, so "not observed" stays a nil map
+// instead of a present-but-empty observation.
+func projectApprovedAnnotations(approved []store.ApprovedAnnotationKey, workloadAnnotations, podAnnotations map[string]string) map[string]map[string]string {
+	if len(approved) == 0 {
+		return nil
+	}
+	var projected map[string]map[string]string
+	for index := range approved {
+		key := strings.TrimSpace(approved[index].Key)
+		scope := strings.TrimSpace(approved[index].Scope)
+		if key == "" || scope == "" {
+			continue
+		}
+		var source map[string]string
+		switch scope {
+		case AnnotationScopeWorkloadMetadata:
+			source = workloadAnnotations
+		case AnnotationScopePodTemplateMetadata:
+			source = podAnnotations
+		default:
+			continue // unknown scope: nothing to read, fail closed
+		}
+		value, ok := source[key]
+		if !ok {
+			continue
+		}
+		if projected == nil {
+			projected = make(map[string]map[string]string, 2)
+		}
+		if projected[scope] == nil {
+			projected[scope] = make(map[string]string)
+		}
+		projected[scope][key] = value
+	}
+	return projected
 }
 
 // projectContainers projects the pod template containers into the container
@@ -491,10 +552,10 @@ func (s *Service) applyWorkloadObservation(ctx context.Context, customerID, clus
 // workloadObservationFromItem projects the report item's observed fields onto
 // the store contract. observed_at presence is the gate: an item that never
 // carried a projection (old operator) reports the field as absent, and a
-// projection must never be fabricated from it. Empty containers / image refs
-// and an absent current_replicas are preserved as per-field "not observed"
-// sentinels; a present current_replicas of 0 is a real observed zero and is
-// carried as a non-nil pointer.
+// projection must never be fabricated from it. Empty containers / image refs /
+// annotations and an absent current_replicas are preserved as per-field "not
+// observed" sentinels; a present current_replicas of 0 is a real observed zero
+// and is carried as a non-nil pointer.
 func workloadObservationFromItem(item *operatorv1.WorkloadIdentityItem) (store.WorkloadObservation, bool) {
 	if item == nil {
 		return store.WorkloadObservation{}, false
@@ -504,9 +565,10 @@ func workloadObservationFromItem(item *operatorv1.WorkloadIdentityItem) (store.W
 		return store.WorkloadObservation{}, false
 	}
 	observation := store.WorkloadObservation{
-		Containers: append([]string{}, item.GetContainers()...),
-		ImageRefs:  make(map[string]string, len(item.GetCurrentImageRefs())),
-		ObservedAt: observedAt.AsTime().UTC(),
+		Containers:  append([]string{}, item.GetContainers()...),
+		ImageRefs:   make(map[string]string, len(item.GetCurrentImageRefs())),
+		Annotations: scopedAnnotationsToStore(item.GetCurrentAnnotations()),
+		ObservedAt:  observedAt.AsTime().UTC(),
 	}
 	for container, ref := range item.GetCurrentImageRefs() {
 		observation.ImageRefs[container] = ref
@@ -516,6 +578,45 @@ func workloadObservationFromItem(item *operatorv1.WorkloadIdentityItem) (store.W
 		observation.Replicas = &replicas
 	}
 	return observation, true
+}
+
+// scopedAnnotationsToStore flattens the wire's scope-grouped annotation list
+// into the store contract's scope → key → value map (TASK-241 U2=B). Blank
+// scopes and blank keys are dropped; a scope whose entries are all blank is
+// dropped entirely, so an empty projection stays nil ("not observed") instead
+// of becoming a present-but-empty observation. A nil or empty input yields nil
+// (fail closed): absence on the wire means "not observed" or "whitelist
+// unknown", never "no annotations configured".
+func scopedAnnotationsToStore(scoped []*operatorv1.ScopedAnnotations) map[string]map[string]string {
+	if len(scoped) == 0 {
+		return nil
+	}
+	annotations := make(map[string]map[string]string, len(scoped))
+	for _, group := range scoped {
+		if group == nil {
+			continue
+		}
+		scope := strings.TrimSpace(group.GetScope())
+		if scope == "" {
+			continue
+		}
+		for _, entry := range group.GetEntries() {
+			if entry == nil || entry.GetKey() == "" {
+				continue
+			}
+			if annotations[scope] == nil {
+				annotations[scope] = make(map[string]string, len(group.GetEntries()))
+			}
+			annotations[scope][entry.GetKey()] = entry.GetValue()
+		}
+		if len(annotations[scope]) == 0 {
+			delete(annotations, scope)
+		}
+	}
+	if len(annotations) == 0 {
+		return nil
+	}
+	return annotations
 }
 
 // ReplayAfterInventory binds a buffered identity to the inventory row that a

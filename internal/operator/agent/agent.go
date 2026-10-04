@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 	"github.com/ndzuki/release-manager/internal/operator/observer"
 	"github.com/ndzuki/release-manager/internal/operator/secretmetadata"
+	"github.com/ndzuki/release-manager/internal/store"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/client-go/kubernetes"
@@ -96,6 +98,13 @@ type Agent struct {
 	// observationInterval is the periodic workload-observation cadence
 	// (TASK-168 W2); zero means defaultObservationInterval.
 	observationInterval time.Duration
+	// approvedAnnotations caches the center-approved annotation whitelist per
+	// release key (namespace/release_name), learned from the command downlink
+	// (Command.approved_annotation_keys, TASK-241 U1=A). The command is the
+	// only source: a release with no cached entry has an unknown whitelist and
+	// the observation path then reports no annotations at all (fail closed).
+	approvedAnnotations   map[string][]store.ApprovedAnnotationKey
+	approvedAnnotationsMu sync.RWMutex
 	// connected tracks whether a gateway command stream is currently live
 	// (TASK-099): the agent Pod must not report Ready while its reconnect loop
 	// is between sessions.
@@ -207,6 +216,7 @@ func New(cfg Config) (*Agent, error) {
 		installFlags:        cfg.InstallFlags,
 		registryPlainHTTP:   cfg.RegistryPlainHTTP,
 		observationInterval: cfg.ObservationInterval,
+		approvedAnnotations: make(map[string][]store.ApprovedAnnotationKey),
 	}, nil
 }
 
@@ -557,6 +567,10 @@ func (a *Agent) handleCommand(ctx context.Context, stream Stream, command *opera
 	if command.GetCommandId() == "" {
 		return errors.New("received command without command_id")
 	}
+	// TASK-241 U1=A: the command is the only source of the approved annotation
+	// whitelist. Cache it before any early return so a redelivered terminal
+	// command still refreshes what the periodic observation scan may report.
+	a.rememberApprovedAnnotations(command)
 
 	existing, err := a.store.Get(ctx, command.GetCommandId())
 	if err == nil {
@@ -609,6 +623,11 @@ func (a *Agent) executeEntry(ctx context.Context, stream Stream, entry *localsto
 	if err := a.store.UpdateStatus(ctx, entry.CommandID, localstore.StatusRunning, ""); err != nil {
 		return fmt.Errorf("mark command %q running: %w", entry.CommandID, err)
 	}
+
+	// The replay path never went through handleCommand, so refresh the
+	// annotation whitelist from the persisted payload too (TASK-241 U1=A). The
+	// payload preserved Command.approved_annotation_keys when it was stored.
+	a.rememberApprovedAnnotations(&command)
 
 	reporter := newRolloutReporter(stream, command.GetOperationId(), a.logger)
 	result := a.executeCommand(ctx, &command, reporter)
@@ -789,13 +808,142 @@ func (a *Agent) executeSecretMetadataList(ctx context.Context, command *operator
 	return result
 }
 
+// annotationWhitelistKey is the release key the approved-annotation cache is
+// stored under. It matches the release identity the observation scan already
+// carries (Release.Namespace / Release.Name), so a cached whitelist and the
+// scan that consumes it always agree.
+func annotationWhitelistKey(namespace, releaseName string) string {
+	return strings.TrimSpace(namespace) + "/" + strings.TrimSpace(releaseName)
+}
+
+// rememberApprovedAnnotations caches the annotation whitelist a release-write
+// command carries for its release (TASK-241 U1=A). The command is the only
+// source. Only release writes update the cache: an inventory-sync or
+// secret-metadata command does not describe the release's definition, and
+// letting it clear the cache would make a healthy whitelist flap to unknown. A
+// release write that carries no whitelist clears the entry — the center is
+// saying the definition approves no annotation (or is too old to send one), and
+// both cases must fail closed to "report nothing".
+func (a *Agent) rememberApprovedAnnotations(command *operatorv1.Command) {
+	if command == nil || !isReleaseWrite(command.GetOperationType()) {
+		return
+	}
+	key := annotationWhitelistKey(command.GetNamespace(), command.GetReleaseName())
+	if key == "/" {
+		return // no release identity: nothing to key the cache by
+	}
+	approved := cloneApprovedAnnotationKeys(command.GetApprovedAnnotationKeys())
+	a.approvedAnnotationsMu.Lock()
+	if len(approved) == 0 {
+		delete(a.approvedAnnotations, key)
+	} else {
+		a.approvedAnnotations[key] = approved
+	}
+	a.approvedAnnotationsMu.Unlock()
+}
+
+// approvedAnnotationsFor returns the cached whitelist for one release, or nil
+// when it is unknown. Callers must treat nil as "report no annotations"
+// (fail closed).
+func (a *Agent) approvedAnnotationsFor(namespace, releaseName string) []store.ApprovedAnnotationKey {
+	key := annotationWhitelistKey(namespace, releaseName)
+	a.approvedAnnotationsMu.RLock()
+	defer a.approvedAnnotationsMu.RUnlock()
+	return a.approvedAnnotations[key]
+}
+
+// isReleaseWrite reports whether an operation type writes the release and so
+// carries the definition-derived annotation whitelist.
+func isReleaseWrite(operationType string) bool {
+	switch operationType {
+	case "INSTALL", "UPGRADE", "ROLLBACK":
+		return true
+	default:
+		return false
+	}
+}
+
+// cloneApprovedAnnotationKeys copies the wire whitelist into the store type,
+// dropping blank entries (a blank key or scope can never match a real
+// annotation) and de-duplicating by (scope, key). It returns nil for an empty
+// result so "unknown"/"cleared" and "empty whitelist" have one representation.
+func cloneApprovedAnnotationKeys(keys []*operatorv1.ApprovedAnnotationKey) []store.ApprovedAnnotationKey {
+	if len(keys) == 0 {
+		return nil
+	}
+	approved := make([]store.ApprovedAnnotationKey, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, entry := range keys {
+		if entry == nil {
+			continue
+		}
+		key := strings.TrimSpace(entry.GetKey())
+		scope := strings.TrimSpace(entry.GetScope())
+		if key == "" || scope == "" {
+			continue
+		}
+		identity := scope + "\x00" + key
+		if _, ok := seen[identity]; ok {
+			continue
+		}
+		seen[identity] = struct{}{}
+		approved = append(approved, store.ApprovedAnnotationKey{
+			Key: key, Scope: scope, PromotionValuesPath: entry.GetPromotionValuesPath(),
+		})
+	}
+	if len(approved) == 0 {
+		return nil
+	}
+	return approved
+}
+
+// scopedAnnotationsFromObservation converts the scope-grouped projection into
+// the wire shape (TASK-241 U2=B). Scopes and keys are sorted so the report is
+// deterministic even though the projection map is unordered. An empty
+// projection yields nil — the field stays absent, which the center reads as
+// "not observed".
+func scopedAnnotationsFromObservation(annotations map[string]map[string]string) []*operatorv1.ScopedAnnotations {
+	if len(annotations) == 0 {
+		return nil
+	}
+	scopes := make([]string, 0, len(annotations))
+	for scope, entries := range annotations {
+		if len(entries) > 0 {
+			scopes = append(scopes, scope)
+		}
+	}
+	if len(scopes) == 0 {
+		return nil
+	}
+	sort.Strings(scopes)
+	scoped := make([]*operatorv1.ScopedAnnotations, 0, len(scopes))
+	for _, scope := range scopes {
+		entries := annotations[scope]
+		keys := make([]string, 0, len(entries))
+		for key := range entries {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		group := &operatorv1.ScopedAnnotations{Scope: scope, Entries: make([]*operatorv1.AnnotationEntry, 0, len(keys))}
+		for _, key := range keys {
+			group.Entries = append(group.Entries, &operatorv1.AnnotationEntry{Key: key, Value: entries[key]})
+		}
+		scoped = append(scoped, group)
+	}
+	return scoped
+}
+
 // buildWorkloadIdentityItems resolves live UIDs and the observed field
-// projection for one release's workloads (REQ-085 + TASK-168 W2). Workloads
-// outside the emergency whitelist (e.g. Job) and workloads whose live UID
-// cannot be read are skipped — an identity item with an empty uid must never
-// reach the orchestrator (D-110 ③ fail closed).
+// projection for one release's workloads (REQ-085 + TASK-168 W2 + TASK-241).
+// Workloads outside the emergency whitelist (e.g. Job) and workloads whose live
+// UID cannot be read are skipped — an identity item with an empty uid must
+// never reach the orchestrator (D-110 ③ fail closed).
 func (a *Agent) buildWorkloadIdentityItems(ctx context.Context, release *helmengine.Release) []*operatorv1.WorkloadIdentityItem {
 	items := make([]*operatorv1.WorkloadIdentityItem, 0, len(release.Workloads))
+	// The approved annotation whitelist is per release (TASK-241 U1=A). It is
+	// resolved once per release rather than per workload; nil means unknown and
+	// makes the annotation projection report nothing (fail closed).
+	approved := a.approvedAnnotationsFor(release.Namespace, release.Name)
 	for _, workload := range release.Workloads {
 		kind, ok := operatorruntime.NormalizeWorkloadKind(workload.Kind)
 		if !ok {
@@ -804,7 +952,7 @@ func (a *Agent) buildWorkloadIdentityItems(ctx context.Context, release *helmeng
 		if workload.Namespace == "" || workload.Name == "" {
 			continue
 		}
-		uid, observation, err := operatorruntime.WorkloadObservation(ctx, a.kubeClient, kind, workload.Namespace, workload.Name)
+		uid, observation, err := operatorruntime.WorkloadObservation(ctx, a.kubeClient, kind, workload.Namespace, workload.Name, approved)
 		if err != nil || uid == "" {
 			a.logger.Debug("skipping workload without live uid",
 				"kind", kind, "namespace", workload.Namespace, "name", workload.Name, "error", err)
@@ -819,6 +967,12 @@ func (a *Agent) buildWorkloadIdentityItems(ctx context.Context, release *helmeng
 			Uid:              uid,
 			Containers:       observation.Containers,
 			CurrentImageRefs: observation.ImageRefs,
+		}
+		// An empty projection leaves the field absent: the center reads that as
+		// "not observed" or "whitelist unknown" (TASK-241), never as "no
+		// annotations configured".
+		if scoped := scopedAnnotationsFromObservation(observation.Annotations); len(scoped) > 0 {
+			item.CurrentAnnotations = scoped
 		}
 		// The proto field is optional so presence survives the wire: a real
 		// observed 0 must not be flattened into "not observed" (and a DaemonSet,

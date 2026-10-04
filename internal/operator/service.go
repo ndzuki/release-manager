@@ -1307,6 +1307,10 @@ type commandPayload struct {
 	ValuesPatch    json.RawMessage            `json:"values_patch"`
 	PayloadVersion uint32                     `json:"payload_version"`
 	Upgrade        *operatorv1.UpgradeCommand `json:"upgrade"`
+	// ApprovedAnnotationKeys is the release definition's annotation whitelist
+	// carried down by a release write (TASK-241 U1=A). Absent means the
+	// whitelist is unknown/empty and the agent must report no annotations.
+	ApprovedAnnotationKeys []store.ApprovedAnnotationKey `json:"approved_annotation_keys"`
 }
 
 // DecodeCommandPayload populates command fields from an outbox JSON payload.
@@ -1333,6 +1337,7 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 	command.ValuesPatch = []byte(envelope.ValuesPatch)
 	command.PayloadVersion = envelope.PayloadVersion
 	command.Stage = envelope.Stage
+	command.ApprovedAnnotationKeys = approvedAnnotationKeysToProto(envelope.ApprovedAnnotationKeys)
 	if envelope.Upgrade != nil {
 		command.TypedPayload = &operatorv1.Command_Upgrade{Upgrade: envelope.Upgrade}
 	}
@@ -1344,6 +1349,25 @@ func DecodeCommandPayload(payload []byte, command *operatorv1.Command) error {
 		}
 	}
 	return nil
+}
+
+// approvedAnnotationKeysToProto converts the outbox JSON whitelist (the store
+// shape the orchestrator freezes into the payload) into the wire shape the
+// agent caches (TASK-241 U1=A). Producer order is preserved; an empty slice
+// stays nil so the field is absent and the agent reads "whitelist unknown".
+func approvedAnnotationKeysToProto(keys []store.ApprovedAnnotationKey) []*operatorv1.ApprovedAnnotationKey {
+	if len(keys) == 0 {
+		return nil
+	}
+	result := make([]*operatorv1.ApprovedAnnotationKey, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, &operatorv1.ApprovedAnnotationKey{
+			Key:                 key.Key,
+			Scope:               key.Scope,
+			PromotionValuesPath: key.PromotionValuesPath,
+		})
+	}
+	return result
 }
 
 // deliverPending polls for pending commands and sends them to the delivery channel.

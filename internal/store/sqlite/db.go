@@ -1662,6 +1662,11 @@ var migrationStatements = []string{
 	`ALTER TABLE release_inventory ADD COLUMN observed_image_refs TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE release_inventory ADD COLUMN observed_replicas INTEGER`,
 	`ALTER TABLE release_inventory ADD COLUMN observed_at TEXT`,
+	// TASK-241 (REQ-058 C1/R1): approved annotation projection grouped by scope
+	// (U2=B); mirrors migrations/000033_observed_annotations.up.sql. Uses the
+	// same TEXT-encoded JSON convention as observed_image_refs, with '{}' as the
+	// "not observed" sentinel.
+	`ALTER TABLE release_inventory ADD COLUMN observed_annotations TEXT NOT NULL DEFAULT '{}'`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_cluster ON release_inventory(customer_id, cluster_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_inventory_status ON release_inventory(inventory_status)`,
 

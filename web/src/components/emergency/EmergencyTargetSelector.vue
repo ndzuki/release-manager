@@ -29,6 +29,13 @@ function replicasAvailabilityLabel(target: EmergencyTargetDisplay): string {
   if (!action.availability.available) return '副本不可用';
   return '副本可变更';
 }
+
+function annotationAvailabilityLabel(target: EmergencyTargetDisplay): string {
+  const availability = target.annotationAvailability;
+  if (availability.available) return '注解可变更';
+  if (availability.reasonCode === 'not_observed') return '注解不可用（无实时观测）';
+  return '注解不可用';
+}
 </script>
 
 <template>
@@ -55,12 +62,15 @@ function replicasAvailabilityLabel(target: EmergencyTargetDisplay): string {
           <span :class="{ blocked: !target.replicasAction?.availability.available }">
             {{ replicasAvailabilityLabel(target) }}
           </span>
+          <span :class="{ blocked: !target.annotationAvailability.available }">
+            {{ annotationAvailabilityLabel(target) }}
+          </span>
           <span
             v-for="annotation in target.annotationActions"
-            :key="annotation.key"
+            :key="`${annotation.scope}/${annotation.key}`"
             :class="{ blocked: !annotation.availability.available }"
           >
-            注解 {{ annotation.key }}
+            注解 {{ annotation.scope }}/{{ annotation.key }}
           </span>
         </span>
       </div>

@@ -171,14 +171,19 @@ func TestInventoryUpdateWorkloadObservation(t *testing.T) {
 
 	replicas := int32(3)
 	observedAt := time.Now().UTC().Truncate(time.Second)
+	annotations := map[string]map[string]string{
+		"WORKLOAD_METADATA":     {"team": "platform", "tier": "web"},
+		"POD_TEMPLATE_METADATA": {"prometheus.io/scrape": "true"},
+	}
 	observation := store.WorkloadObservation{
 		Containers: []string{"api", "sidecar"},
 		ImageRefs: map[string]string{
 			"api":     "registry.example.com/api:1.2.3",
 			"sidecar": "registry.example.com/sidecar:0.4.0",
 		},
-		Replicas:   &replicas,
-		ObservedAt: observedAt,
+		Annotations: annotations,
+		Replicas:    &replicas,
+		ObservedAt:  observedAt,
 	}
 	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", observation))
 
@@ -186,11 +191,14 @@ func TestInventoryUpdateWorkloadObservation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"api", "sidecar"}, got.ObservedContainers)
 	assert.Equal(t, observation.ImageRefs, got.ObservedImageRefs)
+	assert.Equal(t, annotations, got.ObservedAnnotations, "the scope-grouped annotation projection must round-trip")
 	require.NotNil(t, got.ObservedReplicas)
 	assert.Equal(t, int32(3), *got.ObservedReplicas)
 	assert.True(t, got.ObservedAt.Equal(observedAt), "observed_at must round-trip: got %s want %s", got.ObservedAt, observedAt)
 
-	// Last write wins, and a real zero replica count is preserved as zero.
+	// Last write wins, and a real zero replica count is preserved as zero. The
+	// later observation carries no annotations, so the projection is cleared —
+	// an empty result must not leave the previous value behind.
 	zero := int32(0)
 	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
 		Containers: []string{"api"},
@@ -202,6 +210,7 @@ func TestInventoryUpdateWorkloadObservation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"api"}, got.ObservedContainers)
 	assert.Equal(t, map[string]string{"api": "registry.example.com/api:1.2.4"}, got.ObservedImageRefs)
+	assert.Nil(t, got.ObservedAnnotations, "a later observation with no annotations must clear them")
 	require.NotNil(t, got.ObservedReplicas)
 	assert.Equal(t, int32(0), *got.ObservedReplicas, "a real zero must not collapse into not-observed")
 
@@ -224,6 +233,7 @@ func TestInventoryObservedWorkloadDefaultsToNotObserved(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got.ObservedContainers)
 	assert.Nil(t, got.ObservedImageRefs)
+	assert.Nil(t, got.ObservedAnnotations)
 	assert.Nil(t, got.ObservedReplicas)
 	assert.True(t, got.ObservedAt.IsZero())
 }
@@ -238,11 +248,13 @@ func TestInventoryUpsertPreservesWorkloadObservation(t *testing.T) {
 
 	replicas := int32(4)
 	observedAt := time.Now().UTC().Truncate(time.Second)
+	annotations := map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}}
 	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
-		Containers: []string{"api"},
-		ImageRefs:  map[string]string{"api": "registry.example.com/api:2.0.0"},
-		Replicas:   &replicas,
-		ObservedAt: observedAt,
+		Containers:  []string{"api"},
+		ImageRefs:   map[string]string{"api": "registry.example.com/api:2.0.0"},
+		Annotations: annotations,
+		Replicas:    &replicas,
+		ObservedAt:  observedAt,
 	}))
 
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
@@ -261,30 +273,34 @@ func TestInventoryUpsertPreservesWorkloadObservation(t *testing.T) {
 	assert.Equal(t, 2, got.Revision)
 	assert.Equal(t, []string{"api"}, got.ObservedContainers, "sync upsert must not clobber the observation")
 	assert.Equal(t, map[string]string{"api": "registry.example.com/api:2.0.0"}, got.ObservedImageRefs)
+	assert.Equal(t, annotations, got.ObservedAnnotations, "sync upsert must not clobber the annotations")
 	require.NotNil(t, got.ObservedReplicas)
 	assert.Equal(t, int32(4), *got.ObservedReplicas)
 	assert.True(t, got.ObservedAt.Equal(observedAt))
 
 	inserted := int32(1)
 	insertedAt := observedAt.Add(2 * time.Minute)
+	freshAnnotations := map[string]map[string]string{"POD_TEMPLATE_METADATA": {"prometheus.io/scrape": "true"}}
 	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
-		CustomerID:         "customer-1",
-		ClusterID:          "cluster-1",
-		Namespace:          "apps",
-		ReleaseName:        "fresh",
-		Chart:              "example-chart",
-		Revision:           1,
-		Status:             "deployed",
-		InventoryStatus:    store.InventoryActive,
-		ObservedContainers: []string{"fresh-api"},
-		ObservedImageRefs:  map[string]string{"fresh-api": "registry.example.com/fresh:1.0.0"},
-		ObservedReplicas:   &inserted,
-		ObservedAt:         insertedAt,
+		CustomerID:          "customer-1",
+		ClusterID:           "cluster-1",
+		Namespace:           "apps",
+		ReleaseName:         "fresh",
+		Chart:               "example-chart",
+		Revision:            1,
+		Status:              "deployed",
+		InventoryStatus:     store.InventoryActive,
+		ObservedContainers:  []string{"fresh-api"},
+		ObservedImageRefs:   map[string]string{"fresh-api": "registry.example.com/fresh:1.0.0"},
+		ObservedAnnotations: freshAnnotations,
+		ObservedReplicas:    &inserted,
+		ObservedAt:          insertedAt,
 	}))
 	got, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "fresh")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"fresh-api"}, got.ObservedContainers)
 	assert.Equal(t, map[string]string{"fresh-api": "registry.example.com/fresh:1.0.0"}, got.ObservedImageRefs)
+	assert.Equal(t, freshAnnotations, got.ObservedAnnotations)
 	require.NotNil(t, got.ObservedReplicas)
 	assert.Equal(t, int32(1), *got.ObservedReplicas)
 	assert.True(t, got.ObservedAt.Equal(insertedAt))

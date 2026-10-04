@@ -25,6 +25,7 @@ const inventorySelectColumns = `customer_id, cluster_id, release_definition_id, 
 	inventory_status, last_sync_id, snapshot_version,
 	workload_kind, workload_name, workload_namespace, workload_uid,
 	observed_containers, observed_image_refs, observed_replicas, observed_at,
+	observed_annotations,
 	created_at, updated_at`
 
 // scanInventoryRow decodes one row selected with inventorySelectColumns.
@@ -32,6 +33,7 @@ func scanInventoryRow(scanner interface{ Scan(dest ...any) error }) (*store.Rele
 	var item store.ReleaseInventory
 	var createdAt, updatedAt string
 	var observedContainers, observedImageRefs, observedAt sql.NullString
+	var observedAnnotations sql.NullString
 	var observedReplicas sql.NullInt32
 	if err := scanner.Scan(
 		&item.CustomerID, &item.ClusterID, &item.ReleaseDefinitionID, &item.Namespace, &item.ReleaseName,
@@ -41,6 +43,7 @@ func scanInventoryRow(scanner interface{ Scan(dest ...any) error }) (*store.Rele
 		&item.SnapshotVersion,
 		&item.WorkloadKind, &item.WorkloadName, &item.WorkloadNamespace, &item.WorkloadUID,
 		&observedContainers, &observedImageRefs, &observedReplicas, &observedAt,
+		&observedAnnotations,
 		&createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
@@ -49,6 +52,7 @@ func scanInventoryRow(scanner interface{ Scan(dest ...any) error }) (*store.Rele
 	item.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt) //nolint:errcheck // stored timestamps always valid RFC3339
 	item.ObservedContainers = decodeObservedContainers(observedContainers)
 	item.ObservedImageRefs = decodeObservedImageRefs(observedImageRefs)
+	item.ObservedAnnotations = decodeObservedAnnotations(observedAnnotations)
 	if observedReplicas.Valid {
 		item.ObservedReplicas = &observedReplicas.Int32
 	}
@@ -74,14 +78,18 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 	if err != nil {
 		return err
 	}
+	observedAnnotations, err := encodeObservedAnnotations(item.ObservedAnnotations)
+	if err != nil {
+		return err
+	}
 
 	const stmt = `INSERT INTO release_inventory
 		(customer_id, cluster_id, release_definition_id, namespace, release_name, chart, chart_version, revision, status,
 		 values_digest, observed_bundle_digest, observed_chart_digest, observed_effective_values_digest,
 		 observed_manifest_digest, live_status, last_operation_id, inventory_status, last_sync_id, snapshot_version,
 		 workload_kind, workload_name, workload_namespace, workload_uid,
-		 observed_containers, observed_image_refs, observed_replicas, observed_at, created_at, updated_at)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 observed_containers, observed_image_refs, observed_replicas, observed_at, observed_annotations, created_at, updated_at)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	 ON CONFLICT(customer_id, cluster_id, namespace, release_name) DO UPDATE SET
 		release_definition_id = COALESCE(NULLIF(excluded.release_definition_id, ''), release_definition_id),
 		chart = excluded.chart,
@@ -106,6 +114,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		observed_image_refs = CASE WHEN excluded.observed_image_refs = '{}' THEN observed_image_refs ELSE excluded.observed_image_refs END,
 		observed_replicas = COALESCE(excluded.observed_replicas, observed_replicas),
 		observed_at = COALESCE(excluded.observed_at, observed_at),
+		observed_annotations = CASE WHEN excluded.observed_annotations = '{}' THEN observed_annotations ELSE excluded.observed_annotations END,
 		updated_at = excluded.updated_at`
 
 	_, err = s.db.ExecContext(ctx, stmt,
@@ -116,6 +125,7 @@ func (s *inventoryStore) Upsert(ctx context.Context, item *store.ReleaseInventor
 		item.LastSyncID, item.SnapshotVersion,
 		item.WorkloadKind, item.WorkloadName, item.WorkloadNamespace, item.WorkloadUID,
 		observedContainers, observedImageRefs, observedReplicasValue(item.ObservedReplicas), observedAtValue(item.ObservedAt),
+		observedAnnotations,
 		item.CreatedAt.UTC().Format(time.RFC3339), now,
 	)
 	return err
@@ -249,11 +259,16 @@ func (s *inventoryStore) UpdateWorkloadObservation(ctx context.Context, customer
 	if err != nil {
 		return err
 	}
+	annotations, err := encodeObservedAnnotations(observation.Annotations)
+	if err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE release_inventory
-		SET observed_containers = ?, observed_image_refs = ?, observed_replicas = ?, observed_at = ?, updated_at = ?
+		SET observed_containers = ?, observed_image_refs = ?, observed_replicas = ?, observed_at = ?, observed_annotations = ?, updated_at = ?
 		WHERE customer_id = ? AND cluster_id = ? AND namespace = ? AND release_name = ?`,
 		containers, imageRefs, observedReplicasValue(observation.Replicas), observedAtValue(observation.ObservedAt),
+		annotations,
 		time.Now().UTC().Format(time.RFC3339),
 		customerID, clusterID, namespace, releaseName,
 	)
@@ -324,6 +339,61 @@ func decodeObservedImageRefs(raw sql.NullString) map[string]string {
 		return nil
 	}
 	return imageRefs
+}
+
+// encodeObservedAnnotations JSON-encodes the scope-grouped approved annotation
+// projection (TASK-241 U2=B). A nil or empty map encodes to "{}" — the column
+// default and the "not observed" sentinel the upsert preservation relies on.
+// Scopes with no approved entry are dropped so an "observed nothing" scope
+// never masquerades as a real observation.
+func encodeObservedAnnotations(annotations map[string]map[string]string) (string, error) {
+	compact := compactObservedAnnotations(annotations)
+	if len(compact) == 0 {
+		return "{}", nil
+	}
+	payload, err := json.Marshal(compact)
+	if err != nil {
+		return "", fmt.Errorf("encode observed annotations: %w", err)
+	}
+	return string(payload), nil
+}
+
+// decodeObservedAnnotations decodes the scope-grouped annotation projection
+// with the same fail-closed rules as decodeObservedImageRefs: a NULL, empty or
+// malformed value decodes to nil ("not observed") rather than failing the row
+// read, and empty scopes are dropped.
+func decodeObservedAnnotations(raw sql.NullString) map[string]map[string]string {
+	if !raw.Valid || raw.String == "" || raw.String == "{}" {
+		return nil
+	}
+	var annotations map[string]map[string]string
+	if err := json.Unmarshal([]byte(raw.String), &annotations); err != nil {
+		return nil
+	}
+	compact := compactObservedAnnotations(annotations)
+	if len(compact) == 0 {
+		return nil
+	}
+	return compact
+}
+
+// compactObservedAnnotations drops empty scopes (and blank scope names) so the
+// persisted value never carries a scope that observed nothing.
+func compactObservedAnnotations(annotations map[string]map[string]string) map[string]map[string]string {
+	if len(annotations) == 0 {
+		return nil
+	}
+	compact := make(map[string]map[string]string, len(annotations))
+	for scope, entries := range annotations {
+		if scope == "" || len(entries) == 0 {
+			continue
+		}
+		compact[scope] = entries
+	}
+	if len(compact) == 0 {
+		return nil
+	}
+	return compact
 }
 
 // observedReplicasValue converts the optional replica count to a SQL value:

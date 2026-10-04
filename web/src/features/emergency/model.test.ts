@@ -23,6 +23,7 @@ import {
   mapEmergencyTypedValues,
   mapOpType,
   mapRunningOperation,
+  parseScopedAnnotationKey,
   workloadRefToWire,
 } from '@/features/emergency/model';
 
@@ -96,6 +97,114 @@ describe('model mapping (generated → display)', () => {
     });
     expect(display.annotationActions).toHaveLength(1);
     expect(display.annotationActions[0]).toMatchObject({ key: 'tier', currentValue: 'web', availability: { available: true } });
+  });
+
+  // TASK-241 W-e: annotation actions come from the real (approved, observed)
+  // projection. The flat read-model map encodes the scope as "<scope>/<key>";
+  // the display splits it so submissions can carry the scope, and a key that
+  // itself contains '/' is preserved.
+  it('generates annotation actions per scope from a fresh observation', () => {
+    const target = create(EmergencyTargetSchema, {
+      workloadRef: create(WorkloadRefSchema, { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' }),
+      containers: [],
+      supportedOperations: [EmergencyAction.SET_APPROVED_ANNOTATION],
+      promotions: [
+        { workloadKind: 'DEPLOYMENT', workloadName: 'api', container: '', field: 'team', valuesPath: 'labels.team' },
+      ],
+      currentImageRefs: {},
+      currentReplicas: 1,
+      currentAnnotations: {
+        'WORKLOAD_METADATA/team': 'platform',
+        'POD_TEMPLATE_METADATA/prometheus.io/scrape': 'true',
+      },
+      hpaManaged: false,
+      maxEmergencyReplicas: 0,
+    });
+
+    const display = mapEmergencyTarget(target);
+    expect(display.annotationAvailability).toEqual({ available: true });
+    const byScopeKey: Record<string, unknown> = {};
+    for (const action of display.annotationActions) {
+      byScopeKey[`${action.scope}/${action.key}`] = action;
+    }
+    expect(byScopeKey).toEqual({
+      'WORKLOAD_METADATA/team': {
+        key: 'team',
+        scope: 'WORKLOAD_METADATA',
+        currentValue: 'platform',
+        availability: { available: true },
+        promotions: [
+          { workloadKind: 'DEPLOYMENT', workloadName: 'api', container: '', field: 'team', valuesPath: 'labels.team' },
+        ],
+      },
+      'POD_TEMPLATE_METADATA/prometheus.io/scrape': {
+        key: 'prometheus.io/scrape',
+        scope: 'POD_TEMPLATE_METADATA',
+        currentValue: 'true',
+        availability: { available: true },
+        promotions: [],
+      },
+    });
+  });
+
+  it('keeps annotation actions empty with a stable reason when nothing was observed', () => {
+    const target = create(EmergencyTargetSchema, {
+      workloadRef: create(WorkloadRefSchema, { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' }),
+      containers: [],
+      supportedOperations: [EmergencyAction.SET_REPLICAS],
+      promotions: [],
+      currentImageRefs: {},
+      currentReplicas: 1,
+      currentAnnotations: {},
+      hpaManaged: false,
+      maxEmergencyReplicas: 5,
+    });
+
+    const display = mapEmergencyTarget(target);
+    expect(display.annotationActions).toEqual([]);
+    expect(display.annotationAvailability).toEqual({ available: false, reasonCode: 'not_observed' });
+  });
+
+  it('parses the scope-qualified read-model annotation key on the first slash', () => {
+    expect(parseScopedAnnotationKey('WORKLOAD_METADATA/team')).toEqual({
+      scope: 'WORKLOAD_METADATA',
+      key: 'team',
+    });
+    expect(parseScopedAnnotationKey('POD_TEMPLATE_METADATA/prometheus.io/scrape')).toEqual({
+      scope: 'POD_TEMPLATE_METADATA',
+      key: 'prometheus.io/scrape',
+    });
+    expect(parseScopedAnnotationKey('bare')).toEqual({ scope: '', key: 'bare' });
+  });
+
+  // TASK-241 U2=B: the same key may exist under two scopes. The flat read model
+  // distinguishes them by the scope prefix, so the display must keep two actions
+  // (and the selector keys them by scope/key) instead of collapsing them.
+  it('keeps the same annotation key under two scopes as two distinct actions', () => {
+    const target = create(EmergencyTargetSchema, {
+      workloadRef: create(WorkloadRefSchema, { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' }),
+      containers: [],
+      supportedOperations: [EmergencyAction.SET_APPROVED_ANNOTATION],
+      promotions: [],
+      currentImageRefs: {},
+      currentReplicas: 1,
+      currentAnnotations: {
+        'WORKLOAD_METADATA/tier': 'web',
+        'POD_TEMPLATE_METADATA/tier': 'worker',
+      },
+      hpaManaged: false,
+      maxEmergencyReplicas: 5,
+    });
+
+    const display = mapEmergencyTarget(target);
+    expect(display.annotationAvailability).toEqual({ available: true });
+    const byScope: Record<string, string> = {};
+    for (const action of display.annotationActions) {
+      byScope[action.scope] = action.currentValue;
+    }
+    expect(byScope).toEqual({ WORKLOAD_METADATA: 'web', POD_TEMPLATE_METADATA: 'worker' });
+    expect(display.annotationActions).toHaveLength(2);
+    expect(new Set(display.annotationActions.map((a) => `${a.scope}/${a.key}`)).size).toBe(2);
   });
 
   it('marks unsupported replicas as unavailable', () => {

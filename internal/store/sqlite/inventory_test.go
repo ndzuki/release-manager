@@ -411,3 +411,84 @@ func TestInventoryUpsertPreservesWorkloadObservation(t *testing.T) {
 	assert.Equal(t, int32(1), *got.ObservedReplicas)
 	assert.True(t, got.ObservedAt.Equal(insertedAt))
 }
+
+// TestInventoryUpdateWorkloadAnnotations (TASK-241 W-c) covers both states of
+// the additive contract: a row that was never observed carries no annotations
+// (nil, not a fabricated empty map), and a reported scope → key → value
+// projection round-trips; a later observation with no annotations clears them
+// again (last write wins).
+func TestInventoryUpdateWorkloadAnnotations(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	seedInventoryItem(t, st, "customer-1", "cluster-1", "apps", "example")
+
+	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Nil(t, got.ObservedAnnotations, "an unobserved row carries no annotations")
+
+	annotations := map[string]map[string]string{
+		"WORKLOAD_METADATA":     {"team": "platform", "tier": "web"},
+		"POD_TEMPLATE_METADATA": {"prometheus.io/scrape": "true"},
+	}
+	observedAt := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
+		Annotations: annotations,
+		ObservedAt:  observedAt,
+	}))
+
+	got, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, annotations, got.ObservedAnnotations)
+	assert.Equal(t, observedAt, got.ObservedAt)
+
+	// A later observation that carries no approved annotations clears the
+	// projection instead of leaving the previous one behind.
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
+		ObservedAt: observedAt.Add(time.Minute),
+	}))
+	got, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Nil(t, got.ObservedAnnotations, "a later observation with no annotations must clear them")
+
+	// Unknown row → ErrNotFound, no implicit insert.
+	err = st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "missing", store.WorkloadObservation{
+		Annotations: annotations, ObservedAt: observedAt,
+	})
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// TestInventoryUpsertPreservesObservedAnnotations: an inventory-sync Upsert
+// (whose rows carry no observation) must not clobber a previously reported
+// annotation projection, while an Upsert that does carry one writes it on the
+// INSERT path.
+func TestInventoryUpsertPreservesObservedAnnotations(t *testing.T) {
+	st := setupStore(t)
+	ctx := t.Context()
+	seedInventoryItem(t, st, "customer-1", "cluster-1", "apps", "example")
+
+	observedAt := time.Now().UTC().Truncate(time.Second)
+	annotations := map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}}
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
+		Annotations: annotations,
+		ObservedAt:  observedAt,
+	}))
+
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID: "customer-1", ClusterID: "cluster-1", Namespace: "apps", ReleaseName: "example",
+		Chart: "example-chart", Revision: 2, Status: "deployed", InventoryStatus: store.InventoryActive,
+	}))
+	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, annotations, got.ObservedAnnotations, "sync upsert must not clobber the annotations")
+
+	fresh := map[string]map[string]string{"POD_TEMPLATE_METADATA": {"prometheus.io/scrape": "true"}}
+	require.NoError(t, st.Inventories().Upsert(ctx, &store.ReleaseInventory{
+		CustomerID: "customer-1", ClusterID: "cluster-1", Namespace: "apps", ReleaseName: "fresh",
+		Chart: "example-chart", Revision: 1, Status: "deployed", InventoryStatus: store.InventoryActive,
+		ObservedAnnotations: fresh,
+		ObservedAt:          observedAt,
+	}))
+	got, err = st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "fresh")
+	require.NoError(t, err)
+	assert.Equal(t, fresh, got.ObservedAnnotations)
+}

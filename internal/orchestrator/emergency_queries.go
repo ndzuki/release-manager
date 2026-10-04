@@ -23,15 +23,18 @@ import (
 const emergencyObservationMaxAge = 15 * time.Minute
 
 // emergencyObservation is the operator-reported mutable workload state for one
-// release: the container list, each container's current image ref and the
-// observed replica count, stamped with the observation time. Annotations are
-// deliberately absent this round (their values may carry sensitive data), so
-// annotation operations stay degraded.
+// release: the container list, each container's current image ref, the
+// observed replica count and the approved-and-observed annotations, stamped
+// with the observation time.
 //
 // The zero value means "not observed": consumers must fail closed.
 type emergencyObservation struct {
 	Containers       []string
 	CurrentImageRefs map[string]string
+	// Annotations is the approved annotation projection grouped by scope
+	// (TASK-241 U2=B): scope → key → value. nil/empty means "not observed" or
+	// "whitelist unknown" and must be treated as absent.
+	Annotations      map[string]map[string]string
 	CurrentReplicas  int32
 	// ReplicasObserved distinguishes an observed 0 from "not observed" (a
 	// DaemonSet reports no replica count at all).
@@ -64,6 +67,7 @@ func emergencyObservedWorkload(inventory *store.ReleaseInventory) (emergencyObse
 	observation := emergencyObservation{
 		Containers:       inventory.ObservedContainers,
 		CurrentImageRefs: inventory.ObservedImageRefs,
+		Annotations:      cloneScopedAnnotations(inventory.ObservedAnnotations),
 		ObservedAt:       inventory.ObservedAt,
 	}
 	if inventory.ObservedReplicas != nil {
@@ -75,20 +79,32 @@ func emergencyObservedWorkload(inventory *store.ReleaseInventory) (emergencyObse
 
 // emergencyWorkloadView is the fail-closed projection of an observation onto
 // the target read model. When no fresh observation exists every field keeps the
-// D7=A unavailable sentinel: an empty container/image map and replicas -1.
+// D7=A unavailable sentinel: an empty container/image/annotation map and
+// replicas -1.
 type emergencyWorkloadView struct {
 	Containers       []string
 	CurrentImageRefs map[string]string
-	CurrentReplicas  int32
+	// Annotations carries the approved annotation projection grouped by scope
+	// (TASK-241 U2=B); empty when no fresh observation backed it.
+	Annotations     map[string]map[string]string
+	CurrentReplicas int32
 	// Observed reports whether a fresh observation backed these values.
 	Observed bool
 }
 
 // imageSelectable reports whether a fresh observation supplies enough data to
-// target a container image change. Annotation operations are not represented
-// here: the annotation data plane is out of scope this round.
+// target a container image change.
 func (w emergencyWorkloadView) imageSelectable() bool {
 	return w.Observed && len(w.Containers) > 0 && len(w.CurrentImageRefs) > 0
+}
+
+// annotationSelectable reports whether a fresh observation supplies at least
+// one approved annotation, which is the condition for offering
+// SET_APPROVED_ANNOTATION. The operator only reports whitelisted keys (U1=A),
+// so a non-empty projection implies the definition whitelist existed and was
+// applied; a missing or empty projection means the action must stay degraded.
+func (w emergencyWorkloadView) annotationSelectable() bool {
+	return w.Observed && len(w.Annotations) > 0
 }
 
 // projectEmergencyWorkload turns an observation into the fail-closed view used
@@ -99,6 +115,7 @@ func projectEmergencyWorkload(observation emergencyObservation, observed bool, n
 	view := emergencyWorkloadView{
 		Containers:       []string{},
 		CurrentImageRefs: map[string]string{},
+		Annotations:      map[string]map[string]string{},
 		CurrentReplicas:  -1,
 	}
 	if !observed || !observation.observedFresh(now) {
@@ -114,10 +131,52 @@ func projectEmergencyWorkload(observation emergencyObservation, observed bool, n
 			view.CurrentImageRefs[container] = ref
 		}
 	}
+	if len(observation.Annotations) > 0 {
+		view.Annotations = cloneScopedAnnotations(observation.Annotations)
+	}
 	if observation.ReplicasObserved {
 		view.CurrentReplicas = observation.CurrentReplicas
 	}
 	return view
+}
+
+// cloneScopedAnnotations deep-copies a scope → key → value projection so a
+// caller cannot mutate the store row through the returned map. nil stays nil.
+func cloneScopedAnnotations(annotations map[string]map[string]string) map[string]map[string]string {
+	if len(annotations) == 0 {
+		return nil
+	}
+	cloned := make(map[string]map[string]string, len(annotations))
+	for scope, entries := range annotations {
+		copied := make(map[string]string, len(entries))
+		for key, value := range entries {
+			copied[key] = value
+		}
+		cloned[scope] = copied
+	}
+	return cloned
+}
+
+// emergencyAnnotationScopeSeparator joins the scope and the key in the flat
+// EmergencyTarget.current_annotations map. The proto read-model field is a flat
+// map<string,string> while the observation is grouped by scope (TASK-241
+// U2=B), so the scope is encoded in the key as "<scope>/<key>". Kubernetes
+// annotation keys may themselves contain '/', so a consumer must split on the
+// FIRST separator only (the scope vocabulary WORKLOAD_METADATA /
+// POD_TEMPLATE_METADATA contains none).
+const emergencyAnnotationScopeSeparator = "/"
+
+// flatScopedAnnotations projects the scope-grouped observation onto the flat
+// read-model map. An empty projection yields an empty (non-nil) map, matching
+// the D7=A sentinel shape.
+func flatScopedAnnotations(annotations map[string]map[string]string) map[string]string {
+	flat := make(map[string]string)
+	for scope, entries := range annotations {
+		for key, value := range entries {
+			flat[scope+emergencyAnnotationScopeSeparator+key] = value
+		}
+	}
+	return flat
 }
 
 func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requestedOrganizationID string) error {
@@ -147,10 +206,12 @@ func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requ
 // authoritative workload identity reported by the operator (REQ-085
 // D-110 ②), all four WorkloadRef fields come from it; otherwise name/namespace
 // keep the D1=B derivation and kind/uid stay empty (downstream fail-closed).
-// The mutable current values (containers, image refs, replicas) come from the
-// operator-reported observation only while it is fresh; a missing or stale
-// observation keeps the D7=A unavailable sentinels (current_replicas=-1, empty
-// containers/image refs) and the corresponding operation stays unavailable.
+// The mutable current values (containers, image refs, replicas, approved
+// annotations) come from the operator-reported observation only while it is
+// fresh; a missing or stale observation keeps the D7=A unavailable sentinels
+// (current_replicas=-1, empty containers/image refs/annotations) and the
+// corresponding operation stays unavailable. Because the read-model proto field
+// is a flat map, annotations are projected as "<scope>/<key>" (TASK-241 U2=B).
 // A definition without an inventory row yields an empty target list (not an
 // error).
 func (s *Service) ListEmergencyTargets(
@@ -208,7 +269,7 @@ func (s *Service) ListEmergencyTargets(
 		CurrentReplicas:      workload.CurrentReplicas,
 		Containers:           workload.Containers,
 		CurrentImageRefs:     workload.CurrentImageRefs,
-		CurrentAnnotations:   map[string]string{},
+		CurrentAnnotations:   flatScopedAnnotations(workload.Annotations),
 		HpaManaged:           definition.HPAManaged,
 		MaxEmergencyReplicas: definition.MaxEmergencyReplicas,
 		Promotions:           promotionsToProto(definition.PromotionMappings),
@@ -233,22 +294,27 @@ func promotionsToProto(mappings []store.PromotionMapping) []*orchestratorv1.Prom
 }
 
 // deriveSupportedOperations computes the emergency actions available for one
-// target. The two dimensions are independent (AC-058-09: image may be
-// selectable while replicas is disabled with a stable reason):
+// target. The dimensions are independent (AC-058-09: image may be selectable
+// while replicas is disabled with a stable reason):
 //   - SET_REPLICAS requires a DEPLOYMENT/STATEFUL_SET promotion mapping
 //     (REQ-032 §226), no live HPA and a positive replicas ceiling;
 //   - SET_CONTAINER_IMAGE requires a fresh observation carrying containers and
 //     their current image refs (W4). Without one the operation stays degraded.
-//
-// Annotation operations always stay degraded: the annotation data plane is out
-// of scope this round, so no annotation value is ever projected.
+//   - SET_APPROVED_ANNOTATION requires a fresh observation carrying at least
+//     one approved annotation (TASK-241 W-d): the operator reports only
+//     whitelisted keys (U1=A), so a non-empty projection means the whitelist
+//     existed and was applied. A missing or stale observation advertises
+//     nothing — stale values are never treated as current.
 func deriveSupportedOperations(definition *store.ReleaseDefinition, workload emergencyWorkloadView) []orchestratorv1.EmergencyAction {
-	operations := make([]orchestratorv1.EmergencyAction, 0, 2)
+	operations := make([]orchestratorv1.EmergencyAction, 0, 3)
 	if emergencyReplicasEligible(definition) {
 		operations = append(operations, orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_REPLICAS)
 	}
 	if workload.imageSelectable() {
 		operations = append(operations, orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_CONTAINER_IMAGE)
+	}
+	if workload.annotationSelectable() {
+		operations = append(operations, orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_APPROVED_ANNOTATION)
 	}
 	return operations
 }

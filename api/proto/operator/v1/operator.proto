@@ -112,12 +112,38 @@ message WorkloadIdentityItem {
   // "not observed" (absent) apart from a real zero (e.g. a scaled-to-zero
   // Deployment); DaemonSets have no replica count and leave it absent.
   optional int32 current_replicas = 9;
-  // Field 10 is intentionally unused: it is reserved for
-  // current_annotations, whose data plane is deferred (annotation values may
-  // carry sensitive data and need a whitelist decision first — TASK-168).
+  // Annotations observed on the workload, grouped by scope (TASK-241 U2=B): the
+  // same key may appear under two scopes, so keys are not globally unique and the
+  // existing definition contract is unchanged. Only keys the center approved for
+  // this release may appear here (TASK-241 U1=A); an empty list means either "not
+  // observed" or "whitelist unknown", and a consumer must treat both as absent
+  // rather than as "no annotations configured".
+  repeated ScopedAnnotations current_annotations = 10;
   // Time the operator took this observation, used for staleness decisions.
   // Absent means "not observed".
   google.protobuf.Timestamp observed_at = 11;
+}
+
+// AnnotationEntry is one approved annotation key/value pair.
+message AnnotationEntry {
+  string key = 1;
+  string value = 2;
+}
+
+// ScopedAnnotations carries the approved annotation entries observed for one scope.
+message ScopedAnnotations {
+  string scope = 1;
+  repeated AnnotationEntry entries = 2;
+}
+
+// ApprovedAnnotationKey mirrors one center-side whitelist entry
+// (store.ApprovedAnnotationKeys). It travels down with a command so the operator can
+// filter annotations inside the cluster: unapproved values never reach the wire
+// (TASK-241 U1=A, ADR-001 keeps the center from dialing the operator).
+message ApprovedAnnotationKey {
+  string key = 1;
+  string scope = 2;
+  string promotion_values_path = 3;
 }
 
 // RolloutProgress reports observed workload readiness during a standard operation.
@@ -227,6 +253,10 @@ message Command {
   bytes values_patch = 16;            // JSON merge patch
   int64 target_revision = 17;         // target revision for ROLLBACK
   uint32 payload_version = 18;
+  // Annotation keys this release is allowed to observe and report, with their scope.
+  // The agent caches them per release; absence means the whitelist is unknown, in
+  // which case the agent reports no annotations at all (fail-closed, TASK-241 U1=A).
+  repeated ApprovedAnnotationKey approved_annotation_keys = 19;
   // Preflight stage this command executes (REQ-019 artifact/render/cluster/runtime_pull).
   // Empty for a normal execution command. When set, the agent runs that stage's
   // validation and reports its result instead of installing or upgrading: a stage

@@ -301,9 +301,10 @@ func seedObservedInventory(t *testing.T, st store.Store, observation emergencyOb
 		WorkloadKind: workloadDeployment, WorkloadName: "my-release", WorkloadNamespace: "default", WorkloadUID: "uid-observed-0001",
 	}))
 	reported := store.WorkloadObservation{
-		Containers: observation.Containers,
-		ImageRefs:  observation.CurrentImageRefs,
-		ObservedAt: observation.ObservedAt,
+		Containers:  observation.Containers,
+		ImageRefs:   observation.CurrentImageRefs,
+		Annotations: observation.Annotations,
+		ObservedAt:  observation.ObservedAt,
 	}
 	if observation.ReplicasObserved {
 		replicas := observation.CurrentReplicas
@@ -486,7 +487,8 @@ func TestListEmergencyTargetsReplicasPresence(t *testing.T) {
 }
 
 // AC-058-09: a fresh observation advertises SET_CONTAINER_IMAGE and fills the
-// real current values, while annotation operations stay degraded.
+// real current values. This fixture approves no annotation, so the annotation
+// operation stays degraded (the annotated case is TASK-241 W-d).
 func TestListEmergencyTargetsProjectsFreshObservation(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
@@ -504,8 +506,10 @@ func TestListEmergencyTargetsProjectsFreshObservation(t *testing.T) {
 	assert.Equal(t, []string{"api", "sidecar"}, target.GetContainers())
 	assert.Equal(t, "registry.example/team/api:1.0.0", target.GetCurrentImageRefs()["api"])
 	assert.Equal(t, int32(3), target.GetCurrentReplicas())
-	// The annotation data plane is out of scope this round: no value is ever
-	// projected and no annotation operation is advertised.
+	// The seeded observation carries no annotation projection (the whitelist
+	// was empty), so no annotation value is projected and the annotation
+	// operation stays unavailable. The annotation data plane itself is covered
+	// by emergency_annotation_queries_test.go (TASK-241 W-d).
 	assert.Empty(t, target.GetCurrentAnnotations())
 	assert.Equal(t, []orchestratorv1.EmergencyAction{
 		orchestratorv1.EmergencyAction_EMERGENCY_ACTION_SET_REPLICAS,

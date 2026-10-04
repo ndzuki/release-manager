@@ -34,6 +34,12 @@ type CommandPayload struct {
 	Atomic                  bool                       `json:"atomic,omitempty"`
 	CreateNamespace         bool                       `json:"create_namespace,omitempty"`
 	ValuesPatch             json.RawMessage            `json:"values_patch,omitempty"`
+	// ApprovedAnnotationKeys carries the release definition's annotation
+	// whitelist down to the operator (TASK-241 U1=A). The operator filters live
+	// annotations inside the cluster through it, so an unapproved value never
+	// reaches the wire. Omitted (nil) means "whitelist unknown/empty" and the
+	// operator reports no annotations at all (fail closed).
+	ApprovedAnnotationKeys []store.ApprovedAnnotationKey `json:"approved_annotation_keys,omitempty"`
 }
 
 // Marshal serializes the payload to JSON bytes.
@@ -140,6 +146,10 @@ func BuildUpgradePayload(
 		// stays the single authoritative source for Helm execution.
 		Namespace:   definition.Namespace,
 		ReleaseName: definition.ReleaseName,
+		// TASK-241 U1=A: the release-write command is the only carrier of the
+		// definition-derived annotation whitelist; the operator filters the
+		// observed annotations through it inside the cluster.
+		ApprovedAnnotationKeys: definition.ApprovedAnnotationKeys,
 	}, nil
 }
 

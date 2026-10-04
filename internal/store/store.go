@@ -1788,14 +1788,23 @@ type WorkloadIdentity struct {
 // emergency read model can derive real current values (D7=A).
 //
 // Not observed is represented by an empty Containers slice, an empty ImageRefs
-// map, a nil Replicas and a zero ObservedAt; a zero value therefore means "no
-// observation" and must fail closed. Replicas is a pointer because proto3
-// presence distinguishes "not observed" from a real zero.
+// map, an empty Annotations map, a nil Replicas and a zero ObservedAt; a zero
+// value therefore means "no observation" and must fail closed. Replicas is a
+// pointer because proto3 presence distinguishes "not observed" from a real
+// zero.
+//
+// Annotations is grouped by scope (TASK-241 U2=B): scope → key → value, where
+// the scope vocabulary is WORKLOAD_METADATA (the workload object's own
+// metadata) and POD_TEMPLATE_METADATA (its pod template). Only keys the center
+// approved for the release may appear here (TASK-241 U1=A); a nil or empty map
+// means "not observed" or "whitelist unknown" and must be treated as absent,
+// never as "no annotations configured".
 type WorkloadObservation struct {
-	Containers []string
-	ImageRefs  map[string]string
-	Replicas   *int32
-	ObservedAt time.Time
+	Containers  []string
+	ImageRefs   map[string]string
+	Annotations map[string]map[string]string
+	Replicas    *int32
+	ObservedAt  time.Time
 }
 
 // PendingWorkloadIdentity buffers an authoritative identity report whose
@@ -1882,9 +1891,17 @@ type ReleaseInventory struct {
 	ObservedContainers []string
 	ObservedImageRefs  map[string]string
 	ObservedReplicas   *int32
-	ObservedAt         time.Time
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// ObservedAnnotations is the approved annotation projection grouped by
+	// scope (TASK-241 U2=B): scope → key → value, with the scope vocabulary
+	// WORKLOAD_METADATA / POD_TEMPLATE_METADATA. Only keys the center approved
+	// for the release are present (TASK-241 U1=A) and only when the
+	// observation is fresh; a nil or empty map means "not observed" (or
+	// "whitelist unknown") and must be treated as absent, never as "no
+	// annotations configured".
+	ObservedAnnotations map[string]map[string]string
+	ObservedAt          time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // InventorySyncLog records the application of a sync snapshot for idempotency.
@@ -2461,11 +2478,12 @@ type InventoryStore interface {
 	UpdateWorkloadIdentity(ctx context.Context, customerID, clusterID, namespace, releaseName string, identity WorkloadIdentity) error
 
 	// UpdateWorkloadObservation overwrites the observed workload field
-	// projection (containers / image refs / replicas / observed_at) on the row
-	// located by (customer_id, cluster_id, namespace, release_name). Returns
-	// ErrNotFound when no such inventory row exists — an observation is never
-	// inserted for a release the inventory does not know. Last write wins; an
-	// inventory sync Upsert never clobbers a previously reported observation.
+	// projection (containers / image refs / approved annotations / replicas /
+	// observed_at) on the row located by (customer_id, cluster_id, namespace,
+	// release_name). Returns ErrNotFound when no such inventory row exists — an
+	// observation is never inserted for a release the inventory does not know.
+	// Last write wins; an inventory sync Upsert never clobbers a previously
+	// reported observation.
 	UpdateWorkloadObservation(ctx context.Context, customerID, clusterID, namespace, releaseName string, observation WorkloadObservation) error
 
 	// Query returns one filtered page and validates that an opaque cursor still

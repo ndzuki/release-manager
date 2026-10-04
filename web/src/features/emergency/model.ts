@@ -53,7 +53,7 @@ export interface PromotionMappingDisplay {
   valuesPath: string;
 }
 
-export type ActionAvailabilityReason = 'hpa_managed' | 'unsupported_operation';
+export type ActionAvailabilityReason = 'hpa_managed' | 'unsupported_operation' | 'not_observed';
 
 export interface ActionAvailabilityDisplay {
   available: boolean;
@@ -77,6 +77,10 @@ export interface EmergencyReplicasActionDisplay {
 
 export interface EmergencyAnnotationActionDisplay {
   key: string;
+  /** AnnotationScope the key was approved and observed under (REQ-058:
+   * WORKLOAD_METADATA / POD_TEMPLATE_METADATA). The read-model proto field is a
+   * flat map, so the server encodes it as "<scope>/<key>". */
+  scope: string;
   currentValue: string;
   availability: ActionAvailabilityDisplay;
   promotions: PromotionMappingDisplay[];
@@ -90,6 +94,11 @@ export interface EmergencyTargetDisplay {
   imageActions: EmergencyImageActionDisplay[];
   replicasAction: EmergencyReplicasActionDisplay | null;
   annotationActions: EmergencyAnnotationActionDisplay[];
+  /** Availability of the annotation action as a whole. When no fresh
+   * observation exists the action list is empty and this carries the stable
+   * reason ('not_observed') so the UI can explain the absence without
+   * fabricating entries. */
+  annotationAvailability: ActionAvailabilityDisplay;
 }
 
 export interface CandidateArtifactDisplay {
@@ -266,14 +275,30 @@ export function mapEmergencyTarget(target: ProtoEmergencyTarget): EmergencyTarge
   const annotationSupported = supportedOperations.includes('SET_APPROVED_ANNOTATION');
   const annotationActions: EmergencyAnnotationActionDisplay[] = Object.entries(
     target.currentAnnotations,
-  ).map(([key, currentValue]) => ({
-    key,
-    currentValue,
-    availability: annotationSupported
-      ? { available: true }
-      : { available: false, reasonCode: 'unsupported_operation' },
-    promotions: promotionFor(promotions, workloadRef, '', key),
-  }));
+  ).map(([flatKey, currentValue]) => {
+    const { scope, key } = parseScopedAnnotationKey(flatKey);
+    return {
+      key,
+      scope,
+      currentValue,
+      availability: annotationSupported
+        ? { available: true }
+        : { available: false, reasonCode: 'unsupported_operation' },
+      // Promotion mappings address the annotation by its bare key, not the
+      // scope-qualified read-model key.
+      promotions: promotionFor(promotions, workloadRef, '', key),
+    };
+  });
+  // No projected annotation means no fresh observation (or an empty whitelist):
+  // report a stable reason instead of inventing entries. The server only
+  // advertises SET_APPROVED_ANNOTATION when a fresh observation carries at
+  // least one approved annotation, so the unsupported branch is defensive.
+  const annotationAvailability: ActionAvailabilityDisplay =
+    annotationActions.length === 0
+      ? { available: false, reasonCode: 'not_observed' }
+      : annotationSupported
+        ? { available: true }
+        : { available: false, reasonCode: 'unsupported_operation' };
 
   return {
     workloadRef,
@@ -283,7 +308,23 @@ export function mapEmergencyTarget(target: ProtoEmergencyTarget): EmergencyTarge
     imageActions,
     replicasAction,
     annotationActions,
+    annotationAvailability,
   };
+}
+
+/**
+ * Splits a flat EmergencyTarget.current_annotations key back into its
+ * (scope, key) parts. The server joins the scope and the key with the first
+ * '/' because the read-model proto field is a flat map while the observation is
+ * grouped by scope (TASK-241 U2=B). Kubernetes annotation keys may themselves
+ * contain '/' (e.g. "app.kubernetes.io/name"), so only the first separator is
+ * significant. A key without a separator keeps an empty scope rather than
+ * dropping the entry.
+ */
+export function parseScopedAnnotationKey(flatKey: string): { scope: string; key: string } {
+  const separator = flatKey.indexOf('/');
+  if (separator <= 0) return { scope: '', key: flatKey };
+  return { scope: flatKey.slice(0, separator), key: flatKey.slice(separator + 1) };
 }
 
 export function mapCandidateArtifact(artifact: ProtoCandidateArtifactSummary): CandidateArtifactDisplay {
