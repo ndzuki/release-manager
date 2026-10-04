@@ -156,7 +156,7 @@ func TestWorkloadObservation(t *testing.T) {
 	)
 
 	t.Run("deployment projects containers images and replicas", func(t *testing.T) {
-		uid, observation, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "api")
+		uid, observation, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "api", nil)
 		require.NoError(t, err)
 		assert.Equal(t, "uid-deploy", uid)
 		assert.Equal(t, []string{"api", "sidecar"}, observation.Containers)
@@ -169,30 +169,30 @@ func TestWorkloadObservation(t *testing.T) {
 		assert.False(t, observation.ObservedAt.IsZero(), "the read must be timestamped")
 	})
 	t.Run("real zero replicas stays a non-nil zero", func(t *testing.T) {
-		_, observation, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "scaled")
+		_, observation, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "scaled", nil)
 		require.NoError(t, err)
 		require.NotNil(t, observation.Replicas, "a real 0 is not 'not observed'")
 		assert.Equal(t, int32(0), *observation.Replicas)
 	})
 	t.Run("statefulset projects replicas", func(t *testing.T) {
-		_, observation, err := operator.WorkloadObservation(t.Context(), client, "STATEFUL_SET", "apps", "db")
+		_, observation, err := operator.WorkloadObservation(t.Context(), client, "STATEFUL_SET", "apps", "db", nil)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"postgres"}, observation.Containers)
 		require.NotNil(t, observation.Replicas)
 		assert.Equal(t, int32(3), *observation.Replicas)
 	})
 	t.Run("daemonset leaves replicas absent", func(t *testing.T) {
-		_, observation, err := operator.WorkloadObservation(t.Context(), client, "DAEMON_SET", "apps", "node-agent")
+		_, observation, err := operator.WorkloadObservation(t.Context(), client, "DAEMON_SET", "apps", "node-agent", nil)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"agent"}, observation.Containers)
 		assert.Nil(t, observation.Replicas, "a DaemonSet has no replica count: absent, never 0")
 	})
 	t.Run("missing object fails closed", func(t *testing.T) {
-		_, _, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "ghost")
+		_, _, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "ghost", nil)
 		require.Error(t, err)
 	})
 	t.Run("nil client fails closed", func(t *testing.T) {
-		_, _, err := operator.WorkloadObservation(context.Background(), nil, "DEPLOYMENT", "apps", "api")
+		_, _, err := operator.WorkloadObservation(context.Background(), nil, "DEPLOYMENT", "apps", "api", nil)
 		require.Error(t, err)
 	})
 }
@@ -400,4 +400,104 @@ func TestSelectWorkloadIdentity(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TASK-241 W-b (operator projection): WorkloadObservation reads the workload
+// and pod-template annotations, keeps only the center-approved (key, scope)
+// pairs and groups them by scope. An unknown whitelist (nil) reports nothing —
+// the unapproved `unapproved` value present in the cluster must never appear.
+func TestWorkloadObservationApprovedAnnotations(t *testing.T) {
+	client := kubernetesfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "api", Namespace: "apps", UID: "uid-annotation",
+			Annotations: map[string]string{"team": "platform", "tier": "web", "unapproved": "nope"},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"prometheus.io/scrape": "true"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "api", Image: "registry.example/team/api:1.0.0"}}},
+			},
+		},
+	})
+
+	approved := []store.ApprovedAnnotationKey{
+		{Key: "tier", Scope: operator.AnnotationScopeWorkloadMetadata},
+		{Key: "team", Scope: operator.AnnotationScopeWorkloadMetadata},
+		{Key: "prometheus.io/scrape", Scope: operator.AnnotationScopePodTemplateMetadata},
+		{Key: "missing", Scope: operator.AnnotationScopeWorkloadMetadata},
+		{Key: "team", Scope: "UNKNOWN_SCOPE"},
+	}
+	_, observation, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "api", approved)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]map[string]string{
+		"WORKLOAD_METADATA":     {"team": "platform", "tier": "web"},
+		"POD_TEMPLATE_METADATA": {"prometheus.io/scrape": "true"},
+	}, observation.Annotations)
+
+	// Negative control: an unknown whitelist never projects anything, even
+	// though the live object carries annotations.
+	_, unknown, err := operator.WorkloadObservation(t.Context(), client, "DEPLOYMENT", "apps", "api", nil)
+	require.NoError(t, err)
+	assert.Nil(t, unknown.Annotations, "unknown whitelist must report no annotations (fail closed)")
+}
+
+// TASK-241 W-c (central projection): the wire's scope-grouped
+// current_annotations must reach the release_inventory row through
+// UpdateWorkloadObservation, flattened to scope → key → value. A report whose
+// observation carries no annotation group stores "not observed" (nil), never a
+// present-but-empty map, and an observation-less redelivery leaves the stored
+// projection untouched.
+func TestCommandStreamWorkloadIdentityReportPersistsApprovedAnnotations(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	seedObservationDefinition(t, st, "definition-annotations", "example")
+
+	observedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+		ReleaseNamespace: "apps", ReleaseName: "example",
+		Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-annotations",
+		CurrentAnnotations: []*operatorv1.ScopedAnnotations{
+			{Scope: "WORKLOAD_METADATA", Entries: []*operatorv1.AnnotationEntry{
+				{Key: "team", Value: "platform"}, {Key: "tier", Value: "web"},
+			}},
+			{Scope: "POD_TEMPLATE_METADATA", Entries: []*operatorv1.AnnotationEntry{
+				{Key: "prometheus.io/scrape", Value: "true"},
+			}},
+		},
+		ObservedAt: timestamppb.New(observedAt),
+	}})
+
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]map[string]string{
+		"WORKLOAD_METADATA":     {"team": "platform", "tier": "web"},
+		"POD_TEMPLATE_METADATA": {"prometheus.io/scrape": "true"},
+	}, row.ObservedAnnotations)
+
+	// A later observation with observed_at but no annotation group means the
+	// whitelist now yields nothing: it clears the stored projection rather than
+	// leaving a stale value behind.
+	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+		ReleaseNamespace: "apps", ReleaseName: "example",
+		Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-annotations",
+		ObservedAt: timestamppb.New(observedAt.Add(time.Minute)),
+	}})
+	row, err = st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Nil(t, row.ObservedAnnotations, "an empty projection must be stored as not-observed")
+
+	// An observation-less redelivery (no observed_at) must not clobber it with
+	// the zero value.
+	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "cust-1", "clus-1", "apps", "example", store.WorkloadObservation{
+		Annotations: map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}},
+		ObservedAt:  observedAt,
+	}))
+	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+		ReleaseNamespace: "apps", ReleaseName: "example",
+		Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-annotations",
+	}})
+	row, err = st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}}, row.ObservedAnnotations,
+		"an observation-less report must not clear stored annotations")
 }

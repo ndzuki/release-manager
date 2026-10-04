@@ -12,20 +12,24 @@ import (
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
-// observedWorkloadColumns are the TASK-168 (REQ-058 C1/R1) observed field
-// projection columns migrationStatements must add to release_inventory.
+// observedWorkloadColumns are the observed field projection columns
+// migrationStatements must add to release_inventory: TASK-168 (REQ-058 C1/R1)
+// containers/image refs/replicas/observed_at and TASK-241 the approved
+// annotation projection.
 var observedWorkloadColumns = []string{
 	"observed_containers",
 	"observed_image_refs",
 	"observed_replicas",
 	"observed_at",
+	"observed_annotations",
 }
 
 // TestLegacyMigrationAddsObservedWorkloadColumns is the W3 mutation gate: a
 // pre-existing (legacy) database must gain the observed workload columns from
-// migrationStatements, not just a freshly created one. Removing any of the four
-// ALTER statements makes this test fail ("no such column") — the fresh path
-// alone would not catch it, which is exactly the drift the gate exists for.
+// migrationStatements, not just a freshly created one. Removing any of the ALTER
+// statements makes this test fail ("no such column") — the fresh path alone
+// would still catch a removed statement, but only the legacy path proves the
+// in-place upgrade an existing deployment performs.
 func TestLegacyMigrationAddsObservedWorkloadColumns(t *testing.T) {
 	legacyPath := t.TempDir() + "/legacy.db"
 	raw, err := sql.Open("sqlite", legacyPath)
@@ -60,16 +64,18 @@ func TestLegacyMigrationAddsObservedWorkloadColumns(t *testing.T) {
 	replicas := int32(2)
 	observedAt := time.Now().UTC().Truncate(time.Second)
 	require.NoError(t, st.Inventories().UpdateWorkloadObservation(ctx, "customer-1", "cluster-1", "apps", "example", store.WorkloadObservation{
-		Containers: []string{"api"},
-		ImageRefs:  map[string]string{"api": "registry.example.com/api:1.0.0"},
-		Replicas:   &replicas,
-		ObservedAt: observedAt,
+		Containers:  []string{"api"},
+		ImageRefs:   map[string]string{"api": "registry.example.com/api:1.0.0"},
+		Annotations: map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}},
+		Replicas:    &replicas,
+		ObservedAt:  observedAt,
 	}))
 
 	got, err := st.Inventories().GetByReleaseKey(ctx, "customer-1", "cluster-1", "apps", "example")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"api"}, got.ObservedContainers)
 	assert.Equal(t, map[string]string{"api": "registry.example.com/api:1.0.0"}, got.ObservedImageRefs)
+	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}}, got.ObservedAnnotations)
 	require.NotNil(t, got.ObservedReplicas)
 	assert.Equal(t, int32(2), *got.ObservedReplicas)
 	assert.True(t, got.ObservedAt.Equal(observedAt))
