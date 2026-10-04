@@ -99,6 +99,32 @@ describe('model mapping (generated → display)', () => {
     expect(display.annotationActions[0]).toMatchObject({ key: 'tier', currentValue: 'web', availability: { available: true } });
   });
 
+  // TASK-242 (review follow-up): the availability gating that replaced the store's
+  // hardcoded operation type has only a positive image assertion above, so pin the
+  // negative direction too: a target whose supported_operations omits image must
+  // expose the containers with available=false and a stable reason, which is what
+  // the selector renders as "镜像不可用".
+  it('marks image actions unavailable when supported_operations omits image', () => {
+    const target = create(EmergencyTargetSchema, {
+      workloadRef: create(WorkloadRefSchema, { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' }),
+      containers: ['app'],
+      supportedOperations: [EmergencyAction.SET_REPLICAS],
+      promotions: [],
+      currentImageRefs: { app: 'repo/app:v1' },
+      currentReplicas: 2,
+      currentAnnotations: {},
+      hpaManaged: false,
+      maxEmergencyReplicas: 10,
+    });
+
+    const display = mapEmergencyTarget(target);
+    expect(display.imageActions).toHaveLength(1);
+    expect(display.imageActions[0].availability).toEqual({
+      available: false,
+      reasonCode: 'unsupported_operation',
+    });
+  });
+
   // TASK-241 W-e: annotation actions come from the real (approved, observed)
   // projection. The flat read-model map encodes the scope as "<scope>/<key>";
   // the display splits it so submissions can carry the scope, and a key that

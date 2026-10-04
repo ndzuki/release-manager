@@ -255,7 +255,12 @@ export function mapEmergencyTarget(target: ProtoEmergencyTarget): EmergencyTarge
   const imageActions: EmergencyImageActionDisplay[] = target.containers.map((container) => ({
     container,
     currentImageRef: target.currentImageRefs[container] ?? '',
-    availability: { available: imageSupported },
+    // TASK-242: carry a stable reason like replicas (hpa_managed /
+    // unsupported_operation) and annotations (not_observed) do, so a rendered
+    // "镜像不可用" has a machine-readable cause instead of a bare boolean.
+    availability: imageSupported
+      ? { available: true }
+      : { available: false, reasonCode: 'unsupported_operation' },
     promotions: promotionFor(promotions, workloadRef, container, 'image_digest'),
   }));
 
