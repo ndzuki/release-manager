@@ -177,6 +177,36 @@ describe('model mapping (generated → display)', () => {
     expect(parseScopedAnnotationKey('bare')).toEqual({ scope: '', key: 'bare' });
   });
 
+  // TASK-241 U2=B: the same key may exist under two scopes. The flat read model
+  // distinguishes them by the scope prefix, so the display must keep two actions
+  // (and the selector keys them by scope/key) instead of collapsing them.
+  it('keeps the same annotation key under two scopes as two distinct actions', () => {
+    const target = create(EmergencyTargetSchema, {
+      workloadRef: create(WorkloadRefSchema, { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' }),
+      containers: [],
+      supportedOperations: [EmergencyAction.SET_APPROVED_ANNOTATION],
+      promotions: [],
+      currentImageRefs: {},
+      currentReplicas: 1,
+      currentAnnotations: {
+        'WORKLOAD_METADATA/tier': 'web',
+        'POD_TEMPLATE_METADATA/tier': 'worker',
+      },
+      hpaManaged: false,
+      maxEmergencyReplicas: 5,
+    });
+
+    const display = mapEmergencyTarget(target);
+    expect(display.annotationAvailability).toEqual({ available: true });
+    const byScope: Record<string, string> = {};
+    for (const action of display.annotationActions) {
+      byScope[action.scope] = action.currentValue;
+    }
+    expect(byScope).toEqual({ WORKLOAD_METADATA: 'web', POD_TEMPLATE_METADATA: 'worker' });
+    expect(display.annotationActions).toHaveLength(2);
+    expect(new Set(display.annotationActions.map((a) => `${a.scope}/${a.key}`)).size).toBe(2);
+  });
+
   it('marks unsupported replicas as unavailable', () => {
     const target = create(EmergencyTargetSchema, {
       workloadRef: create(WorkloadRefSchema, { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' }),
