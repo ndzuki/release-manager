@@ -63,13 +63,37 @@ func TestTraceInterceptorRecordsBoundedErrorOnly(t *testing.T) {
 	assert.Equal(t, codes.Error, span.Status.Code)
 	assert.Equal(t, "unauthenticated", span.Status.Description, "the status description is the bounded code")
 	assert.NotContains(t, span.Name, sensitive)
+	assert.NotContains(t, span.InstrumentationScope.Name, sensitive)
+
+	// Scan every field a reader could see (name, attributes, events, status and the
+	// resource/scope metadata) so "nowhere on the span" is true as stated.
+	scanned := map[string]bool{}
+	note := func(v string) {
+		scanned[v] = true
+		assert.NotContains(t, v, sensitive)
+	}
+	note(span.Name)
+	note(span.Status.Description)
+	note(span.InstrumentationScope.Name)
+	if span.Resource != nil {
+		for _, attr := range span.Resource.Attributes() {
+			note(attr.Value.AsString())
+		}
+	}
+	for _, event := range span.Events {
+		note(event.Name)
+		for _, attr := range event.Attributes {
+			note(attr.Value.AsString())
+		}
+	}
 
 	var codesSeen []string
 	for _, attr := range span.Attributes {
-		assert.NotContains(t, attr.Value.AsString(), sensitive)
+		note(attr.Value.AsString())
 		if attr.Key == attribute.Key("error.code") {
 			codesSeen = append(codesSeen, attr.Value.AsString())
 		}
 	}
 	assert.Equal(t, []string{"unauthenticated"}, codesSeen)
+	require.NotEmpty(t, scanned)
 }

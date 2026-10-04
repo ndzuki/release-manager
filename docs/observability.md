@@ -88,10 +88,10 @@
 **现状**
 
 - OTel 依赖存在（`go.mod:24-26`，`go.opentelemetry.io/otel{,/sdk,/trace} v1.44.0`；`docs/dependencies.md:134-137`）。
-- 装配只有一处：`authorization.InstallTracing()`（`internal/authorization/tracing.go:15-27`）——本地 `trace.NewTracerProvider(ParentBased(AlwaysSample()))` + W3C `TraceContext{}` 与 `Baggage{}` propagator，返回 `provider.Shutdown`。调用方：`cmd/auth/main.go:138`、`cmd/orchestrator/main.go:321`。**其它服务连 provider 都没装**。注释明确写着「Exporters remain deployment concerns」（`internal/authorization/tracing.go:16`）。
+- 装配只有一处：`authorization.InstallTracing()`（`internal/authorization/tracing.go:17-29`）——本地 `trace.NewTracerProvider(ParentBased(AlwaysSample()))` + W3C `TraceContext{}` 与 `Baggage{}` propagator，返回 `provider.Shutdown`。调用方：`cmd/auth/main.go:138`、`cmd/orchestrator/main.go:321`。**其它服务连 provider 都没装**。注释明确写着「Exporters remain deployment concerns」（`internal/authorization/tracing.go:18`）。
 - **没有 exporter、没有 collector 配置**：全仓无 `otlptrace`/`stdouttrace`/`BatchSpanProcessor` 之类装配，`deploy/kustomize/` 里也没有 collector ⇒ span 只存在于进程内、随 provider 关闭丢弃 ⇒ **当前不存在跨进程可追踪能力**。
-- 传播能力是真的存在一半：`TraceInterceptor()`（注释「unary」，`internal/authorization/tracing.go:29-30`）被装在 auth（`cmd/auth/main.go:184`）、orchestrator 管理面（`cmd/orchestrator/main.go:448,515`）以及 orchestrator→auth 的**客户端**（`cmd/orchestrator/main.go:329`）⇒ auth 与 orchestrator 之间的 unary 调用可携带/透传 W3C traceparent；但：
-  - 流式 RPC 不被 tracing 覆盖：`TraceInterceptor()` 返回 `connect.UnaryInterceptorFunc`（`internal/authorization/tracing.go:30`），因此 `WatchOperation`、`CommandStream` 不产生 span；网关 handler 只挂 request-id 与 error-sanitize（`cmd/orchestrator/main.go:181-184`）；
+- 传播能力是真的存在一半：`TraceInterceptor()`（注释「unary」，`internal/authorization/tracing.go:31-32`）被装在 auth（`cmd/auth/main.go:184`）、orchestrator 管理面（`cmd/orchestrator/main.go:448,515`）以及 orchestrator→auth 的**客户端**（`cmd/orchestrator/main.go:329`）⇒ auth 与 orchestrator 之间的 unary 调用可携带/透传 W3C traceparent；但：
+  - 流式 RPC 不被 tracing 覆盖：`TraceInterceptor()` 返回 `connect.UnaryInterceptorFunc`（`internal/authorization/tracing.go:32`），因此 `WatchOperation`、`CommandStream` 不产生 span；网关 handler 只挂 request-id 与 error-sanitize（`cmd/orchestrator/main.go:181-184`）；
   - agent ↔ 网关这条最关键链路没有安装 tracing（`cmd/operator/main.go` 无 `InstallTracing` 调用）；
   - trace id **不进日志**（`startupLogger` 构造的 handler 无 trace 关联，`internal/app/app.go:123`）⇒ 即使将来有 exporter，也无法从日志跳到 trace。
 - 结论：**无可用追踪面**。可用的是「两个服务之间的 trace context 透传骨架」，其余为空白。
@@ -101,7 +101,7 @@
 1. 先做「能看见」的最小闭环：在 `InstallTracing()` 内按配置决定 exporter（默认 `stdout`，可选 OTLP/HTTP），加 `OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_TRACES_SAMPLING` 风格的环境开关；没有 endpoint 时保持今天的本地 provider 行为。
 2. 给 agent 与网关装上 provider + 拦截器（含流式：用 Connect 的 streaming interceptor 在 `CommandStream` 建立时创建 root span，并把 `command_id`/`operation_id` 作为 span 属性）。
 3. 加日志↔trace 关联：在 slog handler 外层注入 `trace_id`/`span_id`（仅当 span recording）。
-4. 采样策略：`ParentBased(AlwaysSample)`（`internal/authorization/tracing.go:19`）在无 head 采样器时等于全采，接入 exporter 前需要显式降采样，否则量级不可控。
+4. 采样策略：`ParentBased(AlwaysSample)`（`internal/authorization/tracing.go:21`）在无 head 采样器时等于全采，接入 exporter 前需要显式降采样，否则量级不可控。
 
 ## 4. 健康与就绪
 
@@ -199,7 +199,7 @@
 | --- | --- | --- | --- |
 | 日志 | slog JSON → stderr，级别由 `log_level` 控制（缺省/非法=debug） | `internal/app/app.go:123`（`startupLogger`/`applyLogLevel`）、`internal/config/loglevel.go` | 无 request-id 字段；级别收敛已可用（TASK-094 闭环） |
 | 指标 | 仅授权 + 身份收敛，仅 auth/orchestrator 两个 `/metrics` | `internal/authorization/metrics.go:23-71`、`internal/operator/identity_metrics.go:42-58`、`cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:316-319` | 无运行时/进程指标（`grep collectors\.` 零命中）；无抓取配置；其余 5 类进程 0 指标 |
-| 追踪 | 只装 provider + W3C 传播，无 exporter | `internal/authorization/tracing.go:15-27` | 无跨进程追踪能力；agent 侧未装配；trace id 不进日志 |
+| 追踪 | 只装 provider + W3C 传播，无 exporter | `internal/authorization/tracing.go:17-29` | 无跨进程追踪能力；agent 侧未装配；trace id 不进日志 |
 | liveness | `/health` 恒 200＝纯 liveness（REQ-099 裁定），orchestrator 附 `gc` | `internal/handler/health.go:12-28` | 无「前进性」判据（§4 建议 1）；`gc` 的 disabled 被报成 healthy（`cmd/orchestrator/main.go:275-277`） |
 | readiness | `/readyz` 200/503 + checks；七进程全真实 | `internal/handler/ready.go:11-34` | 探针层已有 startupProbe + 显式超时（`make check-probes`）；`auth_policy_health` 未入检查 |
 | readiness 覆盖面 | database / redis / cleanup_gc / orchestrator-upstream / gateway_session / sink-config | `cmd/orchestrator/main.go:248-266`、`cmd/auth/main.go:67-87`、`cmd/notifier/main.go:50-61`、`cmd/webhook/main.go:90`、`cmd/operator/main.go:382`、`cmd/notification-sink/main.go:151` | 本地 `cmd/api` 仍是 `noop`（`internal/app/app.go:134-136`，非集群路径） |
@@ -219,7 +219,7 @@
 
 明确判定为**当前不存在**（每条都经全仓检索验证，非「我没找到」）：
 
-1. **分布式追踪导出**：无 exporter / 无 collector / 无采样策略配置（`internal/authorization/tracing.go:15-27` 是全部装配）。
+1. **分布式追踪导出**：无 exporter / 无 collector / 无采样策略配置（`internal/authorization/tracing.go:17-29` 是全部装配）。
 2. **跨进程 trace↔log 关联**：无（`internal/app/app.go:123` 的 handler 无任何注入）。
 3. **Go 运行时与进程指标**：无（`collectors.*` 零命中）。
 4. **除 auth、orchestrator 之外的 `/metrics` 端点**：无（`grep 'GET /metrics'` 只有两处，均在 `cmd/`）。

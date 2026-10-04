@@ -48,11 +48,15 @@ func TraceInterceptor() connect.UnaryInterceptorFunc {
 			response, err := next(ctx, req)
 			if err != nil {
 				// TASK-246: never record the error text on the span. This
-				// interceptor wraps the authorization client, whose pull failures
-				// can carry credential text (see the note in module.go), and a
-				// deployment that attaches an OTel exporter would ship it. The
-				// bounded Connect code keeps the span actionable -- the same
-				// choice the WARN log makes (TASK-243).
+				// interceptor is generic -- it wraps every unary Connect call it
+				// is installed on (the auth server, orchestrator's management and
+				// client calls) -- and the authorization client is the sensitive
+				// one: its pull failures can carry credential text (see the note
+				// in module.go), which a deployment attaching an OTel exporter
+				// would ship. The bounded Connect code keeps every span actionable
+				// without the text; the WARN log makes the same class of choice
+				// (TASK-243) but carries the finer stale cause, while this span
+				// only knows the transport code.
 				code := connect.CodeOf(err).String()
 				span.SetAttributes(attribute.String("error.code", code))
 				span.SetStatus(codes.Error, code)
