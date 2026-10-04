@@ -2511,6 +2511,41 @@ func TestCreateOperation_DeferredArtifactPayloadOmitsEmptyAnnotationWhitelist(t 
 		"an empty whitelist must stay absent from the deferred payload (omitempty)")
 }
 
+// TASK-245 (c) real-world control: with no operator registered, Dispatch still
+// returns a usable :artifact row, and that row must carry the definition's
+// annotation whitelist so the operator can filter the observation even though
+// the dispatch is undeliverable.
+func TestCreateOperation_CoordinatorUnavailableArtifactPayloadCarriesAnnotationWhitelist(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	def, err := st.Definitions().Get(context.Background(), "def-001")
+	require.NoError(t, err)
+	def.ApprovedAnnotationKeys = []store.ApprovedAnnotationKey{
+		{Key: "team", Scope: "WORKLOAD_METADATA"},
+		{Key: "prometheus.io/scrape", Scope: "POD_TEMPLATE_METADATA"},
+	}
+	def, err = st.Definitions().Update(context.Background(), def, nil)
+	require.NoError(t, err)
+
+	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+		OperationType:       "INSTALL",
+		BundleId:            "bundle-001",
+		ReleaseDefinitionId: "def-001",
+		ValuesRevisionId:    "vr-001",
+	}), "idem-annotation-noop"))
+	require.NoError(t, err)
+
+	entry, err := st.Outbox().GetByCommandID(context.Background(), resp.Msg.OperationId+":artifact")
+	require.NoError(t, err, "preflight dispatch must be durably persisted")
+
+	var payload preflight.CommandPayload
+	require.NoError(t, json.Unmarshal(entry.Payload, &payload))
+	assert.Equal(t, def.ApprovedAnnotationKeys, payload.ApprovedAnnotationKeys,
+		"the no-operator artifact payload must carry the definition's annotation whitelist")
+}
+
 // ── AC-077-04/13: effect_status projection matrix ──
 
 // emergencyProjectionOp creates an EMERGENCY operation with an intent in the
