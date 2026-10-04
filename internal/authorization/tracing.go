@@ -5,6 +5,8 @@ import (
 
 	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/trace"
 	apitrace "go.opentelemetry.io/otel/trace"
@@ -45,7 +47,15 @@ func TraceInterceptor() connect.UnaryInterceptorFunc {
 			}
 			response, err := next(ctx, req)
 			if err != nil {
-				span.RecordError(err)
+				// TASK-246: never record the error text on the span. This
+				// interceptor wraps the authorization client, whose pull failures
+				// can carry credential text (see the note in module.go), and a
+				// deployment that attaches an OTel exporter would ship it. The
+				// bounded Connect code keeps the span actionable -- the same
+				// choice the WARN log makes (TASK-243).
+				code := connect.CodeOf(err).String()
+				span.SetAttributes(attribute.String("error.code", code))
+				span.SetStatus(codes.Error, code)
 			}
 			return response, err
 		}
