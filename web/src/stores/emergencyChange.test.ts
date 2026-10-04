@@ -35,6 +35,7 @@ function target(overrides: Partial<EmergencyTargetDisplay> = {}): EmergencyTarge
       promotions: [],
     },
     annotationActions: [],
+    annotationAvailability: { available: false, reasonCode: 'not_observed' },
     ...overrides,
   };
 }

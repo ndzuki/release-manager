@@ -42,6 +42,7 @@ function unobservedTarget(): EmergencyTargetDisplay {
     containers: [], currentImageRefs: {}, currentAnnotations: {},
     supportedOperations: ['SET_REPLICAS'], promotions: [],
     imageActions: [], annotationActions: [],
+    annotationAvailability: { available: false, reasonCode: 'not_observed' },
     currentReplicas: -1, maxEmergencyReplicas: 0, hpaManaged: false, replicasAction: null,
   } as unknown as EmergencyTargetDisplay;
 }

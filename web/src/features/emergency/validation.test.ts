@@ -24,6 +24,7 @@ function targetWithPromotions(promotions: EmergencyTargetDisplay['promotions']):
     imageActions: [],
     replicasAction: null,
     annotationActions: [],
+    annotationAvailability: { available: false, reasonCode: 'not_observed' },
   };
 }
 

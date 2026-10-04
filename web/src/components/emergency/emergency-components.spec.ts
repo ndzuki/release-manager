@@ -29,6 +29,7 @@ function target(): EmergencyTargetDisplay {
       promotions: [],
     },
     annotationActions: [],
+    annotationAvailability: { available: false, reasonCode: 'not_observed' },
   };
 }
 

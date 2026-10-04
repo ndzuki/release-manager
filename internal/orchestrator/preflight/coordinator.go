@@ -513,6 +513,11 @@ func (c *Coordinator) commandPayload(
 		// namespaces "e2e-release" not found).
 		CreateNamespace: op.OperationType == store.OperationInstall,
 		TimeoutSeconds:  c.timeoutSeconds,
+		// TASK-241 U1=A: every command built from the definition — the
+		// preflight stages and the INSTALL/ROLLBACK execution write — carries
+		// the annotation whitelist so the operator can filter inside the
+		// cluster. UPGRADE builds its payload in BuildUpgradePayload.
+		ApprovedAnnotationKeys: def.ApprovedAnnotationKeys,
 	}, nil
 }
 

@@ -530,6 +530,9 @@ func (s *Service) CreateOperation(
 				Bundle: bundleToProto(bundle), Namespace: def.Namespace, ReleaseName: def.ReleaseName, Values: merged.effective,
 				ValuesRevisionID: op.ValuesRevisionID, ValuesPatch: op.ValuesPatch,
 				ExpectedCurrentRevision: int64(op.ExpectedRevision), TargetRevision: int64(op.TargetRevision),
+				// TASK-241 U1=A: keep the deferred artifact record a real
+				// carrier of the annotation whitelist too.
+				ApprovedAnnotationKeys: def.ApprovedAnnotationKeys,
 			}).Marshal()
 			if marshalErr != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("marshal deferred dispatch: %w", marshalErr))
