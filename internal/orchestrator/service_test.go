@@ -2376,8 +2376,11 @@ func TestCreateOperation_CoordinatorUnavailablePersistsDispatch(t *testing.T) {
 	defer cleanup()
 	seedDefinition(t, st)
 
-	// No operators registered: Coordinator.Dispatch returns errNoOperator,
-	// which forces the deferred-dispatch path (REQ-067 rule: dispatch persists).
+	// No operators registered: Coordinator.Dispatch returns errNoOperator but still
+	// builds the command payload itself (coordinator.go:520), so the persisted
+	// :artifact row comes from the coordinator, not from service.go's deferred
+	// fallback (which only runs when that payload build fails; TASK-245 pinned both
+	// paths separately). REQ-067's rule that dispatch persists holds either way.
 	resp, err := svc.CreateOperation(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
 		BundleId:            "bundle-001",
