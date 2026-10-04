@@ -57,8 +57,15 @@ func annotationRelease() *helmengine.Release {
 
 func annotationAgent(t *testing.T) *Agent {
 	t.Helper()
+	return annotationAgentWithEngine(t, &recordingEngine{release: annotationRelease()})
+}
+
+// annotationAgentWithEngine is annotationAgent with a caller-supplied engine, so
+// a test whose command path needs Status/History can script those responses.
+func annotationAgentWithEngine(t *testing.T, engine helmengine.Engine) *Agent {
+	t.Helper()
 	agent, err := New(Config{
-		Client: noopClient{}, Engine: &recordingEngine{release: annotationRelease()}, Store: newMemoryStore(),
+		Client: noopClient{}, Engine: engine, Store: newMemoryStore(),
 		SessionID: "session-1", OperatorID: "operator-1",
 		KubeClient:   kubernetesfake.NewSimpleClientset(annotationDeployment()),
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -66,6 +73,16 @@ func annotationAgent(t *testing.T) *Agent {
 	})
 	require.NoError(t, err)
 	return agent
+}
+
+// annotationReleaseNamed returns annotationRelease() under a different release
+// identity, keeping the same live workload (namespace apps, deployment api) so
+// only the cache key varies between releases.
+func annotationReleaseNamed(namespace, name string) *helmengine.Release {
+	release := annotationRelease()
+	release.Namespace = namespace
+	release.Name = name
+	return release
 }
 
 // annotationWhitelist is the approved subset: TEAM/TIER on the workload object
@@ -222,4 +239,97 @@ func TestAgent_AnnotationObservationNonReleaseCommandKeepsCache(t *testing.T) {
 
 	assert.NotEmpty(t, agent.approvedAnnotationsFor("apps", "example"),
 		"a non-release command must not clear the whitelist")
+}
+
+// TASK-245 (a): UPGRADE is a release write (isReleaseWrite), so it refreshes the
+// cached annotation whitelist for its release. A preceding INSTALL cached a
+// different whitelist; the UPGRADE's observation must project the new one,
+// otherwise "refresh" is indistinguishable from "reuse the stale cache".
+func TestAgent_AnnotationObservationUpgradeRefreshesWhitelist(t *testing.T) {
+	valuesJSON := []byte(`{"message":"hello"}`)
+	engine := &recordingEngine{release: annotationRelease(), status: annotationRelease()}
+	agent := annotationAgentWithEngine(t, engine)
+
+	stale := installCommand("cmd-annotation-upgrade-stale")
+	stale.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "team", Scope: "WORKLOAD_METADATA"}}
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), stale))
+	require.Equal(t, []store.ApprovedAnnotationKey{{Key: "team", Scope: "WORKLOAD_METADATA"}},
+		agent.approvedAnnotationsFor("apps", "example"),
+		"precondition: the INSTALL cached the stale whitelist")
+
+	stream := newTestStream()
+	command := upgradeCommand("cmd-annotation-upgrade-refresh", valuesJSON, sha256Hex(valuesJSON))
+	// DecodeCommandPayload mirrors the envelope identity onto the wire command,
+	// so the test sets the top-level fields the operator reads for the cache key.
+	command.Namespace = "apps"
+	command.ReleaseName = "example"
+	command.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "tier", Scope: "WORKLOAD_METADATA"}}
+	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+
+	reports := workloadIdentityReports(stream)
+	require.Len(t, reports, 1)
+	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"tier": "web"}},
+		flattenScopedAnnotations(reports[0].GetItems()[0].GetCurrentAnnotations()),
+		"an UPGRADE must refresh the cached whitelist, not reuse the INSTALL one")
+}
+
+// TASK-245 (a): ROLLBACK is the third release write and must refresh the cache
+// the same way. The rollback succeeds against a history containing the target
+// revision, so a workload identity report is emitted and can be asserted.
+func TestAgent_AnnotationObservationRollbackRefreshesWhitelist(t *testing.T) {
+	engine := &recordingEngine{
+		release: annotationRelease(),
+		history: []helmengine.ReleaseHistoryEntry{{Revision: 1, Status: "superseded"}},
+	}
+	agent := annotationAgentWithEngine(t, engine)
+
+	stale := installCommand("cmd-annotation-rollback-stale")
+	stale.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "team", Scope: "WORKLOAD_METADATA"}}
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), stale))
+	require.Equal(t, []store.ApprovedAnnotationKey{{Key: "team", Scope: "WORKLOAD_METADATA"}},
+		agent.approvedAnnotationsFor("apps", "example"),
+		"precondition: the INSTALL cached the stale whitelist")
+
+	stream := newTestStream()
+	command := rollbackCommand("cmd-annotation-rollback-refresh")
+	command.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "tier", Scope: "WORKLOAD_METADATA"}}
+	require.NoError(t, agent.handleCommand(t.Context(), stream, command))
+
+	reports := workloadIdentityReports(stream)
+	require.Len(t, reports, 1)
+	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"tier": "web"}},
+		flattenScopedAnnotations(reports[0].GetItems()[0].GetCurrentAnnotations()),
+		"a ROLLBACK must refresh the cached whitelist, not reuse the INSTALL one")
+}
+
+// TASK-245 (b): the approved-annotation cache is keyed by release identity, so
+// two releases with different whitelists must each observe through their own
+// whitelist. A global (release-identity-ignoring) cache would leak beta's
+// whitelist into alpha's observation and vice versa.
+func TestAgent_AnnotationObservationIsolatesWhitelistPerRelease(t *testing.T) {
+	agent := annotationAgent(t)
+
+	alpha := installCommand("cmd-annotation-alpha")
+	alpha.Namespace = "apps"
+	alpha.ReleaseName = "alpha"
+	alpha.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "team", Scope: "WORKLOAD_METADATA"}}
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), alpha))
+
+	beta := installCommand("cmd-annotation-beta")
+	beta.Namespace = "apps"
+	beta.ReleaseName = "beta"
+	beta.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{{Key: "tier", Scope: "WORKLOAD_METADATA"}}
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), beta))
+
+	alphaItems := agent.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("apps", "alpha"))
+	require.Len(t, alphaItems, 1)
+	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}},
+		flattenScopedAnnotations(alphaItems[0].GetCurrentAnnotations()),
+		"release alpha must observe through its own whitelist")
+
+	betaItems := agent.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("apps", "beta"))
+	require.Len(t, betaItems, 1)
+	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"tier": "web"}},
+		flattenScopedAnnotations(betaItems[0].GetCurrentAnnotations()),
+		"release beta must observe through its own whitelist")
 }
