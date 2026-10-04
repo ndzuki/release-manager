@@ -91,7 +91,6 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   const loadError = ref<EmergencyErrorDisplay | null>(null);
 
   const selectedTarget = ref<WorkloadRefDisplay | null>(null);
-  const selectedOpType = ref<'SET_CONTAINER_IMAGE' | 'SET_REPLICAS' | 'SET_APPROVED_ANNOTATION' | null>(null);
   const selectedContainer = ref('');
   const loadingArtifacts = ref(false);
   const artifacts = ref<CandidateArtifactDisplay[]>([]);
@@ -248,7 +247,6 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     if (!target) return;
     if (selectedTarget.value?.uid === refKey.uid) return;
     selectedTarget.value = target.workloadRef;
-    selectedOpType.value = 'SET_CONTAINER_IMAGE';
     selectedContainer.value = '';
     artifacts.value = [];
     selectedArtifact.value = null;
@@ -419,7 +417,6 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     targets.value = [];
     loadError.value = null;
     selectedTarget.value = null;
-    selectedOpType.value = null;
     selectedContainer.value = '';
     loadingArtifacts.value = false;
     artifacts.value = [];
@@ -445,7 +442,6 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     targets,
     loadError,
     selectedTarget,
-    selectedOpType,
     selectedContainer,
     loadingArtifacts,
     artifacts,
