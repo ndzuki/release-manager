@@ -546,6 +546,26 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 audit-citations: ## Read-only audit: symbols named next to a code citation should sit near the cited line (TASK-112)
 	$(GO) run ./cmd/docscheck/ -root . -max 40
 
+.PHONY: audit-task-premises
+audit-task-premises: ## Read-only audit, NOT a gate / NOT in `make quality`: ready TASK cards should record verified_at + verified_head (TASK-248)
+	@$(TASKS_RESOLVE); \
+	if [ -z "$$TASKS" ]; then \
+		printf "$(YELLOW)SKIP audit-task-premises: no TASK documents found — set TASKS_DIR to the vault Tasks directory$(NC)\n"; \
+		exit 0; \
+	fi; \
+	head_sha="$$(git rev-parse HEAD)"; \
+	commits="$$(mktemp)"; \
+	trap 'rm -f "$$commits"' EXIT INT TERM; \
+	for sha in $$(grep -h '^verified_head:' $$TASKS 2>/dev/null | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"' | sort -u); do \
+		if git merge-base --is-ancestor "$$sha" HEAD >/dev/null 2>&1; then \
+			n="$$(git rev-list --count "$$sha"..HEAD)"; \
+		else \
+			n="-1"; \
+		fi; \
+		printf '%s\t%s\n' "$$sha" "$$n" >> "$$commits"; \
+	done; \
+	$(GO) run ./cmd/taskpremises -max 40 -head "$$head_sha" -commits "$$commits" $$TASKS
+
 .PHONY: check-error-codes
 check-error-codes: ## Check that every error code an AC asserts is emittable (TASK-125)
 	@$(REQS_RESOLVE); \
