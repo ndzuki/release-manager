@@ -134,13 +134,13 @@ func TestAgent_AnnotationWhitelistRestartKeepsReleasesIsolated(t *testing.T) {
 	t.Cleanup(func() { _ = storeB.Close() })
 	agentB := annotationAgentWithStore(t, &recordingEngine{release: annotationRelease()}, storeB)
 
-	alphaItems := agentB.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("apps", "alpha"))
+	alphaItems := agentB.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("alpha"))
 	require.Len(t, alphaItems, 1)
 	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}},
 		flattenScopedAnnotations(alphaItems[0].GetCurrentAnnotations()),
 		"alpha must hydrate its own whitelist")
 
-	betaItems := agentB.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("apps", "beta"))
+	betaItems := agentB.buildWorkloadIdentityItems(t.Context(), annotationReleaseNamed("beta"))
 	require.Len(t, betaItems, 1)
 	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"tier": "web"}},
 		flattenScopedAnnotations(betaItems[0].GetCurrentAnnotations()),

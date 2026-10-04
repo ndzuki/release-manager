@@ -202,6 +202,15 @@ KUBECONFIG=data/kubeconfigs/dev-customer-a-direct.yaml kubectl -n release-manage
 
 业务侧验证：`ListOperators` / `GetOperator`（`api/gen/orchestrator/v1/orchestratorv1connect`，procedure 路径 `/orchestrator.v1.OrchestratorService/ListOperators`），请求样例在 `api/kulala/orchestrator.http`。
 
+### 3.1 agent 重启后的注解观测（TASK-244）
+
+注解白名单（下行 `Command.approved_annotation_keys`）不再只存在于内存：operator 把它按 release 键（`namespace/release_name`）持久化在本地 BoltDB 的专用 bucket（与命令、身份并列的 `annotation_whitelists`，`internal/operator/localstore/bolt.go:21`），agent 构造时水合（`internal/operator/agent/agent.go:889`）。
+
+- **现状**：agent 重启后**不需要**新的 release write 就能继续上报注解观测——重启前的白名单直接从盘上读回（`replayActive` 仍只重放非终态命令，这一点未变）。
+- **失效规则与内存语义一致**（`internal/operator/agent/agent.go:841`）：release write 带白名单 ⇒ 覆盖；release write 不带白名单（中心删光了 approved keys）⇒ 删除；非 release 命令（`INVENTORY_SYNC`、secret metadata）⇒ 不动。
+- **仍需一次 release write 才恢复的情形**：① 落盘失败（agent 日志含 `persist approved annotation whitelist failed`）；② 水合失败（日志含 `load persisted annotation whitelists failed`，此后 fail-closed、不报任何注解）；③ 本地库丢失（Pod 换盘、`data` 卷没保留）。三者都不影响命令执行，只影响注解观测。
+- **不支持该接口的 Store 实现**：优雅降级为纯内存（等价 TASK-244 之前的行为），不 panic、不报错。
+
 ## 3bis. 制品准入（漏洞）从 shadow 切到 enforce
 
 TASK-105 把「漏洞准入」接成了真实步骤（`CreateOperation` 内，对 bundle 的每个 image digest 调
