@@ -1,6 +1,6 @@
 // Command taskpremises runs the premise-re-check audit: it reports `ready`
 // planning/investigation task cards whose `verified_at`/`verified_head` record
-// is missing, older than a threshold, or behind the current HEAD (see
+// is missing, older than a threshold, or behind the reference head (main — see
 // internal/quality/taskpremises).
 //
 // Usage:
@@ -45,9 +45,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("taskpremises", flag.ContinueOnError)
 	limit := flags.Int("max", 40, "print at most N findings")
 	maxAgeDays := flags.Int("max-age-days", 14, "report cards whose verified_at is older than N days (<=0 disables)")
-	head := flags.String("head", "", "current HEAD sha; empty skips the head comparison entirely")
+	head := flags.String("head", "", "reference head sha to compare against (the Makefile passes main's sha, not the checkout HEAD); empty skips the head comparison entirely")
 	commitsFile := flags.String("commits", "",
-		"file of sha<TAB>count lines precomputed with git merge-base --is-ancestor + git rev-list --count; count -1 means unknown or not-an-ancestor")
+		"file of sha<TAB>count lines precomputed with git merge-base --is-ancestor + git rev-list --count against the reference head; count -1 means unknown or not-an-ancestor")
 
 	flags.SetOutput(stderr)
 	flags.Usage = func() {

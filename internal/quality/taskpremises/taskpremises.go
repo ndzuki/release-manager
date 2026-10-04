@@ -13,10 +13,11 @@
 //   - The audit cannot read the premise itself. It cannot tell whether the
 //     thing the card assumes (a missing feature, an unmerged PR, an
 //     unimplemented gate) still holds; only a human re-running the check can.
-//   - A missing or unparsable field is reported because "no record" is
-//     indistinguishable from "never checked" — which is the failure this
-//     convention exists to prevent (five premises were rewritten in one session
-//     because nothing said when they had last been verified).
+//   - A missing or unparsable field is reported as "no usable record", NOT as
+//     "never checked": the two are indistinguishable from the card alone, and
+//     that ambiguity is the failure this convention exists to prevent (five
+//     premises were rewritten in one session because nothing said when they had
+//     last been verified).
 //
 // So the findings go to a human, the exit status never fails on them, and the
 // package is deliberately NOT part of `make quality`.
@@ -38,11 +39,11 @@ const (
 	KindUnrecorded = "unrecorded"
 	// KindStale: `verified_at` is older than the configured maximum age.
 	KindStale = "stale"
-	// KindHeadMoved: the recorded `verified_head` is an ancestor of the current
-	// HEAD and N > 0 commits have landed since.
+	// KindHeadMoved: the recorded `verified_head` is an ancestor of the
+	// reference head and N > 0 commits have landed since.
 	KindHeadMoved = "head_moved"
 	// KindIncomparable: `verified_head` is unknown to the repository, or it is
-	// not an ancestor of the current HEAD, so "how far ahead" has no answer.
+	// not an ancestor of the reference head, so "how far ahead" has no answer.
 	// This is reported instead of guessing a commit count.
 	KindIncomparable = "incomparable"
 )
@@ -69,19 +70,24 @@ func (c Card) Ready() bool { return c.Status == "ready" }
 // is a pure function and tests do not depend on real git or the wall clock.
 type Options struct {
 	// Now is the reference point for staleness. Required for the age check.
+	// The comparison is day-granular, because `verified_at` is a date: Check
+	// truncates Now to UTC midnight itself, so callers may pass any wall-clock
+	// instant (the CLI passes time.Now().UTC()).
 	Now time.Time
 	// MaxAge is the largest acceptable gap between Now and `verified_at`.
 	// A gap exactly equal to MaxAge is fresh: the comparison is strictly
 	// greater-than, so "verified 14 days ago" with MaxAge 14 days does not
 	// report. MaxAge <= 0 disables the age check.
 	MaxAge time.Duration
-	// Head is the current HEAD sha. Empty means the caller did not supply one,
-	// so the head comparison is skipped entirely (never reported as
-	// incomparable: "not asked" is not "cannot compare").
+	// Head is the reference head sha. The `make audit-task-premises` target
+	// passes **main**'s sha (origin/main, else main), not the current checkout
+	// HEAD, so commits on a feature branch do not inflate N. Empty means the
+	// caller did not supply one, so the head comparison is skipped entirely
+	// (never reported as incomparable: "not asked" is not "cannot compare").
 	Head string
 	// CommitsAhead answers how many commits separate `verified_head` from the
-	// current HEAD. ok=false means the sha is unknown or is not an ancestor of
-	// HEAD, so no count can be trusted. Nil skips the comparison.
+	// reference head. ok=false means the sha is unknown or is not an ancestor
+	// of it, so no count can be trusted. Nil skips the comparison.
 	CommitsAhead func(sha string) (int, bool)
 }
 
@@ -123,6 +129,12 @@ func (r *Report) Count(kind string) int {
 // Check audits every card. Cards that are not `ready` are counted in Skipped
 // and produce no findings.
 func Check(cards []Card, opts Options) *Report {
+	// `verified_at` is a date parsed at UTC midnight, so truncate Now the same
+	// way before comparing: a card verified exactly MaxAge days ago is fresh
+	// no matter what time of day the audit runs. Truncate counts from the epoch
+	// (midnight UTC), so on a UTC time it lands on the current UTC midnight.
+	opts.Now = opts.Now.UTC().Truncate(24 * time.Hour)
+
 	report := &Report{Cards: len(cards)}
 	for _, card := range cards {
 		if !card.Ready() {
@@ -168,7 +180,7 @@ func checkCard(card Card, opts Options) []Finding {
 			findings = append(findings, Finding{
 				Path: card.Path,
 				Kind: KindIncomparable,
-				Message: fmt.Sprintf("verified_head %s is not an ancestor of HEAD %s (or is unknown); cannot count the commits since",
+				Message: fmt.Sprintf("verified_head %s is not an ancestor of the reference head %s (or is unknown); cannot count the commits since",
 					head, opts.Head),
 			})
 		case n > 0:

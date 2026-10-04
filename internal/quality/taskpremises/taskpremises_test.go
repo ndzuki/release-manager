@@ -129,6 +129,25 @@ func TestCheckFindings(t *testing.T) {
 	}
 }
 
+// The staleness comparison is day-granular: a caller passing a wall-clock
+// instant (hours/minutes/seconds set) must get the same verdict as one passing
+// midnight, because `verified_at` is a date. Without the truncation inside
+// Check, "verified exactly 14 days ago" at 23:59:59 looks like 14d23h59m59s and
+// is wrongly reported stale.
+func TestCheckStalenessIsDayGranularity(t *testing.T) {
+	lateNow := time.Date(2026, 10, 5, 23, 59, 59, 0, time.UTC)
+	opts := Options{Now: lateNow, MaxAge: testMaxAge, Head: "headsha", CommitsAhead: always("aaaa", 0)}
+
+	report := Check([]Card{
+		{Path: "edge.md", Status: "ready", VerifiedAt: "2026-09-21", VerifiedHead: "aaaa"}, // exactly 14 days before 2026-10-05
+		{Path: "old.md", Status: "ready", VerifiedAt: "2026-09-20", VerifiedHead: "aaaa"},  // 15 days
+	}, opts)
+
+	require.Len(t, report.Findings, 1)
+	assert.Equal(t, KindStale, report.Findings[0].Kind)
+	assert.Equal(t, "old.md", report.Findings[0].Path, "exactly max age must stay fresh at any time of day")
+}
+
 func TestCheckCountsReadyAndSkipped(t *testing.T) {
 	report := Check([]Card{
 		{Path: "a.md", Status: "ready"},
