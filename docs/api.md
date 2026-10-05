@@ -24,7 +24,7 @@
 | `trust.v1` | `TrustService` | 6 | `api/proto/trust/v1/trust.proto:158` | `release-orchestrator` | 8083 |
 | `webhook.v1` | `WebhookService` | 1 | `api/proto/webhook/v1/webhook.proto:46` | `release-webhook`（`cmd/webhook`） | 8082 |
 
-合计 3+11+9+4+2+3+2+4+4+53+2+6+1 = 104。RPC 类型：102 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1138`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:399`），无 client-streaming。
+合计 3+11+9+4+3+3+2+4+4+53+2+6+1 = 105。RPC 类型：103 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1138`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:399`），无 client-streaming。
 
 `api/proto/common/v1/domain.proto`、`api/proto/common/v1/health.proto`、`api/proto/common/v1/trust.proto`、`api/proto/common/v1/types.proto`、`api/proto/operator/v1/upgrade_result.proto`、`api/proto/orchestrator/v1/vulnerability.proto` 只定义共享消息/枚举，`service` 计数为 0。
 

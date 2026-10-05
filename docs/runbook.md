@@ -381,7 +381,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 - 「设计内的等待态」清单（现状）：`preflight`（等 preflight 通过/重启恢复）、`queued`/`running` 且 operator 处于重连退避窗口、`cancelling` 且未超 5m、`convergence_tasks.status = pending_promotion`（`internal/orchestrator/rollback.go:95-102` 会因此拒绝新回滚并报 `release_convergence_pending`）、values revision 处于 `pending_approval`（`internal/store/store.go:207`）。
 - 「真故障」清单（现状）：outbox 长期 `pending`/`delivered` 且会话 `offline`；EMERGENCY 越过 deadline 后 `effect_status = UNKNOWN` 且超过 `effect_observe_timeout`（dev 24h，`configs/orchestrator.dev.yaml:56-57`）⇒ stuck lock，日志 `emergency target lock is stuck`（`internal/orchestrator/emergency_stuck.go:290-299`，60s 一轮，`cmd/orchestrator/main.go:812-824`，**只告警+审计，绝不自动解锁**）；`cleanup_gc` 不健康拖垮 readiness（§1）。
 - 枚举能力的现状缺口：**`ListOperations` 服务端未实现**，返回 `unimplemented`（`internal/orchestrator/service.go:1552-1554`），Web 也没有调用它（只存在生成的类型）。⇒ 值班没有「列出所有非终态 Operation」的 API 路径，只能按已知 `operation_id` 查，或直接跑只读 SQL（§2、§9）。
-- timeline 的读取路径只有 `WatchOperation`（服务端流，`api/proto/orchestrator/v1/orchestrator.proto:1041`）；`last_error` 与 timeline 里的错误摘要都经 `redact.Sanitize` + `redact.Truncate(..., 500)` 脱敏（`internal/store/store.go:2743-2757`）。⇒ 日志/时间线里看到 `****REDACTED****` 是预期，不是数据损坏。
+- timeline 的读取路径只有 `WatchOperation`（服务端流，`api/proto/orchestrator/v1/orchestrator.proto:1138`）；`last_error` 与 timeline 里的错误摘要都经 `redact.Sanitize` + `redact.Truncate(..., 500)` 脱敏（`internal/store/store.go:2743-2757`）。⇒ 日志/时间线里看到 `****REDACTED****` 是预期，不是数据损坏。
 
 **处置动作**
 
@@ -600,7 +600,7 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 4. ~~**`release-api` 的归档 worker 与关停刷盘不会被触发**~~ **TASK-094 已闭环**（签名匹配 + 编译期断言，`cmd/api/main.go:93,103`）；**部署形态仍无执行者**：集群里没有 `release-api` Deployment（`deploy/kustomize/services/kustomization.yaml:3-9`）。影响：审计 retention 与导出在集群环境仍无人跑——这是产品决策缺口，不是签名缺陷。
 5. **spool 只写不读**：`internal/audit/spool.go:20-28` 的恢复器无生产调用者 ⇒ 落进 `audit_spool.jsonl` 的事件目前没有任何官方回灌路径。
 6. **`ListOperations` 未实现**：`internal/orchestrator/service.go:1552-1554` ⇒ 没有「列出非终态 Operation」的 API，跨单排查只能走只读 SQL 或已知 ID。
-7. **维护模式不覆盖流式 RPC**：`internal/app/maintenance.go:14-28` 使用 `connect.UnaryInterceptorFunc`（仅包 unary）⇒ 维护窗口内 `WatchOperation`、`CommandStream` 不受门禁（`api/proto/orchestrator/v1/orchestrator.proto:851`、`api/proto/operator/v1/operator.proto:238`）。
+7. **维护模式不覆盖流式 RPC**：`internal/app/maintenance.go:14-28` 使用 `connect.UnaryInterceptorFunc`（仅包 unary）⇒ 维护窗口内 `WatchOperation`、`CommandStream` 不受门禁（`api/proto/orchestrator/v1/orchestrator.proto:1138`、`api/proto/operator/v1/operator.proto:399`）。
 8. **审计查询响应字段被截断**：`internal/audit/audit_service_handler.go:164-174` 只回填 `id/action/status/duration_ms`，proto 里的 `actor`、`resource_type`、`resource_id`、`change_summary`、`metadata`、`created_at`（`api/proto/audit/v1/audit.proto`）**不返回**。影响：不能把 `QueryAuditEvents` 当作完整取证面。
 9. **审计导出没有消费者**：`ExportAuditEvents` 只写入一条 `pending` 导出记录（`internal/audit/audit_service_handler.go:111-162`），`AuditExportStore` 接口只有 `CreateWithEvent`（`internal/store/store.go`），全仓无读取/推进该状态的代码 ⇒ 「导出」当前是占位能力。
 10. **Web 侧审计调用无路由**：`web/src/connect/client.ts:57-61` 用同一 transport 建 `auditClient`，但 `web/nginx.conf:17-71` 没有 `/audit.v1.` location ⇒ 浏览器发起的审计查询会落到 SPA fallback。需核实是否有意（配合第 4 条看，更像缺口）。
