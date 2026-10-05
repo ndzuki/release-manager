@@ -17,14 +17,14 @@
 | `auth.v1` | `AuthorizationService` | 3 | `api/proto/auth/v1/auth.proto:629` | `release-auth` | 8085 |
 | `auth.v1` | `ExternalIdentityService` | 3 | `api/proto/auth/v1/auth.proto:711` | 无（未见挂载，见 3.8） | — |
 | `notifier.v1` | `NotifierService` | 2 | `api/proto/notifier/v1/notifier.proto:81` | `release-notifier`（`cmd/notifier`） | 8086 |
-| `operator.v1` | `OperatorService` | 4 | `api/proto/operator/v1/operator.proto:284` | `release-orchestrator` 网关/管理端口、`release-operator` gateway 模式 | 8083 / 8084 |
+| `operator.v1` | `OperatorService` | 4 | `api/proto/operator/v1/operator.proto:348` | `release-orchestrator` 网关/管理端口、`release-operator` gateway 模式 | 8083 / 8084 |
 | `orchestrator.v1` | `BundleService` | 4 | `api/proto/orchestrator/v1/orchestrator.proto:156` | `release-orchestrator`（`cmd/orchestrator`） | 8083 |
-| `orchestrator.v1` | `OrchestratorService` | 53 | `api/proto/orchestrator/v1/orchestrator.proto:981` | `release-orchestrator` | 8083（+ 网关 8084 仅 `SyncInventory`） |
+| `orchestrator.v1` | `OrchestratorService` | 53 | `api/proto/orchestrator/v1/orchestrator.proto:1064` | `release-orchestrator` | 8083（+ 网关 8084 仅 `SyncInventory`） |
 | `orchestrator.v1` | `CleanupService` | 2 | `api/proto/orchestrator/v1/cleanup.proto:21` | `release-orchestrator` | 8083 |
 | `trust.v1` | `TrustService` | 6 | `api/proto/trust/v1/trust.proto:158` | `release-orchestrator` | 8083 |
 | `webhook.v1` | `WebhookService` | 1 | `api/proto/webhook/v1/webhook.proto:46` | `release-webhook`（`cmd/webhook`） | 8082 |
 
-合计 3+11+9+4+2+3+2+4+4+53+2+6+1 = 104。RPC 类型：102 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1041`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:344`），无 client-streaming。
+合计 3+11+9+4+2+3+2+4+4+53+2+6+1 = 104。RPC 类型：102 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1138`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:399`），无 client-streaming。
 
 `api/proto/common/v1/domain.proto`、`api/proto/common/v1/health.proto`、`api/proto/common/v1/trust.proto`、`api/proto/common/v1/types.proto`、`api/proto/operator/v1/upgrade_result.proto`、`api/proto/orchestrator/v1/vulnerability.proto` 只定义共享消息/枚举，`service` 计数为 0。
 
@@ -42,7 +42,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 
 ### 1.3 生成物
 
-`api/proto/buf.gen.yaml:1-15`：`buf.build/protocolbuffers/go` 与 `buf.build/connectrpc/go`（`paths=source_relative`）产出 `api/gen/**`；`buf.build/bufbuild/es`（`target=ts`、`import_extension=none`）产出 `web/src/gen/**`。`api/proto/buf.gen.web.yaml:1-16` 是只跑 es 插件、且把输入限定到 6 个 path 的 web 专用变体。`buf.yaml:1-13`：module path `api/proto`，`lint.use: [STANDARD]` 且豁免 `RPC_REQUEST_RESPONSE_UNIQUE`、`RPC_RESPONSE_STANDARD_NAME`、`RPC_REQUEST_STANDARD_NAME`，`breaking.use: [FILE]`。豁免的存在是因为多个 RPC 共用同一响应类型（例如 `SubmitValuesRevision`/`Approve`/`Reject` 共用 `ValuesRevisionDecisionResponse`，`api/proto/orchestrator/v1/orchestrator.proto:1064-1082`）以及 `rpc GetValuesRevision(...) returns (common.v1.ValuesRevision)`（`api/proto/orchestrator/v1/orchestrator.proto:1102`）直接返回共享实体。
+`api/proto/buf.gen.yaml:1-15`：`buf.build/protocolbuffers/go` 与 `buf.build/connectrpc/go`（`paths=source_relative`）产出 `api/gen/**`；`buf.build/bufbuild/es`（`target=ts`、`import_extension=none`）产出 `web/src/gen/**`。`api/proto/buf.gen.web.yaml:1-16` 是只跑 es 插件、且把输入限定到 6 个 path 的 web 专用变体。`buf.yaml:1-13`：module path `api/proto`，`lint.use: [STANDARD]` 且豁免 `RPC_REQUEST_RESPONSE_UNIQUE`、`RPC_RESPONSE_STANDARD_NAME`、`RPC_REQUEST_STANDARD_NAME`，`breaking.use: [FILE]`。豁免的存在是因为多个 RPC 共用同一响应类型（例如 `SubmitValuesRevision`/`Approve`/`Reject` 共用 `ValuesRevisionDecisionResponse`，`api/proto/orchestrator/v1/orchestrator.proto:1161`、`:1170`、`:1179`）以及 `rpc GetValuesRevision(...) returns (common.v1.ValuesRevision)`（`api/proto/orchestrator/v1/orchestrator.proto:1199`）直接返回共享实体。
 
 ## 2. 调用方式
 
@@ -302,10 +302,10 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 
 | detail | proto 位置 | 构造点 |
 | --- | --- | --- |
-| `orchestrator.v1.OperatorErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:719-721` | `internal/orchestrator/operator.go:426-436` |
-| `orchestrator.v1.EmergencyErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:1632-1635` | `internal/orchestrator/emergency.go:740-752` |
-| `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:203-205` | `internal/orchestrator/service.go:1327-1335` |
-| `orchestrator.v1.RouteValidationDetail` | `api/proto/orchestrator/v1/orchestrator.proto:759-763` | `internal/orchestrator/cluster.go:323-330` |
+| `orchestrator.v1.OperatorErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:802-805` | `internal/orchestrator/operator.go:426-436` |
+| `orchestrator.v1.EmergencyErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:1739-1743` | `internal/orchestrator/emergency.go:740-752` |
+| `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:229-232` | `internal/orchestrator/service.go:1327-1335` |
+| `orchestrator.v1.RouteValidationDetail` | `api/proto/orchestrator/v1/orchestrator.proto:842-847` | `internal/orchestrator/cluster.go:323-330` |
 
 未见使用 Google `errdetails`（检索 `google.golang.org/genproto/googleapis/rpc/errdetails` 零命中）。更常见的是 **metadata 承载 reason**：
 
@@ -322,7 +322,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 
 ### 5.1 分页
 
-契约里没有统一的 `page`/`offset`，全部是 opaque cursor。共享消息 `common.v1.Pagination{page_size, page_token}`（`api/proto/common/v1/types.proto:21-30`）与 `common.v1.PaginationResponse{next_page_token, total_size}`（`:33-38`）**只被两个 RPC 使用**（检索 `common.v1.Pagination`/`common.v1.PaginationResponse` 的全部声明点恰好 4 处：`api/proto/audit/v1/audit.proto:90`、`:96` 与 `api/proto/orchestrator/v1/orchestrator.proto:117`、`:123`）：`audit.v1.QueryAuditEvents` 与 `orchestrator.v1.BundleService/ListBundles`。其余分页 RPC 用内联字段，命名有三套：
+契约里没有统一的 `page`/`offset`，全部是 opaque cursor。共享消息 `common.v1.Pagination{page_size, page_token}`（`api/proto/common/v1/types.proto:21-30`）与 `common.v1.PaginationResponse{next_page_token, total_size}`（`:33-38`）**只被两个 RPC 使用**（检索 `common.v1.Pagination`/`common.v1.PaginationResponse` 的全部声明点恰好 4 处：`api/proto/audit/v1/audit.proto:90`、`:96` 与 `api/proto/orchestrator/v1/orchestrator.proto:124`、`:130`）：`audit.v1.QueryAuditEvents` 与 `orchestrator.v1.BundleService/ListBundles`。其余分页 RPC 用内联字段，命名有三套：
 
 | RPC | 请求字段 | 响应字段 | 出处 |
 | --- | --- | --- | --- |
