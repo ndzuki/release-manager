@@ -10,12 +10,20 @@
 //
 // Environment contract: same as e2e/emergency-smoke.spec.ts. The full dev stack
 // (auth + orchestrator + operator + Postgres + registry) must be up and seeded,
-// and the target release must be installed at revision > 1. Set
-// E2E_BACKEND=true to activate; without it every case skips with an explicit
-// reason — never silently shrunk.
+// and the target release must be installed at revision > 1.
+//
+// E2E_BACKEND is the ONLY skip gate. Once the stack is declared up
+// (E2E_BACKEND=true), a missing rollback entry, an empty release inventory or a
+// missing credential is a HARD FAILURE with diagnostics — never a skip. A spec
+// that exits 0 with a skip on a half-wired stack is the "skip 充数" TASK-240
+// explicitly forbids (review 2026-10-05).
 //
 //   E2E_BACKEND=true
-//   E2E_BASE_URL           console base (default http://127.0.0.1:5173)
+//   E2E_BASE_URL           console base (default http://127.0.0.1:5173, which is
+//                          NOT usable: the Vite dev proxy misses
+//                          /auth.v1.AuthorizationService, so writeBlocked hides
+//                          the rollback entry — use the container console
+//                          http://127.0.0.1:8087; see docs/testing.md)
 //   E2E_ADMIN_A_USER/PASS  a write-capable account (default dev-admin)
 //   E2E_CUSTOMER_ID        optional; with E2E_CLUSTER_ID it skips the UI hops
 //   E2E_CLUSTER_ID         optional; see above
@@ -57,8 +65,29 @@ const ACCEPTED_STATES = /^(pending|preflight)$/;
 
 const ROLLBACK_ROW = '[data-testid^="release-rollback-"]';
 
-const PRE_REVISION_PRECONDITION =
-  'no release on this cluster is bound to a ReleaseDefinition at revision > 1, so the rollback entry does not render (run `make e2e-stage STAGES=release` after `make dev-up dev-seed dev-status` to install+upgrade the e2e-release-target)';
+// Quoted by every "rollback entry missing although E2E_BACKEND=true" failure so
+// the message names the likely cause instead of only "element not found".
+// The `(web` + `/vite.config.ts` split is deliberate: the locator-hygiene gate
+// scans `/.../` spans in spec sources as English locators, and a joined path
+// would be read as one.
+const DEV_PROXY_HINT =
+  'likely cause: the console was served by the Vite dev server, whose dev proxy has no ' +
+  '/auth.v1.AuthorizationService entry (web' +
+  '/vite.config.ts). GetAuthorizationSnapshot then falls ' +
+  'through to the SPA, the Authorization Snapshot never becomes fresh, writeBlocked is true and the ' +
+  'rollback entry is not rendered. Run against the container console (nginx, `^~ /auth.v1.`) at ' +
+  'E2E_BASE_URL=http://127.0.0.1:8087 — see docs/testing.md "控制台（浏览器）E2E：回滚路径".';
+
+// E2E_BACKEND=true means the environment was declared up: a missing credential
+// is a misconfiguration that must fail, not silently skip the whole case.
+function requireCredentials(): void {
+  if (ADMIN.password !== '') return;
+  throw new Error(
+    'E2E_BACKEND=true but E2E_ADMIN_A_PASS is empty, so no login can be attempted. ' +
+      'Source data/dev-credentials.env (never echo it) and pass E2E_ADMIN_A_PASS=$DEV_ADMIN_PASSWORD ' +
+      'plus E2E_ADMIN_A_USER — see docs/testing.md "控制台（浏览器）E2E：回滚路径".',
+  );
+}
 
 async function login(page: Page, username: string, password: string): Promise<void> {
   await page.goto('/login');
@@ -95,10 +124,25 @@ async function openReleases(page: Page): Promise<void> {
   await page.waitForURL((url) => url.pathname.endsWith('/releases'));
 }
 
+// The Revision column is always the 4th cell (release/status/chart/revision),
+// whether or not the optional trailing columns render.
+async function inventoryRevisions(page: Page): Promise<number[]> {
+  const rows = page.locator('tbody tr');
+  const count = await rows.count();
+  const revisions: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const text = (await rows.nth(i).locator('td').nth(3).innerText()).trim();
+    const value = Number(text);
+    if (Number.isInteger(value)) revisions.push(value);
+  }
+  return revisions;
+}
+
 // Waits for the inventory to settle, then returns the first rollback trigger.
-// A count of 0 is a real precondition failure, not a pass: the caller skips with
-// PRE_REVISION_PRECONDITION.
-async function rollbackTrigger(page: Page): Promise<Locator> {
+// A missing trigger while E2E_BACKEND=true is a hard failure with diagnostics:
+// it may be a genuine setup gap (no revision > 1) or the Vite-proxy writeBlocked
+// regression, and neither may be mistaken for a pass.
+async function requireRollbackTrigger(page: Page): Promise<Locator> {
   await page
     .locator('tbody tr, [data-testid="release-inventory-empty"]')
     .first()
@@ -106,7 +150,28 @@ async function rollbackTrigger(page: Page): Promise<Locator> {
     .catch(() => undefined);
   const trigger = page.locator(ROLLBACK_ROW).first();
   await trigger.waitFor({ state: 'attached', timeout: 20_000 }).catch(() => undefined);
-  return trigger;
+  if ((await trigger.count()) > 0) return trigger;
+
+  const rows = await page.locator('tbody tr').count();
+  const emptyState = await page.locator('[data-testid="release-inventory-empty"]').count();
+  const staleNotice = await page.locator('.auth-stale-notice').count();
+  const revisions = await inventoryRevisions(page);
+  const maxRevision = revisions.length > 0 ? Math.max(...revisions) : null;
+  const entryShouldRender = maxRevision !== null && maxRevision > 1;
+  throw new Error(
+    [
+      'rollback entry not found although E2E_BACKEND=true declares the stack up.',
+      `url=${page.url()}`,
+      `inventory rows=${rows} (empty-state ${emptyState > 0 ? 'rendered' : 'absent'}), revisions=[${revisions.join(', ')}]`,
+      `max revision=${maxRevision ?? 'none'} => rollback entry ${entryShouldRender ? 'MUST render' : 'cannot render (needs revision > 1)'}`,
+      `writeBlocked notice (.auth-stale-notice)=${staleNotice > 0 ? 'rendered (authorization snapshot not fresh)' : 'absent'}`,
+      entryShouldRender
+        ? DEV_PROXY_HINT
+        : 'no release on this cluster is bound to a ReleaseDefinition at revision > 1; run ' +
+          '`make e2e-stage STAGES=release` after `make dev-up dev-seed dev-status` to install+upgrade ' +
+          'the e2e-release-target',
+    ].join('\n'),
+  );
 }
 
 function scopeFromUrl(page: Page): { customerId: string; clusterId: string } {
@@ -114,12 +179,24 @@ function scopeFromUrl(page: Page): { customerId: string; clusterId: string } {
   return { customerId: parts[2] ?? '', clusterId: parts[4] ?? '' };
 }
 
-// The row's bound definition id, read from the operation-create link it renders
-// (same projection the rollback trigger is derived from — no fixture coupling).
+// The row's bound definition id, read from the operation-create link it renders.
+// The link href carries a query string whose `releaseName` is `namespace/name`
+// and therefore contains slashes (vue-router does not escape them), so the id
+// MUST come from the URL PATH only: splitting the raw href can slice into the
+// query. Review measured this shape (a route table without a trailing
+// `/operations/new`):
+//   /customers/c1/clusters/cl1/releases/def-1?releaseName=ns/release-a&...
+// → raw split[1].split('/')[0] === 'def-1?releaseName=ns' (wrong).
+// The app's current route renders `.../releases/<id>/operations/new?...`, where
+// the raw split happens to land on `<id>`; the path parse does not depend on
+// that trailing segment staying there.
 async function definitionIdForRow(page: Page): Promise<string> {
   const row = page.locator('tbody tr').filter({ has: page.locator(ROLLBACK_ROW) }).first();
   const href = await row.locator('a.release-table__operation').getAttribute('href');
-  return href?.split('/releases/')[1]?.split('/')[0] ?? '';
+  if (!href) return '';
+  const parts = new URL(href, 'http://x').pathname.split('/');
+  const marker = parts.indexOf('releases');
+  return marker >= 0 ? (parts[marker + 1] ?? '') : '';
 }
 
 function isRollbackRequest(url: string): boolean {
@@ -127,12 +204,11 @@ function isRollbackRequest(url: string): boolean {
 }
 
 test('Rollback from the release inventory creates a ROLLBACK operation and lands on its detail (AC-240-02)', async ({ page }) => {
-  test.skip(ADMIN.password === '', 'E2E_ADMIN_A_PASS is required');
+  requireCredentials();
   await login(page, ADMIN.username, ADMIN.password);
   await openReleases(page);
 
-  const trigger = await rollbackTrigger(page);
-  test.skip((await trigger.count()) === 0, PRE_REVISION_PRECONDITION);
+  const trigger = await requireRollbackTrigger(page);
   await expect(trigger).toBeVisible();
 
   const scope = scopeFromUrl(page);
@@ -163,8 +239,10 @@ test('Rollback from the release inventory creates a ROLLBACK operation and lands
   expect(wireRequest.targetRevision).toBe(targetRevision);
   expect(wireRequest.expectedCurrentRevision).toBe(currentRevision);
   expect(request.headers()['idempotency-key']).toBeTruthy();
-  // AC-240-02(b) request half: the deprecated values fields are never sent, so
-  // rollback_values_not_allowed has nothing to reject.
+  // AC-240-02(b) request half: the request carries EMPTY values fields, so the
+  // server has no rollback_values_not_allowed to reject. This is not proof the
+  // fields were "never sent": proto3 cannot distinguish an unset string field
+  // from an explicitly empty one, so decoding can only show the value is empty.
   expect(wireRequest.valuesRevisionId).toBe('');
   expect(wireRequest.valuesPatch).toBe('');
 
@@ -196,12 +274,11 @@ test('Rollback from the release inventory creates a ROLLBACK operation and lands
 });
 
 test('an illegal target revision is refused by the SERVER, not only by the form guard (AC-240-03)', async ({ page }) => {
-  test.skip(ADMIN.password === '', 'E2E_ADMIN_A_PASS is required');
+  requireCredentials();
   await login(page, ADMIN.username, ADMIN.password);
   await openReleases(page);
 
-  const trigger = await rollbackTrigger(page);
-  test.skip((await trigger.count()) === 0, PRE_REVISION_PRECONDITION);
+  const trigger = await requireRollbackTrigger(page);
   await expect(trigger).toBeVisible();
   await trigger.click();
 
