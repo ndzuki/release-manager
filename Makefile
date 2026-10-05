@@ -546,6 +546,29 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 audit-citations: ## Read-only audit: symbols named next to a code citation should sit near the cited line (TASK-112)
 	$(GO) run ./cmd/docscheck/ -root . -max 40
 
+.PHONY: audit-task-premises
+audit-task-premises: ## Read-only audit, NOT a gate / NOT in `make quality`: ready TASK cards should record verified_at + verified_head; verified_head is compared against main (origin/main, else main) — NOT the current checkout HEAD (TASK-248)
+	@$(TASKS_RESOLVE); \
+	if [ -z "$$TASKS" ]; then \
+		printf "$(YELLOW)SKIP audit-task-premises: no TASK documents found — set TASKS_DIR to the vault Tasks directory$(NC)\n"; \
+		exit 0; \
+	fi; \
+	main_ref="$$(git rev-parse --verify -q origin/main || git rev-parse --verify -q main || true)"; \
+	if [ -z "$$main_ref" ]; then \
+		printf "$(YELLOW)SKIP audit-task-premises: cannot resolve main (neither origin/main nor main) — head comparison unavailable/incomparable, staleness still audited$(NC)\n"; \
+	fi; \
+	commits="$$(mktemp)"; \
+	trap 'rm -f "$$commits"' EXIT INT TERM; \
+	for sha in $$(grep -hE '^[[:space:]]*verified_head:' $$TASKS 2>/dev/null | sed -E 's/^[[:space:]]*verified_head:[[:space:]]*//' | tr -d "\"'" | sort -u); do \
+		if [ -n "$$main_ref" ] && git merge-base --is-ancestor "$$sha" "$$main_ref" >/dev/null 2>&1; then \
+			n="$$(git rev-list --count "$$sha".."$$main_ref")"; \
+		else \
+			n="-1"; \
+		fi; \
+		printf '%s\t%s\n' "$$sha" "$$n" >> "$$commits"; \
+	done; \
+	$(GO) run ./cmd/taskpremises -max 40 -head "$$main_ref" -commits "$$commits" $$TASKS
+
 .PHONY: check-error-codes
 check-error-codes: ## Check that every error code an AC asserts is emittable (TASK-125)
 	@$(REQS_RESOLVE); \
