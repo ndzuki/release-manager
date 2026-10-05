@@ -505,6 +505,13 @@ func candidateArtifactSummaries(artifacts []*store.CandidateArtifact, repository
 // emergencyWorkloadView loads the release inventory row for one definition and
 // projects it onto the fail-closed workload view. A definition without an
 // inventory row has no observation, so it yields the unavailable sentinels.
+//
+// The annotation projection is re-filtered against the definition's *current*
+// whitelist (TASK-247), the same read-side filter ListEmergencyTargets applies,
+// so no consumer of this view can observe a key the definition no longer
+// approves. Today's only consumer (ListCandidateArtifacts) ignores Annotations
+// entirely, so this filter changes no observable output; it exists to remove
+// the footgun for the next consumer.
 func (s *Service) emergencyWorkloadView(ctx context.Context, definitionID string) (emergencyWorkloadView, error) {
 	inventory, err := s.store.Inventories().GetByDefinition(ctx, definitionID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -513,8 +520,17 @@ func (s *Service) emergencyWorkloadView(ctx context.Context, definitionID string
 	if err != nil {
 		return emergencyWorkloadView{}, fmt.Errorf("load emergency inventory: %w", err)
 	}
+	definition, err := s.store.Definitions().Get(ctx, definitionID)
+	if errors.Is(err, store.ErrNotFound) {
+		// Fail closed: an unlinked definition approves nothing.
+		definition = nil
+	} else if err != nil {
+		return emergencyWorkloadView{}, fmt.Errorf("load emergency definition: %w", err)
+	}
 	observation, observed := emergencyObservedWorkload(inventory)
-	return projectEmergencyWorkload(observation, observed, time.Now().UTC()), nil
+	view := projectEmergencyWorkload(observation, observed, time.Now().UTC())
+	view.Annotations = filterApprovedAnnotations(definition, view.Annotations)
+	return view, nil
 }
 
 // emergencyArtifactRepositoryScope derives the logical repository that scopes

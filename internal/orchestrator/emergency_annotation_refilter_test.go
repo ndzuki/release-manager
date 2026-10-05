@@ -23,11 +23,19 @@ import (
 // TestListEmergencyTargetsDropsAnnotationRemovedFromDefinition is the TASK-247
 // end-to-end regression: an operator whose persisted annotation whitelist is
 // stale still reports a key the definition has since removed (no later release
-// write refreshed it), and the emergency read model must never show it. The
-// operator report goes through the real CommandStream ingest path, the center
-// re-filters against the current definition, and ListEmergencyTargets reads the
-// washed row: the still-approved key survives, the removed key is gone.
-// Removing the re-filter from applyWorkloadObservation makes this test fail.
+// write refreshed it), and neither half of the data plane may keep it. The
+// operator report goes through the real CommandStream ingest path, so this test
+// guards both cut points:
+//
+//   - ingest: once the report is drained, the persisted release_inventory row
+//     must not carry the removed key (the store-level assertion below). This is
+//     the half that fails when the filterApprovedAnnotations call in
+//     internal/operator/workload_identity.go's applyWorkloadObservation is
+//     disabled; the read-side filter cannot mask a dirty stored row.
+//   - read side: ListEmergencyTargets must not advertise the removed key.
+//
+// The ingest cut point also has a focused operator-side regression,
+// TestCommandStreamAnnotationRefilterDropsRemovedKeyWhenDefinitionShrinks.
 func TestListEmergencyTargetsDropsAnnotationRemovedFromDefinition(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
@@ -107,6 +115,17 @@ func TestListEmergencyTargetsDropsAnnotationRemovedFromDefinition(t *testing.T) 
 			break
 		}
 	}
+
+	// Ingest cut point: assert the raw stored row, not just the read model. The
+	// read-side filter would otherwise hide an unfiltered write, so this is the
+	// assertion that catches a disabled ingest filter. The approved key must be
+	// persisted and the definition-removed key must never reach the row.
+	stored, err := st.Inventories().GetByDefinition(t.Context(), "def-001")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]map[string]string{
+		"WORKLOAD_METADATA": {"team": "platform"},
+	}, stored.ObservedAnnotations,
+		"ingest must persist only the currently approved annotation projection")
 
 	resp, err := svc.ListEmergencyTargets(deployerCtx(), connect.NewRequest(&orchestratorv1.ListEmergencyTargetsRequest{
 		ReleaseDefinitionId: "def-001",

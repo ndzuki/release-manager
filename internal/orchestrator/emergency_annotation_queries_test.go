@@ -41,7 +41,8 @@ func listTarget(t *testing.T, svc *Service) *orchestratorv1.EmergencyTarget {
 //
 // TASK-247: the read path re-filters against the definition's current
 // whitelist, so the fixture must grant the two keys the observation carries —
-// production can only persist a projection the definition approves.
+// production can only persist a projection the definition approved at ingest
+// time (the stored projection may lag the current definition).
 func TestListEmergencyTargetsProjectsFreshAnnotations(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
