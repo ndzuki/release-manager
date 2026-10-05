@@ -186,10 +186,13 @@ func flatScopedAnnotations(annotations map[string]map[string]string) map[string]
 // (TASK-247). It is the read-side twin of the ingest-side filter in
 // internal/operator/workload_identity.go and closes the window the ingest
 // filter alone cannot: a key that reached release_inventory while it was still
-// approved stays on the row until the next (re-filtered) ingest, so a definition
+// approved stays on the row until the next (re-filtered) ingest, and if the
+// release never reports again it stays there indefinitely -- so a definition
 // update that removes a key would otherwise keep advertising it through
-// ListEmergencyTargets for up to one report period. The center is the authority;
-// the read model never shows a key the current definition no longer approves.
+// ListEmergencyTargets. How long the read model could show it is bounded by the
+// observation freshness window, not by a report period. The center is the
+// authority; the read model never shows a key the current definition no longer
+// approves.
 //
 // The matching semantics are identical to ingest so both halves of the data
 // plane agree: both sides are trimmed (TrimSpace) and compared as the exact
