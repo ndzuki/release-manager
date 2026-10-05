@@ -50,6 +50,54 @@ in-memory storage + `kubefake`，**不需要集群**：
 「全量质量门禁」覆盖前端三关。`test:e2e` 需要完整 dev 栈，仍由 CI 的
 `e2e`/`e2e-prerequisite` job 承担（PR 上不跑，push 与 `workflow_dispatch` 跑）。
 
+#### 控制台（浏览器）E2E：回滚路径（TASK-240）
+
+`web/e2e/rollback.spec.ts` 覆盖 REQ-056 AC-056-08 的**浏览器**路径：在发布清单打开回滚表单 →
+填目标 revision + 原因 → 提交 → 落到新 operation 详情。断言逐条标注证据来源（请求体/响应体用
+`RollbackReleaseRequest/Response` 的 protobuf schema 解码，类型/状态用页面元素）。另有**负控制**
+（AC-240-03）：非法 `target_revision` 必须被**服务端**拒绝——表单守卫会先拦下 `target_revision`
+不小于当前 revision，所以该用例把出站载荷在途改写成非法值，断言真实服务端返回 `400` +
+`target_revision` 字样，且页面显示错误、不跳转。服务端 RPC 路径已由
+`test/e2e/prerequisite/smoke.sh` 真实覆盖，本 spec 不重复它（TASK-240 复核收窄）。请求侧对
+deprecated `values_revision_id`/`values_patch` 的断言只证明**载荷里这两个字段为空**、响应未被
+`rollback_values_not_allowed` 拒绝 —— proto3 无法区分「未发送」与「发送了空串」，解码不能证明前者。
+
+前置：**目标 release 的 revision 必须 > 1**（否则发布清单不渲染回滚入口；`E2E_BACKEND=true` 时
+用例**硬失败并打印诊断**，不再以「revision 不大于 1」为由 skip）：
+
+```bash
+make dev-up && make dev-seed && make dev-status   # 起栈 + seed + 写 data/dev-status.json
+make e2e-stage STAGES=release                     # 对 e2e-release-target 做 UPGRADE；运行结束时会执行回滚补偿，revision 仍 > 1
+```
+
+运行（唯一的 skip 门控是 `E2E_BACKEND`：未设 `E2E_BACKEND=true` 时整 suite 以显式原因 skip；
+一旦声明栈已起，发布清单为空、找不到回滚入口或缺凭据都**硬失败并打印诊断**，不会静默缩小覆盖）：
+
+```bash
+cd web
+set -a; . ../data/dev-credentials.env; set +a    # 只 source，不要回显/记录文件内容
+E2E_BACKEND=true E2E_CHANNEL=chrome \
+  E2E_BASE_URL=http://127.0.0.1:8087 \
+  E2E_ADMIN_A_USER=dev-admin E2E_ADMIN_A_PASS="$DEV_ADMIN_PASSWORD" \
+  E2E_CUSTOMER_ID=11111111-1111-4111-8111-111111111111 \
+  E2E_CLUSTER_ID=dev-customer-a-direct \
+  npx playwright test e2e/rollback.spec.ts
+```
+
+- 浏览器：`E2E_CHANNEL=chrome` 复用系统 Chrome（`web/playwright.config.ts`），不下载 Chromium。
+- **必须用 `E2E_BASE_URL=http://127.0.0.1:8087`（容器内控制台）；默认的 `http://127.0.0.1:5173`
+  跑不通本 spec，也不要用它。** 原因：`web/vite.config.ts` 的 dev proxy **缺
+  `/auth.v1.AuthorizationService`**（只列了 `AuthService`/`OrganizationService`/`BindingService`），
+  直连 Vite 时 `GetAuthorizationSnapshot` 落到 SPA 而失败、`writeBlocked` 为真，回滚入口不渲染；
+  生产 `web/nginx.conf` 用 `^~ /auth.v1.` 前缀覆盖该服务。`:8087` 由 `make dev-up` 起的
+  `release-web` 容器提供（与生产同一份 nginx）；Vite 缺口的修法不在 TASK-240 范围内。
+- **web 镜像必须包含 TASK-153 的控制台回滚入口**：`web/src/components/releases/RollbackReleaseDialog.vue`
+  与发布清单的 `data-testid^="release-rollback-"` 触发按钮
+  （`web/src/components/releases/ReleaseInventoryTable.vue`）。镜像过旧时发布清单不会渲染回滚入口；
+  `E2E_BACKEND=true` 下这会让 spec **硬失败**并打印清单行数/revision/`writeBlocked` 诊断（不再 skip）。
+  镜像按内容重建：`make dev-up` 会重建 `localhost:5001/release-web`。
+- `E2E_CUSTOMER_ID`/`E2E_CLUSTER_ID` 省略时 spec 走 UI 导航（客户 → 集群 → 发布清单）。
+
 ### 跨两侧契约测试（「读侧要求 X / 写侧生产 Y」）
 
 **规则**：任何**读侧要求某字段非空或处于特定状态**的查询（`WHERE x IS NOT NULL`、
