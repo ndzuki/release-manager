@@ -325,6 +325,8 @@ func TestCommandStreamWorkloadIdentityReportPersistsSelectedItemObservation(t *t
 
 // seedObservationDefinition seeds the definition + inventory row pair the
 // observation persistence tests need.
+//
+//nolint:unparam // releaseName is uniformly "example" across the ingest tests; the helper mirrors the production release shape and stays explicit.
 func seedObservationDefinition(t *testing.T, st store.Store, definitionID, releaseName string) {
 	t.Helper()
 	ctx := t.Context()
@@ -337,6 +339,20 @@ func seedObservationDefinition(t *testing.T, st store.Store, definitionID, relea
 		ReleaseDefinitionID: definitionID, CustomerID: "cust-1", ClusterID: "clus-1",
 		Namespace: "apps", ReleaseName: releaseName, Status: "deployed", InventoryStatus: store.InventoryActive,
 	}))
+}
+
+// grantObservationAnnotations sets the center-approved annotation whitelist on
+// an already-seeded definition (TASK-247). The center re-filters every reported
+// annotation against this whitelist before it is persisted, so an ingest test
+// that expects annotations on the row must grant them here.
+func grantObservationAnnotations(t *testing.T, st store.Store, definitionID string, approved ...store.ApprovedAnnotationKey) {
+	t.Helper()
+	ctx := t.Context()
+	definition, err := st.Definitions().Get(ctx, definitionID)
+	require.NoError(t, err)
+	definition.ApprovedAnnotationKeys = approved
+	_, err = st.Definitions().Update(ctx, definition, nil)
+	require.NoError(t, err)
 }
 
 // sendIdentityReport drives one WorkloadIdentityReport through the real control
@@ -443,14 +459,21 @@ func TestWorkloadObservationApprovedAnnotations(t *testing.T) {
 
 // TASK-241 W-c (central projection): the wire's scope-grouped
 // current_annotations must reach the release_inventory row through
-// UpdateWorkloadObservation, flattened to scope → key → value. A report whose
-// observation carries no annotation group stores "not observed" (nil), never a
-// present-but-empty map, and an observation-less redelivery leaves the stored
-// projection untouched.
+// UpdateWorkloadObservation, flattened to scope → key → value. Every reported
+// key is granted on the definition first (TASK-247): the center re-filters
+// ingest against the current whitelist, so an ungranted key is dropped. A
+// report whose observation carries no annotation group stores "not observed"
+// (nil), never a present-but-empty map, and an observation-less redelivery
+// leaves the stored projection untouched.
 func TestCommandStreamWorkloadIdentityReportPersistsApprovedAnnotations(t *testing.T) {
 	st := newTestSvc(t)
 	ctx := t.Context()
 	seedObservationDefinition(t, st, "definition-annotations", "example")
+	grantObservationAnnotations(t, st, "definition-annotations",
+		store.ApprovedAnnotationKey{Key: "team", Scope: "WORKLOAD_METADATA"},
+		store.ApprovedAnnotationKey{Key: "tier", Scope: "WORKLOAD_METADATA"},
+		store.ApprovedAnnotationKey{Key: "prometheus.io/scrape", Scope: "POD_TEMPLATE_METADATA"},
+	)
 
 	observedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
 	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
@@ -500,4 +523,156 @@ func TestCommandStreamWorkloadIdentityReportPersistsApprovedAnnotations(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}}, row.ObservedAnnotations,
 		"an observation-less report must not clear stored annotations")
+}
+
+// TASK-247 case (a): the center re-applies its own annotation whitelist at
+// ingest. An operator whose persisted whitelist is stale reports a key the
+// definition no longer approves, and only the approved subset may be persisted
+// — the removed key cannot survive. An unknown scope is dropped too. Removing
+// the filter from applyWorkloadObservation makes the `removed`/`UNKNOWN_SCOPE`
+// assertions fail.
+func TestCommandStreamAnnotationRefilterKeepsApprovedSubsetOnly(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	seedObservationDefinition(t, st, "definition-refilter-subset", "example")
+	grantObservationAnnotations(t, st, "definition-refilter-subset",
+		store.ApprovedAnnotationKey{Key: "team", Scope: "WORKLOAD_METADATA"},
+	)
+
+	reportedAt := time.Now().UTC().Truncate(time.Second)
+	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+		ReleaseNamespace: "apps", ReleaseName: "example",
+		Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-refilter-subset",
+		Containers:       []string{"api"},
+		CurrentImageRefs: map[string]string{"api": "registry.example/team/api:1.0.0"},
+		CurrentAnnotations: []*operatorv1.ScopedAnnotations{
+			{Scope: "WORKLOAD_METADATA", Entries: []*operatorv1.AnnotationEntry{
+				{Key: "team", Value: "platform"},
+				{Key: "removed", Value: "stale"},
+			}},
+			{Scope: "POD_TEMPLATE_METADATA", Entries: []*operatorv1.AnnotationEntry{
+				{Key: "prometheus.io/scrape", Value: "true"},
+			}},
+			{Scope: "UNKNOWN_SCOPE", Entries: []*operatorv1.AnnotationEntry{
+				{Key: "team", Value: "wrong-scope"},
+			}},
+		},
+		ObservedAt: timestamppb.New(reportedAt),
+	}})
+
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]map[string]string{
+		"WORKLOAD_METADATA": {"team": "platform"},
+	}, row.ObservedAnnotations,
+		"only the (scope, key) the definition approves may be persisted")
+	assert.Equal(t, []string{"api"}, row.ObservedContainers,
+		"the annotation filter must not disturb the other observed fields")
+	assert.WithinDuration(t, reportedAt, row.ObservedAt, time.Second)
+}
+
+// TASK-247 case (b): the definition shrinks while the operator keeps its stale
+// whitelist (no later release write reaches it), so the operator still reports
+// the removed key. The removed key must be dropped from the row, and once the
+// definition approves no annotation at all the filtered-empty projection must
+// clear the column instead of leaving the old key behind.
+func TestCommandStreamAnnotationRefilterDropsRemovedKeyWhenDefinitionShrinks(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	seedObservationDefinition(t, st, "definition-refilter-shrink", "example")
+	grantObservationAnnotations(t, st, "definition-refilter-shrink",
+		store.ApprovedAnnotationKey{Key: "team", Scope: "WORKLOAD_METADATA"},
+		store.ApprovedAnnotationKey{Key: "legacy", Scope: "WORKLOAD_METADATA"},
+	)
+
+	reportBoth := func(observedAt time.Time) {
+		t.Helper()
+		sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+			ReleaseNamespace: "apps", ReleaseName: "example",
+			Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-refilter-shrink",
+			CurrentAnnotations: []*operatorv1.ScopedAnnotations{
+				{Scope: "WORKLOAD_METADATA", Entries: []*operatorv1.AnnotationEntry{
+					{Key: "team", Value: "platform"},
+					{Key: "legacy", Value: "stale"},
+				}},
+			},
+			ObservedAt: timestamppb.New(observedAt),
+		}})
+	}
+
+	base := time.Now().UTC().Truncate(time.Second)
+	reportBoth(base)
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	require.Equal(t, map[string]map[string]string{
+		"WORKLOAD_METADATA": {"team": "platform", "legacy": "stale"},
+	}, row.ObservedAnnotations, "precondition: both keys were approved and persisted")
+
+	// The center removes `legacy` without sending the release a new command, so
+	// the operator's persisted whitelist stays stale and it keeps reporting it.
+	grantObservationAnnotations(t, st, "definition-refilter-shrink",
+		store.ApprovedAnnotationKey{Key: "team", Scope: "WORKLOAD_METADATA"},
+	)
+	reportBoth(base.Add(time.Minute))
+	row, err = st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]map[string]string{
+		"WORKLOAD_METADATA": {"team": "platform"},
+	}, row.ObservedAnnotations, "the center-removed key must not survive ingest")
+
+	// The definition now approves no annotation at all while the stale operator
+	// still reports both: the filtered-empty result must drop them all.
+	grantObservationAnnotations(t, st, "definition-refilter-shrink")
+	reportBoth(base.Add(2 * time.Minute))
+	row, err = st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Nil(t, row.ObservedAnnotations, "an all-unapproved report must clear the projection")
+}
+
+// TASK-247 case (c): a report that carries no annotations at all (an operator
+// with no whitelist) is not evidence about the definition, and the filter must
+// not fabricate one. The pre-existing ingest semantics are preserved: the
+// other observed fields still refresh, while the annotation column keeps the
+// store's "empty projection is not observed" rule so the read model stops
+// advertising the old value. Preserving the stored projection here would let a
+// definition-removed key survive whenever a fresh operator (empty local store)
+// reports the identity without annotations — exactly the window this card
+// closes — so clearing is deliberate (filterApprovedAnnotations, case c).
+func TestCommandStreamAnnotationRefilterWithoutAnnotationsKeepsExistingSemantics(t *testing.T) {
+	st := newTestSvc(t)
+	ctx := t.Context()
+	seedObservationDefinition(t, st, "definition-refilter-none", "example")
+	grantObservationAnnotations(t, st, "definition-refilter-none",
+		store.ApprovedAnnotationKey{Key: "team", Scope: "WORKLOAD_METADATA"},
+	)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+		ReleaseNamespace: "apps", ReleaseName: "example",
+		Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-refilter-none",
+		CurrentAnnotations: []*operatorv1.ScopedAnnotations{
+			{Scope: "WORKLOAD_METADATA", Entries: []*operatorv1.AnnotationEntry{{Key: "team", Value: "platform"}}},
+		},
+		ObservedAt: timestamppb.New(base),
+	}})
+	row, err := st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	require.Equal(t, map[string]map[string]string{"WORKLOAD_METADATA": {"team": "platform"}}, row.ObservedAnnotations)
+
+	// The operator now reports the identity with observed_at but no annotation
+	// group: its whitelist is unknown/empty. Containers and observed_at still
+	// refresh; annotations keep the existing "not observed" semantics rather
+	// than retaining the previous value.
+	sendIdentityReport(t, st, []*operatorv1.WorkloadIdentityItem{{
+		ReleaseNamespace: "apps", ReleaseName: "example",
+		Kind: "DEPLOYMENT", Name: "example", Namespace: "apps", Uid: "uid-refilter-none",
+		Containers:       []string{"api"},
+		CurrentImageRefs: map[string]string{"api": "registry.example/team/api:2.0.0"},
+		ObservedAt:       timestamppb.New(base.Add(time.Minute)),
+	}})
+	row, err = st.Inventories().GetByReleaseKey(ctx, "cust-1", "clus-1", "apps", "example")
+	require.NoError(t, err)
+	assert.Nil(t, row.ObservedAnnotations, "no annotation payload keeps the existing not-observed semantics")
+	assert.Equal(t, []string{"api"}, row.ObservedContainers, "the rest of the observation still updates")
+	assert.WithinDuration(t, base.Add(time.Minute), row.ObservedAt, time.Second)
 }

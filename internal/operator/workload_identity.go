@@ -392,7 +392,9 @@ func (s *Service) applyReportToInventoryRow(ctx context.Context, customerID, clu
 	// projection. It is applied only after the identity was accepted, and it is
 	// scoped to the selected item — an observation from a workload the row was
 	// not bound to must never advertise containers the target cannot address.
-	s.applyWorkloadObservation(ctx, customerID, clusterID, row.Namespace, row.ReleaseName, item, key)
+	// definition (the row's own, or the fallback reverse lookup) also re-filters
+	// the reported annotations before they are persisted (TASK-247).
+	s.applyWorkloadObservation(ctx, customerID, clusterID, row.Namespace, row.ReleaseName, definition, item, key)
 	// A selectable report applied to the existing row supersedes any buffered
 	// pending identity for the same release. If a stale pending row were left
 	// behind, the sweep could later replay an OLDER report over the fresher
@@ -523,17 +525,24 @@ func (s *Service) applyIdentity(ctx context.Context, customerID, clusterID, name
 // observed_* columns stay NULL and the emergency read model keeps answering
 // "current fields not observed" forever.
 //
+// The reported annotations are re-filtered against the *current* definition
+// before the write (TASK-247): the operator filters from a whitelist it
+// persists locally and refreshes only when a later release write carries one,
+// so its projection can be stale. The center is the authority and never lets
+// an unapproved (scope, key) reach the row — see filterApprovedAnnotations.
+//
 // A report without observed_at carries no observation at all — an older
 // operator, or an item built before the projection existed. It must not
 // overwrite an existing observation with the zero value (that would make a
 // previously fresh row permanently stale), so it is a no-op. Failures are
 // best-effort and never interrupt the control stream: the periodic observation
 // report re-delivers on the next tick.
-func (s *Service) applyWorkloadObservation(ctx context.Context, customerID, clusterID, namespace, releaseName string, item *operatorv1.WorkloadIdentityItem, key string) {
+func (s *Service) applyWorkloadObservation(ctx context.Context, customerID, clusterID, namespace, releaseName string, definition *store.ReleaseDefinition, item *operatorv1.WorkloadIdentityItem, key string) {
 	observation, observed := workloadObservationFromItem(item)
 	if !observed {
 		return
 	}
+	observation.Annotations = filterApprovedAnnotations(definition, observation.Annotations)
 	if err := s.store.Inventories().UpdateWorkloadObservation(ctx, customerID, clusterID, namespace, releaseName, observation); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// The row vanished between the identity apply and this write, or the
@@ -617,6 +626,80 @@ func scopedAnnotationsToStore(scoped []*operatorv1.ScopedAnnotations) map[string
 		return nil
 	}
 	return annotations
+}
+
+// filterApprovedAnnotations re-applies the center's current annotation
+// whitelist to an operator-reported projection before it reaches the store
+// (TASK-247). The operator already filters locally (projectApprovedAnnotations)
+// against the whitelist a release write handed it, but that whitelist is
+// persisted on the operator (TASK-244) and refreshed only by a *later* release
+// write. If the center removes a key from the definition without sending the
+// release another command, the operator keeps reporting the old key and the
+// center previously trusted it verbatim — so a key the definition no longer
+// approves could survive on release_inventory. The center must be the
+// authority: matching is exact on (scope, key), an unknown scope or an
+// unlisted key is dropped.
+//
+// Three cases are deliberate and distinct in intent:
+//
+//	(a) the report carries approved and unapproved keys -> only the approved
+//	    subset is kept; the removed key cannot survive the write;
+//	(b) the report carries keys but none is approved (the definition shrank)
+//	    -> the filtered result is empty and the empty projection is persisted.
+//	    UpdateWorkloadObservation encodes an empty projection as the "not
+//	    observed" sentinel, so the stale key is dropped from the read model
+//	    exactly as if it had never been reported;
+//	(c) the report carries no annotations at all (for example an operator with
+//	    no whitelist) -> nil in, nil out: no annotation is fabricated. The
+//	    pre-existing store semantics then apply unchanged — an annotation-less
+//	    observation writes the empty projection, so the read model sees "not
+//	    observed" for annotations while the other observed fields (containers,
+//	    image refs, replicas, observed_at) still update. Preserving the stored
+//	    projection instead would re-open the very window this filter closes: a
+//	    fresh operator hydrated from an empty store reports the identity with no
+//	    annotations, and a definition-removed key would survive forever.
+//
+// A nil definition (a row not linked to one) approves nothing: every reported
+// key is dropped, mirroring the operator's fail-closed rule for an unknown
+// whitelist. The result is nil when nothing is approved so "not observed" keeps
+// its single representation.
+func filterApprovedAnnotations(definition *store.ReleaseDefinition, reported map[string]map[string]string) map[string]map[string]string {
+	if len(reported) == 0 {
+		return nil
+	}
+	if definition == nil || len(definition.ApprovedAnnotationKeys) == 0 {
+		return nil
+	}
+	approved := make(map[string]struct{}, len(definition.ApprovedAnnotationKeys))
+	for index := range definition.ApprovedAnnotationKeys {
+		key := strings.TrimSpace(definition.ApprovedAnnotationKeys[index].Key)
+		scope := strings.TrimSpace(definition.ApprovedAnnotationKeys[index].Scope)
+		if key == "" || scope == "" {
+			continue
+		}
+		approved[scope+"\x00"+key] = struct{}{}
+	}
+	if len(approved) == 0 {
+		return nil
+	}
+	var filtered map[string]map[string]string
+	for scope, entries := range reported {
+		trimmedScope := strings.TrimSpace(scope)
+		for key, value := range entries {
+			trimmedKey := strings.TrimSpace(key)
+			if _, ok := approved[trimmedScope+"\x00"+trimmedKey]; !ok {
+				continue
+			}
+			if filtered == nil {
+				filtered = make(map[string]map[string]string, len(reported))
+			}
+			if filtered[trimmedScope] == nil {
+				filtered[trimmedScope] = make(map[string]string, len(entries))
+			}
+			filtered[trimmedScope][trimmedKey] = value
+		}
+	}
+	return filtered
 }
 
 // ReplayAfterInventory binds a buffered identity to the inventory row that a

@@ -840,6 +840,10 @@ func annotationWhitelistKey(namespace, releaseName string) string {
 // whitelist clears the entry — the center is saying the definition approves no
 // annotation (or is too old to send one), and both cases must fail closed to
 // "report nothing".
+//
+// The durable write is skipped when the cached value is already equal to the
+// command's whitelist (TASK-247): the same release write is remembered twice
+// per delivery, and a fsync that changes nothing is pure overhead.
 func (a *Agent) rememberApprovedAnnotations(ctx context.Context, command *operatorv1.Command) {
 	if command == nil || !isReleaseWrite(command.GetOperationType()) {
 		return
@@ -849,14 +853,62 @@ func (a *Agent) rememberApprovedAnnotations(ctx context.Context, command *operat
 		return // no release identity: nothing to key the cache by
 	}
 	approved := cloneApprovedAnnotationKeys(command.GetApprovedAnnotationKeys())
-	a.approvedAnnotationsMu.Lock()
-	if len(approved) == 0 {
-		delete(a.approvedAnnotations, key)
-	} else {
-		a.approvedAnnotations[key] = approved
+	if !a.replaceApprovedAnnotations(key, approved) {
+		// The cached value already equals the command's whitelist. A release
+		// write reaches this function twice — handleCommand caches from the
+		// wire command, executeEntry re-caches from the persisted payload —
+		// and both carry the same value, so the second (and any redelivery)
+		// must not trigger another fsync (TASK-247).
+		return
 	}
-	a.approvedAnnotationsMu.Unlock()
 	a.persistApprovedAnnotations(ctx, key, approved)
+}
+
+// replaceApprovedAnnotations updates the in-memory whitelist for one release
+// and reports whether it actually changed. "No approved keys" (a nil/empty
+// slice) and a missing cache entry are the same state, so clearing an entry
+// that is already absent is not a change — otherwise a release write without a
+// whitelist would rewrite the store on every redelivery. Callers only persist
+// when this returns true (TASK-247).
+func (a *Agent) replaceApprovedAnnotations(key string, approved []store.ApprovedAnnotationKey) bool {
+	a.approvedAnnotationsMu.Lock()
+	defer a.approvedAnnotationsMu.Unlock()
+	current, exists := a.approvedAnnotations[key]
+	if len(approved) == 0 {
+		if !exists {
+			return false
+		}
+		delete(a.approvedAnnotations, key)
+		return true
+	}
+	if exists && approvedAnnotationKeysEqual(current, approved) {
+		return false
+	}
+	a.approvedAnnotations[key] = approved
+	return true
+}
+
+// approvedAnnotationKeysEqual reports whether two whitelists carry the same
+// entries, independent of order. Entry identity is (scope, key) — the pair
+// cloneApprovedAnnotationKeys de-duplicates by — and the promotion values path
+// is compared too so a mapping change is still a real change. The inputs are
+// already blank-filtered and de-duplicated, so equal length plus every entry of
+// b present in a is set equality.
+func approvedAnnotationKeysEqual(a, b []store.ApprovedAnnotationKey) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	index := make(map[string]string, len(a))
+	for _, entry := range a {
+		index[entry.Scope+"\x00"+entry.Key] = entry.PromotionValuesPath
+	}
+	for _, entry := range b {
+		path, ok := index[entry.Scope+"\x00"+entry.Key]
+		if !ok || path != entry.PromotionValuesPath {
+			return false
+		}
+	}
+	return true
 }
 
 // persistApprovedAnnotations mirrors one cache update to the durable store so

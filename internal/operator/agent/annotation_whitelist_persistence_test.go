@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +17,42 @@ import (
 	"github.com/ndzuki/release-manager/internal/operator/helmengine"
 	"github.com/ndzuki/release-manager/internal/operator/localstore"
 )
+
+// countingWhitelistStore wraps a real store and counts the durable whitelist
+// writes, so a test can assert how many fsyncs one command delivery actually
+// causes (TASK-247). Every other Store method is forwarded unchanged.
+type countingWhitelistStore struct {
+	localstore.Store
+	inner localstore.AnnotationWhitelistStore
+
+	mu      sync.Mutex
+	saves   int
+	deletes int
+}
+
+func (s *countingWhitelistStore) SaveAnnotationWhitelist(ctx context.Context, releaseKey string, keys []localstore.ApprovedAnnotationKey) error {
+	s.mu.Lock()
+	s.saves++
+	s.mu.Unlock()
+	return s.inner.SaveAnnotationWhitelist(ctx, releaseKey, keys)
+}
+
+func (s *countingWhitelistStore) DeleteAnnotationWhitelist(ctx context.Context, releaseKey string) error {
+	s.mu.Lock()
+	s.deletes++
+	s.mu.Unlock()
+	return s.inner.DeleteAnnotationWhitelist(ctx, releaseKey)
+}
+
+func (s *countingWhitelistStore) LoadAnnotationWhitelists(ctx context.Context) (map[string][]localstore.ApprovedAnnotationKey, error) {
+	return s.inner.LoadAnnotationWhitelists(ctx)
+}
+
+func (s *countingWhitelistStore) writes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saves + s.deletes
+}
 
 // annotationAgentWithStore is annotationAgentWithEngine with a caller-supplied
 // store, so a restart test can hand the second Agent the same on-disk state.
@@ -161,4 +199,47 @@ func TestAgent_AnnotationWhitelistPersistenceUnsupportedStaysInMemory(t *testing
 	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), command))
 	assert.NotEmpty(t, agent.approvedAnnotationsFor("apps", "example"),
 		"the in-memory cache must still work without persistence")
+}
+
+// TASK-247 fsync micro-fix: one release-write delivery reaches
+// rememberApprovedAnnotations twice — handleCommand caches from the wire
+// command, executeEntry re-caches from the persisted payload — and every
+// redelivery reaches it once more. The durable write now happens only when the
+// cached value actually changes, so a delivery costs one fsync instead of two
+// and an unchanged redelivery costs none. Without the change-only guard each
+// handleCommand above writes twice and the later assertions fail.
+func TestAgent_AnnotationWhitelistPersistsOncePerDistinctValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "operator.db")
+	bolt := openBoltAnnotationStore(t, path)
+	t.Cleanup(func() { _ = bolt.Close() })
+	counting := &countingWhitelistStore{Store: bolt, inner: bolt}
+	agent := annotationAgentWithStore(t, &recordingEngine{release: annotationRelease()}, counting)
+
+	command := installCommand("cmd-fsync-once")
+	command.ApprovedAnnotationKeys = annotationWhitelist()
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), command))
+	assert.Equal(t, 1, counting.writes(),
+		"the same whitelist remembered twice (handleCommand + executeEntry) must fsync once")
+
+	// A redelivery of the same command carries the same value: no new write.
+	redelivered := installCommand("cmd-fsync-once")
+	redelivered.ApprovedAnnotationKeys = annotationWhitelist()
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), redelivered))
+	assert.Equal(t, 1, counting.writes(), "an unchanged whitelist must not fsync again")
+
+	// A genuine change still fsyncs.
+	changed := installCommand("cmd-fsync-once")
+	changed.ApprovedAnnotationKeys = []*operatorv1.ApprovedAnnotationKey{
+		{Key: "tier", Scope: "WORKLOAD_METADATA"},
+	}
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), changed))
+	assert.Equal(t, 2, counting.writes(), "a changed whitelist must fsync")
+
+	// Clearing a present whitelist writes the delete once; clearing again is a
+	// no-op because the entry is already absent.
+	cleared := installCommand("cmd-fsync-once")
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), cleared))
+	assert.Equal(t, 3, counting.writes(), "clearing a present whitelist must persist the delete")
+	require.NoError(t, agent.handleCommand(t.Context(), newTestStream(), cleared))
+	assert.Equal(t, 3, counting.writes(), "clearing an already-absent whitelist must not persist again")
 }
