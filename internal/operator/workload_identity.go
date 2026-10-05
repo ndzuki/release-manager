@@ -528,8 +528,8 @@ func (s *Service) applyIdentity(ctx context.Context, customerID, clusterID, name
 // The reported annotations are re-filtered against the *current* definition
 // before the write (TASK-247): the operator filters from a whitelist it
 // persists locally and refreshes only when a later release write carries one,
-// so its projection can be stale. The center is the authority and never lets
-// an unapproved (scope, key) reach the row — see filterApprovedAnnotations.
+// so its projection can be stale. The filtered write never stores an
+// unapproved (scope, key); older on-row values are re-filtered on the read path.
 //
 // A report without observed_at carries no observation at all — an older
 // operator, or an item built before the projection existed. It must not
@@ -637,8 +637,8 @@ func scopedAnnotationsToStore(scoped []*operatorv1.ScopedAnnotations) map[string
 // release another command, the operator keeps reporting the old key and the
 // center previously trusted it verbatim — so a key the definition no longer
 // approves could survive on release_inventory. The center must be the
-// authority: matching is exact on (scope, key), an unknown scope or an
-// unlisted key is dropped.
+// authority: matching is exact after trimming both sides of (scope, key), and
+// an unknown scope or an unlisted key is dropped.
 //
 // Three cases are deliberate and distinct in intent:
 //

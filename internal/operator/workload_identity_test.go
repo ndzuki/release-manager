@@ -326,7 +326,7 @@ func TestCommandStreamWorkloadIdentityReportPersistsSelectedItemObservation(t *t
 // seedObservationDefinition seeds the definition + inventory row pair the
 // observation persistence tests need.
 //
-//nolint:unparam // releaseName is uniformly "example" across the ingest tests; the helper mirrors the production release shape and stays explicit.
+//nolint:unparam // releaseName is uniformly "example" across the ingest tests; TASK-247 added three same-value call sites, which is what pushes the helper over golangci-lint's unparam threshold (the suppression is new here, not a pre-existing baseline warning). The parameter stays explicit because the helper mirrors the production release shape and reads clearer at the call sites.
 func seedObservationDefinition(t *testing.T, st store.Store, definitionID, releaseName string) {
 	t.Helper()
 	ctx := t.Context()

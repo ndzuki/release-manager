@@ -100,9 +100,11 @@ func (w emergencyWorkloadView) imageSelectable() bool {
 
 // annotationSelectable reports whether a fresh observation supplies at least
 // one approved annotation, which is the condition for offering
-// SET_APPROVED_ANNOTATION. The operator only reports whitelisted keys (U1=A),
-// so a non-empty projection implies the definition whitelist existed and was
-// applied; a missing or empty projection means the action must stay degraded.
+// SET_APPROVED_ANNOTATION. The projection has already been re-filtered against
+// the definition's *current* whitelist (TASK-247), so a non-empty projection
+// implies the current definition approves those keys; a missing or empty
+// projection means the action must stay degraded. The predicate itself is
+// unchanged by the filter — freshness still comes from observed_at.
 func (w emergencyWorkloadView) annotationSelectable() bool {
 	return w.Observed && len(w.Annotations) > 0
 }
@@ -179,6 +181,64 @@ func flatScopedAnnotations(annotations map[string]map[string]string) map[string]
 	return flat
 }
 
+// filterApprovedAnnotations re-applies the definition's *current* annotation
+// whitelist to an already-persisted observation projection on the read path
+// (TASK-247). It is the read-side twin of the ingest-side filter in
+// internal/operator/workload_identity.go and closes the window the ingest
+// filter alone cannot: a key that reached release_inventory while it was still
+// approved stays on the row until the next (re-filtered) ingest, so a definition
+// update that removes a key would otherwise keep advertising it through
+// ListEmergencyTargets for up to one report period. The center is the authority;
+// the read model never shows a key the current definition no longer approves.
+//
+// The matching semantics are identical to ingest so both halves of the data
+// plane agree: both sides are trimmed (TrimSpace) and compared as the exact
+// (scope, key) pair; an unknown scope or an unlisted key is dropped. A nil
+// definition, or one with an empty/blank-only whitelist, approves nothing.
+//
+// The filter only removes visible keys: it never touches the observation's
+// freshness, so an all-unapproved projection becomes an empty (not observed)
+// annotation map while observed_at still decides freshness and the other
+// observed fields are unaffected.
+func filterApprovedAnnotations(definition *store.ReleaseDefinition, reported map[string]map[string]string) map[string]map[string]string {
+	if len(reported) == 0 {
+		return nil
+	}
+	if definition == nil || len(definition.ApprovedAnnotationKeys) == 0 {
+		return nil
+	}
+	approved := make(map[string]struct{}, len(definition.ApprovedAnnotationKeys))
+	for index := range definition.ApprovedAnnotationKeys {
+		key := strings.TrimSpace(definition.ApprovedAnnotationKeys[index].Key)
+		scope := strings.TrimSpace(definition.ApprovedAnnotationKeys[index].Scope)
+		if key == "" || scope == "" {
+			continue
+		}
+		approved[scope+"\x00"+key] = struct{}{}
+	}
+	if len(approved) == 0 {
+		return nil
+	}
+	var filtered map[string]map[string]string
+	for scope, entries := range reported {
+		trimmedScope := strings.TrimSpace(scope)
+		for key, value := range entries {
+			trimmedKey := strings.TrimSpace(key)
+			if _, ok := approved[trimmedScope+"\x00"+trimmedKey]; !ok {
+				continue
+			}
+			if filtered == nil {
+				filtered = make(map[string]map[string]string, len(reported))
+			}
+			if filtered[trimmedScope] == nil {
+				filtered[trimmedScope] = make(map[string]string, len(entries))
+			}
+			filtered[trimmedScope][trimmedKey] = value
+		}
+	}
+	return filtered
+}
+
 func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requestedOrganizationID string) error {
 	actor, ok := authctx.ActorFromContext(ctx)
 	if !ok {
@@ -212,8 +272,10 @@ func (s *Service) authorizeEmergencyRead(ctx context.Context, definitionID, requ
 // (current_replicas=-1, empty containers/image refs/annotations) and the
 // corresponding operation stays unavailable. Because the read-model proto field
 // is a flat map, annotations are projected as "<scope>/<key>" (TASK-241 U2=B).
-// A definition without an inventory row yields an empty target list (not an
-// error).
+// The annotation projection is additionally re-filtered against the current
+// definition (TASK-247): the row may carry a key the center has since removed,
+// and the read model must not advertise it. A definition without an inventory
+// row yields an empty target list (not an error).
 func (s *Service) ListEmergencyTargets(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.ListEmergencyTargetsRequest],
@@ -260,6 +322,13 @@ func (s *Service) ListEmergencyTargets(
 
 	observation, observed := emergencyObservedWorkload(inventory)
 	workload := projectEmergencyWorkload(observation, observed, time.Now().UTC())
+	// TASK-247 read-side closure: the ingest path already re-filters before the
+	// write, but a key persisted before the definition shrank (or before that
+	// filter existed) survives on the row until the next ingest. Filter the
+	// projection here too so the read model never advertises a key the current
+	// definition no longer approves. Freshness is untouched — see
+	// filterApprovedAnnotations.
+	workload.Annotations = filterApprovedAnnotations(definition, workload.Annotations)
 
 	target := &orchestratorv1.EmergencyTarget{
 		WorkloadRef: workloadRef,

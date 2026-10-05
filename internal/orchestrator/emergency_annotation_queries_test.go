@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/store"
 )
 
 // annotatedFreshObservation is freshObservation plus the two-scope approved
@@ -37,11 +38,19 @@ func listTarget(t *testing.T, svc *Service) *orchestratorv1.EmergencyTarget {
 // map). The annotation operation is advertised only because the observation is
 // fresh and non-empty. Removing the annotation projection or the freshness gate
 // in emergency_queries.go makes the assertions fail.
+//
+// TASK-247: the read path re-filters against the definition's current
+// whitelist, so the fixture must grant the two keys the observation carries —
+// production can only persist a projection the definition approves.
 func TestListEmergencyTargetsProjectsFreshAnnotations(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)
 	seedReplicasDefinition(t, st, replicasPromotionMapping(), false, 10)
+	seedApprovedAnnotationKeys(t, st,
+		store.ApprovedAnnotationKey{Key: "team", Scope: "WORKLOAD_METADATA"},
+		store.ApprovedAnnotationKey{Key: "prometheus.io/scrape", Scope: "POD_TEMPLATE_METADATA"},
+	)
 	seedObservedInventory(t, st, annotatedFreshObservation(time.Now().UTC()))
 
 	target := listTarget(t, svc)
