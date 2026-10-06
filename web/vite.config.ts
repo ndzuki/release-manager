@@ -22,42 +22,69 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Bind IPv4 explicitly. Vite defaults to host "localhost", which on Node 26
+    // resolves to ::1 first, so the server listens on [::1]:5173 only and
+    // http://127.0.0.1:5173 -- the URL web/playwright.config.ts defaults to, and
+    // the one the docs hand out -- refuses connections.
+    host: '127.0.0.1',
+    // Proxy Connect API calls to the development service ports.
+    //
+    // Keys are PACKAGE prefixes, mirroring web/nginx.conf's `location ^~ /auth.v1.`
+    // style, not individual services. Enumerating services by hand is what broke
+    // the dev console: `/auth.v1.AuthorizationService` was never listed, so it was
+    // not proxied at all (Vite answers 404 to an unproxied POST -- its SPA fallback
+    // only rewrites GET/HEAD), the authorization snapshot never became fresh,
+    // `writeBlocked` turned true and every write entry point (rollback, new
+    // operation, emergency change) silently stopped rendering. Production was fine
+    // because nginx proxies the whole package. Adding a service to an existing
+    // proto package must not require touching this file.
+    //
+    // Keep this list in step with web/nginx.conf: one entry per proto package plus
+    // the probe endpoints. `/health`, `/readyz` and `/environment` belong to
+    // orchestrator and the SPA router does not own those paths; they are here for
+    // parity with nginx (AC-065-35), not because the console calls them.
     proxy: {
-      // Proxy Connect API calls to the development service ports.
-      '/auth.v1.AuthService': {
+      '/auth.v1.': {
         target: 'http://127.0.0.1:8085',
         changeOrigin: true,
       },
-      '/auth.v1.OrganizationService': {
-        target: 'http://127.0.0.1:8085',
-        changeOrigin: true,
-      },
-      '/auth.v1.BindingService': {
-        target: 'http://127.0.0.1:8085',
-        changeOrigin: true,
-      },
-      '/orchestrator.v1.OrchestratorService': {
-
+      '/orchestrator.v1.': {
         target: 'http://127.0.0.1:8083',
         changeOrigin: true,
       },
-      '/operator.v1.OperatorService': {
+      '/operator.v1.': {
         target: 'http://127.0.0.1:8084',
         changeOrigin: true,
       },
       // AuditService is served by release-api. 8087 is release-web itself in
       // the dev cluster (release-api is 8088), so pointing this at 8087 sent
       // audit calls back into the SPA and answered 405 (B5).
-      '/audit.v1.AuditService': {
+      '/audit.v1.': {
         target: 'http://127.0.0.1:8088',
         changeOrigin: true,
       },
-      '/notifier.v1.NotifierService': {
+      '/notifier.v1.': {
         target: 'http://127.0.0.1:8086',
         changeOrigin: true,
       },
-      '/webhook.v1.WebhookService': {
+      '/webhook.v1.': {
         target: 'http://127.0.0.1:8082',
+        changeOrigin: true,
+      },
+      '/trust.v1.': {
+        target: 'http://127.0.0.1:8083',
+        changeOrigin: true,
+      },
+      '/health': {
+        target: 'http://127.0.0.1:8083',
+        changeOrigin: true,
+      },
+      '/readyz': {
+        target: 'http://127.0.0.1:8083',
+        changeOrigin: true,
+      },
+      '/environment': {
+        target: 'http://127.0.0.1:8083',
         changeOrigin: true,
       },
     },

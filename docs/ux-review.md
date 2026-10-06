@@ -143,7 +143,7 @@ reason=unauthenticated` 且 `source_version=0 policy_version=0 checkpoint=0`。
 
 - 容器入口：`web/nginx.conf:17` 起只代理了 auth/orchestrator/webhook/operator/notifier，
   **没有 `/audit.v1.`**，`POST /audit.v1.AuditService/QueryAuditEvents` 落到 SPA 静态处理器 → `405`。
-- dev 入口：`web/vite.config.ts:48-49` 把 `/audit.v1.AuditService` 指向 `8087`（`:48` 是 key，`:49` 是 target），
+- dev 入口：`web/vite.config.ts:62-63` 把 `/audit.v1.` 指向 `8088`（`:62` 是 key，`:63` 是 target），
   而集群路径下 8087 是 `release-web` 自己（`release-api` 在 8088）→ 同样 `405`。
 - 直连 `release-api`（8088）同一请求返回 `401`（说明路由存在），对照清楚。
 
@@ -326,7 +326,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control \
 | 7 | B2 的白屏留档取自 2026-09-25 的另一次走查，强度不足 | **2026-09-28 实测复现**（auth 临时缩到 0 → `502`、`#app` 为空、DOM 1 节点、未捕获 `ConnectError`）并重拍留档 |
 | 8 | 支撑 87/182 的清单是 2026-09-25 产物，原文写作「本次子代理的」 | §0 与§7 明确标注生成日期与归档位置 |
 | 9 | 交付物在审查期间被持续修改（每次「通过」只对某个 hash 成立） | 修订后冻结基线并记录 hash（见 TASK-169 的「冻结基线」） |
-| 10 | `web/vite.config.ts:48` 应指 `:49` 的 target | 改为 `:48-49` 并注明 key/target |
+| 10 | `web/vite.config.ts:62` 应指 `:63` 的 target | 改为 `:62-63` 并注明 key/target |
 
 修订后，其中 8 条由审查员的同一份复核口径确认（数字复算 + 实测），2 条由本次实测重做
 （补拍 `23-cluster-edit.png`、重拍 `22-blank-page-backend-down.png`）。

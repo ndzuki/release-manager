@@ -85,12 +85,16 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
 ```
 
 - 浏览器：`E2E_CHANNEL=chrome` 复用系统 Chrome（`web/playwright.config.ts`），不下载 Chromium。
-- **必须用 `E2E_BASE_URL=http://127.0.0.1:8087`（容器内控制台）；默认的 `http://127.0.0.1:5173`
-  跑不通本 spec，也不要用它。** 原因：`web/vite.config.ts` 的 dev proxy **缺
-  `/auth.v1.AuthorizationService`**（只列了 `AuthService`/`OrganizationService`/`BindingService`），
-  直连 Vite 时 `GetAuthorizationSnapshot` 落到 SPA 而失败、`writeBlocked` 为真，回滚入口不渲染；
-  生产 `web/nginx.conf` 用 `^~ /auth.v1.` 前缀覆盖该服务。`:8087` 由 `make dev-up` 起的
-  `release-web` 容器提供（与生产同一份 nginx）；Vite 缺口的修法不在 TASK-240 范围内。
+- **两种前端都可用（TASK-249 之后）**：默认 `http://127.0.0.1:5173`（Vite dev，proxy 已按
+  **proto 包前缀**转发，含 `/auth.v1.` 与 `/trust.v1.`，`vite.config.ts:46-90`；并已显式
+  `host: '127.0.0.1'`），或 `E2E_BASE_URL=http://127.0.0.1:8087`（`make dev-up` 起的
+  `release-web` 容器，与生产同一份 nginx）。
+- **TASK-249 之前的坑（勿再复现）**：dev proxy 只列了 `AuthService`/`OrganizationService`/`BindingService`，
+  缺 `/auth.v1.AuthorizationService` ⇒ `GetAuthorizationSnapshot` **未被代理（POST 得 404，不是落 SPA）**
+  ⇒ `writeBlocked` 为真、回滚入口不渲染。
+- **URL 别写错**：Vite 默认 `host=localhost` 在 Node 26 下只监听 `[::1]:5173`，`http://127.0.0.1:5173`
+  会被拒连；本仓库已在 `vite.config.ts` 显式 `host: '127.0.0.1'` 固定为 IPv4（`playwright.config.ts:17`
+  的默认 baseURL 恰是该地址）。
 - **web 镜像必须包含 TASK-153 的控制台回滚入口**：`web/src/components/releases/RollbackReleaseDialog.vue`
   与发布清单的 `data-testid^="release-rollback-"` 触发按钮
   （`web/src/components/releases/ReleaseInventoryTable.vue`）。镜像过旧时发布清单不会渲染回滚入口；
