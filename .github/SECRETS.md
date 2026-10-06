@@ -48,7 +48,7 @@ gh variable delete RUNS_ON --repo ndzuki/release-manager
 
 1. **`e2e`（`test.yml:376-377`）是唯一消费 9 个 DEV_*/E2E_* secret 的 job。** 它的 `if:` 是 `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)`，而 workflow 的 `push` 只监听 `main`（`test.yml:4-5`）→ **只有 push main 与手动触发会跑，`pull_request` 一律跳过**（设计意图见 `test.yml:367-375` 注释：PR 刻意不跑这个特权 job）。
 2. **secret 缺失不会让 `e2e` job 被跳过，只会让它失败。** GitHub 对未定义的 secret 注入空字符串（平台行为，非仓库内证据），因此失败点在脚本内部，而不是在表达式求值：`make dev-up` → `deploy/dev/dev.sh:294-295/342-343/394-395`；`make dev-seed` → `internal/devfixture/files.go:200-215,258-261`；`make e2e-all` → `Makefile:203`。三处都有显式的「ci profile requires X」文案，**这是有意的**：缺机密必须报成配置缺陷，不能被误读成代码回归。
-3. **`e2e-prerequisite`（`test.yml:324-365`）在所有触发上跑，且不需要任何仓库 secret**（`docs/testing.md:196` 同口径）。它没有设 `DEV_PROFILE`，因此走 local profile：口令与密钥由 `dev-seed`/`dev-up` 自行生成到 `data/`（`internal/devfixture/files.go:183-195`），smoke 再从 `data/dev-credentials.env` source 回来（`test/e2e/prerequisite/smoke.sh:86-94`）。**它上传的 artifact（`test.yml:359-365`）来自本地生成的夹具，不含 CI secret 值。**
+3. **`e2e-prerequisite`（`test.yml:420-492`）只在 push main / `workflow_dispatch` 上跑（PR 上不跑），且不需要任何仓库 secret**（`docs/testing.md:207` 同口径）。它没有设 `DEV_PROFILE`，因此走 local profile：口令与密钥由 `dev-seed`/`dev-up` 自行生成到 `data/`（`internal/devfixture/files.go:183-195`），smoke 再从 `data/dev-credentials.env` source 回来（`test/e2e/prerequisite/smoke.sh:86-94`）。**它上传的 artifact（`test.yml:359-365`）来自本地生成的夹具，不含 CI secret 值。**
 4. **其余 10 个 job（`sdk-check`、`license-check`、`install-sdk`、`upgrade-sdk`、`operator-image-sdk-only`、`test`、`test-sqlite`、`test-sdkcheck`、`docs-check`、`proto-check`）无 `if:`，全部触发都跑，除自动的 `GITHUB_TOKEN` 外不消费任何 secret**（逐个 job 核对步骤：`test.yml:37-49,50-68,70-85,87-102,104-116,118-200,202-243,245-282,454-469,470-504`）。`install-sdk`/`upgrade-sdk`/`operator-image-sdk-only`/`rollout-watch` 依赖的是 Docker 与 kind，而非机密。`docs-check` 与 `proto-check` 是本次新增的静态门禁，二者同样只在 `contents: read` 下工作，不引入新的机密依赖。
 5. **`gitcode-sync`（`sync-to-gitcode.yaml:11`）只在 push main 跑，且只依赖 `GITCODE_TOKEN`。** 该 job 没有 `timeout-minutes`、没有 `concurrency`（对比 `test.yml:20-22,52,72,...`）→ 两个连续 push 可能并发 `--mirror` 互踩（**建议**：加 `concurrency` 组与超时）。
 
@@ -143,7 +143,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 
 ### 7.2 其它只在本地/测试出现的 env（不需要配到 GitHub）
 
-- `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,204-206`；`CONTRIBUTING.md:49`）。CI 的 13 个 job 都没设它，所以这些用例在 CI 里是 skip 而非 fail（**建议**：若要真正跑 PG 侧门禁，需在 CI 起 Postgres 服务并注入 DSN —— 目前该缺口未闭合）。
+- `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,399-400`；`CONTRIBUTING.md:49`）。CI 的 13 个 job 都没设它，所以这些用例在 CI 里是 skip 而非 fail（**建议**：若要真正跑 PG 侧门禁，需在 CI 起 Postgres 服务并注入 DSN —— 目前该缺口未闭合）。
 - `RELEASE_MANAGER_DATABASE_DSN`：`devseed --reset` 的 PostgreSQL DSN（`cmd/devseed/main.go:58`）。
 - `E2E_RUNNER_PASSWORD` 之外的 e2e 可调项：`E2E_ENV_CONFIG` / `OUTPUT_DIR` / `STAGES` / `TIMEOUT` / `TOTAL_TIMEOUT` / `PARALLEL` / `KEEP_ON_FAILURE` / `SNAPSHOT_FULL` / `BASELINE_FILE`（`Makefile:135-153`），均非机密。
 - 服务配置的可注入 env（`internal/config/config.go:270-297`）：`DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`REDIS_PASSWORD`、`GATEWAY_*`、`VALUES_SECRET_PATTERNS` 等。**这些是本仓库「配置文件 + env 覆盖」的通道，dev 环境由 kustomize 提供，生产由部署侧提供，不在 CI secrets 清单内。**

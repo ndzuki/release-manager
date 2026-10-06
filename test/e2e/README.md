@@ -1,6 +1,6 @@
 # test/e2e/ — 分阶段 E2E runner（REQ-066）
 
-Go 包，提供**基于正式 Connect API 的分阶段端到端验证框架**与七个 canonical 阶段的实现。可执行入口是仓库根的 `cmd/e2e`（`go run ./cmd/e2e run|cleanup`），它 import 本包组装阶段图（cmd/e2e/main.go:22-23）。浏览器端 Playwright E2E 在 `web/e2e/`，与本目录无关。阶段模型的文档权威在 `docs/testing.md:65-167`，本文不重复，只标注目录内证据 `文件:行号`。
+Go 包，提供**基于正式 Connect API 的分阶段端到端验证框架**与七个 canonical 阶段的实现。可执行入口是仓库根的 `cmd/e2e`（`go run ./cmd/e2e run|cleanup`），它 import 本包组装阶段图（cmd/e2e/main.go:22-23）。浏览器端 Playwright E2E 在 `web/e2e/`，与本目录无关。阶段模型的文档权威在 `docs/testing.md:204-338`，本文不重复，只标注目录内证据 `文件:行号`。
 
 ## 1. 目录内容
 

@@ -102,7 +102,7 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
 - **前置：目标 release 的 revision 必须 > 1**（否则发布清单不渲染回滚入口）。`smoke.sh` 以 UPGRADE + ROLLBACK
   结束，正好满足；单独对 fresh `dev-seed` 跑本 spec 会以「`max revision=1`」**硬失败**——那是前置不满足，
   不是控制台故障。
-- **浏览器准备**：CI 的 `e2e-prerequisite` job 先 `npm ci` 再 `npx playwright install --with-deps chromium`，
+- **浏览器准备**：CI 的 `e2e-prerequisite` job 先 `npm ci` 再装 Chromium —— hosted runner 用 `npx playwright install --with-deps chromium`，self-hosted 无 sudo 时退回 `npx playwright install chromium`（系统库由镜像预置）——
   并以 `E2E_CONSOLE_CHANNEL=`（**空串** ⇒ 用 bundled Chromium）调用目标；本地约定 `E2E_CHANNEL=chrome`
   复用系统 Chrome。**缺凭据 / 缺浏览器 / 入口不渲染一律硬失败**（`console.sh` 在 Playwright 之前 fail-closed），
   **绝不 skip**。
