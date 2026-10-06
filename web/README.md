@@ -29,7 +29,7 @@ TypeScript 编译配置为 `strict: true`、`noEmit: true`、`@/* → src/*`（t
 
 | script | 实际命令 | 含义与前置条件 | 是否参与仓库级 CI 门禁 |
 | --- | --- | --- | --- |
-| `npm run dev` | `vite` | 启动 dev server（端口固定 5173，vite.config.ts:24），并按 service 前缀代理 Connect 请求到本机 8082-8087 服务端口（vite.config.ts:25-60，见 §4）。前置：Node + `npm ci` 安装依赖；要用真实后端需先起对应服务（`make dev-up` 或本地进程）。 | 不参与。`.github/workflows/test.yml` 与 `sync-to-gitcode.yaml` 中不存在任何 npm/node 步骤（对两文件做大小写不敏感 `npm|node|vite|playwright|vitest` 检索为 0 匹配）。 |
+| `npm run dev` | `vite` | 启动 dev server（端口固定 5173，vite.config.ts:24），并按 **proto 包前缀**代理 Connect 请求到本机 8082-8088 服务端口（vite.config.ts:46-90，见 §4）。前置：Node + `npm ci` 安装依赖；要用真实后端需先起对应服务（`make dev-up` 或本地进程）。 | 不参与。`.github/workflows/test.yml` 与 `sync-to-gitcode.yaml` 中不存在任何 npm/node 步骤（对两文件做大小写不敏感 `npm|node|vite|playwright|vitest` 检索为 0 匹配）。 |
 | `npm run build` | `vue-tsc -b && vite build` | 先以 project references 做全量类型检查（含 `tsconfig.node.json` 引用的 vite.config.ts），再产出 `dist/`。 | 不参与（同上）。 |
 | `npm test` | `vitest run` | 跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`（当前 43 个文件）；环境 `happy-dom`、`globals: true`、`restoreMocks: true`（vite.config.ts:13-16）；`e2e/**`、`playwright/**`、`node_modules/**` 被排除，避免 Playwright spec 被 vitest 误跑（vite.config.ts:17-21 注释与 exclude）。 | 不参与。Makefile 也没有转发目标（`grep -n npm Makefile` 无匹配；docs/testing.md:45-48 明确「Makefile 内没有对应的转发 target，需在 web/ 目录内直接运行」）。 |
 | `npm run test:e2e` | `playwright test` | 跑 `web/e2e/` 下的 Playwright spec（playwright.config.ts:9）。默认打 `http://127.0.0.1:5173`（playwright.config.ts:17），且**必须**设置 `E2E_BACKEND=true`，否则整个 suite 显式 skip（e2e/emergency-smoke.spec.ts:12-17）。需要真实后端栈（ADR-013：只走正式 API，不打 mock）。 | 不参与（CI 无 playwright 步骤）。 |
@@ -80,7 +80,7 @@ web/
 
 - **Connect transport**：`createConnectTransport({ baseUrl: import.meta.env.VITE_API_BASE ?? '', useBinaryFormat: true, fetch: browserFetch, interceptors: [sessionInterceptor] })`（connect/client.ts:50-55）。默认 `baseUrl` 为空串 = 同源相对路径；`browserFetch` 固定 `credentials: 'include'`（client.ts:46-48）。按 service 建的类型化 client 在 client.ts:57-61（auth/organization/orchestrator/bundle/audit），其余 API 封装在 `src/connect/*-api.ts`。
 - **base URL 来自哪里**：只有 `VITE_API_BASE`（client.ts:51）一个环境变量；不设置就走同源。
-  - dev：Vite 代理按 proto 包名前缀转发到本机服务端口——`/auth.v1.AuthService|OrganizationService|BindingService → 8085`、`/orchestrator.v1.* → 8083`、`/operator.v1.* → 8084`、`/audit.v1.* → 8087`、`/notifier.v1.* → 8086`、`/webhook.v1.* → 8082`（vite.config.ts:27-59）。
+  - dev：Vite 代理按 **proto 包前缀**转发到本机服务端口——`/auth.v1. → 8085`、`/orchestrator.v1. → 8083`、`/operator.v1. → 8084`、`/audit.v1. → 8088`、`/notifier.v1. → 8086`、`/webhook.v1. → 8082`、`/trust.v1. → 8083`，外加 `/health`、`/readyz`、`/environment` → 8083（vite.config.ts:46-90）。
   - 容器部署：`nginx.conf` 做同样的前缀反代（`/auth.v1. → auth:8085`、`/orchestrator.v1. → orchestrator:8083`、`/webhook.v1. → webhook:8082`、`/operator.v1. → operator:8084`、`/notifier.v1. → notifier:8086`，并代理 `/health`、`/readyz`、`/environment` 到 orchestrator；nginx.conf:17-98），SPA fallback 在最后（nginx.conf:103）。
 - **登录与会话**：不存 Bearer token。登录经 `authClient.login` Connect 调用完成（stores/auth.ts:100-103）；服务端以 HttpOnly cookie 下发会话（`rm_access`/`rm_refresh`，internal/auth/service.go:17-18；internal/auth/browser_session.go:216、222-224），前端只可读 CSRF cookie `rm_csrf`，由 `sessionInterceptor` 复制进 `X-CSRF-Token` 请求头（client.ts:7-8、29-33）。启动时 `initialize()` 依次 `getInitStatus` → `validateToken` → 失败则 `refreshToken`（auth.ts:64-88）；`Unauthenticated`/`PermissionDenied` 统一回调 `handleAuthError`（client.ts:38-42、auth.ts:131-141）。业务数据只存内存 ref，`localStorage`/`sessionStorage` 仅用于 Values 编辑器草稿与操作表单草稿（stores/valuesEditor.ts:36-38、stores/operationForm.ts:89、227），不是令牌。
 - **权限投影**：角色从会话用户派生（`canWrite`、`canEnrollOperators` 等，auth.ts:36-43），前端只做 UI 门禁，服务端仍是权威。
@@ -95,7 +95,7 @@ web/
 
 ## 6. 常见坑（均可在代码中证实）
 
-1. **新增 proto service 后忘记加 dev 代理**：代理 key 是「包名.服务名」全路径前缀（vite.config.ts:27-59）；不匹配的路径不会被转发，dev 下表现为请求打到 Vite 而非后端。生产镜像同理要加 nginx location（nginx.conf:17-62）。
+1. **新增 proto service 后代理失效**：代理 key 是 **proto 包前缀**（`/auth.v1.` 等，vite.config.ts:46-90），**同一包内新增服务无需改动**；只有当整个**包**未列出时才不会被转发，dev 下表现为请求打到 Vite 而 404（Vite 的 SPA fallback 只改 GET/HEAD）。生产镜像同理要按包加 nginx location（nginx.conf:17-146）。
 2. **端口冲突**：dev server 固定 5173 但未设 `strictPort`（vite.config.ts:24）；若 5173 被占用 Vite 会换端口，而 Playwright 默认 baseURL 仍是 `127.0.0.1:5173`（playwright.config.ts:17）→ E2E 静默打错对象，需显式 `E2E_BASE_URL`。另外 `make dev-up` 把集群 8082-8087 映射到宿主同端口段（deploy/dev/dev.sh:726），与本地 `make run-*` 进程、`make run-api`（configs/api.dev.yaml 的 8087）互斥。
 3. **生成代码被手改**：`src/gen/**` 已提交进 git（`git ls-files web/src/gen` 14 个文件），手改会在下一次 `make proto` 时被无声覆盖；lint 也忽略该目录（eslint.config.js:7），坏改动不会被 eslint 拦住。
 4. **`.env` 忽略范围比想象的窄**：根 `.gitignore:66` 只忽略 `.env`（任意层级），`web/.gitignore:3` 的 `*.local` 覆盖 `.env.local`；实测 `web/.env.development`、`web/.env.production` **不被忽略**，把真实值写进这类文件会被提交。只用 `.env.local`（从 `.env.example` 复制），并保留 `.env.example` 入库（它本身未被忽略，属预期）。

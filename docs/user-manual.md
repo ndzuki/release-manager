@@ -235,7 +235,7 @@ Operator 是跑在客户集群里的 agent，负责执行 Helm 操作并回传�
 > `Audit request failed HTTP 405` 与 `No audit events`（把错误解释成空结果）。
 > 原因是控制台入口没有把 `/audit.v1.AuditService` 路由到 `release-api`：容器侧
 > `web/nginx.conf:17` 起只代理了 auth/orchestrator/webhook/operator/notifier，没有 audit；
-> dev 侧 `web/vite.config.ts:48-49` 把 audit 指向 8087（`:48` 是 key、`:49` 是 target；8087 在集群路径下是 `release-web` 自己）。
+> dev 侧 `web/vite.config.ts:62-63` 把 audit 指向 8088（`:62` 是 key、`:63` 是 target；8087 在集群路径下是 `release-web` 自己）。
 > 详见 `docs/ux-review.md` 的 B5。
 
 ## 12. 权限与角色

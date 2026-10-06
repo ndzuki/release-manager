@@ -101,11 +101,11 @@ curl -sS http://127.0.0.1:8083/environment
 
 ### 2.5 代理与同源
 
-浏览器不直连各服务端口。k3d 下由 `web/nginx.conf:17-71` 按过程前缀反代：`/auth.v1.` → `auth:8085`、`/orchestrator.v1.` → `orchestrator:8083`、`/webhook.v1.` → `webhook:8082`、`/operator.v1.` → `operator:8084`、`/notifier.v1.` → `notifier:8086`，外加 `/health`、`/readyz`、`/environment` 三条代理到 `orchestrator:8083`（`web/nginx.conf:77-100`）。host dev 下由 Vite 代理同名前缀（`web/vite.config.ts:25-59`，审计前缀指 `127.0.0.1:8087`）。
+浏览器不直连各服务端口。k3d 下由 `web/nginx.conf:17-71` 按过程前缀反代：`/auth.v1.` → `auth:8085`、`/orchestrator.v1.` → `orchestrator:8083`、`/webhook.v1.` → `webhook:8082`、`/operator.v1.` → `operator:8084`、`/notifier.v1.` → `notifier:8086`，外加 `/health`、`/readyz`、`/environment` 三条代理到 `orchestrator:8083`（`web/nginx.conf:77-100`）。host dev 下由 Vite 代理同名前缀（`web/vite.config.ts:46-90`，审计前缀指 `127.0.0.1:8088`）。
 
 两点差异必须知道：
 
-- **`/audit.v1.` 与 `/trust.v1.` 未被 nginx 代理**（`web/nginx.conf:17-71` 只有上述 5 个前缀），会落进 SPA fallback `location /`（`web/nginx.conf:103-105`）。k3d 环境下审计与 trust 的 Connect 面从 8087 不可达；Vite 侧则配了 `/audit.v1.AuditService`（`web/vite.config.ts:48-51`）。
+- **`/audit.v1.` 与 `/trust.v1.` 未被 nginx 代理**（`web/nginx.conf:17-71` 只有上述 5 个前缀），会落进 SPA fallback `location /`（`web/nginx.conf:103-105`）。k3d 环境下审计与 trust 的 Connect 面从 8087 不可达；Vite 侧则配了 `/audit.v1.` 前缀（`web/vite.config.ts:62-65`）。
 - **Go 侧没有任何 CORS 处理**：检索 `Access-Control-Allow-Origin` 在 `cmd/**`、`internal/**` 的非测试代码中零命中。跨源直连不可行，必须由同源反代承载。
 
 ### 2.6 流式与 HTTP/2

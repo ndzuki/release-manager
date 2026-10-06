@@ -22,20 +22,27 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Bind IPv4 explicitly. Vite defaults to host "localhost", which on Node 26
+    // resolves to ::1 first, so the server listens on [::1]:5173 only and
+    // http://127.0.0.1:5173 -- the URL web/playwright.config.ts defaults to, and
+    // the one the docs hand out -- refuses connections.
+    host: '127.0.0.1',
     // Proxy Connect API calls to the development service ports.
     //
     // Keys are PACKAGE prefixes, mirroring web/nginx.conf's `location ^~ /auth.v1.`
     // style, not individual services. Enumerating services by hand is what broke
-    // the dev console: `/auth.v1.AuthorizationService` was never listed, so it fell
-    // through to the SPA, the authorization snapshot never became fresh,
+    // the dev console: `/auth.v1.AuthorizationService` was never listed, so it was
+    // not proxied at all (Vite answers 404 to an unproxied POST -- its SPA fallback
+    // only rewrites GET/HEAD), the authorization snapshot never became fresh,
     // `writeBlocked` turned true and every write entry point (rollback, new
-    // operation, emergency change) silently stopped rendering — production was
-    // fine because nginx proxies the whole package. Adding a service to an
-    // existing proto package must not require touching this file.
+    // operation, emergency change) silently stopped rendering. Production was fine
+    // because nginx proxies the whole package. Adding a service to an existing
+    // proto package must not require touching this file.
     //
     // Keep this list in step with web/nginx.conf: one entry per proto package plus
     // the probe endpoints. `/health`, `/readyz` and `/environment` belong to
-    // orchestrator, and the SPA router does not own those paths.
+    // orchestrator and the SPA router does not own those paths; they are here for
+    // parity with nginx (AC-065-35), not because the console calls them.
     proxy: {
       '/auth.v1.': {
         target: 'http://127.0.0.1:8085',
