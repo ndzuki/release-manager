@@ -233,7 +233,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   当前 `sdkcheck.exceptions.yaml` 共 **2 条**（`deploy/dev/dev_test.go`、`cmd/e2e/main_test.go`，
   均为 `os_exec_import`，`expires_at: 2099-12-31`）。
 - 门禁命令与 CI：`Makefile:413-415`（`make sdk-check`）、`.github/workflows/test.yml:37-49`（`sdk-check` job），
-  规则说明 `docs/testing.md:208-212`。
+  规则说明 `docs/testing.md:219-223`。
 - 运行镜像侧二次校验：operator 镜像必须以 distroless 摘要基底、入口点固定、不得含
   `helm/kubectl/helmsman/kubectl-plugin`，且 **`/bin/sh` 必须不存在**：
   `imagecheck.operator.yaml:2-5,14,18-23`（CI job `.github/workflows/test.yml:104-116`）。

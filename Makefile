@@ -195,7 +195,7 @@ e2e-env-config:
 # pass on a machine that happens to still hold a copy from an earlier run, and
 # fail on a clean checkout.
 e2e-prerequisite: dev-up dev-seed dev-status ## AC-066-17 prerequisite smoke (versioned gate for upstream chain changes)
-	@bash test/e2e/prerequisite/smoke.sh
+	@bash test/e2e/prerequisite/smoke.sh && bash test/e2e/prerequisite/console.sh
 
 .PHONY: e2e-prerequisite-ci
 e2e-prerequisite-ci: ## AC-066-17 prerequisite smoke with artifact preservation and dev cleanup
@@ -203,7 +203,7 @@ e2e-prerequisite-ci: ## AC-066-17 prerequisite smoke with artifact preservation 
 	mkdir -p e2e-results; \
 	trap 'bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true; make dev-purge CONFIRM=1 >/dev/null 2>&1 || true' EXIT; \
 	$(MAKE) dev-up dev-seed dev-status; \
-	bash test/e2e/prerequisite/smoke.sh; \
+	bash test/e2e/prerequisite/smoke.sh; bash test/e2e/prerequisite/console.sh; \
 	bash test/e2e/prerequisite/capture-logs.sh >/dev/null 2>&1 || true; \
 	cp -f data/smoke-result.json e2e-results/ 2>/dev/null || true
 

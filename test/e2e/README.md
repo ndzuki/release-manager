@@ -55,9 +55,9 @@ make e2e-prerequisite                               # AC-066-17 冒烟（依赖 
 
 运行链（Makefile:199-210）：source `data/dev-credentials.env` 或要求已导出 `E2E_RUNNER_PASSWORD`（:203）→ 对 `data/dev.lock` 取共享锁（冲突立即退出码 3 `environment_locked`，:206-209）→ `e2e-env-config` 从 `data/dev-status.json` + `data/dev-fixture.json` 组装唯一运行时配置 `data/e2e-env-config.yaml`（0600，:174-179；configs/e2e.dev.yaml 只是 schema 模板，其文件头 :1-10 明确不是第二配置源）→ `go run ./cmd/e2e run --stages=... --timeout=5m --total-timeout=25m --output-dir=./e2e-results ...`（默认值 :145-152，可覆盖）。
 
-产物落在 `e2e-results/`（`OUTPUT_DIR ?= ./e2e-results`，Makefile:145；已被 .gitignore:38 忽略）：`run.json`（CI 解析的 Run 级汇总，cmd/e2e/main.go:423）、`baseline.json`（:256）、`residue.json`（:285）、每个已选阶段一份 `<stage>.json`（skip 的也写，:364；docs/testing.md:141-145）。`e2e-prerequisite*` 的结果另落 `data/smoke-result.json`（smoke.sh:35），CI 变体复制到 `e2e-results/` 并由 capture-logs.sh 收集 `e2e-results/operator-logs`（Makefile:193-197；capture-logs.sh:7-8）。
+产物落在 `e2e-results/`（`OUTPUT_DIR ?= ./e2e-results`，Makefile:145；已被 .gitignore:38 忽略）：`run.json`（CI 解析的 Run 级汇总，cmd/e2e/main.go:423）、`baseline.json`（:256）、`residue.json`（:285）、每个已选阶段一份 `<stage>.json`（skip 的也写，:364；docs/testing.md:152-156）。`e2e-prerequisite*` 的结果另落 `data/smoke-result.json`（smoke.sh:35），CI 变体复制到 `e2e-results/` 并由 capture-logs.sh 收集 `e2e-results/operator-logs`（Makefile:193-197；capture-logs.sh:7-8）。
 
-退出码表与失败诊断目录（`--keep-on-failure=true` → `e2e-results/diagnostics/{run_id}/{stage}/`）见 docs/testing.md:139-155。
+退出码表与失败诊断目录（`--keep-on-failure=true` → `e2e-results/diagnostics/{run_id}/{stage}/`）见 docs/testing.md:150-166。
 
 ## 4. 与 CI 的关系（`.github/workflows/test.yml`）
 
@@ -74,7 +74,7 @@ make e2e-prerequisite                               # AC-066-17 冒烟（依赖 
 2. **kubectl 只允许两种例外**：restart 屏障经 client-go 给 Deployment 打 restart 注解并等待收敛，禁止删 Pod / shell out（stages/restart.go:26-30；stages/restart_probe.go:11-15）；prerequisite 冒烟在 dev-script 层允许一次 kubectl 副本数只读观察（prerequisite/smoke.sh:16-19）。
 3. **fail-closed，禁止空过**：canonical 阶段缺实现必须报 `not_implemented` 而非 vacuous pass（stage.go:62-67、92-97；契约测试 not_implemented_test.go、stage_error_code_test.go）；阶段图组装不全即整体失败且不写工件（cmd/e2e/main.go:154-163）。
 4. **每个可逆写登记恰好一条补偿**，补偿身份稳定、注册表拒绝重复（stages/release.go:12-14、stages/emergency.go:111-113；compensation.go）。
-5. **错误码进工件、文本不进**：阶段根因用稳定 code 常量（stages/write.go:12-22），`RootCause`/`ErrorCause.Message` 必须脱敏（result.go:21-25；docs/testing.md:150-155）；harness 不 import `internal/**`，需要的 wire 契约就地重述并指向 REQ 来源（livewire/readers.go:36-38）。
+5. **错误码进工件、文本不进**：阶段根因用稳定 code 常量（stages/write.go:12-22），`RootCause`/`ErrorCause.Message` 必须脱敏（result.go:21-25；docs/testing.md:161-166）；harness 不 import `internal/**`，需要的 wire 契约就地重述并指向 REQ 来源（livewire/readers.go:36-38）。
 6. **env-config 是唯一配置面**：新阶段需要的环境事实应扩展 `e2e.Config` schema（config.go:211-218 起，严格解码 + KnownFields），由 `e2e-env-config` 的组装规则供给（Makefile:155-179），不要新造配置文件，也不要把密码写进 YAML（config.go:222-223 注释：secret 只经进程环境解析）。
 7. 新阶段名要同步 `CanonicalStages` 与 `CanonicalDependencies`（stage.go:28-36、runner.go:16-24）与 `livewire/specs.go` 的实现映射（specs.go:99-108），否则组装失败。
 
