@@ -455,7 +455,32 @@ jobs:
           k3d version
           kustomize version
 
+      # TASK-250: the prerequisite gate now also drives the console (browser) path
+      # (web/e2e/rollback.spec.ts) against the in-container console on :8087. That
+      # needs the web toolchain and a browser, neither of which this job had.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies and the Chromium browser
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+          if [ "${{ vars.RUNS_ON }}" = "self-hosted" ]; then
+            # No sudo on the local runner; the system libraries are pre-provisioned.
+            npx playwright install chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
       - name: Run AC-066-17 prerequisite smoke
+        env:
+          # Empty (not unset) selects Playwright's bundled Chromium; console.sh
+          # treats "unset" as "use the system Chrome" (the local convention).
+          E2E_CONSOLE_CHANNEL: ""
         run: make e2e-prerequisite-ci
 
       - name: Upload smoke result and operator diagnostics

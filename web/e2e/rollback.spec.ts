@@ -19,10 +19,11 @@
 // explicitly forbids (review 2026-10-05).
 //
 //   E2E_BACKEND=true
-//   E2E_BASE_URL           console base (default http://127.0.0.1:5173, which is
-//                          NOT usable: the Vite dev proxy misses
-//                          /auth.v1.AuthorizationService, so writeBlocked hides
-//                          the rollback entry — use the container console
+//   E2E_BASE_URL           console base (default http://127.0.0.1:5173). Both
+//                          front ends work since TASK-249: the Vite dev proxy
+//                          now forwards proto packages, including
+//                          /auth.v1.AuthorizationService. CI and
+//                          `make e2e-prerequisite` use the in-container console
 //                          http://127.0.0.1:8087; see docs/testing.md)
 //   E2E_ADMIN_A_USER/PASS  a write-capable account (default dev-admin)
 //   E2E_CUSTOMER_ID        optional; with E2E_CLUSTER_ID it skips the UI hops
@@ -71,12 +72,12 @@ const ROLLBACK_ROW = '[data-testid^="release-rollback-"]';
 // scans `/.../` spans in spec sources as English locators, and a joined path
 // would be read as one.
 const DEV_PROXY_HINT =
-  'likely cause: the console was served by the Vite dev server, whose dev proxy has no ' +
-  '/auth.v1.AuthorizationService entry (web' +
-  '/vite.config.ts). GetAuthorizationSnapshot then falls ' +
-  'through to the SPA, the Authorization Snapshot never becomes fresh, writeBlocked is true and the ' +
-  'rollback entry is not rendered. Run against the container console (nginx, `^~ /auth.v1.`) at ' +
-  'E2E_BASE_URL=http://127.0.0.1:8087 — see docs/testing.md "控制台（浏览器）E2E：回滚路径".';
+  'likely cause: the authorization snapshot never became fresh, so the console sets ' +
+  'writeBlocked and renders no rollback entry. Check which console E2E_BASE_URL points at: ' +
+  'the in-container console (nginx, which proxies the whole auth package) answers on port 8087, ' +
+  'and the Vite dev server needs its proto-package proxy entries -- the vite config forwards the ' +
+  'auth package since TASK-249, while an unproxied package answers 404 to a Connect POST, not the SPA. ' +
+  'See docs testing.md, section "控制台（浏览器）E2E：回滚路径".';
 
 // E2E_BACKEND=true means the environment was declared up: a missing credential
 // is a misconfiguration that must fail, not silently skip the whole case.
@@ -195,7 +196,11 @@ async function definitionIdForRow(page: Page): Promise<string> {
   const href = await row.locator('a.release-table__operation').getAttribute('href');
   if (!href) return '';
   const parts = new URL(href, 'http://x').pathname.split('/');
-  const marker = parts.indexOf('releases');
+  // TASK-250: lastIndexOf, not indexOf. The path always ends in /operations/new
+  // or /operations/<id>, so the LAST 'releases' segment is the definition id;
+  // a first-match lookup would pick a customer or cluster literally named
+  // "releases" (the ids are UUIDs today, but the lookup should not depend on it).
+  const marker = parts.lastIndexOf('releases');
   return marker >= 0 ? (parts[marker + 1] ?? '') : '';
 }
 

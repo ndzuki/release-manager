@@ -410,7 +410,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 ## 7. 回滚与紧急处置
 
-> 通则：**只有 `RollbackRelease` / `ExecuteEmergencyChange` / `CancelOperation` / `ReleaseEmergencyLock` 是正式处置通道**。直接 `kubectl patch`、`helm rollback`、改库都违反项目的 SDK-only 执行边界与审计契约（`docs/architecture.md:23-38`、`docs/testing.md:123`）。
+> 通则：**只有 `RollbackRelease` / `ExecuteEmergencyChange` / `CancelOperation` / `ReleaseEmergencyLock` 是正式处置通道**。直接 `kubectl patch`、`helm rollback`、改库都违反项目的 SDK-only 执行边界与审计契约（`docs/architecture.md:23-38`、`docs/testing.md:134`）。
 
 ### 7.1 回滚到上一个 revision
 

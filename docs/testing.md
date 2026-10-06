@@ -95,6 +95,17 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
 - **URL 别写错**：Vite 默认 `host=localhost` 在 Node 26 下只监听 `[::1]:5173`，`http://127.0.0.1:5173`
   会被拒连；本仓库已在 `vite.config.ts` 显式 `host: '127.0.0.1'` 固定为 IPv4（`playwright.config.ts:17`
   的默认 baseURL 恰是该地址）。
+- **本 spec 现在由 `e2e-prerequisite` / CI 运行（TASK-250）**：`make e2e-prerequisite`（本地）与
+  `make e2e-prerequisite-ci`（CI 的 `e2e-prerequisite` job；push main 或手动触发）在 `smoke.sh` **之后**
+  调用 `test/e2e/prerequisite/console.sh`，对**容器内控制台** `http://127.0.0.1:8087` 跑本 spec；
+  失败时的 trace 落在被忽略的 `e2e-results/console/`，随既有 artifact 一并上传。
+- **前置：目标 release 的 revision 必须 > 1**（否则发布清单不渲染回滚入口）。`smoke.sh` 以 UPGRADE + ROLLBACK
+  结束，正好满足；单独对 fresh `dev-seed` 跑本 spec 会以「`max revision=1`」**硬失败**——那是前置不满足，
+  不是控制台故障。
+- **浏览器准备**：CI 的 `e2e-prerequisite` job 先 `npm ci` 再装 Chromium —— hosted runner 用 `npx playwright install --with-deps chromium`，self-hosted 无 sudo 时退回 `npx playwright install chromium`（系统库由镜像预置）——
+  并以 `E2E_CONSOLE_CHANNEL=`（**空串** ⇒ 用 bundled Chromium）调用目标；本地约定 `E2E_CHANNEL=chrome`
+  复用系统 Chrome。**缺凭据 / 缺浏览器 / 入口不渲染一律硬失败**（`console.sh` 在 Playwright 之前 fail-closed），
+  **绝不 skip**。
 - **web 镜像必须包含 TASK-153 的控制台回滚入口**：`web/src/components/releases/RollbackReleaseDialog.vue`
   与发布清单的 `data-testid^="release-rollback-"` 触发按钮
   （`web/src/components/releases/ReleaseInventoryTable.vue`）。镜像过旧时发布清单不会渲染回滚入口；

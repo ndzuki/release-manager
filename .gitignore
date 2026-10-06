@@ -78,3 +78,5 @@ release-*
 /sdkcheck
 /reqcheck
 core.*
+# Playwright's default output dir; the console gate writes under e2e-results/ instead
+web/test-results/
