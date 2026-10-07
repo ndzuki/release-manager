@@ -743,12 +743,13 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 }
 
 // warmProbe drives one authorization pull by attempting a write with a throwaway
-// payload: AuthorizeWrite pulls the snapshot before the handler validates anything,
-// so the attempt itself is what refreshes it. The probe cannot create a real
-// operation even when the snapshot is already fresh: CreateOperation authorizes
-// before it loads the bundle, and its bundle/values ids exist nowhere in the
-// repository, so the probe stops at bundle_not_found. A unique idempotency key per
-// attempt keeps the probes from replaying each other.
+// payload: the authorization gate runs on the interceptor path, before the handler
+// reaches CreateOperation's own lookups, so the attempt is what refreshes the snapshot.
+// The probe cannot create a real operation even when the snapshot is already fresh: it
+// authorizes, then fails on the first lookup that needs data, because its bundle and
+// values ids exist nowhere in the repository (the definition id has to be real so the
+// request survives the definition lookup that precedes authorization). A unique
+// idempotency key per attempt keeps the probes from replaying each other.
 func warmProbe(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, token, definitionID string) func() error {
 	return func() error {
 		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
@@ -767,12 +768,13 @@ func warmProbe(ctx context.Context, client orchestratorv1connect.OrchestratorSer
 // waitForFreshAuthorization waits on the observable state a write actually needs: a
 // store checkpoint that is fresh and at least at expectedVersion. TASK-160: the first
 // pull that observes a version bump persists the new checkpoint and THEN rejects that
-// request as a warm-up (module.go saves at :296 and returns stale at :325), so a write
+// request as a warm-up (module.go's pull saves the checkpoint before it returns the
+// stale error), so a write
 // issued before that pull lands fails closed with "authorization snapshot stale" even
 // though the checkpoint is about to be healthy. One probe is not enough: if that
 // probe's own pull dies (200ms snapshotDeadline, RPC error, scope mismatch) the next
-// write is still a warm-up, which is how the single-retry version of this wait failed
-// twice in CI. The check runs before the probe, so once the checkpoint is fresh no
+// write is still a warm-up, which is how a version of this wait that only retried once
+// could fail on both attempts. The check runs before the probe, so once the checkpoint is fresh no
 // further probe is issued; no sleep is added and no budget is silently enlarged —
 // each caller states its own budget, because the pulls themselves are the driver.
 // This replaces an older helper that merely asserted the first write was rejected with
@@ -1950,12 +1952,13 @@ func runPreflightLifecycleE2E(t *testing.T, failFirstSnapshot bool) (snapshotFai
 		return req
 	}
 
-	// TASK-160 root cause: the Module's FIRST pull after a version bump is always stale
-	// (module.go derives `changed` from the previous checkpoint and only saves it after the
-	// authorization check), so a create issued straight after Apply is rejected once. The
-	// old single retry hid that: if the first pull died before SaveCheckpoint (snapshot RPC
-	// failure, the 200ms deadline, scope mismatch, ...) the one retry was still a warm-up
-	// and the request failed twice. Wait for the observable state the retry was guessing at
+	// TASK-160 root cause: the pull that observes a version bump saves the new checkpoint
+	// and only then rejects that request as a warm-up (module.go's pull saves before it
+	// returns the stale error), so a create issued straight after Apply is rejected once
+	// even though the next pull will be healthy. The old code retried once and hid that:
+	// if the first pull died before SaveCheckpoint (snapshot RPC failure, the 200ms
+	// deadline, scope mismatch, ...) the retry was still a warm-up and the request failed
+	// again. Wait for the observable state the retry was guessing at
 	// — a checkpoint fresh at the applied version — then issue exactly one clean request.
 	// This waits on a signal; it does not extend any timeout or sleep, because the pulls
 	// themselves are the driver.
