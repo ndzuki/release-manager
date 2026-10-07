@@ -66,7 +66,7 @@ make dev-status    # 打印机器可读的 data/dev-status.json
 
 - 宿主端口冲突时用 `REGISTRY_PORT` / `DEV_K3D_API_PORT` 覆盖（本手册使用 `REGISTRY_PORT=5011`、`DEV_K3D_API_PORT=6449`，因为默认的 5001/6443 被同机另一套环境占用）。
 - 账号口令落在 `data/dev-credentials.env`（0600）：`dev-admin` / `dev-deployer` / `dev-reader` / `e2e-runner`。
-- 控制台两种入口：**容器部署** `http://localhost:8087`（`release-web` + nginx 反代，本手册截图所用）；**开发服务器** `cd web && npm run dev` → `http://127.0.0.1:5173`（Vite 按包名前缀代理到 8082–8087）。
+- 控制台两种入口：**容器部署** `http://localhost:8087`（`release-web` + nginx 反代，本手册截图所用）；**开发服务器** `cd web && npm run dev` → `http://127.0.0.1:5173`（Vite 按包名前缀代理到 8082–8088）。
 - 收尾：`make dev-down`（删 5 个集群、保留 registry），或 `make dev-purge CONFIRM=1`（连 registry 与 `data/` 运行时文件一起删）。两者都是**破坏性操作**，执行前确认没有需要保留的现场。
 
 ## 3. 登录与首屏
@@ -226,16 +226,16 @@ Operator 是跑在客户集群里的 agent，负责执行 Helm 操作并回传�
 
 ## 11. 审计
 
-![审计（当前环境为失败态）](images/user-manual/14-audit.png)
+![审计（修复前的失败态）](images/user-manual/14-audit.png)
 
 审计页可按 `Actor` / `Resource type` / `Resource ID` / `Action` / `Status` / `From` / `To` 过滤，
 `Export current query` 生成导出任务。**注意 `Actor` 是私有过滤条件，不会写进 URL。**
 
-> ⚠️ 上图是**失败态**：本环境下审计 RPC 返回 `HTTP 405`，页面同时渲染了
-> `Audit request failed HTTP 405` 与 `No audit events`（把错误解释成空结果）。
-> 原因是控制台入口没有把 `/audit.v1.AuditService` 路由到 `release-api`：容器侧
-> `web/nginx.conf:17` 起只代理了 auth/orchestrator/webhook/operator/notifier，没有 audit；
-> dev 侧 `web/vite.config.ts:62-63` 把 audit 指向 8088（`:62` 是 key、`:63` 是 target；8087 在集群路径下是 `release-web` 自己）。
+> ⚠️ 上图是**修复前**的失败态（保留以说明当时的现象）：审计 RPC 返回 `HTTP 405`，页面同时渲染了
+> `Audit request failed HTTP 405` 与 `No audit events`（把错误解释成空结果）。原因是当时控制台入口
+> 没有把 `/audit.v1.AuditService` 路由到 `release-api`。**现状（TASK-174 之后）**：容器侧
+> `web/nginx.conf:91` 已有 `location ^~ /audit.v1.` → `api:8088`，dev 侧 `web/vite.config.ts:62-63`
+> 指向 8088（`:62` 是 key、`:63` 是 target）⇒ 该 405 已修复。
 > 详见 `docs/ux-review.md` 的 B5。
 
 ## 12. 权限与角色

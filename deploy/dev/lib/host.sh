@@ -71,7 +71,7 @@ port_in_use() {
   return 1
 }
 
-# require_ports_free — 8082-8087 must be idle (AC-065-07). Reports the
+# require_ports_free — 8082-8088 must be idle (AC-065-07). Reports the
 # occupying PID when /proc lets us resolve it.
 require_ports_free() {
   local port pid

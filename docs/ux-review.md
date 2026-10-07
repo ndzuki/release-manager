@@ -141,10 +141,12 @@ reason=unauthenticated` 且 `source_version=0 policy_version=0 checkpoint=0`。
 
 ### B5【blocker】审计页在两个入口下都不可用，且错误被渲染成空结果
 
-- 容器入口：`web/nginx.conf:17` 起只代理了 auth/orchestrator/webhook/operator/notifier，
+- 容器入口（**修复前**）：`web/nginx.conf:17` 起只代理了 auth/orchestrator/webhook/operator/notifier，
   **没有 `/audit.v1.`**，`POST /audit.v1.AuditService/QueryAuditEvents` 落到 SPA 静态处理器 → `405`。
-- dev 入口：`web/vite.config.ts:62-63` 把 `/audit.v1.` 指向 `8088`（`:62` 是 key，`:63` 是 target），
-  而集群路径下 8087 是 `release-web` 自己（`release-api` 在 8088）→ 同样 `405`。
+  **现状**：`web/nginx.conf:91` 已有 `location ^~ /audit.v1.` → `api:8088`（`:107` 另有 `/trust.v1.`），
+  该 405 已由 TASK-174 修复；下文页面表现与截图是修复前的记录。
+- dev 入口（**修复前**）：当时 `web/vite.config.ts` 把 `/audit.v1.` 指向 **8087**（8087 在集群路径下是
+  `release-web` 自己，`release-api` 在 8088）→ 同样 `405`。**现状**：`web/vite.config.ts:62-63` 指向 8088。
 - 直连 `release-api`（8088）同一请求返回 `401`（说明路由存在），对照清楚。
 
 **页面表现**（实测文本）：`! Audit request failed HTTP 405 Retry` 与
