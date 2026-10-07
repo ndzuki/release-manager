@@ -296,7 +296,7 @@ curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' \
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' \
   http://127.0.0.1:8088/audit.v1.AuditService/QueryAuditEvents   # 401（路由存在）
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' \
-  http://127.0.0.1:8087/audit.v1.AuditService/QueryAuditEvents   # 405（未被反代）
+  http://127.0.0.1:8087/audit.v1.AuditService/QueryAuditEvents   # 405（修复前：未被反代；TASK-174 后已接线）
 
 # B3/B4：服务端日志
 KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control \

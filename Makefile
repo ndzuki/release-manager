@@ -546,6 +546,10 @@ check-reqs: build-reqcheck ## Validate atomic requirement documents (REQ-039)
 audit-citations: ## Read-only audit: symbols named next to a code citation should sit near the cited line (TASK-112)
 	$(GO) run ./cmd/docscheck/ -root . -max 40
 
+.PHONY: audit-doc-facts
+audit-doc-facts: ## Read-only audit, NOT a gate / NOT in `make quality`: claims that can be re-derived from config (nginx/vite proxy prefixes, DEV_PORTS band) must not contradict it — check-docs only verifies that a cited line exists (TASK-254)
+	$(GO) run ./cmd/docfacts/ -root . -max 40
+
 .PHONY: audit-task-premises
 audit-task-premises: ## Read-only audit, NOT a gate / NOT in `make quality`: ready TASK cards should record verified_at + verified_head; verified_head is compared against main (origin/main, else main) — NOT the current checkout HEAD (TASK-248)
 	@$(TASKS_RESOLVE); \
