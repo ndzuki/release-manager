@@ -68,15 +68,22 @@ func (f Finding) String() string {
 // docs/ux-review.md and docs/user-manual.md deliberately keep the pre-fix B5
 // evidence next to its correction.
 var historicalMarkers = []string{
-	"修复前", "曾经", "历史", "此前", "之前", "pre-fix", "before the fix",
+	"修复前", "曾经", "历史", "此前", "pre-fix", "before the fix",
 }
+
+// historicalRefRe covers "TASK-249 之前" style qualifiers. A bare "之前" used to be a
+// marker too, until review showed it swallows real claims: "在运行 dev-up 之前请检查…"
+// on the line above exempted the next line's contradiction.
+var historicalRefRe = regexp.MustCompile(`TASK-\d+\s*之前`)
 
 var (
 	nginxPrefixRe = regexp.MustCompile(`(?m)^\s*location\s+\^~\s+(/[A-Za-z0-9_.]+\.v1\.)\s*\{`)
 	vitePrefixRe  = regexp.MustCompile(`(?m)^\s*'(/[A-Za-z0-9_.]+\.v1\.)':\s*\{`)
 	devPortsRe    = regexp.MustCompile(`DEV_PORTS=\(([^)]*)\)`)
-	portRangeRe   = regexp.MustCompile(`(\d{4})\s*[-–]\s*(\d{4})`)
-	prefixInText  = regexp.MustCompile(`/[A-Za-z0-9_]+\.v1\.`)
+	// Anchored to four-digit endpoints so a NodePort range written next to the host
+	// band (8082-8088:30082-30088) cannot be parsed as 82-3008.
+	portRangeRe  = regexp.MustCompile(`(?:^|\D)(\d{4})\s*[-–]\s*(\d{4})(?:\D|$)`)
+	prefixInText = regexp.MustCompile(`/[A-Za-z0-9_]+\.v1\.`)
 	// The negation and the routing word both have to sit next to the prefix. A whole
 	// line is too wide: SECURITY.md's table row says the entry proxy forwards seven
 	// prefixes AND that the notifier/operator ones have no JWT+Casbin behind them,
@@ -89,6 +96,10 @@ var (
 	// prefix, so the routing word in the other column cannot pair with it.
 	contextWindow = 20
 	exclusiveWord = []string{"只反代", "只代理", "只列", "仅反代", "仅代理", "only proxies", "only proxied"}
+	// A port-band claim is any four-digit range on a line that talks about host
+	// ports: requiring the literal "端口段" missed the twelve lines in this repository
+	// that write "宿主端口 8082-8088" instead.
+	portWords = []string{"端口段", "端口范围", "宿主端口", "host port", "port band"}
 )
 
 // ParseNginxPrefixes derives the proxied proto package prefixes from web/nginx.conf.
@@ -202,7 +213,7 @@ func checkAbsentPrefix(item Item, facts Facts) []Finding {
 
 // checkPortBand flags a stated host port range that is not the DEV_PORTS band.
 func checkPortBand(item Item, facts Facts) []Finding {
-	if !facts.HasHostPortBand() || !strings.Contains(item.Text, "端口段") {
+	if !facts.HasHostPortBand() || !containsAny(item.Text, portWords) {
 		return nil
 	}
 	out := []Finding{}
@@ -271,13 +282,13 @@ func checkExclusiveEnumeration(item Item, facts Facts) []Finding {
 }
 
 func isHistorical(item Item) bool {
-	if containsAny(item.Text, historicalMarkers) {
+	if isHistoricalText(item.Text) {
 		return true
 	}
 	// A qualifier can sit a couple of lines above its claim: the B5 write-ups open a
 	// block with "（修复前）" and then spend two or three lines describing it, and
 	// docs/testing.md heads a paragraph "TASK-249 之前的坑".
-	if item.PrevText != "" && containsAny(item.PrevText, historicalMarkers) {
+	if item.PrevText != "" && isHistoricalText(item.PrevText) {
 		return true
 	}
 	// Strikethrough marks a superseded claim without a prose qualifier.
@@ -308,6 +319,14 @@ func claimsMissingNear(text, prefix string) bool {
 		}
 	}
 	return false
+}
+
+// isHistoricalText reports whether a line qualifies a claim as history.
+func isHistoricalText(text string) bool {
+	if containsAny(text, historicalMarkers) {
+		return true
+	}
+	return historicalRefRe.MatchString(text)
 }
 
 func containsAny(text string, needles []string) bool {

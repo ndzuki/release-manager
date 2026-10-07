@@ -112,6 +112,24 @@ func TestCheckPortBand(t *testing.T) {
 	correct := Item{Path: "docs/runbook.md", Line: 537, Text: "# 2) 探针与元数据（宿主端口段 8082-8088）"}
 	assert.Empty(t, Check([]Item{correct}, facts))
 
+	// Review found the rule needed the literal "端口段": twelve lines in this
+	// repository write host ports without that word.
+	withoutLabel := Item{Path: "docs/user-manual.md", Line: 69, Text: "- 控制台入口：容器部署 8087；开发服务器代理到宿主端口 8082-8087"}
+	findings = Check([]Item{withoutLabel}, facts)
+	require.Len(t, findings, 1)
+	assert.Equal(t, "port-band", findings[0].Rule)
+
+	// Anchoring: a NodePort range next to the host band must not be parsed as 82-3008.
+	withNodePort := Item{Path: "docs/x.md", Line: 40, Text: "宿主端口段 8082-8087:30082-30087"}
+	findings = Check([]Item{withNodePort}, facts)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "8082-8087")
+	assert.NotContains(t, findings[0].Message, "82-3008")
+
+	// A range that is not host ports at all is left alone.
+	numericOnly := Item{Path: "docs/x.md", Line: 41, Text: "- 版本号区间 2024-2026"}
+	assert.Empty(t, Check([]Item{numericOnly}, facts))
+
 	// Without a derived band the rule must not guess one.
 	noBand := NewFacts(testNginx, testVite, "no DEV_PORTS here\n", "deploy/dev/lib/host.sh")
 	assert.Empty(t, Check([]Item{violating}, noBand))
@@ -159,6 +177,20 @@ func TestHistoricalClaimsAreExempt(t *testing.T) {
 	// is what suppresses it rather than the rule being inert.
 	bare := Item{Path: "docs/ux-review.md", Line: 145, Text: "- 容器入口：`/audit.v1.` 未被 nginx 代理"}
 	require.Len(t, Check([]Item{bare}, facts), 1)
+
+	// Review counterexample: a bare "之前" is not a historical qualifier. Only
+	// TASK-NNN 之前 (and the explicit words above) exempt a claim.
+	unrelated := Item{
+		Path: "docs/x.md", Line: 20, Text: "确认 nginx 没有 location `/audit.v1.`",
+		PrevText: "在运行 dev-up 之前请检查下列事实：",
+	}
+	require.Len(t, Check([]Item{unrelated}, facts), 1, "a generic 之前 must not exempt a claim")
+
+	taskRef := Item{
+		Path: "docs/x.md", Line: 20, Text: "缺 `/audit.v1.` ⇒ `GetAuthorizationSnapshot` 未被代理",
+		PrevText: "- **TASK-249 之前的坑（勿再复现）**：",
+	}
+	assert.Empty(t, Check([]Item{taskRef}, facts), "TASK-NNN 之前 is a real qualifier")
 }
 
 func TestFindingsAreSortedAndDescribed(t *testing.T) {
