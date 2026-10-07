@@ -291,8 +291,9 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   （`cmd/auth/main.go:189-203`），**未挂载该服务**；然而它的两个 URL 构造 RPC 却已写进维护期只读白名单
   （`cmd/auth/main.go:227-228`）。该缺口同时被 `docs/architecture.md:80,171` 记录。
 - **状态：未见实现（HTTP 安全响应头）**。浏览器与 API 走**同一 origin**：`web/nginx.conf` 是唯一前端入口，
-  以 same-origin 反向代理把五个 Connect procedure 前缀转发到集群内服务
-  （`web/nginx.conf:1-5,17-18,28-29`，请求体上限 `client_max_body_size 10m` 在 `web/nginx.conf:13`），
+  以 same-origin 反向代理把七个 proto 包前缀（`/auth.v1.`、`/orchestrator.v1.`、`/webhook.v1.`、
+  `/operator.v1.`、`/notifier.v1.`、`/audit.v1.`、`/trust.v1.`）转发到集群内服务
+  （`web/nginx.conf:17,44,55,66,77,91,107`，请求体上限 `client_max_body_size 10m` 在 `web/nginx.conf:13`），
   因此**不存在 CORS 跨源调用面**（Go 侧无 CORS 处理是设计结果，不是遗漏）。但该文件全篇没有一处
   `add_header`：`X-Content-Type-Options`、`Content-Security-Policy`、`X-Frame-Options`、
   `Strict-Transport-Security` 均未设置，且入口 `listen 8087` 为明文 HTTP、TLS 不在这一层
@@ -401,7 +402,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | 注册令牌泄露 | 只存 SHA-256、短 TTL、一次性（§3.2） | 剩余：令牌在 `data/dev-enrollment-tokens/` 明文落盘（仅 dev，`.gitignore:35`）。**已实现**（生产不落盘） |
 | Webhook 请求体（Harbor 等外部制品源） | **TASK-102 已补入站认证**：`SubmitReleaseBundle` 需 CI API key（`ServiceTokenInterceptor` 收窄到该 procedure），`POST /webhooks/harbor` 需独立的 Harbor key（`internal/webhook/token_auth.go` 的 `RequireToken`），两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17，`internal/auth/service_token_routing_test.go`）；转发时原样复制 `Signature`/`Sbom`/`Provenance` 并保留 `Idempotency-Key`，出站另用 webhook/Harbor service token（§3.3）；`BundleService` 侧再验一遍 service token scope | 剩余：`signature`/`sbom`/`provenance` 是请求方可填的 `ArtifactReference`（`api/proto/webhook/v1/webhook.proto:28-30`），信任判定发生在 preflight/trust（§3.9），因此**持合法 CI key 的调用方**仍可造成 bundle 记录污染；非 production 标签下还能被降级为 `policy_warning` 放行。**部分实现** |
 | 单条 procedure 被塞进非法输入 | 契约生成物唯一入口 `api/gen/**`、`web/src/gen/**`（禁止手改，`AGENTS.md:24`）；错误码泛化（§3.6） | 剩余：SQL 拼接只出现在编译期列名/占位符白名单，值全部参数化（`internal/store/postgres/commands.go:116-124`、`internal/store/sqlite/inventory.go:230-245`、`internal/store/postgres/inventory.go:239-245`、审计 where 构造 `internal/store/sqlite/audit.go:210-236`）；迁移工具的标识符插值带引号转义（`internal/migration/copy.go:470-480`）。**已实现** |
-| 能访问 web 同源入口的任何调用方 | 入口把五个 Connect 前缀反向代理到集群内服务（`web/nginx.conf:17,28,39,50,61`），auth/orchestrator/trust 面各有 JWT+Casbin（§3.8） | 剩余：**`/notifier.v1.` 与 `/operator.v1.` 两条前缀后面没有 JWT/Casbin**（`cmd/notifier/main.go:71-78`、`cmd/operator/main.go:259-266`）；`/notifier.v1./Send` 可把控制面变成任意 URL 的 HTTP 出站源（§3.11）。**未见实现（该面的认证）** |
+| 能访问 web 同源入口的任何调用方 | 入口把七个 proto 包前缀反向代理到集群内服务（`web/nginx.conf:17,44,55,66,77,91,107`），auth/orchestrator/trust 面各有 JWT+Casbin（§3.8） | 剩余：**`/notifier.v1.` 与 `/operator.v1.` 两条前缀后面没有 JWT/Casbin**（`cmd/notifier/main.go:71-78`、`cmd/operator/main.go:259-266`）；`/notifier.v1./Send` 可把控制面变成任意 URL 的 HTTP 出站源（§3.11）。**未见实现（该面的认证）** |
 | 数据库快照（离线读到 audit / values / 令牌） | audit 文本入库前脱敏（§3.6）、口令 bcrypt（`internal/auth/password.go:9-19`）、令牌只存摘要（§3.2）、Values 无机密字面（§3.5） | 剩余：应用日志面不过脱敏（§3.6），CI artifact 含原始容器日志（`test/e2e/prerequisite/capture-logs.sh:30`）。**未见实现（日志面）** |
 | CI 凭据（ Actions runner / 镜像同步） | 全 workflow `permissions` 审计见 `.github/SECRETS.md` 第 8 节；runner 通过 `vars.RUNS_ON` 间接化（`.github/workflows/test.yml:24-34`）；kind/k3d 下载都校 sha256/checksum（`.github/workflows/test.yml:295-309,345-348,413-416`） | 剩余：actions 全部按 tag 引用、**0 处 SHA 固定**；`sync-to-gitcode.yaml` 无 `permissions:` 块（`run-name`→job `:11` 直接 `git push --mirror`，`:25`）。**建议**收紧 |
 | 恶意/失序依赖（Go module、npm、基础镜像） | 许可门禁（§6）+ distroless 摘要基底（`deploy/docker/Dockerfile.operator:10`）+ 镜像内容门禁（`imagecheck.operator.yaml:14,18-23`） | 剩余：无漏洞扫描、无 SBOM 生成、无签名/attestation（§6）。**未见实现** |

@@ -95,8 +95,8 @@ web/
 
 ## 6. 常见坑（均可在代码中证实）
 
-1. **新增 proto service 后代理失效**：代理 key 是 **proto 包前缀**（`/auth.v1.` 等，vite.config.ts:46-90），**同一包内新增服务无需改动**；只有当整个**包**未列出时才不会被转发，dev 下表现为请求打到 Vite 而 404（Vite 的 SPA fallback 只改 GET/HEAD）。生产镜像同理要按包加 nginx location（nginx.conf:17-146）。
-2. **端口冲突**：dev server 固定 5173 但未设 `strictPort`（vite.config.ts:24）；若 5173 被占用 Vite 会换端口，而 Playwright 默认 baseURL 仍是 `127.0.0.1:5173`（playwright.config.ts:17）→ E2E 静默打错对象，需显式 `E2E_BASE_URL`。另外 `make dev-up` 把集群 8082-8088 映射到宿主同端口段（deploy/dev/dev.sh:726），与本地 `make run-*` 进程、`make run-api`（configs/api.dev.yaml 的 8087）互斥。
+1. **新增 proto service 后代理失效**：代理 key 是 **proto 包前缀**（`/auth.v1.` 等，vite.config.ts:46-90），**同一包内新增服务无需改动**；只有当整个**包**未列出时才不会被转发，dev 下表现为请求打到 Vite 而 404（Vite 的 SPA fallback 只改 GET/HEAD）。生产镜像同理要按包加 nginx location（nginx.conf:17-147）。
+2. **端口冲突**：dev server 固定 5173 但未设 `strictPort`（vite.config.ts:24）；若 5173 被占用 Vite 会换端口，而 Playwright 默认 baseURL 仍是 `127.0.0.1:5173`（playwright.config.ts:17）→ E2E 静默打错对象，需显式 `E2E_BASE_URL`。另外 `make dev-up` 把集群 8082-8088 映射到宿主同端口段（deploy/dev/dev.sh:900），与本地 `make run-*` 进程、`make run-api`（configs/api.dev.yaml 的 8087）互斥。
 3. **生成代码被手改**：`src/gen/**` 已提交进 git（`git ls-files web/src/gen` 14 个文件），手改会在下一次 `make proto` 时被无声覆盖；lint 也忽略该目录（eslint.config.js:7），坏改动不会被 eslint 拦住。
 4. **`.env` 忽略范围比想象的窄**：根 `.gitignore:66` 只忽略 `.env`（任意层级），`web/.gitignore:3` 的 `*.local` 覆盖 `.env.local`；实测 `web/.env.development`、`web/.env.production` **不被忽略**，把真实值写进这类文件会被提交。只用 `.env.local`（从 `.env.example` 复制），并保留 `.env.example` 入库（它本身未被忽略，属预期）。
 5. **vitest 会捡起 src 下任意 `*.spec.ts`**：exclude 只挡了 `e2e/**` 与 `playwright/**`（vite.config.ts:21）；浏览器类 spec 必须放 `web/e2e/`，否则会把需要真实后端的用例混进 `npm test` 门禁（vite.config.ts:17-20 注释记录了这一动机）。

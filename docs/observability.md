@@ -155,13 +155,13 @@
   - 存储侧能力齐全：`CreateBatch/Query/GetByID/Count/ListOlderThan/DeleteByIDs`（`internal/store/postgres/audit.go:18,66,123,129,202,233`；SQLite 同名方法齐全），过滤维度 `organization/resource_type/resource_id/actor_id/action/status/time range` + cursor 分页（`internal/audit/audit_service_handler.go:56-108`）。
   - **查询响应丢字段**：`toProtoAuditEvent` 只返回 `id/action/status/duration_ms`（`internal/audit/audit_service_handler.go:164-174`），proto 里声明的 `actor`、`resource_type`、`resource_id`、`change_summary`、`metadata`、`created_at` 全部不填（`api/proto/audit/v1/audit.proto` 的 `AuditEvent`）⇒ 取证必须回到 SQL 层（见 `docs/runbook.md` §9.1 第 5 组命令）。
   - **导出是占位**：`ExportAuditEvents` 只 insert 一条 `status="pending"` 记录 + 一条 `export.created` 审计事件（`internal/audit/audit_service_handler.go:111-162`，默认时间窗 30 天）；`AuditExportStore` 接口只有 `CreateWithEvent`，全仓没有任何 worker 读取或推进该状态 ⇒ 没有文件、没有下载入口、没有状态查询。
-  - **部署形态不可达**：`web/nginx.conf:17-71` 只反代 `/auth.v1.`、`/orchestrator.v1.`、`/webhook.v1.`、`/operator.v1.`、`/notifier.v1.`，没有 `/audit.v1.` location（SPA fallback 在 `web/nginx.conf:103`），而前端确实用同一 transport 构造了 `auditClient` 并调用 query/export（`web/src/connect/client.ts:57-61`，调用点 `web/src/stores/audit.ts`）⇒ 浏览器侧审计页拿不到数据。
+  - **部署形态（2026-10-08 更正）**：审计入口**已接线**——`web/nginx.conf:91` 有 `location ^~ /audit.v1.` → `api:8088`（TASK-174），且 `release-api` 本身由 `deploy/kustomize/services/api.yaml` 部署、dev overlay 经 `../services` 含它（`deploy/kustomize/dev/kustomization.yaml`，另有 `api-config` configMap）⇒ 浏览器侧 `auditClient`（`web/src/connect/client.ts:57-61`，调用点 `web/src/stores/audit.ts`）可达。**剩下的审计缺口是响应只回 4 字段与导出无消费者**（见上两条），不是路由。
   - 另有 `internal/store/{sqlite,postgres}/audit_exports.go`（导出记录表双引擎实现）与 `api/kulala/audit.http`（本地 `make dev-stage-audit`（`Makefile:342-348`）跑起 release-api 后可手工查询）。
 
 **建议（未实现）**
 
 1. 补齐 `toProtoAuditEvent`（一行字段映射即可让查询面与契约一致），并让导出有执行者（消费 `audit_exports` 的 worker + 状态回写 + 产物落 `archive_dir`）。
-2. 在 orchestrator 进程内也挂 `AuditService` 的只读子集（或补 `web/nginx.conf` 的 `/audit.v1.` location + 部署 release-api），否则「审计可查询」只是本地能力。
+2. 审计**路由与部署已具备**（`web/nginx.conf:91` + `deploy/kustomize/services/api.yaml`，见上文更正）；若要进一步收敛，可考虑在 orchestrator 进程内也挂 `AuditService` 的只读子集，以免审计可用性依赖 `release-api` 单独存活。
 3. 把「审计是否前进」变成信号：导出 `release_audit_persisted_total` 与 `max(created_at)` 滞后秒数（§2 建议 2），并对 timeline 与 audit 的差集做定期核对。
 4. 事件覆盖审计：为终态 Operation 迁移补一条最小审计（含 `request_id`），当前只有 timeline（`internal/store/store.go:361-370`），而 timeline 没有组织级过滤与保留策略。
 
@@ -205,7 +205,7 @@
 | readiness 覆盖面 | database / redis / cleanup_gc / orchestrator-upstream / gateway_session / sink-config | `cmd/orchestrator/main.go:248-266`、`cmd/auth/main.go:67-87`、`cmd/notifier/main.go:50-61`、`cmd/webhook/main.go:90`、`cmd/operator/main.go:382`、`cmd/notification-sink/main.go:151` | 本地 `cmd/api` 仍是 `noop`（`internal/app/app.go:134-136`，非集群路径） |
 | 环境指纹 | `GET /environment` | `internal/app/app.go:91-116` | 无版本/commit 字段（镜像用内容寻址 tag，`deploy/dev/dev.sh:809-828`，但运行时读不到自身版本） |
 | 审计事件 | 写路径强制脱敏 + 异步批量落库 | `internal/audit/normalize.go:12-28`、`internal/redact/sanitize.go:23-26`、`internal/audit/emitter.go:123-157` | 无指标、spool 无回灌（`internal/audit/spool.go:20-28`）、维护模式不创建 emitter（`cmd/orchestrator/main.go:342-344`） |
-| 审计查询 | RPC + 双引擎 store 齐全 | `api/proto/audit/v1/audit.proto`、`internal/store/postgres/audit.go:133,196` | 响应只回 4 字段（`internal/audit/audit_service_handler.go:164-174`）；部署形态无路由/无服务（`web/nginx.conf:17-71`） |
+| 审计查询 | RPC + 双引擎 store 齐全 | `api/proto/audit/v1/audit.proto`、`internal/store/postgres/audit.go:133,196` | 响应只回 4 字段（`internal/audit/audit_service_handler.go:164-174`）；路由与部署已具备（`web/nginx.conf:91`、`deploy/kustomize/services/api.yaml`） |
 | 审计导出 | 只落一条 `pending` 记录 | `internal/audit/audit_service_handler.go:111-162` | 无消费者、无产物、无状态推进 |
 | 审计保留/归档 | 实现完整（gzip+sha256+幂等），worker 随 api 进程启动（`cmd/api/main.go:93`，TASK-094 闭环） | `internal/audit/archiver.go:38-120`、`internal/audit/archive_config.go:19-29` | 集群无 release-api Deployment ⇒ 只在本地进程跑 |
 | Timeline（单 Operation） | snapshot + timeline + heartbeat 流；`ROLLOUT_PROGRESS` 由 agent 的 rollout reporter 上报（`internal/operator/agent/rollout_progress.go:56,73-74`，接线 `cmd/operator/main.go:220`） | `api/proto/orchestrator/v1/orchestrator.proto`（`WatchOperation`）、`internal/store/store.go:361-370` | 只有 `WatchOperation` 一条路；`ListOperations` 未实现（`internal/orchestrator/service.go:1552-1554`）⇒ 无全局视角 |

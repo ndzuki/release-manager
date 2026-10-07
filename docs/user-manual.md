@@ -226,7 +226,7 @@ Operator 是跑在客户集群里的 agent，负责执行 Helm 操作并回传�
 
 ## 11. 审计
 
-![审计（当前环境为失败态）](images/user-manual/14-audit.png)
+![审计（修复前的失败态）](images/user-manual/14-audit.png)
 
 审计页可按 `Actor` / `Resource type` / `Resource ID` / `Action` / `Status` / `From` / `To` 过滤，
 `Export current query` 生成导出任务。**注意 `Actor` 是私有过滤条件，不会写进 URL。**

@@ -74,7 +74,7 @@
 - 探针时间预算是显式的（TASK-099）：每个应用容器有 `startupProbe`（httpGet `/health`，period 5s，HTTP `timeoutSeconds: 3`）——orchestrator/auth/notifier/webhook/notification-sink `failureThreshold: 120`（10 分钟启动预算），customer agent 60；startup 通过后 liveness 才有发言权。`readinessProbe` 指 `/readyz`（timeout 3s、failureThreshold 3；agent 为 12 以容忍重连窗），`livenessProbe` 指 `/health`（timeout 3s、failureThreshold 3）。防漂移：`make check-probes`。**曾经的形态（迁移前的风险）**：全树无 `startupProbe`、K8s 默认 `timeoutSeconds=1`，而迁移在 `Register` 内同步跑完才开始监听（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`）⇒ 一次慢迁移可能被 liveness 打断，表现为反复 CrashLoop 且每轮日志都从头重放迁移——若再次看到该形态，说明 manifest 被回退。
 - 关停预算只有 5 秒（HTTP server + extra 网关 + `Shutdowner` + `Close`，`internal/app/app.go:211-227`）。审计刷盘超过 5s 会留下 `audit emitter shutdown: context deadline exceeded`（`internal/audit/emitter.go:115-120`）。
 - 8084 网关不是 HTTP 服务：只有 OperatorService 与 SyncInventory 两条路由，`ReadHeaderTimeout: 10s`、TLS1.3、`VerifyClientCertIfGiven`（`cmd/orchestrator/main.go:178-218`）。用普通 HTTP 探测它会得到 `Client sent an HTTP request to an HTTPS server`，dev 生命周期因此只做 TCP 连通性探测（`deploy/dev/dev.sh:1176-1180`）。**对 8084 做 HTTP 探针失败不是故障**。
-- web 的探针指向 `/`（`deploy/kustomize/services/web.yaml:27-50`），nginx 才把 `/health`、`/readyz`、`/environment` 反代到 orchestrator（`web/nginx.conf:77-101`）：所以 **8087 的 `/readyz` 报的是 orchestrator 的健康度**，不要据此判断 web 自身。
+- web 的探针指向 `/`（`deploy/kustomize/services/web.yaml:27-50`），nginx 才把 `/health`、`/readyz`、`/environment` 反代到 orchestrator（`web/nginx.conf:123-146`）：所以 **8087 的 `/readyz` 报的是 orchestrator 的健康度**，不要据此判断 web 自身。
 
 **处置动作**
 
@@ -534,10 +534,10 @@ KUBECONFIG=$KCFG kubectl --context $CTX -n release-manager-dev get pods -o wide
 KUBECONFIG=$KCFG kubectl --context $CTX -n release-manager-dev get events --sort-by=.lastTimestamp | tail -30
 KUBECONFIG=$KCFG kubectl --context $CTX -n release-manager-dev describe pod <pod>
 
-# 2) 探针与元数据（宿主端口段 8082-8087，deploy/dev/lib/host.sh:16）
+# 2) 探针与元数据（宿主端口段 8082-8088，deploy/dev/lib/host.sh:16）
 for p in 8082 8083 8085 8086 8087 8088; do printf '%s ' $p; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:$p/readyz; done
 curl -sS http://127.0.0.1:8083/health          # {"status":"ok","gc":{...}}
-curl -sS http://127.0.0.1:8087/environment     # 反代 orchestrator（web/nginx.conf:93-101）
+curl -sS http://127.0.0.1:8087/environment     # 反代 orchestrator（web/nginx.conf:139-146）
 
 # 3) 指标（只有 auth 与 orchestrator 有 /metrics，见 observability.md）
 curl -sS http://127.0.0.1:8083/metrics | grep -E '^(auth_|identity_)' | head -40
@@ -603,7 +603,7 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 7. **维护模式不覆盖流式 RPC**：`internal/app/maintenance.go:14-28` 使用 `connect.UnaryInterceptorFunc`（仅包 unary）⇒ 维护窗口内 `WatchOperation`、`CommandStream` 不受门禁（`api/proto/orchestrator/v1/orchestrator.proto:1138`、`api/proto/operator/v1/operator.proto:399`）。
 8. **审计查询响应字段被截断**：`internal/audit/audit_service_handler.go:164-174` 只回填 `id/action/status/duration_ms`，proto 里的 `actor`、`resource_type`、`resource_id`、`change_summary`、`metadata`、`created_at`（`api/proto/audit/v1/audit.proto`）**不返回**。影响：不能把 `QueryAuditEvents` 当作完整取证面。
 9. **审计导出没有消费者**：`ExportAuditEvents` 只写入一条 `pending` 导出记录（`internal/audit/audit_service_handler.go:111-162`），`AuditExportStore` 接口只有 `CreateWithEvent`（`internal/store/store.go`），全仓无读取/推进该状态的代码 ⇒ 「导出」当前是占位能力。
-10. **Web 侧审计调用无路由**：`web/src/connect/client.ts:57-61` 用同一 transport 建 `auditClient`，但 `web/nginx.conf:17-71` 没有 `/audit.v1.` location ⇒ 浏览器发起的审计查询会落到 SPA fallback。需核实是否有意（配合第 4 条看，更像缺口）。
+10. ~~**Web 侧审计调用无路由**~~（**已修复，TASK-174**）：`web/nginx.conf:91` 现已有 `location ^~ /audit.v1.` → `api:8088`，`release-api` 由 `deploy/kustomize/services/api.yaml` 部署；浏览器侧 `auditClient`（`web/src/connect/client.ts:57-61`）因此可达。仍成立的是同段的字段/导出缺口（第 8、9 条）。
 11. **未接线组件**（现状 = 代码存在但生产不启用，排查时不要以它们为依据）：`cmd/operator/main.go:323-356` 的 `runSessionExpiry`（agent 模式下 `s.st == nil` 直接 continue）、`internal/operator/session_client.go`（带心跳的会话客户端，无 `cmd/` 引用）。注意 `internal/operator/session_registry.go` **已不在本清单**：TASK-098 起由网关 operator service 构造并 `Run`。
 12. **需核实（无法从代码判定）**：① 「全局 outbox 序列导致跨 operator 误判 gap」是否为有意设计（`internal/operator/service.go:1156`）；② `agent.mode` 何时切到 `gateway`（`cmd/operator/main.go:28-38` 注释称 TASK-065 将移除该路径）；③ 生产形态（本仓只有 `deploy/kustomize/dev` 一套 overlay）下的 retention/告警责任方。
 
