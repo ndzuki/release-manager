@@ -336,7 +336,9 @@ func TestTrustServiceMountAndEd25519TrustChain(t *testing.T) {
 	digest := "sha256:" + bundleDigest
 	rejectedDigest := "sha256:" + fmt.Sprintf("%064x", 75)
 	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
-	warmAuthorization(ctx, t, operationClient, platformToken, definitionID, "warm-trust-live")
+	baseline, err := svc.store.Authorization().Load(ctx)
+	require.NoError(t, err)
+	waitForFreshAuthorization(ctx, t, svc, organizationID, customerID, baseline.SourceVersion, warmProbe(ctx, operationClient, platformToken, definitionID))
 	trustedRequest := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definitionID,
 		ValuesRevisionId: valuesRevisionID,
@@ -576,7 +578,7 @@ func TestProductionTrustResolverFailureFailsClosed(t *testing.T) {
 	request.Header().Set("Authorization", "Bearer "+adminToken)
 	request.Header().Set("Idempotency-Key", "trust-unavailable")
 	client := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
-	warmAuthorization(ctx, t, client, adminToken, definitionID, "warm-trust-unavailable")
+	waitForFreshAuthorization(ctx, t, svc, organizationID, customerID, authSnap.SourceVersion+1, warmProbe(ctx, client, adminToken, definitionID))
 	// AC-074 fail-closed contract: the trust resolver being offline must
 	// surface as verification_unavailable. The authorization module pulls
 	// the snapshot over an RPC with a 200ms deadline; on a loaded CI runner
@@ -707,7 +709,7 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 	digest := "sha256:" + bundleDigest
 
 	operationClient := orchestratorv1connect.NewOrchestratorServiceClient(server.Client(), server.URL)
-	warmAuthorization(ctx, t, operationClient, adminToken, definitionID, "warm-epoch")
+	waitForFreshAuthorization(ctx, t, svc, organizationID, customerID, authSnap.SourceVersion+1, warmProbe(ctx, operationClient, adminToken, definitionID))
 	newRequest := func(definition, valuesRevision, idempotencyKey string) *connect.Request[orchestratorv1.CreateOperationRequest] {
 		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 			OperationType: "INSTALL", BundleId: bundleID, ReleaseDefinitionId: definition,
@@ -744,19 +746,61 @@ func TestRevocationEpochInvalidatesCachedVerification(t *testing.T) {
 // authorization gate: the Module's first pull after a source bump observes a
 // changed checkpoint and fails closed (REQ-027), so the real request below
 // succeeds on the caught-up snapshot.
-func warmAuthorization(ctx context.Context, t *testing.T, client orchestratorv1connect.OrchestratorServiceClient, token, definitionID, idempotencyKey string) {
+// warmProbe drives one authorization pull by attempting a write with a throwaway
+// payload: the Module pulls the snapshot before it validates the request, so the
+// attempt is what refreshes it. The ids are deliberately unknown, so even if the
+// snapshot were already fresh the probe could not create a real operation, and a
+// unique idempotency key per attempt keeps the probes from replaying each other.
+func warmProbe(ctx context.Context, client orchestratorv1connect.OrchestratorServiceClient, token, definitionID string) func() error {
+	return func() error {
+		req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
+			OperationType:       "INSTALL",
+			BundleId:            "bundle-warm",
+			ReleaseDefinitionId: definitionID,
+			ValuesRevisionId:    "values-warm",
+		})
+		req.Header().Set("Authorization", "Bearer "+token)
+		req.Header().Set("Idempotency-Key", "warmup-"+uuid.NewString())
+		_, err := client.CreateOperation(ctx, req)
+		return err
+	}
+}
+
+// waitForFreshAuthorization waits on the observable state a write actually needs: a
+// store checkpoint that is fresh and at least at expectedVersion. TASK-160: the
+// Module's first pull after a version bump is stale BY DESIGN (module.go derives
+// `changed` from the previous checkpoint and only saves the new one after the
+// authorization check), so a write issued before a pull lands is rejected fail-closed
+// with "authorization snapshot stale". One probe is not enough: if that probe's own
+// pull dies (200ms snapshotDeadline, RPC error, scope mismatch) the next write is
+// still a warm-up, which is how the single-retry version of this wait failed twice in
+// CI. The check runs before the probe, so once the checkpoint is fresh no further
+// probe is issued; no timeout is extended and no sleep is added, because the pulls
+// themselves are the driver. This replaces an older helper that merely asserted the
+// first write was rejected with Unavailable — an assertion that says nothing about
+// whether the snapshot actually warmed up.
+func waitForFreshAuthorization(
+	ctx context.Context,
+	t *testing.T,
+	svc *orchSvc,
+	organizationID, customerID string,
+	expectedVersion uint64,
+	probe func() error,
+) {
 	t.Helper()
-	req := connect.NewRequest(&orchestratorv1.CreateOperationRequest{
-		OperationType:       "INSTALL",
-		BundleId:            "bundle-warm",
-		ReleaseDefinitionId: definitionID,
-		ValuesRevisionId:    "values-warm",
-	})
-	req.Header().Set("Authorization", "Bearer "+token)
-	req.Header().Set("Idempotency-Key", idempotencyKey)
-	_, err := client.CreateOperation(ctx, req)
-	require.Error(t, err)
-	assert.Equal(t, connect.CodeUnavailable, connect.CodeOf(err))
+	require.Eventually(t, func() bool {
+		checkpoint, err := svc.store.Authorization().GetCheckpoint(ctx, organizationID, customerID)
+		if err == nil && checkpoint.Fresh && checkpoint.SourceVersion >= expectedVersion {
+			return true
+		}
+		// The probe's own outcome is irrelevant — the checkpoint is the signal — so it
+		// is logged and discarded.
+		if probeErr := probe(); probeErr != nil {
+			t.Logf("authorization warm-up probe rejected: %v", probeErr)
+		}
+		return false
+	}, 10*time.Second, 20*time.Millisecond,
+		"authorization snapshot must warm up before the request under test (TASK-160)")
 }
 
 // Management-plane JWT key material for the orchestrator tests (REQ-065
@@ -1916,21 +1960,11 @@ func runPreflightLifecycleE2E(t *testing.T, failFirstSnapshot bool) (snapshotFai
 	// — a checkpoint fresh at the applied version — then issue exactly one clean request.
 	// This waits on a signal; it does not extend any timeout or sleep, because the pulls
 	// themselves are the driver.
-	expectedVersion := authSnap.SourceVersion + 1
-	require.Eventually(t, func() bool {
-		checkpoint, err := svc.store.Authorization().GetCheckpoint(ctx, organizationID, customerID)
-		if err == nil && checkpoint.Fresh && checkpoint.SourceVersion >= expectedVersion {
-			return true
-		}
-		// Not fresh yet: drive one more pull. The probe's own outcome is irrelevant — the
-		// checkpoint is the signal — so the error is deliberately discarded. A distinct
-		// idempotency key keeps these probes from replaying the clean request below.
-		if _, warmupErr := client.CreateOperation(ctx, createRequest("warmup-"+uuid.NewString())); warmupErr != nil {
-			t.Logf("warm-up probe rejected: %v", warmupErr)
-		}
-		return false
-	}, 5*time.Second, 20*time.Millisecond,
-		"authorization snapshot must warm up before the clean create (TASK-160)")
+	waitForFreshAuthorization(ctx, t, svc, organizationID, customerID, authSnap.SourceVersion+1,
+		func() error {
+			_, warmupErr := client.CreateOperation(ctx, createRequest("warmup-"+uuid.NewString()))
+			return warmupErr
+		})
 
 	createResp, err := client.CreateOperation(ctx, createRequest("create-preflight-e2e"))
 	require.NoErrorf(t, err, "create operation failed: code=%s err=%v", connect.CodeOf(err), err)
