@@ -119,6 +119,19 @@ func TestCheckPortBand(t *testing.T) {
 	require.Len(t, findings, 1)
 	assert.Equal(t, "port-band", findings[0].Rule)
 
+	// The low end anchors the claim: a range that does not start at the band is some
+	// other port, not a stale band claim.
+	otherPort := Item{Path: "docs/x.md", Line: 42, Text: "端口 9090-9100 是别的服务"}
+	assert.Empty(t, Check([]Item{otherPort}, facts))
+
+	// A true historical explanation of the old six-service band is exempt (原来).
+	explains := Item{Path: "docs/testing.md", Line: 234, Text: "- **端口**：8082–8087 由原来那六个服务占满（8087 是 `web`），因此 api 用 8088"}
+	assert.Empty(t, Check([]Item{explains}, facts), "原来 marks the superseded band")
+
+	// Context vocabulary still gates the trigger: a bare numeric range is not a claim.
+	bareRange := Item{Path: "docs/x.md", Line: 43, Text: "版本号区间 8082-8087 不适用"}
+	assert.Empty(t, Check([]Item{bareRange}, facts))
+
 	// Anchoring: a NodePort range next to the host band must not be parsed as 82-3008.
 	withNodePort := Item{Path: "docs/x.md", Line: 40, Text: "宿主端口段 8082-8087:30082-30087"}
 	findings = Check([]Item{withNodePort}, facts)
@@ -191,6 +204,39 @@ func TestHistoricalClaimsAreExempt(t *testing.T) {
 		PrevText: "- **TASK-249 之前的坑（勿再复现）**：",
 	}
 	assert.Empty(t, Check([]Item{taskRef}, facts), "TASK-NNN 之前 is a real qualifier")
+}
+
+// Rule C-by-name: prose that enumerates PACKAGE names instead of /x.v1. prefixes.
+// Review showed the prefix-shaped rule missed "only proxies auth/orchestrator/...".
+func TestCheckExclusiveEnumerationByName(t *testing.T) {
+	facts := testFacts(t) // testFacts forwards auth, audit, trust
+
+	violating := Item{Path: "docs/x.md", Line: 7, Text: "- web/nginx.conf:17 起只代理了 auth/audit"}
+	findings := Check([]Item{violating}, facts)
+	require.Len(t, findings, 1)
+	assert.Equal(t, "exclusive-enumeration-by-name", findings[0].Rule)
+	assert.Contains(t, findings[0].Message, "trust")
+
+	full := Item{Path: "docs/x.md", Line: 7, Text: "只代理了 auth/audit/trust"}
+	assert.Empty(t, Check([]Item{full}, facts))
+
+	// A line that names one config file is reported against that file only.
+	namesNginx := Item{Path: "docs/x.md", Line: 10, Text: "`web/nginx.conf:17` 起只代理了 auth/audit"}
+	findings = Check([]Item{namesNginx}, facts)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "web/nginx.conf")
+
+	// A sentence that names two packages is not an enumeration of what is forwarded.
+	sentence := Item{Path: "docs/x.md", Line: 8, Text: "只代理 auth 服务，其余走 audit 处理"}
+	assert.Empty(t, Check([]Item{sentence}, facts))
+
+	// Word boundaries: "authz" is not the auth package.
+	boundary := Item{Path: "docs/x.md", Line: 9, Text: "只代理 authz/audit"}
+	assert.Empty(t, Check([]Item{boundary}, facts))
+
+	// The qualifier keeps the historical record out, as with the other rules.
+	historical := Item{Path: "docs/ux-review.md", Line: 144, Text: "- 容器入口（修复前）：只代理了 auth/audit", PrevText: ""}
+	assert.Empty(t, Check([]Item{historical}, facts))
 }
 
 func TestFindingsAreSortedAndDescribed(t *testing.T) {
