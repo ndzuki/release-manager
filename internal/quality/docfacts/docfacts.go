@@ -29,8 +29,13 @@ type Facts struct {
 	NginxPackagePrefixes []string
 	NginxPrefixLine      map[string]int
 	// VitePrefixes lists the package prefixes the Vite dev proxy forwards.
-	VitePrefixes    []string
-	VitePrefixLine  map[string]int
+	VitePrefixes   []string
+	VitePrefixLine map[string]int
+	// NginxPackages and VitePackages are the bare package names behind those
+	// prefixes (/auth.v1. -> auth), for prose that enumerates packages instead of
+	// prefixes ("only proxies auth/orchestrator/webhook/...").
+	NginxPackages   []string
+	VitePackages    []string
 	HostPortLow     int
 	HostPortHigh    int
 	HostPortSource  string
@@ -68,7 +73,7 @@ func (f Finding) String() string {
 // docs/ux-review.md and docs/user-manual.md deliberately keep the pre-fix B5
 // evidence next to its correction.
 var historicalMarkers = []string{
-	"修复前", "曾经", "历史", "此前", "pre-fix", "before the fix",
+	"修复前", "曾经", "历史", "此前", "原来", "pre-fix", "before the fix",
 }
 
 // historicalRefRe covers "TASK-249 之前" style qualifiers. A bare "之前" used to be a
@@ -80,9 +85,11 @@ var (
 	nginxPrefixRe = regexp.MustCompile(`(?m)^\s*location\s+\^~\s+(/[A-Za-z0-9_.]+\.v1\.)\s*\{`)
 	vitePrefixRe  = regexp.MustCompile(`(?m)^\s*'(/[A-Za-z0-9_.]+\.v1\.)':\s*\{`)
 	devPortsRe    = regexp.MustCompile(`DEV_PORTS=\(([^)]*)\)`)
-	// Anchored to four-digit endpoints so a NodePort range written next to the host
-	// band (8082-8088:30082-30088) cannot be parsed as 82-3008.
-	portRangeRe  = regexp.MustCompile(`(?:^|\D)(\d{4})\s*[-–]\s*(\d{4})(?:\D|$)`)
+	// A band claim is a range that STARTS at the derived low end and is anchored to
+	// four-digit endpoints, so a NodePort range beside it (8082-8088:30082-30088) cannot
+	// be parsed as 82-3008 and an unrelated four-digit range elsewhere is not mistaken
+	// for the dev band.
+	portBandRe   = regexp.MustCompile(`(?:^|\D)(\d{4})\s*[-–]\s*(\d{4})(?:\D|$)`)
 	prefixInText = regexp.MustCompile(`/[A-Za-z0-9_]+\.v1\.`)
 	// The negation and the routing word both have to sit next to the prefix. A whole
 	// line is too wide: SECURITY.md's table row says the entry proxy forwards seven
@@ -96,10 +103,15 @@ var (
 	// prefix, so the routing word in the other column cannot pair with it.
 	contextWindow = 20
 	exclusiveWord = []string{"只反代", "只代理", "只列", "仅反代", "仅代理", "only proxies", "only proxied"}
-	// A port-band claim is any four-digit range on a line that talks about host
-	// ports: requiring the literal "端口段" missed the twelve lines in this repository
-	// that write "宿主端口 8082-8088" instead.
-	portWords = []string{"端口段", "端口范围", "宿主端口", "host port", "port band"}
+	// The package-name rule has no config-filename anchor, so it uses proxy-scoped
+	// words only: "本文只列 auth/audit 两类示例" is a document listing things, not a
+	// claim about what the proxy forwards (review class B).
+	exclusiveProxyWord = []string{"只反代", "只代理", "仅反代", "仅代理", "only proxies", "only proxied"}
+	// Context vocabulary for a port statement. This used to demand the literal
+	// "端口段", which prose in this repository also writes without; the range anchor in
+	// checkPortBand is what keeps the rule precise, and containsWord keeps the ASCII
+	// entries off "report", "transport" and "localhost".
+	portWords = []string{"端口", "宿主", "host", "port", "管理面", "dev-up"}
 )
 
 // ParseNginxPrefixes derives the proxied proto package prefixes from web/nginx.conf.
@@ -167,6 +179,8 @@ func NewFacts(nginxConf, viteConfig, hostSh, hostShPath string) Facts {
 		NginxPrefixLine:      nginxAt,
 		VitePrefixes:         vitePrefixes,
 		VitePrefixLine:       viteAt,
+		NginxPackages:        packageNames(nginxPrefixes),
+		VitePackages:         packageNames(vitePrefixes),
 		HostPortLow:          low,
 		HostPortHigh:         high,
 		HostPortSource:       hostShPath,
@@ -184,6 +198,7 @@ func Check(items []Item, facts Facts) []Finding {
 		findings = append(findings, checkAbsentPrefix(item, facts)...)
 		findings = append(findings, checkPortBand(item, facts)...)
 		findings = append(findings, checkExclusiveEnumeration(item, facts)...)
+		findings = append(findings, checkExclusiveEnumerationByName(item, facts)...)
 	}
 	sort.SliceStable(findings, func(i, j int) bool {
 		if findings[i].Path != findings[j].Path {
@@ -213,17 +228,19 @@ func checkAbsentPrefix(item Item, facts Facts) []Finding {
 
 // checkPortBand flags a stated host port range that is not the DEV_PORTS band.
 func checkPortBand(item Item, facts Facts) []Finding {
-	if !facts.HasHostPortBand() || !containsAny(item.Text, portWords) {
+	if !facts.HasHostPortBand() || !containsWord(item.Text, portWords) {
 		return nil
 	}
 	out := []Finding{}
-	for _, m := range portRangeRe.FindAllStringSubmatch(item.Text, -1) {
+	for _, m := range portBandRe.FindAllStringSubmatch(item.Text, -1) {
 		low, lowErr := strconv.Atoi(m[1])
 		high, highErr := strconv.Atoi(m[2])
 		if lowErr != nil || highErr != nil {
 			continue
 		}
-		if low == facts.HostPortLow && high == facts.HostPortHigh {
+		// The regex captures any four-digit range; only one that starts at the derived
+		// low end is a claim about THE band.
+		if low != facts.HostPortLow || high == facts.HostPortHigh {
 			continue
 		}
 		out = append(out, Finding{
@@ -277,6 +294,185 @@ func checkExclusiveEnumeration(item Item, facts Facts) []Finding {
 			Message: fmt.Sprintf("the text says %s forwards only the listed prefixes (%d), but it also forwards %s",
 				s.source, len(listed), strings.Join(missing, ", ")),
 		})
+	}
+	return out
+}
+
+// checkExclusiveEnumerationByName covers prose that enumerates PACKAGE names rather
+// than /x.v1. prefixes ("only proxies auth/orchestrator/webhook/operator/notifier").
+// Review found the prefix-shaped rule missed that form entirely.
+func checkExclusiveEnumerationByName(item Item, facts Facts) []Finding {
+	if !containsWord(item.Text, exclusiveProxyWord) {
+		return nil
+	}
+	out := []Finding{}
+	subjects := []struct {
+		packages []string
+		at       map[string]int
+		source   string
+	}{
+		{facts.NginxPackages, facts.NginxPrefixLine, "web/nginx.conf"},
+		{facts.VitePackages, facts.VitePrefixLine, "web/vite.config.ts"},
+	}
+	// Report the subject the text is actually talking about: a line that names
+	// nginx.conf should not also be reported against vite.config.ts.
+	mentionsNginx := strings.Contains(item.Text, "nginx.conf")
+	mentionsVite := strings.Contains(item.Text, "vite.config.ts")
+	for _, s := range subjects {
+		if s.source == "web/nginx.conf" && mentionsVite && !mentionsNginx {
+			continue
+		}
+		if s.source == "web/vite.config.ts" && mentionsNginx && !mentionsVite {
+			continue
+		}
+		listed := enumeratesSlashNames(item.Text, s.packages)
+		if len(listed) < 2 {
+			// One package name is a statement about that package, not an enumeration
+			// of what the proxy forwards.
+			continue
+		}
+		missing := []string{}
+		for _, name := range s.packages {
+			if _, ok := listed[name]; !ok {
+				missing = append(missing, fmt.Sprintf("%s (%s)", name, prefixForName(name, s.at)))
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		out = append(out, Finding{
+			Path: item.Path, Line: item.Line, Rule: "exclusive-enumeration-by-name",
+			Message: fmt.Sprintf("the text says %s forwards only the listed packages (%d), but it also forwards %s",
+				s.source, len(listed), strings.Join(missing, ", ")),
+		})
+	}
+	return out
+}
+
+// enumeratesSlashNames reports the package names the text lists as one "/"-joined
+// package-name rule has no config anchor, and review showed "only proxied the webhook
+// that operator deploys, notifier comes from elsewhere" was read as an enumeration
+// because a comma also separates two names (class A); "/" is how this project writes
+// the claim ("auth/orchestrator/webhook/operator/notifier").
+func enumeratesSlashNames(text string, names []string) map[string]struct{} {
+	listed := map[string]struct{}{}
+	for _, a := range names {
+		for _, b := range names {
+			if a == b {
+				continue
+			}
+			for _, pa := range wordPositions(text, a) {
+				for _, pb := range wordPositions(text, b) {
+					if pa >= pb {
+						continue
+					}
+					if onlySlashSeparators(text[pa+len(a) : pb]) {
+						listed[a] = struct{}{}
+						listed[b] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	return listed
+}
+
+// onlySlashSeparators allows the separators this project actually writes inside a
+// package enumeration.
+func onlySlashSeparators(gap string) bool {
+	for _, r := range gap {
+		switch r {
+		case ' ', '\t', '/':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// containsWord matches CJK words as substrings and ASCII words at word boundaries, so
+// "port"/"host" do not fire on "report", "transport", "localhost" or "import"
+// (review class C).
+func containsWord(text string, words []string) bool {
+	for _, word := range words {
+		if !isASCIIWord(word) {
+			if strings.Contains(text, word) {
+				return true
+			}
+			continue
+		}
+		if len(wordPositions(text, word)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIWord(word string) bool {
+	if word == "" {
+		return false
+	}
+	for i := 0; i < len(word); i++ {
+		c := word[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// wordPositions finds name at word boundaries so "auth" does not match "authz".
+func wordPositions(text, name string) []int {
+	out := []int{}
+	if name == "" {
+		// strings.Index would match at every position and the loop would never
+		// advance; unreachable today, but a hang is the wrong failure mode.
+		return out
+	}
+	for start := 0; ; {
+		idx := strings.Index(text[start:], name)
+		if idx < 0 {
+			return out
+		}
+		pos := start + idx
+		if boundaryAt(text, pos-1) && boundaryAt(text, pos+len(name)) {
+			out = append(out, pos)
+		}
+		start = pos + len(name)
+	}
+}
+
+func boundaryAt(text string, i int) bool {
+	if i < 0 || i >= len(text) {
+		return true
+	}
+	c := text[i]
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+		return false
+	}
+	return true
+}
+
+func prefixForName(name string, at map[string]int) string {
+	for prefix := range at {
+		if packageName(prefix) == name {
+			return prefix
+		}
+	}
+	return name
+}
+
+func packageName(prefix string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(prefix, "/"), ".v1.")
+}
+
+func packageNames(prefixes []string) []string {
+	out := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		out = append(out, packageName(prefix))
 	}
 	return out
 }
