@@ -31,7 +31,7 @@
 
 | 名称 | 用在哪个 job / step | 用途 | 是否敏感 | 缺失时的后果 |
 | --- | --- | --- | --- | --- |
-| `RUNS_ON` | `test.yml` 33 处引用：13 个 job 的 `runs-on`（`:38,51,71,88,105,119,203,246,285,325,378,455,471`）、`actions/setup-go` 的 `cache:`（`:45,59,79,96,113,128,212,255,293,333,404`）、缓存清理/恢复步骤的 `if:`（`:157,166,227,235,260,268`）、自托管分支判断（`:301`）与 `WORKLOAD_IMAGE` 摘要选择（`:317`）；另 `sync-to-gitcode.yaml:12`。**注**：33 里含 `:26` 那处位于注释块内的示例文本（非真实求值点），所以可求值引用是 32 处；13 与 11 两个 job 数分别是 `runs-on` 与 `setup-go` 的出现次数，`docs-check`/`proto-check` 不装 Go 因此没有 `cache:` 项 | 选 runner：未设置 → `ubuntu-latest`；设为 `self-hosted` → 切到本地自托管 runner，并跳过 Go 模块缓存的擦除与读写（避免污染共享 `~/go/pkg/mod`） | 否（是配置，不是凭据） | 不会失败：所有引用都带 `|| 'ubuntu-latest'` 兜底。**但自托管切换的全部理由就是绕开私有仓额度限制，见 `test.yml:24-34`** |
+| `RUNS_ON` | `test.yml` **43 处** `vars.RUNS_ON` 引用（复跑：`grep -c 'vars.RUNS_ON' .github/workflows/test.yml`）：**18 个 job 的 `runs-on`**（`:38` 起、末 `:719`，即每个 job 一处）、**15 个 `actions/setup-go` 的 `cache:`**（形如 `:45`/`:59`，值 `${{ vars.RUNS_ON != 'self-hosted' }}`）、**缓存清理/恢复步骤的 `if:`**（形如 `:165`/`:174`/`:297`）与 **`WORKLOAD_IMAGE` 摘要选择**（`:404`，`vars.RUNS_ON == 'self-hosted' && 'busybox:…'`）；另 `sync-to-gitcode.yaml:22`。**注**：早前本节写「33 处引用 / 13 个 job / 11 个 setup-go」并逐条列举 40+ 行号 —— 那些数字与行号已随 workflow 增长腐化（列出的 13 个 `runs-on` 行号**仅前 6 个**仍命中），故改为**可复跑的计数 + 类别锚点**，不再维护长清单 | 选 runner：未设置 → `ubuntu-latest`；设为 `self-hosted` → 切到本地自托管 runner，并跳过 Go 模块缓存的擦除与读写（避免污染共享 `~/go/pkg/mod`） | 否（是配置，不是凭据） | 不会失败：所有引用都带 `|| 'ubuntu-latest'` 兜底。**但自托管切换的全部理由就是绕开私有仓额度限制，见 `test.yml:24-34`** |
 
 切换命令（`test.yml:29-34` 的注释已给出同一形态）：
 
