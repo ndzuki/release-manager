@@ -65,10 +65,10 @@
 **确认依据（现状）**
 
 - `/readyz` 是唯一有失败语义的探针：全部门禁通过返回 200，任一失败返回 503 且 body 是 `{"status":"degraded","checks":{"<name>":"<err>"}}`（`internal/handler/ready.go:11-34`）。检查项由各服务贡献：
-  - orchestrator：`database`（2s 超时的 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:248-266`）；
-  - auth：`database` + `redis`（`cmd/auth/main.go:67-87`）；
+  - orchestrator：`database`（2s 超时的 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:267-285`）；
+  - auth：`database` + `redis`（`cmd/auth/main.go:68-88`）；
   - notifier：`database`（`cmd/notifier/main.go:60-71`）；
-  - **webhook、notification-sink、operator agent 现已实现 `ReadinessChecks`**（TASK-099；`grep ReadinessChecks cmd/` 命中六个 main）：webhook 检查上游 orchestrator 的 `/readyz`（`cmd/webhook/main.go:90`）——**orchestrator NotReady 会级联使 webhook NotReady，这是设计**（它没有转发对象时接客无意义）；operator agent 检查 gateway 会话存活（`cmd/operator/main.go:382`，重连窗口内 NotReady 是真实状态）；notification-sink 检查配置可用（`cmd/notification-sink/main.go:151`）。未实现检查的进程仍回 `noop` 恒 200（`internal/app/app.go:134-136,152-158`），但 kustomize 内已无此类服务。
+  - **webhook、notification-sink、operator agent 现已实现 `ReadinessChecks`**（TASK-099；`grep ReadinessChecks cmd/` 命中六个 main）：webhook 检查上游 orchestrator 的 `/readyz`（`cmd/webhook/main.go:137-158`）——**orchestrator NotReady 会级联使 webhook NotReady，这是设计**（它没有转发对象时接客无意义）；operator agent 检查 gateway 会话存活（`cmd/operator/main.go:454-467`，重连窗口内 NotReady 是真实状态）；notification-sink 检查配置可用（`cmd/notification-sink/main.go:151`）。未实现检查的进程仍回 `noop` 恒 200（`internal/app/app.go:134-136,152-158`），但 kustomize 内已无此类服务。
 - `/health`（liveness 目标）**没有任何失败路径**（REQ-099 裁定：可失败性一律归 `/readyz`）：无条件 `WriteHeader(200)` + `{"status":"ok"}`（`internal/handler/health.go:12-28`）。orchestrator 额外挂一个 `gc` 子对象（`internal/app/app.go:139-143` + `cmd/orchestrator/main.go:268-289`，字段 `status`/`last_success_at`/`last_attempt_at`，Unix 秒）。结论：liveness 失败只可能是**进程已死、启动未完成（超出 startupProbe 预算）、或 3 秒内没答完**，不代表依赖健康。
 - 启动期任何一步失败都会直接退出进程：配置加载失败 `failed to load config` → `os.Exit(1)`；`Register` 失败（含 store 打开、PostgreSQL 迁移、Redis ping）`failed to register service` → `os.Exit(1)`（`internal/app/app.go:125-149`）。这两条日志就是 CrashLoop 的第一现场。
 - 探针时间预算是显式的（TASK-099）：每个应用容器有 `startupProbe`（httpGet `/health`，period 5s，HTTP `timeoutSeconds: 3`）——orchestrator/auth/notifier/webhook/notification-sink `failureThreshold: 120`（10 分钟启动预算），customer agent 60；startup 通过后 liveness 才有发言权。`readinessProbe` 指 `/readyz`（timeout 3s、failureThreshold 3；agent 为 12 以容忍重连窗），`livenessProbe` 指 `/health`（timeout 3s、failureThreshold 3）。防漂移：`make check-probes`。**曾经的形态（迁移前的风险）**：全树无 `startupProbe`、K8s 默认 `timeoutSeconds=1`，而迁移在 `Register` 内同步跑完才开始监听（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`）⇒ 一次慢迁移可能被 liveness 打断，表现为反复 CrashLoop 且每轮日志都从头重放迁移——若再次看到该形态，说明 manifest 被回退。
