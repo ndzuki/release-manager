@@ -182,7 +182,11 @@ func emitIndex(root string) (map[string]struct{}, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "node_modules", "gen", "web":
+			// .worktrees holds other checkouts of this repository. Their copies are
+			// not emitters of THIS checkout: scanning them made a code that only
+			// exists in an old worktree look emittable, which masked real gaps and
+			// let an expired exception keep passing (TASK-260).
+			case ".git", ".worktrees", "node_modules", "gen", "web":
 				return filepath.SkipDir
 			}
 			return nil
