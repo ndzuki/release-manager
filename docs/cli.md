@@ -336,7 +336,7 @@ cleanup 只经正式 Connect API 回收（`main.go:471-473` 注释）。
 校验 10 节模板结构（`internal/quality/reqcheck/check.go:1-17`）。
 
 - 退出码：usage（无参数）`2`（`main.go:17-20`）；文档读取/校验违例 `1`（`main.go:26-41`）；全部 OK `0`。
-- 门禁角色：`make check-reqs`（`Makefile:478-484`，`find . -path '*/Requirements/REQ-*.md'` 喂给
+- 门禁角色：`make check-reqs`（`Makefile:533`，`find . -path '*/Requirements/REQ-*.md'` 喂给
   `./bin/reqcheck`），属于 `make quality`；文档未接入 CI（`docs/testing.md:155`）。
 
 ### cmd/imagecheck
