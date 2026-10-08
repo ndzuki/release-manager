@@ -43,3 +43,8 @@ exceptions:
     code: "invalid_stage_selection"
     reason: "REQ-066: the staged E2E runner validates --stages but does not emit this stable code. Tracked as REQ-066 partial (audit bucket D)."
     expires_at: "2026-12-31"
+
+  - owner: "release-manager"
+    code: "secret_output_forbidden"
+    reason: "REQ-046 AC-046-07's second half is explicitly deferred (scope-change 2026-09-28, TASK-162): the persistence boundary cannot observe Secret data because RenderResult carries no manifest field and raw manifests are consumed by the cluster stage without ever being persisted, so the guard is structurally unreachable; front-loading it into the render path would violate AC-046-02 (rendering a Secret must succeed and leave only digest/summary). Before 2026-10-08 this code was outside the gate entirely because REQ-046 listed its error codes as bullets and AC-046-07 named it in plain text; the REQ is now table-shaped (TASK-260), so the entry is load-bearing. Revisit at expiry."
+    expires_at: "2027-03-31"
