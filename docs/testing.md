@@ -422,7 +422,9 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 - 断言易变字段（`.Status`/`.State`/`.Overall`/`.Phase`）前先问：**谁**推进它、**何时**可见？推进者是 detached 协程
   （coordinator / runner / `go func`）时，要么**等到可观测信号**再读，要么改为断言**契约**（同一 `OperationId`、类型、
   版本号、**合法状态集合**）。
-- `time.Sleep(N)` 出现在测试里**默认可疑**；唯一可接受的用法是**负向看门狗**（有界地等「什么都没发生」）。
+- `time.Sleep(N)` 出现在测试里**默认可疑**。可接受的只有两类：**负向看门狗**（有界地等「什么都没发生」），
+  以及**轮询循环内的间隔**（循环条件本身等的是真实信号，如 `cmd/orchestrator/main_test.go` 的 `verification_unavailable`
+  轮询、`deploy/dev/dev_test.go` 等 flock 持有者写下 stage 记录——TASK-160 AC-160-04 判为「非靶子」）。
 - 驱动式等待优于单次等待：当"被等待的入口"本身**幂等**时，可以**反复驱动它直到被接受**（no-op 无害），
   再用同一个界失败——这样既消掉竞态，又不掩盖真实缺陷。
 
@@ -431,7 +433,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 其实只是**迟到**。修法是**驱动 `Start` 直到被接受**（并对真泄漏保持可变红：去掉 `unregister` 的变异仍会让用例红）。
 
 **扫描产物**：`internal/orchestrator`、`cmd/orchestrator`、`deploy/dev` 三包的同类假设清单见
-`TASK-160` 卡（AC-160-04）；`deploy/dev` 脚本里的 `sleep` 均在轮询循环内等真实信号，不是该反模式。
+`TASK-160` 卡（AC-160-04）；`deploy/dev` 脚本里的 `sleep`（7 处）**多数**在 `while`/`for` 轮询内等真实信号；`deploy/dev/dev.sh:1651` 是固定重试退避（`for attempt in 1 2`），同样不是「等固定预算内完成」的反模式。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
 > `.github/workflows/test.yml`（13 个 job 与触发条件）、

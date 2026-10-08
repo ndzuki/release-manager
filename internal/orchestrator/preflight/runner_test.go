@@ -50,8 +50,8 @@ func TestRunnerCancelUnregisters(t *testing.T) {
 	// Unregistration is visible: a fresh Start runs again. The fake run signals done
 	// BEFORE the runner's own goroutine unregisters the entry, so a single Start here
 	// races that cleanup: Start is a no-op while the ID is still registered, and on a
-	// loaded runner the cleanup lands after this line (CHANGELOG: the 5s timeout below
-	// used to fire and report a leaked registration that was merely late, TASK-160 #5).
+	// loaded runner the cleanup lands after this line, so the timeout below used to fire
+	// and report a leaked registration that was merely late (TASK-160, family member 5).
 	// Drive Start until the runner accepts it -- no-ops are harmless and the first
 	// accepted call is the signal this test is after. The deadline still fails the test
 	// if the completion path really leaked the registration; it is a bound, not the
