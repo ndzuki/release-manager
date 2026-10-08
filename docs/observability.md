@@ -13,7 +13,7 @@
 
 **现状**
 
-- 库与格式：标准库 `log/slog`，**JSON handler，输出到 `os.Stderr`**（`internal/app/app.go:123` 的 `startupLogger()`）。所有常驻服务共用这一个入口（`app.Run` 是每个 `cmd/*/main.go` 的唯一启动函数，例如 `cmd/auth/main.go:240`、`cmd/orchestrator/main.go:854`、`cmd/operator/main.go:368`、`cmd/webhook/main.go:65`、`cmd/notifier/main.go:126`、`cmd/api/main.go:143`、`cmd/notification-sink/main.go:142`）⇒ 采集侧就是容器 stderr，无文件日志、无日志级别路由、无异步 sink。
+- 库与格式：标准库 `log/slog`，**JSON handler，输出到 `os.Stderr`**（`internal/app/app.go:123` 的 `startupLogger()`）。所有常驻服务共用这一个入口（`app.Run` 是每个 `cmd/*/main.go` 的唯一启动函数，例如 `cmd/auth/main.go:264`、`cmd/orchestrator/main.go:986`、`cmd/operator/main.go:440`、`cmd/webhook/main.go:105`、`cmd/notifier/main.go:203`、`cmd/api/main.go:186`、`cmd/notification-sink/main.go:142`）⇒ 采集侧就是容器 stderr，无文件日志、无日志级别路由、无异步 sink。
 - **级别可配置（TASK-094 闭环）**：`startupLogger` 用 `slog.LevelVar` 构造 handler 并经 `slog.SetDefault` 安装为进程默认 logger（此前 `slog.SetDefault` 全仓零调用），`applyLogLevel`（`internal/app/app.go:133`）在 `LoadService` 之后把 `ServiceConfig.LogLevel`（`internal/config/config.go:131`）解析并写进 LevelVar（`config.ParseLogLevel`，`internal/config/loglevel.go`）：debug/info/warn/error 大小写不敏感；**空或非法 = debug + Warn 一条**——与接线前的硬编码行为一致，属向后兼容的缺省。行为测试 `internal/app/loglevel_test.go`；`make check-config-keys` 保证 `log_level` 不再有"有键无实现"的漂移。各服务配置里的 `log_level: debug`（例如 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:2`、`configs/auth.dev.yaml:2`）从此是真实开关。
 - 结构化字段约定（观察自实际调用点，非文档规定）：
   - 关系标识：`operator_id`、`session_id`、`cluster_id`、`customer_id`、`last_seen_sequence`（`internal/operator/service.go:502-508`）、`outbox_id`、`command_id`、`sequence`（`internal/operator/service.go:600-603`、`internal/operator/service.go:629-633`）、`op_id`（`internal/orchestrator/operation/recover.go:62-64`）、`operation_id`（`internal/orchestrator/emergency.go:325`）、`definition_id`（`internal/orchestrator/emergency_stuck.go:293`）、`intent_id`、`lock_path`、`terminal_at`（`internal/orchestrator/emergency_stuck.go:290-297`）、`command_id`/`retry_after`（`cmd/operator/main.go:104-105`）、`db`/`driver`（`cmd/orchestrator/main.go:299`、`cmd/api/main.go:55`）。
@@ -21,12 +21,12 @@
   - request-id：拦截器 `contractsinterceptor.NewRequestIDInterceptor` 同时覆盖 unary 与 streaming（`internal/contracts/interceptor/requestid.go:26-33,50-59`），头名 `X-Request-ID`（`internal/contracts/errors.go:14`）；它把 request-id 写回响应头与错误 metadata，并**只在请求失败时**打日志：`request failed`（字段 `request_id`/`procedure`/`error`，`internal/contracts/interceptor/requestid.go:67-71`）⇒ **成功请求没有统一 request-id 日志行**，跨组件只能用 `operation_id` / `operator_id` / `session_id` 关联。
   - 审计 metadata 里带 `request_id`（`internal/operator/service.go:1450,1413,1431`），但只有 operator 侧审计这么做。
 - 采样日志事件（可直接 grep 的真实文案，值班判据来自 `docs/runbook.md`）：
-  - 启动：`store opened`（`cmd/orchestrator/main.go:299`）、`emergency config seeded`（`cmd/orchestrator/main.go:312`）、`operator agent wired`（`cmd/operator/main.go:235`）、`operator gateway runtime wired`（`cmd/operator/main.go:299`，gateway 模式）、`server error`、`shutting down`（`internal/app/app.go:205,212`）、`release-orchestrator started`（统一模板 `svc.Name()+" started"`，`internal/app/app.go:186`）。
+  - 启动：`store opened`（`cmd/orchestrator/main.go:318`）、`emergency config seeded`（`cmd/orchestrator/main.go:331`）、`operator agent wired`（`cmd/operator/main.go:255`）、`operator gateway runtime wired`（`cmd/operator/main.go:319`，gateway 模式）、`server error`、`shutting down`（`internal/app/app.go:205,208`）、`release-orchestrator started`（统一模板 `svc.Name()+" started"`，`internal/app/app.go:186`）。
   - 致命：`failed to load config`、`failed to register service`（`internal/app/app.go:127,147`，两条都紧跟 `os.Exit(1)`）。
   - operator/会话：`operator stream established via mTLS`、`heartbeat failed`、`sequence gap detected`、`resync request sent`、`delivering command`、`failed to mark session offline`（`internal/operator/service.go:466,580,1123,1128,599,582`）。
   - 恢复：`recovery: found non-terminal operations`、`recovery: stale cancelling operation, transitioning to failed`、`recovery: deadline exceeded, transitioning to timeout`、`recovery: non-terminal operation left running for operator reconnect`（`internal/orchestrator/operation/recover.go:47,62,75,83`）、`preflight operations resumed on restart`、`operations recovered on restart`（`cmd/orchestrator/main.go:422,338`）。
-  - 审计：`audit buffer full`（`internal/audit/emitter.go:95`）、`audit batch persistence failed`（`internal/audit/emitter.go:135`）、`audit event rejected`（`internal/orchestrator/service.go:1543`）。
-  - 鉴权/授权：`access denied`（`internal/auth/interceptor.go:92,103`，字段含 `user_id`、`organization_id`、`procedure`、`reason_code`）、`initial policy load failed`（`cmd/auth/main.go:162`）、`check active auth session failed`（`internal/auth/interceptor.go:119`）、`invalid service token hex`（`internal/auth/service_token.go:36`）。
+  - 审计：`audit buffer full`（`internal/audit/emitter.go:95`）、`audit batch persistence failed`（`internal/audit/emitter.go:135`）、`audit event rejected`（`internal/orchestrator/service.go:1775`）。
+  - 鉴权/授权：`access denied`（`internal/auth/interceptor.go:86,97`，字段含 `user_id`、`organization_id`、`procedure`、`reason_code`）、`initial policy load failed`（`cmd/auth/main.go:171`）、`check active auth session failed`（`internal/auth/interceptor.go:113`）、`invalid service token hex`（`internal/auth/service_token.go:37`）。
   - 维护：`maintenance write rejected`（`internal/app/maintenance.go:20`）。
   - 通知：`notification consumer started`（含 `poll_interval`、`delivery_limit`、`job_deadline`、`dl_cleanup_max_age`，`internal/notifier/consumer.go:88-93`）、`notification consumer stopped`（`internal/notifier/consumer.go:98`）。
   - 生命周期/关停：`gc_ticker_stopped`（`internal/orchestrator/cleanup.go:265`）、`archive worker disabled (retention_days=0)`、`archive worker stopped`（`internal/audit/archive_worker.go:31,44`）。
@@ -48,7 +48,7 @@
 - 依赖确实存在：`go.mod:19` 引入 `github.com/prometheus/client_golang v1.24.1`；`docs/dependencies.md:111-114` 把它列进「会随产物分发」的 Go 模块清单（同表 `docs/dependencies.md:133-137` 亦列 OTel）。
 - 端点：**只有两个服务暴露 `/metrics`**（全仓 `grep 'GET /metrics'` 只有这两处非测试命中）：
   - `cmd/auth/main.go:136-137`（私有 registry，挂在 8085 的单端口 mux 上）；
-  - `cmd/orchestrator/main.go:316-319`（**共享 registry**，同时注册授权与身份指标）。
+  - `cmd/orchestrator/main.go:332-336`（**共享 registry**，同时注册授权与身份指标）。
   路径挂在既有 HTTP 监听上，符合 `docs/decisions/ADR-016-prometheus-otel.md` 的「现有单端口 ServeMux 上注册 /metrics」决策。
 - **webhook、notifier、notification-sink、operator agent、release-api 没有 `/metrics`**（同上 grep 结论）⇒ 这五类进程没有任何指标面。
 - 指标清单一（授权，ADR-016 规定，实现见 `internal/authorization/metrics.go:28-80`）：
@@ -64,7 +64,7 @@
   | `auth_enforce_duration_seconds` | Histogram（`ExponentialBuckets(0.00005,2,12)`） | `internal/authorization/metrics.go:57-61` |
   | `auth_snapshot_rpc_duration_seconds` | Histogram（`ExponentialBuckets(0.0005,2,12)`） | `internal/authorization/metrics.go:62-70` |
 
-  写入点：裁决计数与 stale 计数（`internal/authorization/module.go:382-388`）、stale 原因计数（`internal/authorization/module.go:414`，`observeStaleCause`）、enforce 耗时（`internal/authorization/module.go:139`）、快照 RPC 耗时（`internal/authorization/module.go:246`）、版本/健康 gauge（`internal/authorization/module.go:313-319`）。
+  写入点：裁决计数与 stale 计数（`internal/authorization/module.go:386-390`）、stale 原因计数（`internal/authorization/module.go:425`，`observeStaleCause`）、enforce 耗时（`internal/authorization/module.go:139`）、快照 RPC 耗时（`internal/authorization/module.go:250`）、版本/健康 gauge（`internal/authorization/module.go:317-322`）。
 
   `auth_snapshot_stale_cause_total{cause}` 的 `cause` 取值**只有枚举**（`internal/authorization/stale_cause.go`）：`warmup` / `gap` / `regression` / `not-fresh` / `snapshot-rpc-timeout` / `snapshot-rpc-error` / `snapshot-scope-mismatch` / `checkpoint-read-error` / `checkpoint-write-error` / `unknown`。**旧指标 `auth_snapshot_stale_total` 保持原名无标签**，两者同时递增；细分原因另经 `X-Stale-Cause` 元数据暴露，`X-Reason-Code: AUTHORIZATION_SNAPSHOT_STALE` 契约不变（TASK-239）。含义：`auth_source_version` 与 `auth_checkpoint_version` 的差值就是「本地快照落后多少」，`auth_policy_health == 0` 是授权链路 fail-closed 的直接信号。
 - 指标清单二（workload 身份收敛，REQ-088）：`identity_report_buffered_total`、`identity_bound_after_inventory_total`、`identity_conflict_total`、`identity_report_dropped_total`、`identity_pending_purged_total`（`internal/operator/identity_metrics.go:42-58`，结构体注释 `internal/operator/identity_metrics.go:13-30`）；与授权指标共用 orchestrator 的 registry（注册点 `cmd/orchestrator/main.go:318`，注入 operator service 经 `newGatewayOperatorService`，`cmd/orchestrator/main.go:364`）⇒ **在 orchestrator 的 `/metrics` 一条路径上同时可读**。
@@ -90,7 +90,7 @@
 - OTel 依赖存在（`go.mod:24-26`，`go.opentelemetry.io/otel{,/sdk,/trace} v1.44.0`；`docs/dependencies.md:134-137`）。
 - 装配只有一处：`authorization.InstallTracing()`（`internal/authorization/tracing.go:17-29`）——本地 `trace.NewTracerProvider(ParentBased(AlwaysSample()))` + W3C `TraceContext{}` 与 `Baggage{}` propagator，返回 `provider.Shutdown`。调用方：`cmd/auth/main.go:138`、`cmd/orchestrator/main.go:321`。**其它服务连 provider 都没装**。注释明确写着「Exporters remain deployment concerns」（`internal/authorization/tracing.go:18`）。
 - **没有 exporter、没有 collector 配置**：全仓无 `otlptrace`/`stdouttrace`/`BatchSpanProcessor` 之类装配，`deploy/kustomize/` 里也没有 collector ⇒ span 只存在于进程内、随 provider 关闭丢弃 ⇒ **当前不存在跨进程可追踪能力**。
-- 传播能力是真的存在一半：`TraceInterceptor()`（注释「unary」，`internal/authorization/tracing.go:31-32`）被装在 auth（`cmd/auth/main.go:184`）、orchestrator 管理面（`cmd/orchestrator/main.go:448,515`）以及 orchestrator→auth 的**客户端**（`cmd/orchestrator/main.go:329`）⇒ auth 与 orchestrator 之间的 unary 调用可携带/透传 W3C traceparent；但：
+- 传播能力是真的存在一半：`TraceInterceptor()`（注释「unary」，`internal/authorization/tracing.go:31-32`）被装在 auth（`cmd/auth/main.go:193`）、orchestrator 管理面（`cmd/orchestrator/main.go:484,587`）以及 orchestrator→auth 的**客户端**（`cmd/orchestrator/main.go:348`）⇒ auth 与 orchestrator 之间的 unary 调用可携带/透传 W3C traceparent；但：
   - 流式 RPC 不被 tracing 覆盖：`TraceInterceptor()` 返回 `connect.UnaryInterceptorFunc`（`internal/authorization/tracing.go:32`），因此 `WatchOperation`、`CommandStream` 不产生 span；网关 handler 只挂 request-id 与 error-sanitize（`cmd/orchestrator/main.go:181-184`）；
   - agent ↔ 网关这条最关键链路没有安装 tracing（`cmd/operator/main.go` 无 `InstallTracing` 调用）；
   - trace id **不进日志**（`startupLogger` 构造的 handler 无 trace 关联，`internal/app/app.go:123`）⇒ 即使将来有 exporter，也无法从日志跳到 trace。
@@ -112,7 +112,7 @@
 | `GET /health` | liveness 目标；`{"status":"ok"}`，orchestrator 附 `gc` 子对象 | **不可能**（无条件 200） | `internal/handler/health.go:12-28`、`internal/app/app.go:139-143` |
 | `GET /readyz` | readiness 目标；全通过 200，任一失败 503 + `{"status":"degraded","checks":{...}}` | 可能 | `internal/handler/ready.go:11-34`、`internal/app/app.go:152-158` |
 | `GET /environment` | 环境指纹（service/environment/environment_id/production） | 不可能 | `internal/app/app.go:91-116,144` |
-| `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:316-319` |
+| `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:332-336` |
 | `GET /notifications` | notification-sink 的 dev 投递观测（含 `dropped_count`） | 可能 5xx | `cmd/notification-sink/main.go:87-132` |
 
 - readiness 贡献项（TASK-099 后**七个进程全部有真实检查**）：orchestrator `database`（2s 超时 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:248-266`，GC 不健康的定义是「距上次成功 ≥ 2×interval」，`internal/orchestrator/gc_health.go:113`）；auth `database` + `redis`（`cmd/auth/main.go:67-87`）；notifier `database`（`cmd/notifier/main.go:50-61`）；**webhook `orchestrator`**——GET 上游 `/readyz`，非 200/不可达即 NotReady（`cmd/webhook/main.go:90`，超时 2s，上游地址与 Register 客户端同源 `orchestratorBaseURL` `cmd/webhook/main.go:79`）；**operator agent `gateway_session`**——agent 与网关的 CommandStream 存活才 Ready，重连退避期间如实 NotReady（`cmd/operator/main.go:382` + `Agent.Connected()`，`internal/operator/agent/connected_test.go` 锁定生命周期；gateway 模式无出站会话，保持无检查）；**notification-sink `config`**——dev 测试替身无外部依赖，唯一前置是解码出的 `http_port` 可用，缺失即 fail-closed（`cmd/notification-sink/main.go:151`）。
@@ -198,7 +198,7 @@
 | 信号 | 现状 | 证据 | 缺口 |
 | --- | --- | --- | --- |
 | 日志 | slog JSON → stderr，级别由 `log_level` 控制（缺省/非法=debug） | `internal/app/app.go:123`（`startupLogger`/`applyLogLevel`）、`internal/config/loglevel.go` | 无 request-id 字段；级别收敛已可用（TASK-094 闭环） |
-| 指标 | 仅授权 + 身份收敛，仅 auth/orchestrator 两个 `/metrics` | `internal/authorization/metrics.go:23-71`、`internal/operator/identity_metrics.go:42-58`、`cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:316-319` | 无运行时/进程指标（`grep collectors\.` 零命中）；无抓取配置；其余 5 类进程 0 指标 |
+| 指标 | 仅授权 + 身份收敛，仅 auth/orchestrator 两个 `/metrics` | `internal/authorization/metrics.go:23-71`、`internal/operator/identity_metrics.go:42-58`、`cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:332-336` | 无运行时/进程指标（`grep collectors\.` 零命中）；无抓取配置；其余 5 类进程 0 指标 |
 | 追踪 | 只装 provider + W3C 传播，无 exporter | `internal/authorization/tracing.go:17-29` | 无跨进程追踪能力；agent 侧未装配；trace id 不进日志 |
 | liveness | `/health` 恒 200＝纯 liveness（REQ-099 裁定），orchestrator 附 `gc` | `internal/handler/health.go:12-28` | 无「前进性」判据（§4 建议 1）；`gc` 的 disabled 被报成 healthy（`cmd/orchestrator/main.go:275-277`） |
 | readiness | `/readyz` 200/503 + checks；七进程全真实 | `internal/handler/ready.go:11-34` | 探针层已有 startupProbe + 显式超时（`make check-probes`）；`auth_policy_health` 未入检查 |
