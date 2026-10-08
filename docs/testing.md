@@ -410,6 +410,29 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   临时集群/容器/凭据必须由创建者清理（`trap` 保证中断也执行），优先复用 `make dev-purge CONFIRM=1`，
   不得为换取门禁通过而停用常驻服务。
 
+## 测试时序纪律：契约 vs 瞬时快照（TASK-160）
+
+同一 `test` job 上先后出现过 **5 个互不相同**的失败（TASK-160 家族 #1–#5，例如 `expected "preflight"` / `actual "queued"`、
+`"authorization snapshot stale"`、`TestRunnerCancelUnregisters` 5s 到期），全部是「本地稳定、CI 间歇红」——根因都是把**调度时序**
+当成**契约**。**口径（可复核）**：
+
+- 测试**不得**断言会被后台协程推进的**瞬时状态**，**不得**假定异步过程在固定时间预算内完成。
+- 需要同步时等**真实信号**（可观测产物：状态迁移、checkpoint、channel、计数器），**不得**用 `time.Sleep` 代替，
+  也**不得**靠「加大 `Eventually` 预算 / 加重试次数」代替（超时是**上界**，不是机制）。
+- 断言易变字段（`.Status`/`.State`/`.Overall`/`.Phase`）前先问：**谁**推进它、**何时**可见？推进者是 detached 协程
+  （coordinator / runner / `go func`）时，要么**等到可观测信号**再读，要么改为断言**契约**（同一 `OperationId`、类型、
+  版本号、**合法状态集合**）。
+- `time.Sleep(N)` 出现在测试里**默认可疑**；唯一可接受的用法是**负向看门狗**（有界地等「什么都没发生」）。
+- 驱动式等待优于单次等待：当"被等待的入口"本身**幂等**时，可以**反复驱动它直到被接受**（no-op 无害），
+  再用同一个界失败——这样既消掉竞态，又不掩盖真实缺陷。
+
+**真实事故与修法**：`TestRunnerCancelUnregisters` 在 fake run 的 `done` 之后立刻 `Start`，而 runner 的 `unregister`
+是 run 返回**之后**才执行的 defer ⇒ 条目仍注册时 `Start` 是 no-op ⇒ `time.After(5s)` 到期，报「注册泄漏」——
+其实只是**迟到**。修法是**驱动 `Start` 直到被接受**（并对真泄漏保持可变红：去掉 `unregister` 的变异仍会让用例红）。
+
+**扫描产物**：`internal/orchestrator`、`cmd/orchestrator`、`deploy/dev` 三包的同类假设清单见
+`TASK-160` 卡（AC-160-04）；`deploy/dev` 脚本里的 `sleep` 均在轮询循环内等真实信号，不是该反模式。
+
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
 > `.github/workflows/test.yml`（13 个 job 与触发条件）、
 > `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、

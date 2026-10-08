@@ -47,16 +47,25 @@ func TestRunnerCancelUnregisters(t *testing.T) {
 
 	// Cancel is idempotent after completion.
 	r.Cancel(op.ID)
-	// Unregistration is visible: a fresh Start runs again. The fresh start can
-	// only succeed once the previous entry is unregistered, so a hang here
-	// means the completion path leaked the registration — fail instead of
-	// blocking forever.
-	r.Start(op)
-	select {
-	case <-blocked:
-	case <-time.After(5 * time.Second):
-		t.Fatal("restart after completion must run: previous entry not unregistered")
-	}
+	// Unregistration is visible: a fresh Start runs again. The fake run signals done
+	// BEFORE the runner's own goroutine unregisters the entry, so a single Start here
+	// races that cleanup: Start is a no-op while the ID is still registered, and on a
+	// loaded runner the cleanup lands after this line (CHANGELOG: the 5s timeout below
+	// used to fire and report a leaked registration that was merely late, TASK-160 #5).
+	// Drive Start until the runner accepts it -- no-ops are harmless and the first
+	// accepted call is the signal this test is after. The deadline still fails the test
+	// if the completion path really leaked the registration; it is a bound, not the
+	// mechanism.
+	require.Eventually(t, func() bool {
+		r.Start(op)
+		select {
+		case <-blocked:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond,
+		"restart after completion must run: previous entry not unregistered")
 	r.Cancel(op.ID)
 	<-done
 }
