@@ -57,7 +57,7 @@ make e2e-prerequisite                               # AC-066-17 冒烟（依赖 
 
 产物落在 `e2e-results/`（`OUTPUT_DIR ?= ./e2e-results`，Makefile:145；已被 .gitignore:38 忽略）：`run.json`（CI 解析的 Run 级汇总，cmd/e2e/main.go:423）、`baseline.json`（:256）、`residue.json`（:285）、每个已选阶段一份 `<stage>.json`（skip 的也写，:364；docs/testing.md:152-156）。`e2e-prerequisite*` 的结果另落 `data/smoke-result.json`（smoke.sh:35），CI 变体复制到 `e2e-results/` 并由 capture-logs.sh 收集 `e2e-results/operator-logs`（Makefile:193-197；capture-logs.sh:7-8）。
 
-退出码表与失败诊断目录（`--keep-on-failure=true` → `e2e-results/diagnostics/{run_id}/{stage}/`）见 docs/testing.md:150-166。
+退出码清单与失败诊断目录（`--keep-on-failure=true` → `e2e-results/diagnostics/{run_id}/{stage}/`）见 docs/testing.md:311-324。
 
 ## 4. 与 CI 的关系（`.github/workflows/test.yml`）
 

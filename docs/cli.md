@@ -247,7 +247,7 @@ install verify`（`internal/devfixture/runner.go:68`），支持断点续跑（`
 | `--timeout` | `5m` | 否 | 单阶段超时（必须为正，`main.go:115-117`） |
 | `--total-timeout` | `25m` | 否 | 总预算 |
 | `--output-dir` | `./e2e-results` | 否 | JSON 产物目录（不得为空，`main.go:152,716-727`） |
-| `--parallel` | `false` | 否 | 允许 `inventory` 与 `artifact` 并发（`main.go:644`；`docs/testing.md:85`） |
+| `--parallel` | `false` | 否 | 允许 `inventory` 与 `artifact` 并发（`main.go:644`；`docs/testing.md:256`） |
 | `--keep-on-failure` | `false` | 否 | 失败时保留阶段诊断（写 `diagnostics/<run_id>/<stage>/result.json`，`main.go:758-763`） |
 | `--snapshot-full` | `false` | 否 | baseline 全量快照 |
 | `--env-config` | `""` | **是** | 运行时环境配置（`main.go:108-110`） |
@@ -336,8 +336,8 @@ cleanup 只经正式 Connect API 回收（`main.go:471-473` 注释）。
 校验 10 节模板结构（`internal/quality/reqcheck/check.go:1-17`）。
 
 - 退出码：usage（无参数）`2`（`main.go:17-20`）；文档读取/校验违例 `1`（`main.go:26-41`）；全部 OK `0`。
-- 门禁角色：`make check-reqs`（`Makefile:478-484`，`find . -path '*/Requirements/REQ-*.md'` 喂给
-  `./bin/reqcheck`），属于 `make quality`；文档未接入 CI（`docs/testing.md:58`）。
+- 门禁角色：`make check-reqs`（`Makefile:533`，`find . -path '*/Requirements/REQ-*.md'` 喂给
+  `./bin/reqcheck`），属于 `make quality`；文档未接入 CI（`docs/testing.md:155`）。
 
 ### cmd/imagecheck
 

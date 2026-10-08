@@ -117,7 +117,7 @@
 
 - readiness 贡献项（TASK-099 后**七个进程全部有真实检查**）：orchestrator `database`（2s 超时 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:267-285`，GC 不健康的定义是「距上次成功 ≥ 2×interval」，`internal/orchestrator/gc_health.go:113`）；auth `database` + `redis`（`cmd/auth/main.go:68-88`）；notifier `database`（`cmd/notifier/main.go:60-71`）；**webhook `orchestrator`**——GET 上游 `/readyz`，非 200/不可达即 NotReady（`cmd/webhook/main.go:137-158`，超时 2s，上游地址与 Register 客户端同源 `orchestratorBaseURL` `cmd/webhook/main.go:126`）；**operator agent `gateway_session`**——agent 与网关的 CommandStream 存活才 Ready，重连退避期间如实 NotReady（`cmd/operator/main.go:454-467` + `Agent.Connected()`，`internal/operator/agent/connected_test.go` 锁定生命周期；gateway 模式无出站会话，保持无检查）；**notification-sink `config`**——dev 测试替身无外部依赖，唯一前置是解码出的 `http_port` 可用，缺失即 fail-closed（`cmd/notification-sink/main.go:151`）。
 - **`noop` 假就绪已退出集群路径**：没有实现 `ReadinessChecks` 的进程仍会得到 `{"noop": ok}`（`internal/app/app.go:134-136`），但 kustomize 里的六个 Deployment（含 customer agent）现已全部贡献真实检查；剩余 noop 只影响非集群进程（如本地 `cmd/api`）⇒ 历史上「Pod Ready 不代表 operator 在线」的误判面已闭环（TASK-099 AC3）。
-- `/health` 的 `gc` 子对象语义：`disabled` 被改写为 `healthy` 上报（`cmd/orchestrator/main.go:275-277`），`status` 取值 `healthy|degraded|disabled`（`internal/orchestrator/gc_health.go:12-14`）⇒ 「GC 关掉」和「GC 正常」在 `/health` 上不可区分。**语义裁定（REQ-099 AC1 修订）**：`/health` 定位为纯 liveness——进程活着就无条件 200 是设计而非缺陷，「可失败性」一律落 `/readyz`（把依赖失败塞进 liveness 会在依赖抖动时引发重启风暴而非摘流量）。
+- `/health` 的 `gc` 子对象语义：`disabled` 被改写为 `healthy` 上报（`cmd/orchestrator/main.go:294-296`），`status` 取值 `healthy|degraded|disabled`（`internal/orchestrator/gc_health.go:12-14`）⇒ 「GC 关掉」和「GC 正常」在 `/health` 上不可区分。**语义裁定（REQ-099 AC1 修订）**：`/health` 定位为纯 liveness——进程活着就无条件 200 是设计而非缺陷，「可失败性」一律落 `/readyz`（把依赖失败塞进 liveness 会在依赖抖动时引发重启风暴而非摘流量）。
 - 探针配置现状（TASK-099 重写）：每个应用容器都有 **`startupProbe`（httpGet `/health`）**吸收启动/同步迁移窗口（`deploy/kustomize/services/orchestrator.yaml:65-90`：period 5s × failureThreshold 120 = 最长 10 分钟启动预算；auth/notifier/webhook/notification-sink/customer-agent 同形，见各 yaml），`readinessProbe` 指向 `/readyz`、`livenessProbe` 指向 `/health`，全部探针**显式 `timeoutSeconds`**（HTTP 3s、exec 5s）与显式 `failureThreshold`（startup 120/60，其余 3；customer agent readiness 12 以容忍重连窗）。此前全树零 `startupProbe`/零显式超时（K8s 默认 `timeoutSeconds=1`），叠加启动期同步跑迁移（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`）构成「慢迁移被 liveness 打断」的结构性风险，已消除。门禁：`make check-probes`（`deploy/dev/probes_gate_test.go`）遍历 `deploy/kustomize` 断言 startupProbe/显式超时/readiness-liveness 路径分离，负控制 `TestProbeGateRejectsHistoricalShape` 证明其可失败。
 - postgres/redis 用镜像自带客户端探测（`pg_isready`、`redis-cli ping`）：`deploy/kustomize/postgres/deployment.yaml:40-59`、`deploy/kustomize/redis/deployment.yaml:28-45`——这两个仍是**全环境里唯二带真实失败语义的 liveness**（应用侧 liveness 恒 200 是上面的显式裁定）。
 - 网关端口 8084 没有任何 HTTP 观测面（只有 OperatorService + SyncInventory 两条路由，`cmd/orchestrator/main.go:166-192`）⇒ 观测只能靠 TCP（`deploy/dev/dev.sh:1176-1180`）。
@@ -127,7 +127,7 @@
 
 1. `/health` 加一个「进程不再前进」的判据（例如最近一次成功推进后台循环的时间戳超龄），否则它只回答「进程还在」。注意与上面的 liveness 裁定保持一致：新判据若引入，应进 `/readyz` 或独立端点，而不是把失败语义塞回 liveness。
 2. ~~为慢启动补 `startupProbe`、显式化 readiness `failureThreshold`~~ **已实现（TASK-099）**：全 kustomize 覆盖 + `make check-probes` 门禁（见上方现状）。
-3. ~~给 operator agent 的 `/readyz` 加「与网关的流是否存活」检查项~~ **已实现（TASK-099）**：`gateway_session`（`cmd/operator/main.go:382`）。
+3. ~~给 operator agent 的 `/readyz` 加「与网关的流是否存活」检查项~~ **已实现（TASK-099）**：`gateway_session`（`cmd/operator/main.go:454-467`）。
 4. 把 `auth_policy_health` 与「审计落盘是否前进」做成 readiness 或独立的 `/healthz/dependency`（谨慎：会让依赖抖动直接摘流量，需先定 SLO）。
 
 ## 5. 审计事件
