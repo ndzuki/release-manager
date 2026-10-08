@@ -149,8 +149,8 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
 | --- | --- | --- | --- |
 | `make test` | 全部包 `go test -race ./...` | 无 | 本地 + CI（CI 拆包见上） |
 | `make test-coverage` | 同上 + coverage profile | 无 | 本地 + CI（`test`/`test-sqlite`/`test-sdkcheck` job 各自产覆盖） |
-| `make lint-changed` | 与 CI 完全同口径的 lint（同工具版本 + `--new-from-rev=$(LINT_BASE)`，默认 `origin/main`）；只 lint 变更范围，所以不会让无关的既有告警阻塞 PR | `golangci-lint`（v2.13.2） | 本地；等价于 CI 的 `Run lint (changed code only)` |
-| `make lint` | `golangci-lint run`（全量，0 issues）。TASK-109 的 Go 1.27 + golangci-lint v2.13.2 升级曾暴露约 45 条既有告警（gocyclo/dupl/gocritic 等），TASK-110 已逐条修复或定点抑制，全量 lint 重新成为可用信号 | `golangci-lint`（v2.13.2） | 本地；CI 用 `golangci-lint-action`（`version: v2.13.2`）且仅 lint 变更（`--new-from-rev`） |
+| `make lint-changed` | 与 CI 完全同口径的 lint（同工具版本 + `--new-from-rev=$(LINT_BASE)`，默认 `origin/main`）；只 lint 变更范围，所以不会让无关的既有告警阻塞 PR | `golangci-lint`（v2.14.0） | 本地；等价于 CI 的 `Run lint (changed code only)` |
+| `make lint` | `golangci-lint run`（全量，0 issues）。TASK-109 的 Go 1.27 + golangci-lint v2.13.2 升级曾暴露约 45 条既有告警（gocyclo/dupl/gocritic 等），TASK-110 已逐条修复或定点抑制，全量 lint 重新成为可用信号 | `golangci-lint`（v2.14.0） | 本地；CI 用 `golangci-lint-action`（`version: v2.14.0`；**Go 1.27.2 工具链要求 ≥v2.14.0** —— 更早版本的 x/tools 读不了 1.27.2 的 export data，TASK-264）且仅 lint 变更（`--new-from-rev`） |
 | `make sdk-check` | SDK-only 静态门禁（REQ-037）：`os_exec_import`、`fork_exec`、`shell_wrapper`、`forbidden_binary_invocation`、`expired_exception` | 无 | 本地 + CI `sdk-check` job（同一命令、同一例外文件、同一扫描范围） |
 | `make check-reqs` | 校验原子需求文档结构（`find . -path '*/Requirements/REQ-*.md'` → `cmd/reqcheck`）；**找不到 REQ 文档时失败**（ζ-1 / D-ζ 裁定）：设 `REQS_DIR` 指向 vault 的 `Requirements/`，或显式 `ALLOW_NO_REQS=1` 才跳过 | 无 | 本地（CI 未接入该 target） |
 | `make audit-citations` | **只读审计**（不是门禁）：当 `文件:行号` 引证旁的正文点名了符号时，断言该符号出现在被引行 **±5 行**窗口内。**为什么不进 `make check-docs`**：实测本仓库 427 条带符号的引用里 **233 条命中（55%）**，其中主导的两类假阳性是**语义的、机械过滤不掉** —— ① 正文把符号说成**不存在**（如「无 `ReplaceAttr` 脱敏」，范围里没有它正是正文要表达的）；② 正文点名的是**调用方**而非定义处。已机械缓解的两类：非符号锚点（单词 CamelCase / YAML 键）与**简写链**（`A:84`、`Sym`（`B:157`）中 `Sym` 属后一条引用）。⇒ 结论交给人工；若要让它阻塞，需先解决上述两类假阳性 | 无 | 本地（`make audit-citations`）；**不在 CI、不在 `make quality`** |

@@ -1,4 +1,4 @@
-FROM golang:1.27.1@sha256:f44f6e88636cfb311f9ebace870ded69d943f227bb3cb27d32ffd84ea18c43ea AS builder
+FROM golang:1.27.2@sha256:2d658507a011f1eadc0114d7a421b312b2e77d9042a24036a26e267cc9231677 AS builder
 ARG GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
 ENV GOPROXY=$GOPROXY
 WORKDIR /src
