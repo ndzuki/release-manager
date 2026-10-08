@@ -196,7 +196,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   的调用只有这两处（`internal/audit/emitter.go:160`、`internal/audit/spool.go:71`）。
 - **状态：部分实现（存在绕过 emitter 的审计直写）**。Operator 管理与审计导出两条链路在写事务内用裸 SQL
   直接插入 `audit_events`，不经过 `Normalize`：
-  `internal/store/sqlite/operator_management.go:472-478`（同一文件另有 7 处调用点，如
+  `internal/store/sqlite/operator_management.go:477-497`（同一文件另有 7 处调用点，如
   `internal/store/sqlite/operator_management.go:104,134,161,187,393,440`）、
   PostgreSQL 等价实现 `internal/store/postgres/operator_management.go:446`，
   以及导出事件 `internal/store/sqlite/audit_exports.go:57`（PG `internal/store/postgres/audit_exports.go:55`，
@@ -397,7 +397,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | 攻击者可控 | 控制点（证据） | 剩余风险与状态 |
 | --- | --- | --- |
 | 客户集群内的任意工作负载与 API（含被攻陷的租户） | Operator 只出站、TLS1.3、身份=证书序列（`docs/architecture.md:18`；`internal/operator/tls_clients.go:24-27`；`migrations/000013_*.up.sql:1-5`）；控制面不存 kubeconfig（`docs/architecture.md:12`） | 剩余：集群内 ClusterRole 可读写全集群 Secret（§3.3）。**已实现**边界，但爆炸半径=该客户集群 |
-| 单个 Customer 下的账号（低权用户） | 域绑定 + Casbin 逐 procedure 裁决（`internal/auth/interceptor.go:98-109`；`internal/auth/casbin.go:426-475`）；`viewer`/`deployer` 无 operator 写权限 | 剩余：`platform_admin` 为 `*,*` 通配（`internal/auth/casbin.go:429`），控制面内无二次制衡；异人审批只管 Values 批准（§3.5）。**已实现** |
+| 单个 Customer 下的账号（低权用户） | 域绑定 + Casbin 逐 procedure 裁决（`internal/auth/interceptor.go:98-109`；`internal/auth/casbin.go:426-475`）；`viewer`/`deployer` 无 operator 写权限 | 剩余：`platform_admin` 为 `*,*` 通配（`internal/auth/casbin.go:449-450`），控制面内无二次制衡；异人审批只管 Values 批准（§3.5）。**已实现** |
 | 已批准 ValuesRevision 被事后篡改 | 不可变 revision + `self_approval_forbidden`（`internal/orchestrator/values_approval.go:286-292`）+ 幂等键唯一（`migrations/000001_legacy_baseline.up.sql:46`）+ 「同一 ReleaseDefinition 只允许一个活跃标准 Operation」 | 剩余：**该互斥在两个引擎上强度不同**——PostgreSQL 有数据库级部分唯一索引（`migrations/000001_legacy_baseline.up.sql:62-63`），SQLite 侧**没有**对应索引（`internal/store/sqlite/db.go` 内无 `one_active_standard`），只靠应用层计数检查（`internal/store/sqlite/uow.go:89-100` 与 `internal/store/postgres/uow.go:84-95` 同一 SQL）。因此 dev/test 掩盖不了竞态，但**生产强度高于 dev 验证强度**，与 `AGENTS.md:25` 的双引擎等价要求存在偏差。**部分实现** |
 | 注册令牌泄露 | 只存 SHA-256、短 TTL、一次性（§3.2） | 剩余：令牌在 `data/dev-enrollment-tokens/` 明文落盘（仅 dev，`.gitignore:35`）。**已实现**（生产不落盘） |
 | Webhook 请求体（Harbor 等外部制品源） | **TASK-102 已补入站认证**：`SubmitReleaseBundle` 需 CI API key（`ServiceTokenInterceptor` 收窄到该 procedure），`POST /webhooks/harbor` 需独立的 Harbor key（`internal/webhook/token_auth.go` 的 `RequireToken`），两把 key 与两条 procedure 不可互相替换（AC-011-04/16/17，`internal/auth/service_token_routing_test.go`）；转发时原样复制 `Signature`/`Sbom`/`Provenance` 并保留 `Idempotency-Key`，出站另用 webhook/Harbor service token（§3.3）；`BundleService` 侧再验一遍 service token scope | 剩余：`signature`/`sbom`/`provenance` 是请求方可填的 `ArtifactReference`（`api/proto/webhook/v1/webhook.proto:28-30`），信任判定发生在 preflight/trust（§3.9），因此**持合法 CI key 的调用方**仍可造成 bundle 记录污染；非 production 标签下还能被降级为 `policy_warning` 放行。**部分实现** |
@@ -406,7 +406,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | 数据库快照（离线读到 audit / values / 令牌） | audit 文本入库前脱敏（§3.6）、口令 bcrypt（`internal/auth/password.go:9-19`）、令牌只存摘要（§3.2）、Values 无机密字面（§3.5） | 剩余：应用日志面不过脱敏（§3.6），CI artifact 含原始容器日志（`test/e2e/prerequisite/capture-logs.sh:30`）。**未见实现（日志面）** |
 | CI 凭据（ Actions runner / 镜像同步） | 全 workflow `permissions` 审计见 `.github/SECRETS.md` 第 8 节；runner 通过 `vars.RUNS_ON` 间接化（`.github/workflows/test.yml:24-34`）；kind/k3d 下载都校 sha256/checksum（`.github/workflows/test.yml:295-309,345-348,413-416`） | 剩余：actions 全部按 tag 引用、**0 处 SHA 固定**；`sync-to-gitcode.yaml` 无 `permissions:` 块（`run-name`→job `:11` 直接 `git push --mirror`，`:25`）。**建议**收紧 |
 | 恶意/失序依赖（Go module、npm、基础镜像） | 许可门禁（§6）+ distroless 摘要基底（`deploy/docker/Dockerfile.operator:10`）+ 镜像内容门禁（`imagecheck.operator.yaml:14,18-23`） | 剩余：无漏洞扫描、无 SBOM 生成、无签名/attestation（§6）。**未见实现** |
-| 运维在事故期绕过流程 | 紧急变更 kill switch（关闭时最高优先级拒绝，配置缺失 fail closed 到 false）+ 客户停用拒绝 + workload 身份先校验后落库 + 授权快照缺失即 `authorization_snapshot_stale`：`internal/orchestrator/emergency.go:77-150`（kill switch `internal/orchestrator/emergency.go:96-110`、客户停用 `internal/orchestrator/emergency.go:120-131`、身份 `internal/orchestrator/emergency.go:137-145`、快照 `internal/orchestrator/emergency.go:146-150`） | 剩余：紧急变更仍需真实操作者身份与审计，但**它天然绕开 Values 审批**；卡死锁由后台扫描器发现（`cmd/orchestrator/main.go:879-896`、过期任务 `internal/orchestrator/emergency.go:297`）。**已实现** |
+| 运维在事故期绕过流程 | 紧急变更 kill switch（关闭时最高优先级拒绝，配置缺失 fail closed 到 false）+ 客户停用拒绝 + workload 身份先校验后落库 + 授权快照缺失即 `authorization_snapshot_stale`：`internal/orchestrator/emergency.go:111-170`（kill switch `internal/orchestrator/emergency.go:116-130`、客户停用 `internal/orchestrator/emergency.go:141-143`、身份 `internal/orchestrator/emergency.go:157-165`、快照 `internal/orchestrator/emergency.go:166-170`） | 剩余：紧急变更仍需真实操作者身份与审计，但**它天然绕开 Values 审批**；卡死锁由后台扫描器发现（`cmd/orchestrator/main.go:879-896`、过期任务 `internal/orchestrator/emergency.go:297`）。**已实现** |
 
 依据：`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md:16-18,22-23`（禁止任意 JSON Patch、紧急变更必须进 Operation）。
 
@@ -450,7 +450,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | --- | --- | --- |
 | `govulncheck` / 任何 Go 漏洞扫描 | **无** | 全仓 `grep -i govulncheck` 0 命中；Makefile 与两个 workflow 均无该 job |
 | SBOM 生成（syft/buildx/provenance） | **无** | 无任何 Dockerfile/Makefile 步骤产出 SBOM |
-| 镜像签名（cosign）/SLSA attestation | **无** | 全仓 `cosign` 仅出现在 `internal/trust/verifier.go:217` 的注释里；无 attestation 生成 |
+| 镜像签名（cosign）/SLSA attestation | **无** | 代码中 `cosign` **零命中**（`grep -rn cosign --include='*.go'` 为空）；仅 `docs/decisions/ADR-022-artifact-signature-verification-stays-ed25519.md:14,16` 记录了「为何不采用 cosign/sigstore」的选型讨论；无 attestation 生成 |
 | Dependabot / Renovate | **无** | 无 `.github/dependabot.yml`、无 `renovate.json` | <!-- check-docs:ignore 陈述缺失，非路径断言 -->
 | `npm audit` / `dependency-review-action` / OpenSSF Scorecard | **无** | workflow 与 package scripts 中均无 |
 | `vendor/` 锁定源码 | **无**（依赖 proxy/网络拉取） | 仓库无 `vendor/` 目录 |

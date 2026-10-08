@@ -216,7 +216,7 @@
 ### D1. Convergence Task 绑定的 ValuesRevision 状态范围 — 裁定：无实质冲突（A）
 
 - 两侧说法：`Notes/CONTEXT.md`「至多绑定一个 active draft/pending ValuesRevision」；`Design/glossary.md`「至多绑定一个 active revision」。
-- 代码证据：生产代码唯一的绑定创建点在消费 Prepare Session 时写入 `active_revision_status='draft'`（`internal/store/sqlite/values_lifecycle.go:311`、`internal/store/postgres/values_lifecycle.go:308`）；draft 被丢弃即解绑（`internal/store/sqlite/values_lifecycle.go:170`、`internal/store/postgres/values_lifecycle.go:160`）；`'approved'` 只随任务收敛在同一语句写入（`internal/store/sqlite/convergence_tasks.go:36-46`、`internal/store/postgres/convergence_tasks.go:29-38`）；通用改写接口 `BindRevision` 已随 TASK-226 删除（PR #289，原 `internal/store/store.go:1371`）——它当时只有测试调用方，那些调用已迁移为测试内直写，生产绑定一直由 Prepare Session 与任务收敛这两处语句承担。
+- 代码证据：生产代码唯一的绑定创建点在消费 Prepare Session 时写入 `active_revision_status='draft'`（`internal/store/sqlite/values_lifecycle.go:311`、`internal/store/postgres/values_lifecycle.go:318`）；draft 被丢弃即解绑（`internal/store/sqlite/values_lifecycle.go:170`、`internal/store/postgres/values_lifecycle.go:170`）；`'approved'` 只随任务收敛在同一语句写入（`internal/store/sqlite/convergence_tasks.go:36-46`、`internal/store/postgres/convergence_tasks.go:29-38`）；通用改写接口 `BindRevision` 已随 TASK-226 删除（PR #289，原 `internal/store/store.go:1371`）——它当时只有测试调用方，那些调用已迁移为测试内直写，生产绑定一直由 Prepare Session 与任务收敛这两处语句承担。
 - 结论：实现与 CONTEXT 一致——进行中绑定是 draft/pending，approved 仅是 converged 的终态戳而非长期驻留绑定；Design 侧「active revision」按此理解。表格条目维持 CONTEXT 定义，仓库侧无进一步改动。
 - 遗留：无实现分歧可裁；若需在 `Design/glossary.md` 给「active revision」补限定语，归 REQ-032/058 owner（知识库修改不在本任务范围）。
 
@@ -244,7 +244,7 @@
 ### D5. Fixture Snapshot 与 BaselineSnapshot 的概念边界 — 裁定：分层概念，无冲突（A）
 
 - 两侧说法：`Notes/CONTEXT.md`（Fixture Snapshot）Run 开始或 Stage 前采集、含各实体非敏感状态；`Design/glossary.md` 另设 BaselineSnapshot = Run 开始时采集一次、含 target revision/replicas、写 `{output-dir}/baseline.json`。
-- 代码证据：同一类型族的两个层次——领域观察类型 `FixtureSnapshot`（`test/e2e/snapshot.go:14-22`），其身份投影 `SnapshotIdentity` 恰含 CONTEXT 列举的实体维度（customers/clusters/release_definitions/release_inventories/operator_sessions/operations，`test/e2e/snapshot.go:25-37`）；Run 开始的基线工件 `baselineArtifact` **嵌入** `e2e.FixtureSnapshot` 并附 run/environment/fixture_version（`cmd/e2e/main.go:60-61`），由 `collectBaseline` 采集 revision/replicas 后原子写 baseline.json（`cmd/e2e/main.go:223`、`cmd/e2e/main.go:256`）；「Stage 前采集」对应 fixture guard 的身份比对（`test/e2e/stages/inventory.go:73-78`）。
+- 代码证据：同一类型族的两个层次——领域观察类型 `FixtureSnapshot`（`test/e2e/snapshot.go:14-22`），其身份投影 `SnapshotIdentity` 恰含 CONTEXT 列举的实体维度（customers/clusters/release_definitions/release_inventories/operator_sessions/operations，`test/e2e/snapshot.go:25-37`）；Run 开始的基线工件 `baselineArtifact` **嵌入** `e2e.FixtureSnapshot` 并附 run/environment/fixture_version（`cmd/e2e/main.go:60-61`），由 `collectBaseline` 采集 revision/replicas 后原子写 baseline.json（`cmd/e2e/main.go:234`、`cmd/e2e/main.go:267`）；「Stage 前采集」对应 fixture guard 的身份比对（`test/e2e/stages/inventory.go:73-78`）。
 - 结论：二者是「领域概念（CONTEXT 词汇）」与「Run 开始工件载体（设计词汇 BaselineSnapshot/baseline.json）」的分层关系，不是互相矛盾的两说；表格两条目各按出处保留，无仓库改动。
 - 遗留：无；若需在 `Design/glossary.md` 将 BaselineSnapshot 显式标注为 Fixture Snapshot 的工件特化，归 REQ-066 owner。
 
