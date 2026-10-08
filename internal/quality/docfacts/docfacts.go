@@ -103,9 +103,14 @@ var (
 	// prefix, so the routing word in the other column cannot pair with it.
 	contextWindow = 20
 	exclusiveWord = []string{"只反代", "只代理", "只列", "仅反代", "仅代理", "only proxies", "only proxied"}
+	// The package-name rule has no config-filename anchor, so it uses proxy-scoped
+	// words only: "本文只列 auth/audit 两类示例" is a document listing things, not a
+	// claim about what the proxy forwards (review class B).
+	exclusiveProxyWord = []string{"只反代", "只代理", "仅反代", "仅代理", "only proxies", "only proxied"}
 	// Context vocabulary for a port statement. This used to demand the literal
-	// "端口段", which twelve lines in this repository do not use; the range anchor in
-	// checkPortBand is what keeps the rule precise.
+	// "端口段", which prose in this repository also writes without; the range anchor in
+	// checkPortBand is what keeps the rule precise, and containsWord keeps the ASCII
+	// entries off "report", "transport" and "localhost".
 	portWords = []string{"端口", "宿主", "host", "port", "管理面", "dev-up"}
 )
 
@@ -223,7 +228,7 @@ func checkAbsentPrefix(item Item, facts Facts) []Finding {
 
 // checkPortBand flags a stated host port range that is not the DEV_PORTS band.
 func checkPortBand(item Item, facts Facts) []Finding {
-	if !facts.HasHostPortBand() || !containsAny(item.Text, portWords) {
+	if !facts.HasHostPortBand() || !containsWord(item.Text, portWords) {
 		return nil
 	}
 	out := []Finding{}
@@ -297,7 +302,7 @@ func checkExclusiveEnumeration(item Item, facts Facts) []Finding {
 // than /x.v1. prefixes ("only proxies auth/orchestrator/webhook/operator/notifier").
 // Review found the prefix-shaped rule missed that form entirely.
 func checkExclusiveEnumerationByName(item Item, facts Facts) []Finding {
-	if !containsAny(item.Text, exclusiveWord) {
+	if !containsWord(item.Text, exclusiveProxyWord) {
 		return nil
 	}
 	out := []Finding{}
@@ -320,7 +325,7 @@ func checkExclusiveEnumerationByName(item Item, facts Facts) []Finding {
 		if s.source == "web/vite.config.ts" && mentionsNginx && !mentionsVite {
 			continue
 		}
-		listed := enumeratesNames(item.Text, s.packages)
+		listed := enumeratesSlashNames(item.Text, s.packages)
 		if len(listed) < 2 {
 			// One package name is a statement about that package, not an enumeration
 			// of what the proxy forwards.
@@ -344,10 +349,12 @@ func checkExclusiveEnumerationByName(item Item, facts Facts) []Finding {
 	return out
 }
 
-// enumeratesNames returns the package names the text lists as one enumeration: at
-// least two names separated only by separators, so "only proxies auth for this path,
-// ask orchestrator otherwise" is not read as a list of the proxied set.
-func enumeratesNames(text string, names []string) map[string]struct{} {
+// enumeratesSlashNames reports the package names the text lists as one "/"-joined
+// package-name rule has no config anchor, and review showed "only proxied the webhook
+// that operator deploys, notifier comes from elsewhere" was read as an enumeration
+// because a comma also separates two names (class A); "/" is how this project writes
+// the claim ("auth/orchestrator/webhook/operator/notifier").
+func enumeratesSlashNames(text string, names []string) map[string]struct{} {
 	listed := map[string]struct{}{}
 	for _, a := range names {
 		for _, b := range names {
@@ -356,10 +363,10 @@ func enumeratesNames(text string, names []string) map[string]struct{} {
 			}
 			for _, pa := range wordPositions(text, a) {
 				for _, pb := range wordPositions(text, b) {
-					// Ordered pair: b follows a with nothing but list punctuation
-					// between them. Word boundaries keep "authz" from matching "auth",
-					// so an empty gap can only mean the two names really abut.
-					if pa < pb && onlySeparators(text[pa+len(a):pb]) {
+					if pa >= pb {
+						continue
+					}
+					if onlySlashSeparators(text[pa+len(a) : pb]) {
 						listed[a] = struct{}{}
 						listed[b] = struct{}{}
 					}
@@ -370,15 +377,45 @@ func enumeratesNames(text string, names []string) map[string]struct{} {
 	return listed
 }
 
-// onlySeparators reports whether a gap between two package names is nothing but list
-// punctuation, so an enumeration is recognised and a sentence is not.
-func onlySeparators(gap string) bool {
-	if strings.TrimSpace(gap) == "and" {
-		return true
-	}
+// onlySlashSeparators allows the separators this project actually writes inside a
+// package enumeration.
+func onlySlashSeparators(gap string) bool {
 	for _, r := range gap {
 		switch r {
-		case ' ', '\t', '/', '、', ',', '，', '和':
+		case ' ', '\t', '/':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// containsWord matches CJK words as substrings and ASCII words at word boundaries, so
+// "port"/"host" do not fire on "report", "transport", "localhost" or "import"
+// (review class C).
+func containsWord(text string, words []string) bool {
+	for _, word := range words {
+		if !isASCIIWord(word) {
+			if strings.Contains(text, word) {
+				return true
+			}
+			continue
+		}
+		if len(wordPositions(text, word)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIWord(word string) bool {
+	if word == "" {
+		return false
+	}
+	for i := 0; i < len(word); i++ {
+		c := word[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 		default:
 			return false
 		}
@@ -389,6 +426,11 @@ func onlySeparators(gap string) bool {
 // wordPositions finds name at word boundaries so "auth" does not match "authz".
 func wordPositions(text, name string) []int {
 	out := []int{}
+	if name == "" {
+		// strings.Index would match at every position and the loop would never
+		// advance; unreachable today, but a hang is the wrong failure mode.
+		return out
+	}
 	for start := 0; ; {
 		idx := strings.Index(text[start:], name)
 		if idx < 0 {

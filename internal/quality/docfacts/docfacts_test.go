@@ -32,9 +32,32 @@ const (
 `
 )
 
+// testNginxFull mirrors the repository's seven proxy prefixes, so a test can assert
+// against the real sentence that TASK-253 had to fix.
+const testNginxFull = `    location ^~ /auth.v1. {
+    }
+    location ^~ /orchestrator.v1. {
+    }
+    location ^~ /webhook.v1. {
+    }
+    location ^~ /operator.v1. {
+    }
+    location ^~ /notifier.v1. {
+    }
+    location ^~ /audit.v1. {
+    }
+    location ^~ /trust.v1. {
+    }
+`
+
 func testFacts(t *testing.T) Facts {
 	t.Helper()
 	return NewFacts(testNginx, testVite, testHost, "deploy/dev/lib/host.sh")
+}
+
+func testFactsFull(t *testing.T) Facts {
+	t.Helper()
+	return NewFacts(testNginxFull, testVite, testHost, "deploy/dev/lib/host.sh")
 }
 
 func TestParseNginxPrefixes(t *testing.T) {
@@ -237,6 +260,45 @@ func TestCheckExclusiveEnumerationByName(t *testing.T) {
 	// The qualifier keeps the historical record out, as with the other rules.
 	historical := Item{Path: "docs/ux-review.md", Line: 144, Text: "- 容器入口（修复前）：只代理了 auth/audit", PrevText: ""}
 	assert.Empty(t, Check([]Item{historical}, facts))
+
+	// Review class A: a comma between two names in separate clauses is not an
+	// enumeration of what the proxy forwards.
+	clauses := Item{Path: "docs/x.md", Line: 11, Text: "只代理 operator 部署的 webhook, notifier 由外部提供"}
+	assert.Empty(t, Check([]Item{clauses}, facts), "comma-separated clauses are not an enumeration")
+
+	// Review class B: "只列" is a document listing, not a forwarding claim.
+	lists := Item{Path: "docs/x.md", Line: 12, Text: "本文只列 auth/audit 两类示例"}
+	assert.Empty(t, Check([]Item{lists}, facts), "只列 must not trigger the proxy rule")
+
+	// ...and a 、-joined table example is not the slash form this project writes.
+	tablelike := Item{Path: "docs/x.md", Line: 13, Text: "下表仅代理 audit、trust 两行作为示意"}
+	assert.Empty(t, Check([]Item{tablelike}, facts))
+
+	// The real shape still reports: the sentence TASK-253 had to fix, with its
+	// qualifier removed, misses exactly the audit and trust packages.
+	fullFacts := testFactsFull(t)
+	realSentence := Item{Path: "docs/ux-review.md", Line: 144, Text: "- 容器入口：`web/nginx.conf:17` 起只代理了 auth/orchestrator/webhook/operator/notifier"}
+	findings = Check([]Item{realSentence}, fullFacts)
+	require.Len(t, findings, 1)
+	assert.Contains(t, findings[0].Message, "audit")
+	assert.Contains(t, findings[0].Message, "trust")
+}
+
+// Review class C: "port"/"host" must not fire inside report/transport/localhost.
+func TestPortWordsRequireWordBoundaries(t *testing.T) {
+	facts := testFacts(t)
+	for _, text := range []string{
+		"报告(report) 中的区间 8082-8085",
+		"transport 层 8082-8085",
+		"http://localhost 的 8082-8085",
+	} {
+		assert.Empty(t, Check([]Item{{Path: "docs/x.md", Line: 1, Text: text}}, facts), text)
+	}
+	assert.NotEmpty(t, Check([]Item{{Path: "docs/x.md", Line: 1, Text: "host port 8082-8085"}}, facts))
+}
+
+func TestWordPositionsHandlesEmptyName(t *testing.T) {
+	assert.Empty(t, wordPositions("auth/audit", ""))
 }
 
 func TestFindingsAreSortedAndDescribed(t *testing.T) {
