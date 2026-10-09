@@ -121,6 +121,70 @@ describe('values editor store', () => {
     expect(store.currentRevision?.id).toBe('draft-1');
   });
 
+  // TASK-270 review blocker ④ (real-service probe): createValuesRevision's
+  // expected_parent_version is compared by the server with MAX(version) over the
+  // definition's revisions (internal/store/*/values_lifecycle.go
+  // validateValuesParent) — it is the CHAIN HEAD's version, not a revision's
+  // state_version. `parent` is approved with version 1 and state_version 3
+  // (draft→pending→approved), so sending state_version produced parent_conflict
+  // while version was ACCEPTED (new version=2). ValuesRevisionActions offers
+  // "保存 Draft" whenever revision === null, so this is the path a second
+  // revision takes when the chain head is approved and nothing is in flight.
+  it('anchors a new draft on the chain head version, not the parent state_version', async () => {
+    vi.mocked(listValuesRevisions).mockResolvedValue([parent]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+
+    await store.load();
+
+    expect(store.currentRevision).toBeNull();
+    expect(store.parentRevision?.id).toBe('parent-1');
+    expect(store.parentRevision?.revision).toBe(1);
+    expect(store.parentRevision?.stateVersion).toBe('3');
+    expect(store.chainHeadVersion).toBe(1);
+
+    vi.mocked(createValuesRevision).mockResolvedValue({ ...draft, document: '{"replicas":4}' });
+    store.setEditorContent('{"replicas":4}');
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await store.save()).toBe(true);
+    // Explicit assertion on the value handed to the connect layer: the chain head
+    // VERSION (1), never the stateVersion (3) that the server refuses.
+    expect(createValuesRevision).toHaveBeenCalledWith(
+      expect.objectContaining({ parentRevisionId: 'parent-1', expectedParentVersion: 1 }),
+    );
+  });
+
+  // The anchor is the CHAIN HEAD, which may not be the approved content parent: a
+  // discarded head still occupies MAX(version). Anchoring on
+  // parentRevision.revision (1) instead of the head (2) would be refused here.
+  it('anchors on the head version when the head is not the approved parent', async () => {
+    const discardedHead: ValuesRevision = {
+      ...draft, id: 'discarded-2', revision: 2, stateVersion: '2', status: 'discarded',
+      parentRevisionId: parent.id,
+    };
+    vi.mocked(listValuesRevisions).mockResolvedValue([discardedHead, parent]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+
+    await store.load();
+
+    expect(store.currentRevision).toBeNull();
+    expect(store.parentRevision?.id).toBe('parent-1');
+    expect(store.chainHeadVersion).toBe(2);
+
+    vi.mocked(createValuesRevision).mockResolvedValue({ ...draft, document: '{"replicas":4}' });
+    store.setEditorContent('{"replicas":4}');
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await store.save()).toBe(true);
+    expect(createValuesRevision).toHaveBeenCalledWith(
+      expect.objectContaining({ parentRevisionId: 'parent-1', expectedParentVersion: 2 }),
+    );
+  });
+
   it('keeps editor content when a reload fails with a network error', async () => {
     const store = useValuesEditorStore();
     store.resetScope('definition-1', 'cluster-1');

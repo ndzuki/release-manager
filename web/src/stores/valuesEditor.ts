@@ -46,11 +46,29 @@ function draftKey(releaseDefinitionId: string): string {
   return `${DRAFT_PREFIX}${releaseDefinitionId}`;
 }
 
+/**
+ * chainHeadVersionOf is the CAS anchor for a new revision. The server compares
+ * expected_parent_version with MAX(version) over the definition's revisions
+ * (internal/store/{sqlite,postgres}/values_lifecycle.go validateValuesParent),
+ * so it is the CHAIN HEAD's version — never a revision's state_version, which
+ * counts state transitions (draft→pending→approved == 3 on a version-1
+ * revision). ConvergenceTasksPage computes the same anchor for the Prepare
+ * session (AC-058-34); keeping the two in step is what makes the second
+ * revision creatable at all.
+ */
+function chainHeadVersionOf(revisions: ValuesRevision[]): number {
+  return revisions.reduce((max, revision) => Math.max(max, revision.revision), 0);
+}
+
 export const useValuesEditorStore = defineStore('valuesEditor', () => {
   const releaseDefinitionId = ref('');
   const clusterId = ref('');
   const currentRevision = ref<ValuesRevision | null>(null);
   const parentRevision = ref<ValuesRevision | null>(null);
+  // CAS anchor for a new revision (see chainHeadVersionOf). Kept apart from
+  // parentRevision: that one is the CONTENT parent (the approved baseline) and
+  // may be an older revision than the chain head.
+  const chainHeadVersion = ref(0);
   const editorContent = ref(EMPTY_TEMPLATE);
   const editorLanguage = ref<EditorLanguage>('yaml');
   const canonicalCurrent = ref<unknown | null>(null);
@@ -217,6 +235,7 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     clusterId.value = nextClusterId;
     currentRevision.value = null;
     parentRevision.value = null;
+    chainHeadVersion.value = 0;
     editorContent.value = EMPTY_TEMPLATE;
     validationIssue.value = null;
     diffResult.value = { changes: [], hasChanges: false };
@@ -245,6 +264,7 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     error.value = null;
     try {
       const revisions = await listValuesRevisions(releaseDefinitionId.value);
+      chainHeadVersion.value = chainHeadVersionOf(revisions);
       // In convergence mode the authoritative parent is the prepared session's
       // parent, not "the first approved in the list" (several may exist).
       const preparedParent = convergenceParentRevisionId.value
@@ -287,6 +307,7 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   async function reloadParent(): Promise<void> {
     if (!releaseDefinitionId.value) return;
     const revisions = await listValuesRevisions(releaseDefinitionId.value);
+    chainHeadVersion.value = chainHeadVersionOf(revisions);
     parentRevision.value = revisions.find((revision) => revision.status === 'approved') ?? null;
     canonicalizeAndDiff();
     conflictDetected.value = false;
@@ -337,7 +358,11 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     saving.value = true;
     error.value = null;
     try {
-      const stateVer = parentRevision.value?.stateVersion;
+      // The CAS anchor is the CHAIN HEAD version (server: MAX(version)), never
+      // parentRevision.stateVersion: an approved version-1 revision has
+      // state_version 3 (draft->pending->approved), and sending 3 for a chain
+      // whose MAX(version) is 1 is refused with parent_conflict. Measured with a
+      // real service probe (TASK-270 review blocker ④).
       const result = await createValuesRevision({
         releaseDefinitionId: releaseDefinitionId.value,
         parentRevisionId: convergenceMode.value
@@ -347,7 +372,7 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
         secretRefs: secretRefs.value.map((item) => ({ name: item.name, key: item.key, namespace: item.namespace })),
         expectedParentVersion: convergenceMode.value
           ? convergenceParentVersion.value
-          : (stateVer ? Number(stateVer) : 0),
+          : chainHeadVersion.value,
         prepareToken: convergenceMode.value ? prepareToken.value : undefined,
       });
       currentRevision.value = result;
@@ -516,6 +541,7 @@ function changedLockedPaths(current: unknown, baseline: unknown, paths: string[]
     clusterId,
     currentRevision,
     parentRevision,
+    chainHeadVersion,
     editorContent,
     editorLanguage,
     canonicalCurrent,

@@ -507,13 +507,16 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   `PLAYWRIGHT_JSON_OUTPUT_NAME`，落在 `e2e-results/console/results.json` 并随 artifact 上传），由
   `test/e2e/prerequisite/console-target-guard.sh` 断言跨角色用例
   `Convergence: Prepare → ValuesEditor draft → Submit → cross-actor Approve` 的**最终结果状态是
-  `passed`**：`skipped` / `failed` / **未被收集**（改名或换了 spec）都**打印原因并 exit 非零**。判据是
+  `passed`**：`skipped` / `failed` / **未被收集**（改名或换了 spec）都**打印原因并 exit 非零**。报告本身
+  先过**结构门禁**（必须是带 `suites` 数组的 JSON 对象）：**0 字节 / 纯空白 / `{}` / `null` / 非 JSON**
+  都失败，绝不因空输入而落到成功分支（`jq` 对空输入**无输出且 rc=0**，早期版本曾据此 fail-open 打印
+  "target case passed"）。判据是
   **具名用例的状态**，不是 `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。守卫只在
   `emergency-smoke.spec.ts` 出现在本次 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 时才武装；spec 内其它两个
   用例的诚实地雷（kill-switch 专用栈、绑定 release 前置）**保持不变**，不被误判为失败。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
-> `.github/workflows/test.yml`（13 个 job 与触发条件）、
+> `.github/workflows/test.yml`（18 个 job 与触发条件）、
 > `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
 > `test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
 > `test/e2e/prerequisite/smoke.sh`、`test/e2e/prerequisite/console.sh`、`test/integration/`、
