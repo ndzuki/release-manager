@@ -21,11 +21,14 @@
 | `DEV_READER_PASSWORD` | `.github/workflows/test.yml:520` | `dev-reader`（viewer 角色，无写权限）口令，`cmd/devseed/main.go:66`、`internal/devfixture/runner.go:54-55,521` | **是** | 同上 |
 | `DEV_JWT_PRIVATE_KEY` | `.github/workflows/test.yml:523` | **Ed25519（EdDSA）JWT 签名私钥，PKCS#8 PEM**（REQ-065 AC-065-01 / D1=A）。ci profile 由 devseed helper 物化：私钥写成 `data/dev-jwt/jwt-private-key.pem` 并**派生**公钥（`deploy/dev/dev.sh:381-420`、`cmd/devseed/jwt_keys.go`），经两个 `secretGenerator`（`deploy/kustomize/dev/kustomization.yaml:44-56`）成为 Secret `release-manager-jwt-private`（`JWT_PRIVATE_KEY`，**仅 auth**：`deploy/kustomize/services/auth.yaml:36-40`）与 `release-manager-jwt-public`（`JWT_PUBLIC_KEY`：`deploy/kustomize/services/orchestrator.yaml:35-39` **与** `deploy/kustomize/services/api.yaml:42-46`，即 **orchestrator 与 api 都挂载**）；webhook/notifier **不挂任何 JWT 密钥** | **是**（私钥泄露即可伪造任意身份 token；公钥不是机密） | `make dev-up` 以 `ERR_SERVICE_UNHEALTHY: ci profile requires DEV_JWT_PRIVATE_KEY` 失败（`deploy/dev/dev.sh:402`）；值不是合法 Ed25519 PEM 时 helper 拒绝并失败 |
 | `DEV_WEBHOOK_SERVICE_TOKEN` | `.github/workflows/test.yml:524` | bundle ingress 的服务令牌：webhook 侧作为 `Authorization: Bearer <token>` 转发（`internal/webhook/service.go:59-65`），orchestrator 侧取 SHA-256 摘要做常量时间比对（`cmd/orchestrator/main.go:953-966`、`internal/auth/service_token.go:108-126`） | **是** | `make dev-up` 以 `ci profile requires DEV_WEBHOOK_SERVICE_TOKEN` 失败（`deploy/dev/dev.sh:441,461`） |
+| `DEV_CI_API_KEY` | `e2e` job 级 env（`.github/workflows/test.yml:528`） | CI 侧向 `WebhookService/SubmitReleaseBundle` 出示的 ingress 键（`cmd/webhook/main.go:97`；webhook 以 `ServiceTokenInterceptor("release-ci", s.ciAPIKeyHashes, …)` 校验，`cmd/webhook/main.go:61-62`） | **是** | 未设则为空 ⇒ webhook 拒绝 CI 提交（`unauthenticated`） |
+| `DEV_HARBOR_SERVICE_TOKEN` | `e2e` job 级 env（`.github/workflows/test.yml:529`） | 转发给 orchestrator 用于 `RecordArtifactEvent` 的服务令牌（`cmd/webhook/main.go:101`；orchestrator 侧 `tokenHashesFromEnv("DEV_HARBOR_SERVICE_TOKEN", "…_PREVIOUS")`，`cmd/orchestrator/main.go:961`） | **是** | 未设则为空 ⇒ Harbor 事件上报鉴权失败 |
+| `DEV_NOTIFIER_SERVICE_TOKEN` | `e2e` job 级 env（`.github/workflows/test.yml:536`） | notifier 的服务令牌（`cmd/notifier/main.go:195-196`，支持 `…_PREVIOUS` 轮换） | **是** | 未设则为空 ⇒ 通知投递鉴权失败 |
 | `DEV_M_TLS_CA_KEY` | `.github/workflows/test.yml:537` | dev mTLS CA 私钥，签 operator 客户端证书与网关服务端证书（`internal/operator/ca/ca.go:205`、`internal/operator/ca/ca.go:252`、`cmd/orchestrator/main.go:173`） | **是**（集群侧身份的信任锚） | `make dev-up` 以 `ci profile requires DEV_M_TLS_CA_KEY and DEV_M_TLS_CA_CERT` 失败（`deploy/dev/dev.sh:533-534`） |
 | `DEV_M_TLS_CA_CERT` | `.github/workflows/test.yml:538` | 与上配对的 CA 证书；同一 Secret 挂载为网关 `/data/gateway-ca.crt`（`deploy/kustomize/services/orchestrator.yaml:124-128,137-143`），并被复制给客户集群 agent 做校验（`deploy/dev/dev.sh:1577-1578`） | 证书本身是公开材料，但**必须与私钥成对**，故与 KEY 同级管理 | 同 `DEV_M_TLS_CA_KEY`；只给证书不给私钥同样失败（`deploy/dev/dev.sh:534` 用 `-z ... || -z ...` 同时判定） |
 | `DEV_TRUST_ROOT_PRIVATE_KEY` | `.github/workflows/test.yml:539` | Dev Trust Root Ed25519 私钥：seed 把它的公钥经 `TrustService.CreateTrustRoot` 激活（`internal/devfixture/accounts_trust.go:96-107`），并用它对 bundle digest 签名（`internal/devfixture/accounts_trust.go:149-151`） | **是** | `make dev-seed` 以 `ci profile requires DEV_TRUST_ROOT_PRIVATE_KEY` 失败（`internal/devfixture/files.go:258-261`） |
 
-合计：**18 处 `secrets.*` 引用，去重后 14 个名字**（`test.yml` 17 处/13 名 + `sync-to-gitcode.yaml` 1 处/1 名；`GITHUB_TOKEN` 独占 4 处，别把"引用数"读成"需配置数"）。其中 `GITHUB_TOKEN` 是自动提供、无需配置；**需要人工配置的 repository secret 共 13 个**：`GITCODE_TOKEN` + `.github/workflows/test.yml:513-539` 的 12 个。这 9 个与既有权威口径一致（`docs/testing.md:369-371`：「4 个账号密码 + `DEV_JWT_PRIVATE_KEY` + `DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_CI_API_KEY`/`DEV_HARBOR_SERVICE_TOKEN`/`DEV_NOTIFIER_SERVICE_TOKEN` + `DEV_M_TLS_CA_KEY`/`DEV_M_TLS_CA_CERT` + `DEV_TRUST_ROOT_PRIVATE_KEY`」）。
+合计：**18 处 `secrets.*` 引用，去重后 14 个名字**（`test.yml` 17 处/13 名 + `sync-to-gitcode.yaml` 1 处/1 名；`GITHUB_TOKEN` 独占 4 处，别把"引用数"读成"需配置数"）。其中 `GITHUB_TOKEN` 是自动提供、无需配置；**需要人工配置的 repository secret 共 13 个**：`GITCODE_TOKEN` + `.github/workflows/test.yml:513-539` 的 12 个。这 13 个与既有权威口径一致（`docs/testing.md:369-371`：「4 个账号密码 + `DEV_JWT_PRIVATE_KEY` + `DEV_WEBHOOK_SERVICE_TOKEN` + `DEV_CI_API_KEY`/`DEV_HARBOR_SERVICE_TOKEN`/`DEV_NOTIFIER_SERVICE_TOKEN` + `DEV_M_TLS_CA_KEY`/`DEV_M_TLS_CA_CERT` + `DEV_TRUST_ROOT_PRIVATE_KEY`」）。
 
 ## 2. 全部 `vars.*` 引用
 
@@ -76,7 +79,7 @@ gh secret list --repo ndzuki/release-manager
 gh variable list --repo ndzuki/release-manager
 ```
 
-一次性配齐 9 个 e2e secret 的循环形态（值来自**当前**本地 dev 夹具，仅供理解字段对应关系；生产/长期 CI 值应另建，见第 6 节）：
+一次性配齐 9 个 e2e secret 的循环形态（**示例省略了 `DEV_CI_API_KEY`/`DEV_HARBOR_SERVICE_TOKEN`/`DEV_NOTIFIER_SERVICE_TOKEN` 三个**，实际需配 12 个）（值来自**当前**本地 dev 夹具，仅供理解字段对应关系；生产/长期 CI 值应另建，见第 6 节）：
 
 ```bash
 set -a; . data/dev-credentials.env; set +a   # data/ 被 .gitignore:35 忽略
@@ -106,9 +109,9 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 | 可见范围 | 仓库内**所有** job、所有 workflow | 只有声明了 `jobs.<id>.environment: <name>` 的 job |
 | 同名优先级 | 低 | 高（环境级覆盖仓库级，平台行为） |
 | 附加门禁 | 无 | 可配 required reviewers / deployment branch policy |
-| 本仓库现状 | **全部 10 个需人工配置的 secret 与 `RUNS_ON` 都是仓库级** | **未使用**：两个 workflow 文件里 `environment:` 关键字 0 处（已 grep 核实） |
+| 本仓库现状 | **全部 13 个需人工配置的 secret 与 `RUNS_ON` 都是仓库级** | **未使用**：两个 workflow 文件里 `environment:` 关键字 0 处（已 grep 核实） |
 
-现状的含义：`GITCODE_TOKEN` 与 9 个 dev/e2e secret 对**任何**能触发 workflow 的 job 都可见。**建议**把 `GITCODE_TOKEN`（唯一具备外部写能力的凭据）改挂到一个只有 push main 才进入的 environment，并在该 environment 上开 required reviewer；同时给 `e2e` job 加 `environment: ci`，让 9 个 secret 从仓库级收窄到环境级。改法本身要动 workflow 文件，属独立变更。
+现状的含义：`GITCODE_TOKEN` 与 12 个 dev/e2e secret 对**任何**能触发 workflow 的 job 都可见。**建议**把 `GITCODE_TOKEN`（唯一具备外部写能力的凭据）改挂到一个只有 push main 才进入的 environment，并在该 environment 上开 required reviewer；同时给 `e2e` job 加 `environment: ci`，让 12 个 secret 从仓库级收窄到环境级。改法本身要动 workflow 文件，属独立变更。
 
 ## 5. 每个 secret 的取值来源与格式要求
 
@@ -143,21 +146,21 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 
 ### 7.2 其它只在本地/测试出现的 env（不需要配到 GitHub）
 
-- `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,399-400`；`CONTRIBUTING.md:49`）。CI 的 13 个 job 都没设它，所以这些用例在 CI 里是 skip 而非 fail（**建议**：若要真正跑 PG 侧门禁，需在 CI 起 Postgres 服务并注入 DSN —— 目前该缺口未闭合）。
+- `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,399-400`；`CONTRIBUTING.md:49`）。CI 的 18 个 job 都没设它，所以这些用例在 CI 里是 skip 而非 fail（**建议**：若要真正跑 PG 侧门禁，需在 CI 起 Postgres 服务并注入 DSN —— 目前该缺口未闭合）。
 - `RELEASE_MANAGER_DATABASE_DSN`：`devseed --reset` 的 PostgreSQL DSN（`cmd/devseed/main.go:58`）。
 - `E2E_RUNNER_PASSWORD` 之外的 e2e 可调项：`E2E_ENV_CONFIG` / `OUTPUT_DIR` / `STAGES` / `TIMEOUT` / `TOTAL_TIMEOUT` / `PARALLEL` / `KEEP_ON_FAILURE` / `SNAPSHOT_FULL` / `BASELINE_FILE`（`Makefile:135-153`），均非机密。
 - 服务配置的可注入 env（`internal/config/config.go:270-297`）：`DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`REDIS_PASSWORD`、`GATEWAY_*`、`VALUES_SECRET_PATTERNS` 等。**这些是本仓库「配置文件 + env 覆盖」的通道，dev 环境由 kustomize 提供，生产由部署侧提供，不在 CI secrets 清单内。**
 
 ### 7.3 「本地值与 CI 值分开管理」的约定
 
-- **约定**：CI 里的 9 个 secret **必须不是**任何开发者本地 `data/dev-credentials.env` 的副本；两者独立生成、独立轮换。依据是仓库既有语义：CI profile 从不写凭据文件、也不读它（`internal/devfixture/files.go:170-179,197-199`），本地文件被 gitignore（`.gitignore:35`），二者本就不该相遇。
+- **约定**：CI 里的 12 个 secret **必须不是**任何开发者本地 `data/dev-credentials.env` 的副本；两者独立生成、独立轮换。依据是仓库既有语义：CI profile 从不写凭据文件、也不读它（`internal/devfixture/files.go:170-179,197-199`），本地文件被 gitignore（`.gitignore:35`），二者本就不该相遇。
 - 上面第 4.1 节的循环示例只是**搬运机制演示**；**建议**实际配置时改为临时生成一套一次性 CI 值（例如把 `deploy/dev/dev.sh:397,455` 与 `internal/devfixture/files.go:99-110` 的生成方式各跑一次），把生成的文件当次用完即弃，不要让 CI 值在个人机器上长期驻留。
 - **纪律**：这些值只用于 ephemeral 的 CI k3d 环境，因此**它们不是生产凭据，任何情况下都不要把生产凭据填进这些名字**——`e2e` job 会把整套环境跑在 runner 上并把日志作为 artifact 上传（`.github/workflows/test.yml:577-584`），日志脱敏只覆盖审计与 operation 错误路径（`internal/redact/sanitize.go:19-34`），不覆盖容器原始 stdout（`internal/app/app.go:123` 的 slog handler 无 `ReplaceAttr` 脱敏）。
 - 仓库里确实存在**已提交的 dev-only 明文口令**：集群内 PostgreSQL 的固定口令出现在 `deploy/kustomize/base/secret.yaml:12-13`（头部 `:7-11` 注释声明 dev-only，且 JWT key 另有独立 Secret），并以 `PGPASSWORD=`/DSN 形态在 `deploy/dev/dev.sh:1988`、`deploy/dev/dev.sh:2083`、`deploy/dev/dev.sh:2051`、`deploy/dev/dev.sh:2085` 内联重复出现（此处按纪律只给位置不复述值）。它不参与本清单的 secret 配置，但**建议**：把它收敛到 `secretGenerator` 或 dev 生成文件，避免多处硬编码漂移。
 
 ## 8. 最小权限与纪律：workflow `permissions:` 逐 job 现状
 
-`test.yml` 共 13 个 job，`sync-to-gitcode.yaml` 共 1 个 job。逐块核实结果：
+`test.yml` 共 18 个 job，`sync-to-gitcode.yaml` 共 1 个 job。逐块核实结果：
 
 | workflow | 作用域 | 声明 | 行号 | 评价 |
 | --- | --- | --- | --- | --- |
