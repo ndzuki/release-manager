@@ -195,4 +195,34 @@ describe('DefinitionsPage', () => {
     expect(wrapper.get('.error-state').text()).toContain('版本冲突');
     expect(wrapper.find('.definitions__editor').exists()).toBe(true);
   });
+
+  /*
+   * TASK-269. Every mapping control sits in a bare <td>: the column header is a plain
+   * <th>, which gives the cell context but NOT an accessible name for the input inside
+   * it, and the five inputs of one row are indistinguishable from the next row's five.
+   * The assertion is the relation itself (label[for] resolves to the control's id),
+   * not the presence of an attribute.
+   */
+  it('labels every mapping-row input with its column and row', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
+    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
+    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
+
+    const inputs = wrapper.findAll('.definitions__mappings tbody input');
+    expect(inputs).toHaveLength(10);
+
+    for (const input of inputs) {
+      const id = input.attributes('id');
+      expect(id, 'an input without an id cannot be pointed at by a label').toBeTruthy();
+      expect(wrapper.get(`.definitions__mappings label[for="${id}"]`).text()).not.toBe('');
+    }
+
+    // Unique per row (two rows cannot share an id)…
+    expect(new Set(inputs.map((input) => input.attributes('id'))).size).toBe(10);
+    // …and the row number is what tells the two rows' Workload 类型 inputs apart.
+    expect(wrapper.get('.definitions__mappings label[for$="-0-kind"]').text()).toBe('Workload 类型（第 1 行）');
+    expect(wrapper.get('.definitions__mappings label[for$="-1-kind"]').text()).toBe('Workload 类型（第 2 行）');
+    expect(wrapper.get('.definitions__mappings label[for$="-1-values-path"]').text()).toBe('Values 路径（第 2 行）');
+  });
 });

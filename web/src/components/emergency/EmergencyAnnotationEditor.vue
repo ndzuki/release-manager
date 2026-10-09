@@ -9,7 +9,7 @@ import { t } from '@/i18n/messages';
 // not carry annotation entries yet, so this editor validates and previews but
 // the page does not submit annotation intents until the upstream contract
 // extends (no frontend simulation of backend state).
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import { validateAnnotationEntries, type AnnotationEntryDraft } from '@/features/emergency/validation';
 
 const props = defineProps<{
@@ -28,6 +28,18 @@ const drafts = computed<AnnotationEntryDraft[]>(() => props.values);
 const validation = computed(() => validateAnnotationEntries(drafts.value));
 
 const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.length < 50);
+
+/*
+ * Ids for the per-row key/value controls. Prefix from useId() so two editors on one
+ * page cannot produce the same id, and stable across re-renders. The row cell's text
+ * column header (Key/值) does not name the control, so each control owns a
+ * visually-hidden <label for> carrying the column name plus the row number.
+ */
+const rowIdPrefix = useId();
+
+function rowFieldId(localId: string, field: 'key' | 'value'): string {
+  return `${rowIdPrefix}-annotation-${localId}-${field}`;
+}
 
 function addRow(): void {
   if (!canAdd.value) return;
@@ -72,9 +84,13 @@ watch(
         </tr>
       </thead>
       <tbody>
-        <tr v-for="entry in drafts" :key="entry.localId">
+        <tr v-for="(entry, index) in drafts" :key="entry.localId">
           <td>
+            <label class="visually-hidden" :for="rowFieldId(entry.localId, 'key')">
+              {{ t('common.labelledRowField', { field: t('annotation.keyWhitelist'), index: index + 1 }) }}
+            </label>
             <select
+              :id="rowFieldId(entry.localId, 'key')"
               class="field-input"
               :value="entry.key"
               @change="updateRow(entry.localId, { key: ($event.target as HTMLSelectElement).value })"
@@ -83,7 +99,11 @@ watch(
             </select>
           </td>
           <td>
+            <label class="visually-hidden" :for="rowFieldId(entry.localId, 'value')">
+              {{ t('common.labelledRowField', { field: t('annotation.value'), index: index + 1 }) }}
+            </label>
             <input
+              :id="rowFieldId(entry.localId, 'value')"
               class="field-input"
               :value="entry.value"
               :placeholder="`1–2048 UTF-8 字节`"
