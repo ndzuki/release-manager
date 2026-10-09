@@ -381,7 +381,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 `e2e-prerequisite`（AC-066-17 前置冒烟，`make e2e-prerequisite-ci`）**只在 `push main` 与 `workflow_dispatch` 运行，不在 PR 上运行** —— 与正式 `e2e` gate 同属 **REQ-066 决策 ⑧** 的模式。
 
-**为什么**：它要起真实的 k3d 环境（`dev-up dev-seed dev-status` → `smoke.sh` → `dev-purge`），实测单次 **15–55 分钟**。2026-09-22 有**四个已批准的改动**同时卡在它后面，而它当次失败是**环境原因**（一次 55 分钟被取消且 `--log-failed` 无根因；一次 seed 撞上正在终止的 pod，`unavailable: unexpected EOF`）。
+**为什么**：它要起真实的 k3d 环境（`dev-up dev-seed dev-status` → `smoke.sh` → `dev-purge`）。**实测**：2026-10-09 的 dispatch run `37987425510` 里 `e2e-prerequisite` job 为 `20:30:18Z → 20:45:56Z`，即 **15 分 38 秒**（约 16 分钟；job 上限 `timeout-minutes: 45`，`test.yml:423`）。历史上不稳定：2026-09-22 有**四个已批准的改动**同时卡在它后面，而它当次失败是**环境原因**（一次 55 分钟被取消且 `--log-failed` 无根因；一次 seed 撞上正在终止的 pod，`unavailable: unexpected EOF`）。因此拿单次墙钟时间当"该车道很慢"的论据不成立——要区分**正常约 16 分钟**与**环境型超时/取消**。
 
 **覆盖没有减少**：`push main` 与手动触发仍然跑它、仍然上传 `e2e-results/` 证据；环境侧根因（seed 收敛重试预算）在 `internal/devfixture` 修复。
 
@@ -447,7 +447,8 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 - **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
   （`.github/workflows/test.yml` 的 `e2e-prerequisite:` 段），`e2e` job 同理。这是 REQ-066 决策 ⑧ 的
-  刻意取舍——真实 k3d 车道 15–55 分钟，不该绑在 PR 门禁上。**因此浏览器 E2E 的证据只能在 push main 或
+  刻意取舍——真实 k3d 车道实测约 16 分钟（2026-10-09 dispatch run `37987425510` 的 `e2e-prerequisite` job，
+  15m38s；同日的 55 分钟属于环境型取消，见上节），不该绑在 PR 门禁上。**因此浏览器 E2E 的证据只能在 push main 或
   手动 dispatch 上取得**，取 run id 与日志：
 
   ```bash
@@ -511,8 +512,12 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   先过**结构门禁**（必须是带 `suites` 数组的 JSON 对象）：**0 字节 / 纯空白 / `{}` / `null` / 非 JSON**
   都失败，绝不因空输入而落到成功分支（`jq` 对空输入**无输出且 rc=0**，早期版本曾据此 fail-open 打印
   "target case passed"）。判据是
-  **具名用例的状态**，不是 `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。守卫只在
-  `emergency-smoke.spec.ts` 出现在本次 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 时才武装；spec 内其它两个
+  **具名用例的状态**，不是 `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。
+  **武装判据是两步、都在代码里**：`console.sh` 对本次 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开出的每个 spec
+  路径做**后缀 glob**（`case "$spec_path" in *"emergency-smoke.spec.ts"`，`console.sh:152-156`）——路径**以**该
+  文件名结尾即武装；`console-target-guard.sh` 随后按**basename** 判定：取报告的 `spec.file` 最后一个 `/` 段
+  （`basename` / `split("/") | last`，`console-target-guard.sh:55-60`）与武装 spec 的 basename 比对，因此
+  `not-emergency-smoke.spec.ts` 既不能武装、也不能满足守卫。spec 内其它两个
   用例的诚实地雷（kill-switch 专用栈、绑定 release 前置）**保持不变**，不被误判为失败。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、

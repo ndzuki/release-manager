@@ -4,10 +4,12 @@
 // and the idempotency key live in module scope — never serialized to Pinia
 // state and never persisted to browser storage (AC-058-15/16/17).
 //
-// Contract divergence (recorded in the TASK record): the canonical
-// ExecuteEmergencyChange only carries the image action (container +
-// artifact_ref). Replicas/annotation actions surface with their target
-// availability but stay non-executable until upstream extends the contract.
+// Three actions are submittable and the request carries exactly one of them
+// (REQ-081 single-action semantics; internal/orchestrator/emergency.go:1065):
+// image (container + artifactRef), replicas (set_replicas ≥ 1) and approved
+// annotations (entries + scope). `actionKind` is the selector, and the intent
+// fingerprint covers the selected action's payload, so switching actions or
+// editing their values mints a new idempotency key.
 //
 // Per uncategorized/TASK-059-pitfall-2026-08-12-pinia-setup-store-p.md:
 // assign source fields directly — never nested $patch merges.
@@ -19,21 +21,31 @@ import {
   listCandidateArtifacts,
   listEmergencyTargets,
   type EmergencyConflictDisplay,
+  type ExecuteEmergencyInput,
 } from '@/connect/emergency-api';
 import { mapEmergencyError, type EmergencyErrorDisplay } from '@/features/emergency/errors';
 import {
+  annotationMappingComplete,
   canonicalIntentJson,
   imageMappingComplete,
+  replicasMappingComplete,
+  validateAnnotationEntries,
   validateReason,
+  validateReplicasChange,
+  type AnnotationEntryDraft,
   type EmergencyIntentFields,
 } from '@/features/emergency/validation';
-import type {
-  CandidateArtifactDisplay,
-  ConvergencePolicy,
-  EmergencyTargetDisplay,
-  WorkloadRefDisplay,
+import {
+  annotationScopes,
+  approvedAnnotationKeysForScope,
+  availableEmergencyActions,
+  workloadRefToWire,
+  type CandidateArtifactDisplay,
+  type ConvergencePolicy,
+  type EmergencyActionKind,
+  type EmergencyTargetDisplay,
+  type WorkloadRefDisplay,
 } from '@/features/emergency/model';
-import { workloadRefToWire } from '@/features/emergency/model';
 
 export interface ConfirmedEmergencyIntent {
   intentJson: string;
@@ -49,7 +61,7 @@ export interface EmergencyChangeOptions {
     input: { organizationId: string; releaseDefinitionId: string; workloadRef: string; container: string; operationVersion: string },
     signal: AbortSignal,
   ) => Promise<CandidateArtifactDisplay[]>;
-  execute?: (input: Parameters<typeof executeEmergencyChange>[0], signal: AbortSignal) => Promise<{ operationId: string; operationVersion: string }>;
+  execute?: (input: ExecuteEmergencyInput, signal: AbortSignal) => Promise<{ operationId: string; operationVersion: string }>;
   abortController?: () => AbortController;
   randomUUID?: () => string;
 }
@@ -68,6 +80,30 @@ const KEY_INVALIDATING_CODES = new Set<string>([
   'release_busy',
   'permission_denied',
   'kill_switch_disabled',
+  // Deterministic payload rejections for the replicas / annotations actions
+  // (REQ-081, REQ-058): retrying unchanged content cannot succeed, so the next
+  // confirm mints a fresh key rather than replaying the frozen intent.
+  'invalid_replicas',
+  'hpa_managed',
+  'workload_kind_not_supported',
+  'invalid_annotation_entries',
+  'duplicate_annotation_key',
+  'annotation_key_not_allowed',
+  'annotation_scope_mismatch',
+  'conflicting_change',
+]);
+
+/**
+ * Server codes that belong to one action's field, so the message renders next
+ * to the control instead of only in the submit summary (D7 double-track).
+ * Codes outside both sets stay summary-level.
+ */
+const REPLICAS_ERROR_CODES = new Set<string>(['invalid_replicas', 'hpa_managed', 'workload_kind_not_supported']);
+const ANNOTATION_ERROR_CODES = new Set<string>([
+  'invalid_annotation_entries',
+  'duplicate_annotation_key',
+  'annotation_key_not_allowed',
+  'annotation_scope_mismatch',
 ]);
 
 function defaultAbortController(): AbortController {
@@ -100,6 +136,14 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   const reason = ref('');
   const convergencePolicy = ref<ConvergencePolicy>('REQUIRE_PROMOTION');
 
+  // The selected action and its payload. Exactly one branch is submittable at a
+  // time (server-side branch exclusivity), so the other branches' state is kept
+  // for convenience but never reaches the wire while another action is selected.
+  const actionKind = ref<EmergencyActionKind>('image');
+  const replicasValue = ref<number | null>(null);
+  const annotationScope = ref('');
+  const annotationEntries = ref<AnnotationEntryDraft[]>([]);
+
   const confirmedIntent = ref<ConfirmedEmergencyIntent | null>(null);
   const confirmOpen = ref(false);
   const submitting = ref(false);
@@ -127,10 +171,63 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
 
   const reasonValid = computed(() => validateReason(reason.value).valid);
 
-  const mappingComplete = computed(() => {
+  /** Actions the selected target currently advertises as available. */
+  const availableActions = computed<EmergencyActionKind[]>(() =>
+    selectedTargetDisplay.value ? availableEmergencyActions(selectedTargetDisplay.value) : [],
+  );
+
+  const selectedReplicasAction = computed(() => selectedTargetDisplay.value?.replicasAction ?? null);
+  const replicasMax = computed(() => selectedReplicasAction.value?.maxEmergencyReplicas ?? 0);
+  const replicasCurrent = computed(() => selectedReplicasAction.value?.currentReplicas ?? null);
+  const replicasHpaManaged = computed(() => selectedReplicasAction.value?.hpaManaged ?? false);
+  const replicasAvailable = computed(() => selectedReplicasAction.value?.availability.available ?? false);
+  const replicasValidation = computed(() =>
+    validateReplicasChange(replicasValue.value, replicasMax.value, replicasHpaManaged.value),
+  );
+
+  const annotationScopesAvailable = computed(() =>
+    selectedTargetDisplay.value ? annotationScopes(selectedTargetDisplay.value) : [],
+  );
+  const approvedAnnotationKeys = computed(() =>
+    selectedTargetDisplay.value ? approvedAnnotationKeysForScope(selectedTargetDisplay.value, annotationScope.value) : [],
+  );
+  const annotationValidation = computed(() =>
+    validateAnnotationEntries(
+      annotationEntries.value,
+      selectedTargetDisplay.value ? approvedAnnotationKeys.value : undefined,
+    ),
+  );
+
+  const imageMappingCompleteForSelection = computed(() => {
     const target = selectedTargetDisplay.value;
     if (!target || selectedContainer.value === '') return false;
     return imageMappingComplete(target, selectedContainer.value);
+  });
+
+  const replicasMappingCompleteForSelection = computed(() =>
+    selectedTargetDisplay.value ? replicasMappingComplete(selectedTargetDisplay.value) : false,
+  );
+
+  const annotationsMappingCompleteForSelection = computed(() => {
+    const target = selectedTargetDisplay.value;
+    if (!target || annotationEntries.value.length === 0) return false;
+    return annotationMappingComplete(target, annotationEntries.value.map((entry) => entry.key));
+  });
+
+  /**
+   * Mapping completeness for the SELECTED action (AC-058-14). Image mappings
+   * are keyed by field "image_digest" + container, replicas by field
+   * "replicas", annotations by field == key.
+   */
+  const mappingComplete = computed(() => {
+    switch (actionKind.value) {
+      case 'replicas':
+        return replicasMappingCompleteForSelection.value;
+      case 'annotations':
+        return annotationsMappingCompleteForSelection.value;
+      default:
+        return imageMappingCompleteForSelection.value;
+    }
   });
 
   const requirePromotionAvailable = computed(() => mappingComplete.value);
@@ -142,19 +239,92 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     requirePromotionAvailable.value ? convergencePolicy.value : 'REVERT_ON_NEXT_RECONCILE',
   );
 
-  function buildIntentFields(): EmergencyIntentFields | null {
-    if (!releaseDefinitionId.value || !selectedTarget.value || !selectedContainer.value || !selectedArtifact.value) {
-      return null;
+  /** Whether the selected action's own payload is complete (before reason/policy). */
+  const actionPayloadValid = computed(() => {
+    switch (actionKind.value) {
+      case 'replicas':
+        return replicasAvailable.value && replicasValidation.value.valid;
+      case 'annotations':
+        return (
+          availableActions.value.includes('annotations') &&
+          annotationScope.value !== '' &&
+          annotationValidation.value.valid
+        );
+      default:
+        return selectedContainer.value !== '' && selectedArtifact.value !== null;
     }
-    return {
+  });
+
+  /** Promotion lock paths for the selected action (AC-058-25 / AC-079-G9). */
+  function targetLocksForSelection(): string[] {
+    switch (actionKind.value) {
+      case 'replicas':
+        return replicasMappingCompleteForSelection.value
+          ? selectedReplicasAction.value?.promotions.map((promotion) => promotion.valuesPath) ?? []
+          : [];
+      case 'annotations': {
+        const target = selectedTargetDisplay.value;
+        if (!target || !annotationsMappingCompleteForSelection.value) return [];
+        const keys = new Set(annotationEntries.value.map((entry) => entry.key));
+        return [
+          ...new Set(
+            target.annotationActions
+              .filter((action) => action.scope === annotationScope.value && keys.has(action.key))
+              .flatMap((action) => action.promotions.map((promotion) => promotion.valuesPath)),
+          ),
+        ];
+      }
+      default:
+        return imageMappingCompleteForSelection.value
+          ? selectedImageAction.value?.promotions.map((promotion) => promotion.valuesPath) ?? []
+          : [];
+    }
+  }
+
+  function buildIntentFields(): EmergencyIntentFields | null {
+    if (!releaseDefinitionId.value || !selectedTarget.value) return null;
+    const base = {
       releaseDefinitionId: releaseDefinitionId.value,
       workloadRef: workloadRefToWire(selectedTarget.value),
-      container: selectedContainer.value,
       operationVersion: operationVersion.value,
-      artifactRef: selectedArtifact.value.id,
       convergenceStrategy: effectivePolicy.value,
-      targetLocks: mappingComplete.value ? selectedImageAction.value?.promotions.map((p) => p.valuesPath) ?? [] : [],
+      targetLocks: targetLocksForSelection(),
     };
+    switch (actionKind.value) {
+      case 'replicas':
+        if (replicasValue.value === null) return null;
+        return {
+          ...base,
+          actionKind: 'replicas',
+          container: '',
+          artifactRef: '',
+          setReplicas: replicasValue.value,
+          annotations: [],
+          annotationScope: '',
+        };
+      case 'annotations':
+        if (annotationScope.value === '' || annotationEntries.value.length === 0) return null;
+        return {
+          ...base,
+          actionKind: 'annotations',
+          container: '',
+          artifactRef: '',
+          setReplicas: 0,
+          annotations: annotationEntries.value.map((entry) => ({ key: entry.key, value: entry.value })),
+          annotationScope: annotationScope.value,
+        };
+      default:
+        if (selectedContainer.value === '' || selectedArtifact.value === null) return null;
+        return {
+          ...base,
+          actionKind: 'image',
+          container: selectedContainer.value,
+          artifactRef: selectedArtifact.value.id,
+          setReplicas: 0,
+          annotations: [],
+          annotationScope: '',
+        };
+    }
   }
 
   const intentJson = computed(() => {
@@ -167,13 +337,26 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   );
 
   const canConfirm = computed(
-    () =>
-      selectedContainer.value !== '' &&
-      selectedArtifact.value !== null &&
-      reasonValid.value &&
-      !submitting.value &&
-      intentJson.value !== '',
+    () => actionPayloadValid.value && reasonValid.value && !submitting.value && intentJson.value !== '',
   );
+
+  /**
+   * Field-level server errors (D7 double-track). The summary bar keeps showing
+   * `submitError`; these route the stable code to the control that caused it.
+   */
+  const replicasError = computed(() => {
+    const server = submitError.value;
+    if (server && REPLICAS_ERROR_CODES.has(server.code)) return server.message;
+    // An untouched field must not shout its "required" message before the user
+    // has interacted with it.
+    if (replicasValue.value === null) return null;
+    return replicasValidation.value.valid ? null : replicasValidation.value.message;
+  });
+
+  const annotationError = computed(() => {
+    const server = submitError.value;
+    return server && ANNOTATION_ERROR_CODES.has(server.code) ? server.message : null;
+  });
 
   function configure(next: EmergencyChangeOptions): void {
     options.value = { ...options.value, ...next };
@@ -204,6 +387,10 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     artifacts.value = [];
     selectedArtifact.value = null;
     operationVersion.value = '';
+    actionKind.value = 'image';
+    replicasValue.value = null;
+    annotationScope.value = '';
+    annotationEntries.value = [];
     confirmedIntent.value = null;
     confirmOpen.value = false;
     submitting.value = false;
@@ -250,6 +437,13 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     selectedContainer.value = '';
     artifacts.value = [];
     selectedArtifact.value = null;
+    // Per-target payload state never carries over, and the action resets to the
+    // first one this target actually advertises (image when it has containers,
+    // replicas otherwise — the selector's order).
+    replicasValue.value = null;
+    annotationEntries.value = [];
+    annotationScope.value = annotationScopes(target)[0] ?? '';
+    actionKind.value = availableEmergencyActions(target)[0] ?? 'image';
     confirmedIntent.value = null;
     void loadArtifactsForSelection();
   }
@@ -302,6 +496,45 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   function selectArtifact(artifact: CandidateArtifactDisplay): void {
     selectedArtifact.value = artifact;
     confirmedIntent.value = null;
+  }
+
+  /** Switching the action is an intent change: the frozen key must not replay a
+   * request whose payload describes a different action (AC-058-16/17). */
+  function setActionKind(next: EmergencyActionKind): void {
+    if (actionKind.value === next) return;
+    actionKind.value = next;
+    confirmedIntent.value = null;
+    submitError.value = null;
+  }
+
+  function setReplicas(value: number | null): void {
+    replicasValue.value = value;
+    confirmedIntent.value = null;
+    submitError.value = null;
+  }
+
+  /**
+   * Re-anchors every row to the new scope and drops rows whose key is not
+   * approved for it: the server validates (key, scope) as a pair and refuses a
+   * mismatch, so carrying a row over would freeze an unsubmittable intent.
+   */
+  function setAnnotationScope(scope: string): void {
+    annotationScope.value = scope;
+    const approved = selectedTargetDisplay.value
+      ? approvedAnnotationKeysForScope(selectedTargetDisplay.value, scope)
+      : [];
+    const allowed = new Set(approved.map((entry) => entry.key));
+    annotationEntries.value = annotationEntries.value
+      .filter((entry) => allowed.has(entry.key))
+      .map((entry) => ({ ...entry, scope }));
+    confirmedIntent.value = null;
+    submitError.value = null;
+  }
+
+  function setAnnotationEntries(entries: AnnotationEntryDraft[]): void {
+    annotationEntries.value = entries;
+    confirmedIntent.value = null;
+    submitError.value = null;
   }
 
   function setReason(next: string): void {
@@ -359,20 +592,28 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     submitError.value = null;
     const execute = options.value.execute ?? executeEmergencyChange;
     const captured = generation;
+    // Exactly one action reaches the wire: the discriminated union (see
+    // connect/emergency-api.ts) makes a combined request unrepresentable, which
+    // is what the server's branch exclusivity demands.
+    const base = {
+      releaseDefinitionId: fields.releaseDefinitionId,
+      workloadRef: fields.workloadRef,
+      operationVersion: fields.operationVersion,
+      convergenceStrategy:
+        fields.convergenceStrategy === 'REQUIRE_PROMOTION'
+          ? ('REQUIRE_PROMOTION' as const)
+          : ('REVERT_ON_NEXT_RECONCILE' as const),
+      targetLocks: fields.targetLocks,
+      idempotencyKey: intent.idempotencyKey,
+    };
+    const input: ExecuteEmergencyInput =
+      fields.actionKind === 'replicas'
+        ? { ...base, action: 'replicas', setReplicas: fields.setReplicas }
+        : fields.actionKind === 'annotations'
+          ? { ...base, action: 'annotations', annotations: fields.annotations, annotationScope: fields.annotationScope }
+          : { ...base, action: 'image', container: fields.container, artifactRef: fields.artifactRef };
     try {
-      const result = await execute(
-        {
-          releaseDefinitionId: fields.releaseDefinitionId,
-          workloadRef: fields.workloadRef,
-          container: fields.container,
-          operationVersion: fields.operationVersion,
-          artifactRef: fields.artifactRef,
-          convergenceStrategy: fields.convergenceStrategy === 'REQUIRE_PROMOTION' ? 'REQUIRE_PROMOTION' : 'REVERT_ON_NEXT_RECONCILE',
-          targetLocks: fields.targetLocks,
-          idempotencyKey: intent.idempotencyKey,
-        },
-        signal ?? abortController?.signal as AbortSignal,
-      );
+      const result = await execute(input, signal ?? abortController?.signal as AbortSignal);
       if (captured !== generation) return null;
       lastAcceptedAt.value = new Date().toISOString();
       operationVersion.value = result.operationVersion;
@@ -424,6 +665,10 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     operationVersion.value = '';
     reason.value = '';
     convergencePolicy.value = 'REQUIRE_PROMOTION';
+    actionKind.value = 'image';
+    replicasValue.value = null;
+    annotationScope.value = '';
+    annotationEntries.value = [];
     confirmedIntent.value = null;
     confirmOpen.value = false;
     submitting.value = false;
@@ -449,6 +694,10 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     operationVersion,
     reason,
     convergencePolicy,
+    actionKind,
+    replicasValue,
+    annotationScope,
+    annotationEntries,
     confirmedIntent,
     confirmOpen,
     submitting,
@@ -456,6 +705,18 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     lastAcceptedAt,
     selectedTargetDisplay,
     selectedImageAction,
+    selectedReplicasAction,
+    availableActions,
+    replicasMax,
+    replicasCurrent,
+    replicasHpaManaged,
+    replicasAvailable,
+    replicasValidation,
+    replicasError,
+    annotationScopesAvailable,
+    approvedAnnotationKeys,
+    annotationValidation,
+    annotationError,
     reasonValid,
     mappingComplete,
     requirePromotionAvailable,
@@ -469,6 +730,10 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     selectTarget,
     selectContainer,
     selectArtifact,
+    setActionKind,
+    setReplicas,
+    setAnnotationScope,
+    setAnnotationEntries,
     setReason,
     setConvergencePolicy,
     openConfirm,

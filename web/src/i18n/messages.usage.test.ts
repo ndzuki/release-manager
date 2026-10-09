@@ -153,8 +153,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/emergency/EmergencyAnnotationEditor.vue',
-    allowed: ['注解变更当前后端契约暂不支持提交，此处仅展示白名单与批量校验。', '移除'],
-    reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
+    allowed: [],
+    reason: 'annotation batch editor copy (hint, placeholder, remove, scope) comes from the catalog',
   },
   {
     file: 'src/components/emergency/EmergencyResultPanel.vue',

@@ -2,7 +2,7 @@
 // All limits come from the REQ-058 input contract and are enforced in UTF-8
 // bytes, not JS code points. These are client-side UX guards only — the
 // server stays the authoritative validator (ADR-006/ADR-011).
-import type { ConvergenceTaskDisplay, EmergencyTargetDisplay } from '@/features/emergency/model';
+import type { ConvergenceTaskDisplay, EmergencyActionKind, EmergencyTargetDisplay } from '@/features/emergency/model';
 
 export const REASON_MIN_BYTES = 1;
 export const REASON_MAX_BYTES = 1000;
@@ -67,6 +67,40 @@ export function validateReplicas(value: number, max: number, hpaManaged: boolean
   return { valid: true };
 }
 
+/** Smallest replicas value that still selects the SET_REPLICAS action. */
+export const REPLICAS_MIN_FOR_CHANGE = 1;
+
+/**
+ * Submit-level replicas rule for the emergency replicas action.
+ *
+ * `validateReplicas` mirrors the server's accepted RANGE (0..max), which is the
+ * right rule for reading a value back. It is the wrong rule for submitting one:
+ * the wire field is a flat int32 with no presence, so the server derives the
+ * action from `set_replicas != 0` and a 0 silently becomes the image branch
+ * (internal/orchestrator/emergency.go:1095-1099 deriveRequestedEmergencyAction,
+ * and :1056-1064 documents the "0 means not requested" contract). Submitting 0
+ * would therefore send the image action the caller never chose.
+ */
+export function validateReplicasChange(value: number | null, max: number, hpaManaged: boolean): ValidationResult {
+  if (value === null) {
+    return { valid: false, code: 'invalid_replicas', message: '请填写目标副本数' };
+  }
+  if (hpaManaged) {
+    return { valid: false, code: 'hpa_managed', message: '副本数由 HPA 管理，不可修改' };
+  }
+  if (!Number.isInteger(value)) {
+    return { valid: false, code: 'invalid_replicas', message: '副本数必须为整数' };
+  }
+  if (value < REPLICAS_MIN_FOR_CHANGE || value > max) {
+    return {
+      valid: false,
+      code: 'invalid_replicas',
+      message: `副本数需在 ${REPLICAS_MIN_FOR_CHANGE}–${max} 之间（0 表示未请求副本变更）`,
+    };
+  }
+  return { valid: true };
+}
+
 export interface AnnotationEntryDraft {
   localId: string;
   key: string;
@@ -74,8 +108,19 @@ export interface AnnotationEntryDraft {
   scope: string;
 }
 
-/** annotations: 1–50 entries, unique keys, value 1–2048 UTF-8 bytes, same scope. */
-export function validateAnnotationEntries(entries: AnnotationEntryDraft[]): ValidationResult {
+/**
+ * annotations: 1–50 entries, unique keys, value 1–2048 UTF-8 bytes, same scope.
+ *
+ * `approvedKeys` is the definition's whitelist projection for the target
+ * (key + scope pairs). When supplied, an entry outside it is refused here with
+ * the same stable code the server emits (`annotation_key_not_allowed`), so the
+ * obvious typo is caught before a round trip — the server remains the authority
+ * (internal/orchestrator/emergency.go:653-680).
+ */
+export function validateAnnotationEntries(
+  entries: AnnotationEntryDraft[],
+  approvedKeys?: Array<{ key: string; scope: string }>,
+): ValidationResult {
   if (entries.length < ANNOTATION_MIN_ENTRIES || entries.length > ANNOTATION_MAX_ENTRIES) {
     return {
       valid: false,
@@ -95,6 +140,16 @@ export function validateAnnotationEntries(entries: AnnotationEntryDraft[]): Vali
     seenKeys.add(entry.key);
     if (entry.scope !== firstScope) {
       return { valid: false, code: 'annotation_scope_mismatch', message: '同一次操作的所有注解必须为同一 scope' };
+    }
+    if (
+      approvedKeys &&
+      !approvedKeys.some((approved) => approved.key === entry.key && approved.scope === entry.scope)
+    ) {
+      return {
+        valid: false,
+        code: 'annotation_key_not_allowed',
+        message: `注解 key "${entry.key}" 不在 ${entry.scope} 的白名单内`,
+      };
     }
     const bytes = utf8ByteLength(entry.value);
     if (bytes < ANNOTATION_VALUE_MIN_BYTES || bytes > ANNOTATION_VALUE_MAX_BYTES) {
@@ -157,13 +212,23 @@ export function annotationMappingComplete(target: EmergencyTargetDisplay, keys: 
 
 /** Canonical stable JSON of the intent fields; the store hashes it to detect
  * intent changes (AC-058-17). The idempotency key is deliberately excluded —
- * it stays stable across retries of the same frozen intent. */
+ * it stays stable across retries of the same frozen intent.
+ *
+ * Every field that reaches ExecuteEmergencyChange is part of the fingerprint,
+ * including the selected action and its branch payload (replicas / annotation
+ * entries + scope): changing the action or its values is a different intent and
+ * must mint a new key (AC-058-16/17). */
 export interface EmergencyIntentFields {
   releaseDefinitionId: string;
   workloadRef: string;
+  actionKind: EmergencyActionKind;
   container: string;
   operationVersion: string;
   artifactRef: string;
+  /** 0 for the non-replicas actions (the wire scalar's "not requested" value). */
+  setReplicas: number;
+  annotations: Array<{ key: string; value: string }>;
+  annotationScope: string;
   convergenceStrategy: string;
   targetLocks: string[];
 }
@@ -172,9 +237,15 @@ export function canonicalIntentJson(fields: EmergencyIntentFields): string {
   return JSON.stringify({
     releaseDefinitionId: fields.releaseDefinitionId,
     workloadRef: fields.workloadRef,
+    actionKind: fields.actionKind,
     container: fields.container,
     operationVersion: fields.operationVersion,
     artifactRef: fields.artifactRef,
+    setReplicas: fields.setReplicas,
+    // Entry order is a rendering detail, not part of the intent: sort by key so
+    // adding and removing a row in a different order is the same frozen intent.
+    annotations: [...fields.annotations].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+    annotationScope: fields.annotationScope,
     convergenceStrategy: fields.convergenceStrategy,
     targetLocks: [...fields.targetLocks].sort(),
   });

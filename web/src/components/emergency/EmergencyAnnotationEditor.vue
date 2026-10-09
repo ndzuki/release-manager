@@ -3,31 +3,48 @@ import { t } from '@/i18n/messages';
 // Annotation batch editor (plan v3 Step 4, AC-058-02/13): rows are bound to
 // the server-approved annotation keys only (whitelist), share one scope, use
 // stable local IDs, and validate through the pure rules in
-// features/emergency/validation.ts.
-//
-// Contract divergence (recorded): the canonical ExecuteEmergencyChange does
-// not carry annotation entries yet, so this editor validates and previews but
-// the page does not submit annotation intents until the upstream contract
-// extends (no frontend simulation of backend state).
+// features/emergency/validation.ts. The batch is submitted with the emergency
+// change (ExecuteEmergencyChangeRequest.annotations + annotation_scope) when
+// the page's action selector is on 'annotations'; the server re-validates every
+// (key, scope) pair against the definition's whitelist.
 import { computed, ref, useId, watch } from 'vue';
-import { validateAnnotationEntries, type AnnotationEntryDraft } from '@/features/emergency/validation';
+import {
+  ANNOTATION_MAX_ENTRIES,
+  validateAnnotationEntries,
+  type AnnotationEntryDraft,
+} from '@/features/emergency/validation';
 
-const props = defineProps<{
-  /** Server-approved annotation keys (whitelist from the target projection). */
-  approvedKeys: string[];
-  scope: string;
-  values: Array<{ localId: string; key: string; value: string; scope: string }>;
+const props = withDefaults(
+  defineProps<{
+    /** Server-approved annotation keys for `scope` (whitelist projection). */
+    approvedKeys: string[];
+    scope: string;
+    values: Array<{ localId: string; key: string; value: string; scope: string }>;
+    /** Scopes the target approves keys for; when empty the row scope is fixed. */
+    availableScopes?: string[];
+    /** Server-side rejection routed to this field (D7 double-track). */
+    error?: string | null;
+  }>(),
+  { availableScopes: () => [], error: null },
+);
+
+const emit = defineEmits<{
+  update: [entries: AnnotationEntryDraft[]];
+  'update:scope': [scope: string];
 }>();
-
-const emit = defineEmits<{ update: [entries: AnnotationEntryDraft[]] }>();
 
 const nextLocalId = ref(1);
 
 const drafts = computed<AnnotationEntryDraft[]>(() => props.values);
 
-const validation = computed(() => validateAnnotationEntries(drafts.value));
+const validation = computed(() =>
+  validateAnnotationEntries(
+    drafts.value,
+    props.approvedKeys.map((key) => ({ key, scope: props.scope })),
+  ),
+);
 
-const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.length < 50);
+const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.length < ANNOTATION_MAX_ENTRIES);
 
 /*
  * Ids for the per-row key/value controls. Prefix from useId() so two editors on one
@@ -36,6 +53,7 @@ const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.leng
  * visually-hidden <label for> carrying the column name plus the row number.
  */
 const rowIdPrefix = useId();
+const errorId = computed(() => `${rowIdPrefix}-annotation-error`);
 
 function rowFieldId(localId: string, field: 'key' | 'value'): string {
   return `${rowIdPrefix}-annotation-${localId}-${field}`;
@@ -73,7 +91,17 @@ watch(
 
 <template>
   <div class="annotation-editor">
-    <p class="hint">注解变更当前后端契约暂不支持提交，此处仅展示白名单与批量校验。</p>
+    <p class="hint">{{ t('annotation.hint') }}</p>
+    <label v-if="availableScopes.length > 0" class="scope-field">
+      <span class="scope-label">{{ t('annotation.scope') }}</span>
+      <select
+        class="scope-select"
+        :value="scope"
+        @change="emit('update:scope', ($event.target as HTMLSelectElement).value)"
+      >
+        <option v-for="candidate in availableScopes" :key="candidate" :value="candidate">{{ candidate }}</option>
+      </select>
+    </label>
     <table class="annotation-table">
       <thead>
         <tr>
@@ -93,6 +121,8 @@ watch(
               :id="rowFieldId(entry.localId, 'key')"
               class="field-input"
               :value="entry.key"
+              :aria-invalid="validation.valid ? undefined : true"
+              :aria-describedby="validation.valid ? undefined : errorId"
               @change="updateRow(entry.localId, { key: ($event.target as HTMLSelectElement).value })"
             >
               <option v-for="key in approvedKeys" :key="key" :value="key">{{ key }}</option>
@@ -106,30 +136,42 @@ watch(
               :id="rowFieldId(entry.localId, 'value')"
               class="field-input"
               :value="entry.value"
-              :placeholder="`1–2048 UTF-8 字节`"
+              :placeholder="t('annotation.valuePlaceholder')"
+              :aria-invalid="validation.valid ? undefined : true"
+              :aria-describedby="validation.valid ? undefined : errorId"
               @input="updateRow(entry.localId, { value: ($event.target as HTMLInputElement).value })"
             />
           </td>
           <td>{{ entry.scope }}</td>
           <td>
-            <button type="button" class="row-remove" :aria-label="`移除注解 ${entry.key}`" @click="removeRow(entry.localId)">
-              移除
+            <button
+              type="button"
+              class="row-remove"
+              :aria-label="t('annotation.removeRow', { key: entry.key })"
+              @click="removeRow(entry.localId)"
+            >
+              {{ t('annotation.remove') }}
             </button>
           </td>
         </tr>
       </tbody>
     </table>
     <button type="button" :disabled="!canAdd" @click="addRow">{{ t('annotation.add') }}</button>
-    <p v-if="!validation.valid" class="error-text">{{ validation.message }}</p>
+    <p v-if="!validation.valid" :id="errorId" class="error-text" role="alert">{{ validation.message }}</p>
+    <p v-if="error" class="error-text" role="alert">{{ error }}</p>
   </div>
 </template>
 
 <style scoped>
-.annotation-editor { display: grid; gap: 0.75rem; }
+.annotation-editor { display: grid; gap: var(--space-3); }
 .annotation-table { width: 100%; border-collapse: collapse; }
-.annotation-table th, .annotation-table td { padding: 0.4rem 0.5rem; border: 1px solid var(--color-border); text-align: left; }
-.field-input { width: 100%; padding: 0.4rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
+.annotation-table th, .annotation-table td { padding: var(--space-2); border: 1px solid var(--color-border); text-align: left; }
+.field-input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
+.field-input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; box-shadow: var(--focus-ring); }
+.scope-field { display: flex; gap: var(--space-2); align-items: center; }
+.scope-label { color: var(--color-muted-strong); font-size: var(--font-size-sm); }
+.scope-select { padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
 .row-remove { color: var(--color-error); }
-.hint { color: var(--color-muted); }
-.error-text { color: var(--color-error); }
+.hint { margin: 0; color: var(--color-muted); font-size: var(--font-size-sm); }
+.error-text { margin: 0; color: var(--color-error); font-size: var(--font-size-sm); }
 </style>

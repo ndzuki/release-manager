@@ -1,18 +1,27 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 // Emergency change page (plan v3 Step 4): thin composition surface —
-// scoped authorization gate → conflict check → target/artifact/form flow →
+// scoped authorization gate → conflict check → target/action/form flow →
 // frozen confirmation → Execute → Operation Detail. All business logic lives
 // in the stores; this page only wires route scope, gates and navigation.
+//
+// The action selector picks ONE of image / replicas / annotations
+// (ExecuteEmergencyChange carries a single action — REQ-081), and the matching
+// payload control is mounted for the selected action. The replicas and
+// annotation payloads reach the request through the store, never through a
+// page-local copy of the wire shape.
 import { computed, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
+import EmergencyActionSelector from '@/components/emergency/EmergencyActionSelector.vue';
+import EmergencyAnnotationEditor from '@/components/emergency/EmergencyAnnotationEditor.vue';
 import EmergencyArtifactSelector from '@/components/emergency/EmergencyArtifactSelector.vue';
 import EmergencyChangeForm from '@/components/emergency/EmergencyChangeForm.vue';
 import EmergencyConfirmDialog from '@/components/emergency/EmergencyConfirmDialog.vue';
+import EmergencyReplicasInput from '@/components/emergency/EmergencyReplicasInput.vue';
 import EmergencyTargetSelector from '@/components/emergency/EmergencyTargetSelector.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
@@ -41,6 +50,31 @@ const writeBlocked = computed(() => !authorization.writeAllowed);
 const selectedTarget = computed(() => store.selectedTargetDisplay);
 
 const submittingError = computed(() => store.submitError);
+
+/** Whitelist keys for the selected annotation scope, in the target's order. */
+const approvedAnnotationKeyNames = computed(() => store.approvedAnnotationKeys.map((entry) => entry.key));
+
+/** Localized reason the replicas input is defensive-disabled (availability can
+ * change when the target projection refreshes). */
+const replicasUnavailableReason = computed(() => {
+  if (store.replicasHpaManaged) return t('emergency.replicas.unavailable.hpa');
+  return t('emergency.replicas.unavailable');
+});
+
+/** One-line summary of the action payload shown in the confirmation dialog
+ * (null for image, whose container/artifact rows already carry it). */
+const actionSummary = computed<string | null>(() => {
+  if (store.actionKind === 'replicas') {
+    return store.replicasValue === null
+      ? null
+      : t('emergency.confirm.action.replicas', { replicas: store.replicasValue });
+  }
+  if (store.actionKind === 'annotations') {
+    const entries = store.annotationEntries.map((entry) => `${entry.key}=${entry.value}`).join('; ');
+    return entries === '' ? null : t('emergency.confirm.action.annotations', { entries });
+  }
+  return null;
+});
 
 watch(routeScope, async (current, previous) => {
   if (previous && current !== previous) {
@@ -141,31 +175,61 @@ async function onConfirm(): Promise<void> {
       />
 
       <template v-if="selectedTarget">
-        <!--
-          The container/artifact picker is only meaningful when the read model
-          actually carries container data, and it does not yet: the target API
-          fills CurrentReplicas with a sentinel and leaves Containers empty
-          because release_inventory has no workload field values (TASK-168).
-          Rendering the picker anyway produced a dead dropdown that looked
-          usable while the target card beside it already reported the image
-          capability as unavailable. State that plainly until observation lands.
-        -->
-        <template v-if="selectedTarget.containers.length > 0">
-          <h2>选择容器与制品</h2>
-          <EmergencyArtifactSelector
-            :containers="selectedTarget.containers"
-            :selected-container="store.selectedContainer"
-            :artifacts="store.artifacts"
-            :selected-artifact-id="store.selectedArtifact?.id ?? null"
-            :loading="store.loadingArtifacts"
-            :error="store.loadError?.message ?? null"
-            @select-container="store.selectContainer"
-            @select-artifact="onSelectArtifact"
-          />
+        <EmergencyActionSelector
+          :target="selectedTarget"
+          :selected="store.actionKind"
+          @update:selected="store.setActionKind"
+        />
+
+        <template v-if="store.actionKind === 'image'">
+          <!--
+            The container/artifact picker is only meaningful when the read model
+            actually carries container data, and it does not yet: the target API
+            fills CurrentReplicas with a sentinel and leaves Containers empty
+            because release_inventory has no workload field values (TASK-168).
+            Rendering the picker anyway produced a dead dropdown that looked
+            usable while the target card beside it already reported the image
+            capability as unavailable. State that plainly until observation lands.
+          -->
+          <template v-if="selectedTarget.containers.length > 0">
+            <h2>选择容器与制品</h2>
+            <EmergencyArtifactSelector
+              :containers="selectedTarget.containers"
+              :selected-container="store.selectedContainer"
+              :artifacts="store.artifacts"
+              :selected-artifact-id="store.selectedArtifact?.id ?? null"
+              :loading="store.loadingArtifacts"
+              :error="store.loadError?.message ?? null"
+              @select-container="store.selectContainer"
+              @select-artifact="onSelectArtifact"
+            />
+          </template>
+          <p v-else class="unavailable-notice" role="status">
+            镜像变更暂不可用：平台尚未采集到该工作负载的容器信息，因此无法选择容器与制品。
+          </p>
         </template>
-        <p v-else class="unavailable-notice" role="status">
-          镜像变更暂不可用：平台尚未采集到该工作负载的容器信息，因此无法选择容器与制品。
-        </p>
+
+        <EmergencyReplicasInput
+          v-else-if="store.actionKind === 'replicas'"
+          :value="store.replicasValue"
+          :current-replicas="store.replicasCurrent"
+          :max="store.replicasMax"
+          :available="store.replicasAvailable"
+          :unavailable-reason="replicasUnavailableReason"
+          :error="store.replicasError"
+          @update:value="store.setReplicas"
+        />
+
+        <EmergencyAnnotationEditor
+          v-else
+          :approved-keys="approvedAnnotationKeyNames"
+          :scope="store.annotationScope"
+          :values="store.annotationEntries"
+          :available-scopes="store.annotationScopesAvailable"
+          :error="store.annotationError"
+          @update="store.setAnnotationEntries"
+          @update:scope="store.setAnnotationScope"
+        />
 
         <h2>填写变更信息</h2>
         <EmergencyChangeForm
@@ -198,6 +262,7 @@ async function onConfirm(): Promise<void> {
       :artifact="store.selectedArtifact"
       :reason="store.reason"
       :policy="store.effectivePolicy"
+      :action-summary="actionSummary"
       :risk-accepted="store.riskAccepted"
       :submitting="store.submitting"
       :error="store.submitError"
