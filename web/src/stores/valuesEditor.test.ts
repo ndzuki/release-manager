@@ -93,6 +93,34 @@ describe('values editor store', () => {
     expect(store.editorContent).toBe('# Paste or edit your values.yaml here\n{}');
   });
 
+  // AC-058-41: approval is a different actor's job, so their page load is the
+  // only entry point to the revision waiting for approval.
+  it('loads the pending-approval revision when there is no draft', async () => {
+    const pending: ValuesRevision = { ...draft, id: 'pending-1', status: 'pending_approval' };
+    vi.mocked(listValuesRevisions).mockResolvedValue([pending, parent]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+
+    await store.load();
+
+    expect(store.currentRevision?.id).toBe('pending-1');
+    expect(store.currentRevision?.status).toBe('pending_approval');
+    expect(store.parentRevision?.id).toBe('parent-1');
+  });
+
+  it('still prefers an editable draft over a pending-approval revision', async () => {
+    const pending: ValuesRevision = { ...draft, id: 'pending-1', status: 'pending_approval' };
+    vi.mocked(listValuesRevisions).mockResolvedValue([pending, draft, parent]);
+    vi.mocked(listSecrets).mockResolvedValue([]);
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1');
+
+    await store.load();
+
+    expect(store.currentRevision?.id).toBe('draft-1');
+  });
+
   it('keeps editor content when a reload fails with a network error', async () => {
     const store = useValuesEditorStore();
     store.resetScope('definition-1', 'cluster-1');

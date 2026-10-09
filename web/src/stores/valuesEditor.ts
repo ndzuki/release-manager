@@ -251,7 +251,17 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
         ? revisions.find((revision) => revision.id === convergenceParentRevisionId.value)
         : undefined;
       parentRevision.value = preparedParent ?? revisions.find((revision) => revision.status === 'approved') ?? null;
-      currentRevision.value = revisions.find((revision) => revision.status === 'draft') ?? null;
+      // A draft wins (it is the editable one). With no draft, fall back to the
+      // revision waiting for approval: approving is a DIFFERENT actor's job
+      // (AC-058-41; the server refuses self-approval and enforces the capability),
+      // so that actor's page load is their only entry point to the revision.
+      // Without the fallback a pending revision is visible only inside the
+      // submitting session, and the cross-actor approval has no entry point at
+      // all — found by running web/e2e/emergency-smoke.spec.ts for real (TASK-270).
+      currentRevision.value =
+        revisions.find((revision) => revision.status === 'draft') ??
+        revisions.find((revision) => revision.status === 'pending_approval') ??
+        null;
       // Convergence mode never reads browser drafts — prepared payloads are
       // rebuilt from the canonical API only (AC-058-35/48).
       const savedDraft = convergenceMode.value ? null : storage.getItem(draftKeyValue.value);

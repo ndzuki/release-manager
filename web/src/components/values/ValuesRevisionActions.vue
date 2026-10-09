@@ -45,7 +45,20 @@ function formatTimestamp(value?: string): string {
     </div>
 
     <div class="revision-actions__buttons">
-      <button v-if="!readOnly && revision?.status === 'draft'" type="button" class="primary" :disabled="saveDisabled" @click="emit('save')">
+      <!-- Save is also the FIRST-revision action: with no revision yet the store
+           creates one (stores/valuesEditor.ts save() → createValuesRevision with
+           the parent anchor). Gating it on `revision.status === 'draft'` left the
+           editor with no way to save at all — the page renders "创建首个配置
+           Revision。" and a convergence session prepared from a pending task starts
+           with no draft, so the cross-actor approval flow was unreachable from the
+           UI (found by actually running web/e2e/emergency-smoke.spec.ts). -->
+      <button
+        v-if="!readOnly && (revision === null || revision.status === 'draft')"
+        type="button"
+        class="primary"
+        :disabled="saveDisabled"
+        @click="emit('save')"
+      >
         {{ saving ? '保存中…' : '保存 Draft' }}
       </button>
       <button

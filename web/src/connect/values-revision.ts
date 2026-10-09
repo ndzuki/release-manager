@@ -71,6 +71,17 @@ export async function createValuesRevision(input: {
   expectedParentVersion: number;
   /** Convergence mode: single-use Prepare Session token (REQ-058/068). */
   prepareToken?: string;
+  /**
+   * Write idempotency key (ADR-009). CreateValuesRevision REQUIRES it
+   * (internal/orchestrator/values_revision.go validateValuesIdempotencyKey:
+   * 1-64 characters in the `Idempotency-Key` header); omitting the header made
+   * every draft creation fail with invalid_argument, so neither the first
+   * configuration revision nor a convergence draft could be created from the
+   * console. Defaults to a fresh key per call — safe because a retry of an
+   * already-created revision is refused by the store's duplicate guard — and
+   * callers that replay a request whose outcome is unknown can pin a stable key.
+   */
+  idempotencyKey?: string;
 }): Promise<ValuesRevision> {
   const request = create(CreateValuesRevisionRequestSchema, {
     releaseDefinitionId: input.releaseDefinitionId,
@@ -80,7 +91,9 @@ export async function createValuesRevision(input: {
     expectedParentVersion: BigInt(input.expectedParentVersion),
     prepareToken: input.prepareToken ?? '',
   });
-  const response = await orchestratorClient.createValuesRevision(request);
+  const response = await orchestratorClient.createValuesRevision(request, {
+    headers: new Headers({ 'Idempotency-Key': input.idempotencyKey ?? crypto.randomUUID() }),
+  });
   if (!response.revision) throw new ConnectError('create response is missing', Code.Internal);
   return mapValuesRevision(response.revision);
 }
