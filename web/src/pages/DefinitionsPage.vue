@@ -2,7 +2,7 @@
 import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import { useAuthStore } from '@/stores/auth';
-import { onMounted, ref } from 'vue';
+import { onMounted, ref, useId } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -32,6 +32,18 @@ const draftNamespace = ref('');
 const draftReleaseName = ref('');
 const draftChartName = ref('');
 const validationError = ref('');
+
+/*
+ * Ids for the mapping-row controls. The prefix comes from useId() so the ids stay
+ * unique even if a second editor is mounted, and stable across re-renders (a bare
+ * array index would collide with a second instance and remounting would renumber
+ * every id, breaking any label reference held across the update).
+ */
+const mappingIdPrefix = useId();
+
+function mappingFieldId(index: number, field: string): string {
+  return `${mappingIdPrefix}-mapping-${index}-${field}`;
+}
 
 const BLANK_MAPPING: PromotionMappingView = { workloadKind: '', workloadName: '', container: '', field: '', valuesPath: '' };
 
@@ -254,11 +266,47 @@ function formatTimestamp(value: string | null): string {
           </thead>
           <tbody>
             <tr v-for="(mapping, index) in draftMappings" :key="index" :data-testid="`mapping-row-${index}`">
-              <td><input v-model="mapping.workloadKind" :name="`kind-${index}`" /></td>
-              <td><input v-model="mapping.workloadName" :name="`name-${index}`" /></td>
-              <td><input v-model="mapping.container" :name="`container-${index}`" /></td>
-              <td><input v-model="mapping.field" :name="`field-${index}`" /></td>
-              <td><input v-model="mapping.valuesPath" :name="`valuesPath-${index}`" /></td>
+              <!--
+                Each cell carries a visually-hidden <label for> instead of an aria-label:
+                the column header above is plain text, so the input has no accessible
+                name of its own, and the row index is what tells the five inputs of one
+                row apart from the next. Ids are derived from useId(), so a second
+                editor mounted anywhere else cannot collide with them.
+              -->
+              <td>
+                <label class="visually-hidden" :for="mappingFieldId(index, 'kind')">
+                  {{ t('common.labelledRowField', { field: t('definitions.workloadKind'), index: index + 1 }) }}
+                </label>
+                <input :id="mappingFieldId(index, 'kind')" v-model="mapping.workloadKind" :name="`kind-${index}`" />
+              </td>
+              <td>
+                <label class="visually-hidden" :for="mappingFieldId(index, 'name')">
+                  {{ t('common.labelledRowField', { field: t('definitions.workloadName'), index: index + 1 }) }}
+                </label>
+                <input :id="mappingFieldId(index, 'name')" v-model="mapping.workloadName" :name="`name-${index}`" />
+              </td>
+              <td>
+                <label class="visually-hidden" :for="mappingFieldId(index, 'container')">
+                  {{ t('common.labelledRowField', { field: t('definitions.container'), index: index + 1 }) }}
+                </label>
+                <input :id="mappingFieldId(index, 'container')" v-model="mapping.container" :name="`container-${index}`" />
+              </td>
+              <td>
+                <label class="visually-hidden" :for="mappingFieldId(index, 'field')">
+                  {{ t('common.labelledRowField', { field: t('definitions.field'), index: index + 1 }) }}
+                </label>
+                <input :id="mappingFieldId(index, 'field')" v-model="mapping.field" :name="`field-${index}`" />
+              </td>
+              <td>
+                <label class="visually-hidden" :for="mappingFieldId(index, 'values-path')">
+                  {{ t('common.labelledRowField', { field: t('definitions.valuesPath'), index: index + 1 }) }}
+                </label>
+                <input
+                  :id="mappingFieldId(index, 'values-path')"
+                  v-model="mapping.valuesPath"
+                  :name="`valuesPath-${index}`"
+                />
+              </td>
               <td>
                 <button type="button" :data-testid="`mapping-remove-${index}`" @click="removeMapping(index)">删除</button>
               </td>

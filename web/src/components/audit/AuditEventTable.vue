@@ -137,10 +137,24 @@ td small {
   cursor: pointer;
 }
 
-.audit-results__row:hover,
+/*
+ * The rows are tab stops (tabindex="0"), so keyboard focus must be visible.
+ *
+ * These rules used to share one block that ended in `outline: none`. A scoped
+ * `.audit-results__row:focus-visible` (0,2,0) beats base.css's global `:focus-visible`
+ * (0,1,0), so that declaration silently cancelled the console's focus ring and left a
+ * pale background tint as the only signal. Mouse hover and keyboard focus are split
+ * again here, and the ring is drawn from the shared tokens, inset because the row
+ * spans the table and an outside offset would be clipped by the rounded wrapper.
+ */
+.audit-results__row:hover {
+  background: var(--color-info-soft);
+}
+
 .audit-results__row:focus-visible {
   background: var(--color-info-soft);
-  outline: none;
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
 }
 
 .audit-status {

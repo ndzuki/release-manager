@@ -133,6 +133,26 @@ describe('TrustPolicyPage', () => {
     const retire = wrapper.get<HTMLButtonElement>('[data-testid="trust-retire-only"]');
     expect(retire.element.disabled).toBe(true);
   });
+
+  /*
+   * TASK-269. The environment selector sat in the middle of a sentence ("环境 <select>")
+   * with no label at all: the prose next to a control is not an accessible name. The
+   * word is now the control's <label>, and the assertion is that the reference resolves
+   * to the real selector — not merely that a `for` attribute exists.
+   */
+  it('associates the environment selector with its label', async () => {
+    const wrapper = await mountPage();
+
+    const label = wrapper.get('label[for="trust-environment"]');
+    const select = wrapper.get<HTMLSelectElement>('#trust-environment');
+
+    expect(label.text()).toBe('环境');
+    expect(select.element.tagName).toBe('SELECT');
+    expect(select.attributes('name')).toBe('environment');
+    // …and it is the selector the policy was loaded for, not a look-alike.
+    expect(select.element.value).toBe('staging');
+    expect([...select.element.options].map((option) => option.value)).toEqual(['staging', 'production']);
+  });
 });
 
 describe('trust-root write gating', () => {

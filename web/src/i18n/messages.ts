@@ -167,6 +167,12 @@ const zhCN = {
   'release.filter.allStatus': '全部状态',
   'release.table.valuesDigest': 'Values 摘要',
   'common.breadcrumb': '面包屑',
+  /*
+   * Accessible name for a form control that lives in a repeated table row: the field
+   * name alone repeats once per row, so a screen-reader user tabbing through the row
+   * editors cannot tell which row they are on. `{field}` is itself a catalog value.
+   */
+  'common.labelledRowField': '{field}（第 {index} 行）',
   // Wave 4: operator management
   'operator.token.oneTimeSecret': '一次性密钥',
   'operator.token.closeWarning': '关闭该对话框会从浏览器中永久移除明文。',

@@ -71,8 +71,11 @@ function formatTimestamp(value: string | null): string {
         <p class="eyebrow">{{ t('trust.eyebrow') }}</p>
         <h1>签名信任根</h1>
         <p class="trust__subtitle">
-          环境
-          <select v-model="store.environment" name="environment" @change="store.load(store.environment)">
+          <!-- The prose word was already there; making it the control's <label> is what
+               associates it with the select (the wrapping <p> is a flex container, so the
+               label stays a separate flex item and the rendering is unchanged). -->
+          <label for="trust-environment">环境</label>
+          <select id="trust-environment" v-model="store.environment" name="environment" @change="store.load(store.environment)">
             <option v-for="env in environments" :key="env" :value="env">{{ env }}</option>
           </select>
           <span v-if="store.policy">
