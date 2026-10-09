@@ -34,6 +34,13 @@ export type EmergencyOpType =
   | 'SET_APPROVED_ANNOTATION'
   | 'UNSPECIFIED';
 
+/**
+ * The three submit actions the form can select. ExecuteEmergencyChange carries
+ * exactly one per request (REQ-081 single-action semantics), so the selector
+ * and the store's intent key on this union rather than on optional payloads.
+ */
+export type EmergencyActionKind = 'image' | 'replicas' | 'annotations';
+
 export type ConvergencePolicy = 'REQUIRE_PROMOTION' | 'REVERT_ON_NEXT_RECONCILE' | 'UNSPECIFIED';
 
 export type EmergencyEffectStatusName = 'NOT_STARTED' | 'UNKNOWN' | 'APPLIED' | 'NOT_APPLIED' | 'UNSPECIFIED';
@@ -330,6 +337,42 @@ export function parseScopedAnnotationKey(flatKey: string): { scope: string; key:
   const separator = flatKey.indexOf('/');
   if (separator <= 0) return { scope: '', key: flatKey };
   return { scope: flatKey.slice(0, separator), key: flatKey.slice(separator + 1) };
+}
+
+/**
+ * The submit actions this target currently advertises as available, in the
+ * selector's display order. Derived from the same projection the availability
+ * badges render, so a disabled action and a disabled badge never disagree
+ * (AC-058-01/09).
+ */
+export function availableEmergencyActions(target: EmergencyTargetDisplay): EmergencyActionKind[] {
+  const actions: EmergencyActionKind[] = [];
+  if (target.imageActions.some((action) => action.availability.available)) actions.push('image');
+  if (target.replicasAction?.availability.available) actions.push('replicas');
+  if (target.annotationAvailability.available && target.annotationActions.length > 0) actions.push('annotations');
+  return actions;
+}
+
+/** Distinct scopes among the target's approved annotation keys, in stable order. */
+export function annotationScopes(target: EmergencyTargetDisplay): string[] {
+  return [...new Set(target.annotationActions.map((action) => action.scope))].sort();
+}
+
+/**
+ * The definition's approved (key, scope) projection for one scope. The read
+ * model only carries approved keys the operator has actually observed
+ * (internal/orchestrator/emergency_queries.go:206-243 filters the observation
+ * against the definition's whitelist), so a key that is approved but not yet
+ * present on the workload is not offered — the emergency contract exposes no
+ * other whitelist read.
+ */
+export function approvedAnnotationKeysForScope(
+  target: EmergencyTargetDisplay,
+  scope: string,
+): Array<{ key: string; scope: string }> {
+  return target.annotationActions
+    .filter((action) => action.scope === scope)
+    .map((action) => ({ key: action.key, scope: action.scope }));
 }
 
 export function mapCandidateArtifact(artifact: ProtoCandidateArtifactSummary): CandidateArtifactDisplay {

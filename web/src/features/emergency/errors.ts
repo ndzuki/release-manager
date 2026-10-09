@@ -35,10 +35,14 @@ const REASON_MESSAGES: Record<string, string> = {
   promotion_not_supported: '该变更不支持收敛策略，请使用 REVERT',
   hpa_managed: '副本数由 HPA 管理，不可修改',
   invalid_replicas: '副本数超出允许范围',
+  workload_kind_not_supported: '该工作负载类型不支持副本数变更',
   annotation_key_not_allowed: '注解 key 不在白名单内',
   duplicate_annotation_key: '注解 key 重复',
   annotation_scope_mismatch: '注解 scope 不一致',
   invalid_annotation_entries: '注解条目不合法',
+  // Branch exclusivity (validateEmergencyBranchExclusivity, D3=A): one action
+  // per request, so the second payload is refused instead of overriding.
+  conflicting_change: '同一次请求只能包含一种变更动作',
   artifact_not_trusted: '制品未通过信任验证',
   operator_offline: 'Operator 离线，请稍后重试',
   idempotency_conflict: '幂等键已绑定其他请求内容，请重新确认',

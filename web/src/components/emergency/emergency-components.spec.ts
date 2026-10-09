@@ -1,9 +1,11 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import EmergencyActionSelector from '@/components/emergency/EmergencyActionSelector.vue';
 import EmergencyArtifactSelector from '@/components/emergency/EmergencyArtifactSelector.vue';
 import EmergencyAnnotationEditor from '@/components/emergency/EmergencyAnnotationEditor.vue';
 import EmergencyChangeForm from '@/components/emergency/EmergencyChangeForm.vue';
 import EmergencyConfirmDialog from '@/components/emergency/EmergencyConfirmDialog.vue';
+import EmergencyReplicasInput from '@/components/emergency/EmergencyReplicasInput.vue';
 import EmergencyTargetSelector from '@/components/emergency/EmergencyTargetSelector.vue';
 import type { CandidateArtifactDisplay, EmergencyTargetDisplay } from '@/features/emergency/model';
 
@@ -152,6 +154,109 @@ describe('emergency components (Step 4)', () => {
       ],
     });
     expect(wrapper.text()).toContain('重复');
+  });
+
+  // TASK-273: the editor carries its own scope selector and exposes the row
+  // error to assistive tech (aria-invalid + a role="alert" message referenced by
+  // aria-describedby) instead of only painting it red.
+  it('AnnotationEditor offers the approved scopes and describes its row error (TASK-273)', async () => {
+    const wrapper = mount(EmergencyAnnotationEditor, {
+      props: {
+        approvedKeys: ['tier'],
+        scope: 'WORKLOAD_METADATA',
+        availableScopes: ['WORKLOAD_METADATA', 'POD_TEMPLATE_METADATA'],
+        values: [{ localId: 'local-1', key: 'tier', value: '', scope: 'WORKLOAD_METADATA' }],
+      },
+    });
+
+    // The scope selector is NOT a row control: it must not be captured by the
+    // row-control selector used by the a11y wiring test above.
+    const scopeSelect = wrapper.get('select.scope-select');
+    expect(scopeSelect.findAll('option')).toHaveLength(2);
+    await scopeSelect.setValue('POD_TEMPLATE_METADATA');
+    expect(wrapper.emitted('update:scope')).toEqual([['POD_TEMPLATE_METADATA']]);
+
+    // An empty value is invalid, and the control points at the rendered alert.
+    const valueInput = wrapper.get('input.field-input');
+    expect(valueInput.attributes('aria-invalid')).toBe('true');
+    const describedBy = valueInput.attributes('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(wrapper.get(`#${describedBy}`).attributes('role')).toBe('alert');
+  });
+
+  // TASK-273: the replicas control exists, starts at 1 (0 means "not requested"
+  // on the wire and selects the image branch server-side) and renders the
+  // FormField relations for its label/help/error.
+  it('ReplicasInput wires its label/error relations and emits the parsed value (TASK-273)', async () => {
+    const wrapper = mount(EmergencyReplicasInput, {
+      props: { value: 3, currentReplicas: 2, max: 8, available: true, error: '副本数超出允许范围' },
+    });
+
+    const input = wrapper.get('input[type="number"]');
+    expect(input.attributes('min')).toBe('1');
+    expect(input.attributes('max')).toBe('8');
+    const id = input.attributes('id');
+    expect(id).toBeTruthy();
+    expect(wrapper.get(`label[for="${id}"]`).text()).toContain('目标副本数');
+    expect(input.attributes('aria-invalid')).toBe('true');
+    const describedBy = input.attributes('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const alert = wrapper.get('[role="alert"]');
+    expect(describedBy).toContain(alert.attributes('id'));
+    expect(alert.text()).toContain('副本数超出允许范围');
+
+    await input.setValue('5');
+    expect(wrapper.emitted('update:value')).toEqual([[5]]);
+    await input.setValue('');
+    expect(wrapper.emitted('update:value')?.[1]).toEqual([null]);
+  });
+
+  it('ReplicasInput states unavailability instead of rendering a dead control (TASK-273)', () => {
+    const wrapper = mount(EmergencyReplicasInput, {
+      props: {
+        value: null,
+        currentReplicas: 2,
+        max: 8,
+        available: false,
+        unavailableReason: '副本数由 HPA 管理，不可修改。',
+        error: null,
+      },
+    });
+    expect(wrapper.find('input[type="number"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('副本数由 HPA 管理');
+  });
+
+  // TASK-273: one action per request. The selector keeps an unavailable action
+  // visible but disabled WITH its reason, and only emits for a selectable one.
+  it('ActionSelector disables unavailable actions with their reason (TASK-273)', async () => {
+    const base = target();
+    const wrapper = mount(EmergencyActionSelector, { props: { target: base, selected: 'image' } });
+
+    const replicas = wrapper.get('input[value="replicas"]');
+    expect((replicas.element as HTMLInputElement).disabled).toBe(true);
+    expect(wrapper.text()).toContain('副本数由 HPA 管理');
+    const annotations = wrapper.get('input[value="annotations"]');
+    expect((annotations.element as HTMLInputElement).disabled).toBe(true);
+
+    // The image action is selectable, so its radio is enabled (and already
+    // checked, which is why the emit assertion below uses another action).
+    const image = wrapper.get('input[value="image"]');
+    expect((image.element as HTMLInputElement).disabled).toBe(false);
+
+    await wrapper.setProps({
+      target: {
+        ...base,
+        replicasAction: {
+          currentReplicas: 2,
+          maxEmergencyReplicas: 8,
+          hpaManaged: false,
+          availability: { available: true },
+          promotions: [],
+        },
+      },
+    });
+    await wrapper.get('input[value="replicas"]').setValue();
+    expect(wrapper.emitted('update:selected')).toEqual([['replicas']]);
   });
 
   it('ConfirmDialog requires risk acceptance before submit (AC-058-15/16)', async () => {
