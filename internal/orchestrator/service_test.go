@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2105,6 +2106,10 @@ func TestWatchOperation_SnapshotAndReplay(t *testing.T) {
 	// Receive messages in a goroutine, then cancel after collecting snapshot + replay.
 	var snapshot *orchestratorv1.OperationSnapshot
 	var entries []*orchestratorv1.TimelineEntry
+	// ready closes once the snapshot and both replayed entries have arrived: a real
+	// signal, so the wait below cannot pass on a partially received stream (TASK-257).
+	ready := make(chan struct{})
+	var readyOnce sync.Once
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -2115,11 +2120,18 @@ func TestWatchOperation_SnapshotAndReplay(t *testing.T) {
 				snapshot = p.Snapshot
 			case *orchestratorv1.WatchOperationResponse_Entry:
 				entries = append(entries, p.Entry)
+				if snapshot != nil && len(entries) >= 2 {
+					readyOnce.Do(func() { close(ready) })
+				}
 			}
 		}
 	}()
-	// Give the handler time to send snapshot + replay entries (50ms poll, so 200ms is enough).
-	time.Sleep(200 * time.Millisecond)
+	// (the wait below is driven by the ready signal, not by a time budget)
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for snapshot + replay entries; no snapshot + replay entries arrived before the deadline")
+	}
 	cancel()
 	<-done
 
@@ -2176,6 +2188,9 @@ func TestWatchOperation_AfterSequenceSkipsEntries(t *testing.T) {
 	require.NotNil(t, stream)
 
 	var replayEntries []*orchestratorv1.TimelineEntry
+	// Real signal: the snapshot and the one expected replay entry (TASK-257).
+	ready := make(chan struct{})
+	var readyOnce sync.Once
 	var gotSnapshot bool
 	done := make(chan struct{})
 	go func() {
@@ -2187,10 +2202,17 @@ func TestWatchOperation_AfterSequenceSkipsEntries(t *testing.T) {
 				gotSnapshot = true
 			case *orchestratorv1.WatchOperationResponse_Entry:
 				replayEntries = append(replayEntries, p.Entry)
+				if gotSnapshot && len(replayEntries) >= 1 {
+					readyOnce.Do(func() { close(ready) })
+				}
 			}
 		}
 	}()
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the snapshot and the replayed entry")
+	}
 	cancel()
 	<-done
 
