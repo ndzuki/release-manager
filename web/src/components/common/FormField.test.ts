@@ -197,5 +197,9 @@ describe('FormField wiring on the adopting page', () => {
     expect(wrapper.get(`#${errorId}`).text()).toContain('密码过长');
     expect(password.attributes('aria-invalid')).toBe('true');
     expect(wrapper.get('[role="alert"]').attributes('id')).toBe(errorId);
+
+    // The slot props the page must forward: required reaches both controls.
+    expect(wrapper.get('input[name="username"]').attributes('required')).toBeDefined();
+    expect(password.attributes('required')).toBeDefined();
   });
 });

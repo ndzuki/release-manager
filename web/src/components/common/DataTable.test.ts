@@ -93,15 +93,16 @@ describe('DataTable', () => {
   it('keeps missing values last and renders them as empty cells', async () => {
     const wrapper = mountTable({
       rows: [
-        { id: 'a', name: 'beta', replicas: 2, state: 'ready' },
+        { id: 'a', name: 'zulu', replicas: 2, state: 'ready' },
         { id: 'b', name: null, replicas: 1, state: 'unknown' },
-        { id: 'c', name: 'alpha', replicas: 3, state: 'ready' },
       ],
     });
 
     await wrapper.get('th[data-key="name"] button').trigger('click');
 
-    expect(bodyRows(wrapper).map((cells) => cells[0])).toEqual(['alpha', 'beta', '']);
+    // 'zulu' > 'null' as strings, so this ordering only holds while the comparator
+    // keeps missing values last instead of falling through to String(null).
+    expect(bodyRows(wrapper).map((cells) => cells[0])).toEqual(['zulu', '']);
   });
 
   it('exposes sortable headers as focusable native buttons', async () => {

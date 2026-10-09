@@ -7,8 +7,8 @@ import { computed, useId } from 'vue';
  * It exists because 55 controls each hand-wrote `label + control + error` and the
  * three relations that make a field readable to assistive tech were mostly absent:
  * `<label>` wrapped the control instead of pointing at it with `for`, field errors
- * were plain `<small>` with no `aria-describedby`, and `aria-invalid` appeared
- * twice in the whole console. Those relations are this component's contract:
+ * were plain `<small>` with no `aria-describedby`, and `aria-invalid` was bound in
+ * sixteen places across eight components. Those relations are this component's contract:
  *
  *   <label :for="id">  ←→  control :id="id"     (explicit, never implicit wrapping)
  *   aria-describedby = the ids of the messages ACTUALLY rendered (error, then help)
@@ -18,12 +18,14 @@ import { computed, useId } from 'vue';
  * and <textarea> — so the wiring itself is handed to the caller as slot props. That
  * is the deliberate seam: pass them through and the three relations hold by
  * construction; ignore them and nothing here can save you. `FormField.test.ts`
- * therefore also mounts the real page that adopted this component, so "the caller
- * actually passes them" is asserted and not assumed.
+ * therefore also mounts the real page that adopted this component, so the wiring the
+ * one real caller passes is asserted and not assumed. (DataTable has no consumer yet,
+ * so nothing asserts a caller of that one.)
  */
 interface Props {
   label: string;
-  /** Control id. Generated (useId) when omitted, so `for` can never dangle. */
+  /** Control id. Generated (useId) when omitted and stable across renders; the caller
+   * must bind it to the control, otherwise the label's `for` points at nothing. */
   id?: string;
   /** Persistent hint. Rendered below the control and referenced by aria-describedby. */
   help?: string;

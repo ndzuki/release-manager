@@ -6,9 +6,10 @@ import LoadingState from './LoadingState.vue';
 import { t } from '@/i18n/messages';
 
 /*
- * The one table primitive (ux-revamp-plan §9.2, ADR-029 clause 3): five tables were
- * hand-rolled, each with its own empty/error/loading markup and none of them
- * sortable. Two things are the contract here:
+ * The one table primitive (ux-revamp-plan §9.2, ADR-029 clause 3): tables are hand-rolled
+ * page by page (thirteen .vue files contain a `<table>`, several pages more than one),
+ * each with its own empty/error/loading markup and none of them sortable. Two things are
+ * the contract here:
  *
  *  - sorting is owned by this component. A sortable header renders a NATIVE
  *    `<button>`, so Tab reaches it and Enter/Space activate it with no extra JS
