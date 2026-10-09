@@ -3,7 +3,7 @@
 本文只回答一个问题：**要让本仓库的 CI 跑起来，需要在 GitHub 上配置哪些机密与变量、谁来配、怎么配、取值必须长什么样。**
 
 - 读者：需要维护本仓库 Actions 的维护者。
-- 事实范围：`.github/workflows/test.yml`（731 行，18 个 job）与 `.github/workflows/sync-to-gitcode.yaml`（40 行，1 个 job）。`.github/workflows/` 之外没有其它 workflow。
+- 事实范围：`.github/workflows/test.yml`（731 行，18 个 job）与 `.github/workflows/sync-to-gitcode.yaml`（40 行，1 个 job）。**另有 `.github/workflows/codeql.yml`（103 行，1 个 job，`permissions: security-events: write`）—— 本文档的逐项清单未覆盖它**；`.github/workflows/` 之外没有其它 workflow。
 - 本文**不包含任何机密取值**。所有示例值一律写成 `<...>` 占位。
 - 生产部署侧的机密注入**不在本清单内**：`docs/architecture.md:113` 明确「生产 Secret manager 注入与生产配置加载仍由 REQ-011 owner 承接」，dev 范围只做了最小接线。
 
@@ -14,7 +14,7 @@
 | 名称 | 用在哪个 job / step（文件:行号） | 用途 | 是否敏感 | 缺失时的后果 |
 | --- | --- | --- | --- | --- |
 | `GITCODE_TOKEN` | `gitcode-sync` → step `Push to GitCode`（`.github/workflows/sync-to-gitcode.yaml:30-40`，token 在 `:35`） | 放进 `git -c http.extraHeader="Authorization: Basic …"`（`:39`，**凭据不进 remote URL**），向 `gitcode.com/ndmizuki/<repo>` 执行 `git push --mirror`（`:40`） | **是**（外部镜像仓库的写凭据） | 仅该 job 失败（认证被拒）；`test.yml` 的 18 个 job 完全不受影响。镜像与 GitHub 主干从此静默漂移，无告警 |
-| `GITHUB_TOKEN` | `test` → step `bufbuild/buf-setup-action`（`.github/workflows/test.yml:139-143`）；`test-sqlite` → 同一 action（`.github/workflows/test.yml:235-238`）；`proto-check` → 同一 action（`.github/workflows/test.yml:618-623`） | 给 buf 发行版查询做 GitHub API 认证，规避匿名限流（注释见 `.github/workflows/test.yml:133-134`） | 否（运行时自动签发；本仓库权限被 `.github/workflows/test.yml:15-16` 收敛为 `contents: read`） | 不会缺失。若被显式清空，最坏是匿名 API 限流导致 action 取版本失败，属可重试的基础设施失败 |
+| `GITHUB_TOKEN` | `test` → step `bufbuild/buf-setup-action`（`.github/workflows/test.yml:139-143`）；`test-postgres-integration` → 同一 action（`.github/workflows/test.yml:235-238`）；`test-sqlite` → 同一 action（`.github/workflows/test.yml:285-290`）；`proto-check` → 同一 action（`.github/workflows/test.yml:618-623`） | 给 buf 发行版查询做 GitHub API 认证，规避匿名限流（注释见 `.github/workflows/test.yml:133-134`） | 否（运行时自动签发；本仓库权限被 `.github/workflows/test.yml:15-16` 收敛为 `contents: read`） | 不会缺失。若被显式清空，最坏是匿名 API 限流导致 action 取版本失败，属可重试的基础设施失败 |
 | `E2E_RUNNER_PASSWORD` | `e2e` job 级 env（`.github/workflows/test.yml:517`）+ step `Run all E2E stages` env 再注入一次（`.github/workflows/test.yml:573`） | E2E 写身份 `e2e-runner` 的口令（角色 `release_admin`，`internal/devfixture/accounts_trust.go:29`）；`make e2e-all` 只从进程环境读它（`Makefile:203-204`） | **是**（但作用域仅 dev/CI 夹具环境） | `make dev-seed` 阶段即失败：CI profile 要求四个口令齐全（`internal/devfixture/files.go:210-215`）；即便跳过 seed，`make e2e-all` 也会在 `Makefile:203` 直接退出 |
 | `DEV_ADMIN_PASSWORD` | `e2e` job 级 env（`.github/workflows/test.yml:518`） | `dev-admin` 账号口令（用户名默认 `dev-admin`，`cmd/devseed/main.go:62`），seed 用它登录并初始化系统（`internal/devfixture/runner.go:337`） | **是** | `make dev-seed`（`.github/workflows/test.yml:569-570`）以 `ci profile requires env-injected passwords: DEV_ADMIN_PASSWORD` 失败（`internal/devfixture/files.go:200-215`） |
 | `DEV_DEPLOYER_PASSWORD` | `.github/workflows/test.yml:519` | `dev-deployer` 口令（`cmd/devseed/main.go:64-65`），deployer token 用于 `GetOperation` 轮询（`internal/devfixture/accounts_trust.go:170-172`） | **是** | 同上（四个口令一次性汇总报错） |
@@ -49,7 +49,7 @@ gh variable delete RUNS_ON --repo ndzuki/release-manager
 
 逐条核实 `if:` 后的事实：
 
-1. **`e2e`（`.github/workflows/test.yml:505`）是唯一消费 `:28` 所列 12 个 `DEV_*/E2E_*` secret 的 job。** 它的 `if:` 是 `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)`，而 workflow 的 `push` 只监听 `main`（`.github/workflows/test.yml:4-5`）→ **只有 push main 与手动触发会跑，`pull_request` 一律跳过**（设计意图见 `.github/workflows/test.yml:495-497` 注释：PR 刻意不跑这个特权 job）。
+1. **`e2e`（`.github/workflows/test.yml:505`）是唯一消费 `:31` 所列 12 个 `DEV_*/E2E_*` secret 的 job。** 它的 `if:` 是 `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)`，而 workflow 的 `push` 只监听 `main`（`.github/workflows/test.yml:4-5`）→ **只有 push main 与手动触发会跑，`pull_request` 一律跳过**（设计意图见 `.github/workflows/test.yml:495-497` 注释：PR 刻意不跑这个特权 job）。
 2. **secret 缺失不会让 `e2e` job 被跳过，只会让它失败。** GitHub 对未定义的 secret 注入空字符串（平台行为，非仓库内证据），因此失败点在脚本内部，而不是在表达式求值：`make dev-up` → `deploy/dev/dev.sh:294-295/342-343/394-395`；`make dev-seed` → `internal/devfixture/files.go:200-215,258-261`；`make e2e-all` → `Makefile:203`。三处都有显式的「ci profile requires X」文案，**这是有意的**：缺机密必须报成配置缺陷，不能被误读成代码回归。
 3. **`e2e-prerequisite`（`.github/workflows/test.yml:420-503`）只在 push main / `workflow_dispatch` 上跑（PR 上不跑），且不需要任何仓库 secret**（`docs/testing.md:382` 同口径）。它没有设 `DEV_PROFILE`，因此走 local profile：口令与密钥由 `dev-seed`/`dev-up` 自行生成到 `data/`（`internal/devfixture/files.go:183-195`），smoke 再从 `data/dev-credentials.env` source 回来（`test/e2e/prerequisite/smoke.sh:86-94`）。**它上传的 artifact（`.github/workflows/test.yml:487-493`）来自本地生成的夹具，不含 CI secret 值。**
 4. **下列 10 个 job（`sdk-check`、`license-check`、`install-sdk`、`upgrade-sdk`、`operator-image-sdk-only`、`test`、`test-sqlite`、`test-sdkcheck`、`docs-check`、`proto-check`）无 `if:`，全部触发都跑，除自动的 `GITHUB_TOKEN` 外不消费任何 secret**（逐个 job 核对步骤：`.github/workflows/test.yml:37-49,50-69,70-86,87-103,104-117,118-221,273-315,332-370,596-611,612-657`）。`test.yml` 共 **18 个 job**：上列 10 个无 `if:`；另 8 个（`test-postgres-integration`/`vulncheck`/`rollout-watch`/`e2e-prerequisite`/`e2e`/`web`/`store-surface`/`dead-methods`）不在此列；**`test.yml` 里带 `if:` 的只有 `e2e-prerequisite`（`:421`）与 `e2e`（`:505`）**。`install-sdk`/`upgrade-sdk`/`operator-image-sdk-only`/`rollout-watch` 依赖的是 Docker 与 kind，而非机密。`docs-check` 与 `proto-check` 是本次新增的静态门禁，二者同样只在 `contents: read` 下工作，不引入新的机密依赖。
@@ -146,7 +146,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 
 ### 7.2 其它只在本地/测试出现的 env（不需要配到 GitHub）
 
-- `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,399-400`；`CONTRIBUTING.md:49`）。CI 的 18 个 job 都没设它，所以这些用例在 CI 里是 skip 而非 fail（**建议**：若要真正跑 PG 侧门禁，需在 CI 起 Postgres 服务并注入 DSN —— 目前该缺口未闭合）。
+- `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,399-400`；`CONTRIBUTING.md:49`）。CI 里**只有 `test-postgres-integration`（`.github/workflows/test.yml:222-271`）注入它** —— 该 job 起 `postgres:16-alpine`、`:265` 设 `POSTGRES_TEST_DSN`、`:267` 跑 `go test -tags integration ./internal/store/postgres/...`；**其余 17 个 job 未注入**，那些用例在它们里面是 skip 而非 fail。
 - `RELEASE_MANAGER_DATABASE_DSN`：`devseed --reset` 的 PostgreSQL DSN（`cmd/devseed/main.go:58`）。
 - `E2E_RUNNER_PASSWORD` 之外的 e2e 可调项：`E2E_ENV_CONFIG` / `OUTPUT_DIR` / `STAGES` / `TIMEOUT` / `TOTAL_TIMEOUT` / `PARALLEL` / `KEEP_ON_FAILURE` / `SNAPSHOT_FULL` / `BASELINE_FILE`（`Makefile:135-153`），均非机密。
 - 服务配置的可注入 env（`internal/config/config.go:270-297`）：`DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`REDIS_PASSWORD`、`GATEWAY_*`、`VALUES_SECRET_PATTERNS` 等。**这些是本仓库「配置文件 + env 覆盖」的通道，dev 环境由 kustomize 提供，生产由部署侧提供，不在 CI secrets 清单内。**
@@ -171,21 +171,26 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 | `upgrade-sdk` | job | 继承 | `:87` | 只读 |
 | `operator-image-sdk-only` | job | 继承 | `:104` | 只读 |
 | `test` | job | 继承 | `:118` | 只读；`GITHUB_TOKEN` 仅传给 buf action（`:144`） |
+| `test-postgres-integration` | job | 继承 | `:222` | 只读；`GITHUB_TOKEN` 传给 buf action（`:238`） |
 | `test-sqlite` | job | 继承 | `:273` | 只读（`:290` 同上） |
+| `vulncheck` | job | 继承 | `:316` | 只读 |
 | `test-sdkcheck` | job | 继承 | `:332` | 只读 |
 | `rollout-watch` | job | 继承 | `:371` | 只读 |
-| `e2e-prerequisite` | job | 继承 | `:420` | 只读；上传 artifact（`:487-493`） |
+| `e2e-prerequisite` | job | **显式重复** `contents: read`（`:424-425`） | `:420` | 只读；上传 artifact（`:487-493`） |
 | `e2e` | job | **显式重复** `contents: read` | `:508-509` | 只读，与继承值一致（冗余但无害；可理解为「特权 job 处再声明一次」的自觉） |
+| `web` | job | 继承 | `:658` | 只读 |
+| `store-surface` | job | 继承 | `:702` | 只读 |
+| `dead-methods` | job | 继承 | `:719` | 只读 |
 | `docs-check` | job | 继承 | `:596` | 只读；不装 Go、不取任何 secret（`make check-docs` 只用 bash/grep/git） |
 | `proto-check` | job | 继承 | `:612` | 只读；`GITHUB_TOKEN` 仅传给 buf action（`:623`），与 `test`/`test-sqlite` 同形 |
-| `sync-to-gitcode.yaml` | workflow / job | **有 workflow 级 `permissions: contents: read`**（`:9-10`） | 全文件（`:1-25`） | ✅ **写外部系统的 job 已显式收敛为只读**（`:9-10`）。`GITHUB_TOKEN` 因此只读（无需靠平台默认值兜底）。|
+| `sync-to-gitcode.yaml` | workflow / job | **有 workflow 级 `permissions: contents: read`**（`:9-10`） | 全文件（`:1-40`） | ✅ **写外部系统的 job 已显式收敛为只读**（`:9-10`）。`GITHUB_TOKEN` 因此只读（无需靠平台默认值兜底）。|
 
 据此的纪律性结论与建议：
 
 1. **现状：两个文件里没有任何写权限 job、没有任何 `pull-requests: write` / `id-token: write` / `deployments: write`**（逐 job 核实，见上表），所以「按需最小」在 `test.yml` 这条线上成立（`.github/workflows/test.yml:15-16,508-509`）。`.github/workflows/sync-to-gitcode.yaml:9-10` **已有** workflow 级 `permissions: contents: read`，与 `test.yml` 对齐。
 2. **`GITCODE_TOKEN` 走 env 而非命令行**，注释与实现一致（`.github/workflows/sync-to-gitcode.yaml:33-36`，命令行用 `${GITCODE_USER}`/`${GITCODE_REPO}`，凭据走 `http.extraHeader`）。**凭据不进 URL**：`:39` 已是 `git -c http.extraHeader="Authorization: Basic …"`，`:31-32` 的注释也明说 never in the remote URL ⇒ 早前「拼进 URL」的残留风险已消除。
 3. **表达式内插进 shell 脚本的注入面**：`.github/workflows/test.yml:388,473` 把 `${{ vars.RUNS_ON }}` 直接写进 `if [ "..." = "self-hosted" ]`，`.github/workflows/test.yml:211` 把 `${{ github.event.* }}` 写进 action 的 `args`。`vars.*` 由仓库管理员控制，风险有限；**建议**统一改为 `env:` 传值（GitHub 官方推荐的脚本注入规避方式），`.github/workflows/test.yml:404` 已经是这种更安全的写法。
-4. **第三方 action 的 SHA pin（已实施）**：两个非官方 action 固定到完整 commit SHA —— `bufbuild/buf-setup-action` ×4（`a47c93e0…`，等于 tag `v1.50.0`）、`golangci/golangci-lint-action` ×1（`ba0d7d2e…`，等于 tag `v9.3.0`）。官方 `actions/*` 与 `github/codeql-action` 仍按 major tag（`checkout@v7` ×17、`setup-go@v7` ×13、`upload-artifact@v7` ×2、`cache/restore@v6` ×2、`cache@v6` ×1、`codeql-action@v4` ×2；工作树另有尚未提交的 `setup-node@v7` ×1）。**剩余建议**：给官方 action 也加 Dependabot/Renovate 版本更新，避免 major tag 静默落后。
+4. **第三方 action 的 SHA pin（已实施）**：两个非官方 action 固定到完整 commit SHA —— `bufbuild/buf-setup-action` ×4（`a47c93e0…`，等于 tag `v1.50.0`）、`golangci/golangci-lint-action` ×1（`ba0d7d2e…`，等于 tag `v9.3.0`）。官方 `actions/*` 与 `github/codeql-action` 仍按 major tag（`checkout@v7` ×18、`setup-go@v7` ×15、`upload-artifact@v7` ×2、`cache/restore@v6` ×2、`cache@v6` ×1、`codeql-action@v4` ×2；`setup-node@v7` ×2）。**剩余建议**：给官方 action 也加 Dependabot/Renovate 版本更新，避免 major tag 静默落后。
 5. **下载物完整性**：kind 与 k3d 二进制都做了 sha256 校验（`.github/workflows/test.yml:384-387` 的 `KIND_SHA256`、`.github/workflows/test.yml:450-451` 与 `:557-558` 的 `checksums.txt`），集群节点镜像与 workload 镜像按 digest pin（`Makefile:13-14`、`.github/workflows/test.yml:404`）。这是仓库里现存的正面控制。
 6. **制品与日志**：`e2e`/`e2e-prerequisite` 用 `if: always()` 上传 `e2e-results/`（`.github/workflows/test.yml:487-493`；其中 `:577-584` 保留 7 天、`:487-493` 走平台默认保留期），内容包括**未脱敏的容器日志**（`test/e2e/prerequisite/capture-logs.sh:30` 直接 `kubectl logs`）。**建议**：上传前对日志跑一遍 `internal/redact` 的同款模式（`internal/redact/sanitize.go:19-34`），或把 artifact 权限收窄到维护者。
 7. **本文自身的纪律**：第 4.1 节的示例命令都不回显值；`gh secret list` / `gh variable list` 只返回名字。**不要**在本仓库任何 workflow 里加 `gh secret list` 之外的读值操作——GitHub 也不提供读回明文的 API。
@@ -197,7 +202,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 | `GITCODE_TOKEN` 的取值来源与格式 | 仓库内无校验代码（见 5.6） | 维护者去 GitCode 侧建最小权限 PAT 并记录命名规范 |
 | 环境级 secret 的引入 | `environment:` 关键字 0 处（见 4.3） | 需产品/运维决策，改动 workflow |
 | secret 轮换周期与责任人 | 无脚本、无 schedule、无到期登记（见 6.2） | 建议在知识库 REQ 面登记 owner + 周期 |
-| live-PostgreSQL 门禁在 CI 的执行 | `POSTGRES_TEST_DSN` 未注入 → CI 上恒 skip（见 7.2） | 建议补 service container 或专用 runner |
+| live-PostgreSQL 门禁在 CI 的执行 | **仅 `test-postgres-integration`（`test.yml:222-271`）注入并真跑**（`:265` 注入 / `:267` 跑 integration）；其余 job 未注入 ⇒ 那些用例 skip | 建议补 service container 或专用 runner |
 | 自托管 runner 的标签与主机名口径 | 注释含主机名（`.github/workflows/test.yml:30-32`） | 对外文档建议只写「本地自托管 runner」 |
 
 > 事实源：
