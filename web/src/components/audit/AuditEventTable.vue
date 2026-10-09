@@ -141,7 +141,7 @@ td small {
  * The rows are tab stops (tabindex="0"), so keyboard focus must be visible.
  *
  * These rules used to share one block that ended in `outline: none`. A scoped
- * `.audit-results__row:focus-visible` (0,2,0) beats base.css's global `:focus-visible`
+ * `.audit-results__row:focus-visible` (0,3,0 once scoped) beats base.css's global `:focus-visible`
  * (0,1,0), so that declaration silently cancelled the console's focus ring and left a
  * pale background tint as the only signal. Mouse hover and keyboard focus are split
  * again here, and the ring is drawn from the shared tokens, inset because the row

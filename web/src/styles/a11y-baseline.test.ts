@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 /*
  * TASK-269 subset guard, parts 3 and 4: a visible `:focus-visible` ring and a
- * `prefers-reduced-motion` fallback are console-wide properties of the baseline
+ * `prefers-reduced-motion` fallback are properties of the console baseline, asserted over
+ * the stylesheets under src/** that this test reads
  * stylesheet, so they are asserted on the stylesheet text. happy-dom does not evaluate
  * `:focus-visible` or media queries, and a component test therefore cannot falsify them.
  *
@@ -14,7 +15,7 @@ import { describe, expect, it } from 'vitest';
  *   .audit-results__row:hover,
  *   .audit-results__row:focus-visible { background: var(--color-info-soft); outline: none; }
  *
- * A scoped `.audit-results__row:focus-visible` (0,2,0) beats base.css's global
+ * A scoped `.audit-results__row:focus-visible` (0,3,0 once scoped) beats base.css's global
  * `:focus-visible` (0,1,0), so that `outline: none` silently removed the keyboard focus
  * ring from a `tabindex="0"` row. No test in the suite could see it; this one can.
  *
@@ -22,7 +23,8 @@ import { describe, expect, it } from 'vitest';
  *   1. the baseline declares the ring from tokens, and the motion fallback overrides
  *      durations (it needs `!important` — a component's `animation:` shorthand on a
  *      class outranks the universal selector no matter the source order);
- *   2. no stylesheet in src/** switches the outline off INSIDE a `:focus-visible` rule.
+ *   2. no stylesheet under src/** switches the outline off inside a `:focus-visible` rule —
+ *      not through the shorthand, not through a longhand, and not with `!important`.
  *      `:focus:not(:focus-visible)` is the one legitimate negative form (it suppresses
  *      the ring for mouse clicks only) and is excluded.
  */
@@ -122,7 +124,10 @@ describe('focus policy', () => {
         if (!block.selector.includes(':focus-visible')) continue;
         // The negative form targets the mouse-click case on purpose.
         if (block.selector.includes(':not(:focus-visible)')) continue;
-        if (/(^|[\s;{])outline\s*:\s*(none|0)\s*(;|$|\})/.test(block.body)) {
+        // Matches the shorthand and the longhands, with or without !important: `outline: none`,
+        // `outline: 0`, `outline-width: 0`, `outline-color: transparent`, each of which can
+        // cancel the ring just as effectively (the review found the first form slipping through).
+        if (/(^|[\s;{}])outline(?:-width|-style|-color)?\s*:\s*[^;{}]*?(?:\bnone\b|\b0(?:px|em|rem)?\b|\btransparent\b)[^;{}]*?(?:;|$|\})/.test(block.body)) {
           offenders.push(`${relative(webRoot, file)}:${block.line} ${block.selector}`);
         }
       }

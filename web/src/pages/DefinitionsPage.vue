@@ -271,7 +271,8 @@ function formatTimestamp(value: string | null): string {
                 the column header above is plain text, so the input has no accessible
                 name of its own, and the row index is what tells the five inputs of one
                 row apart from the next. Ids are derived from useId(), so a second
-                editor mounted anywhere else cannot collide with them.
+                editor mounted in this app cannot collide with them (useId counters are per app, so a
+                 second Vue app in the same document could).
               -->
               <td>
                 <label class="visually-hidden" :for="mappingFieldId(index, 'kind')">
