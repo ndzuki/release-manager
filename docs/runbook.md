@@ -118,7 +118,7 @@ curl -sS http://127.0.0.1:8083/readyz                                     # 期�
 - DSN 校验很硬：必须以 `postgres://` 或 `postgresql://` 开头且 scheme/host/path 完整（`internal/postgres/config.go:12-24`），driver 只接受 `postgres|sqlite`（`internal/config/config.go:41-56`）。任一不满足 → `dsn_invalid: ...` → 服务不起。
 - 失败文案：连不上库是 `connection_unavailable: ping PostgreSQL: ...`（`internal/postgres/db.go:50-53`）或 `connection_unavailable: initialize GORM: ...`（`internal/postgres/db.go:55-59`）。这两个前缀就是「依赖不可达」的确证，不是迁移问题。
 - **迁移的真实入口**（现状）：
-  1. PostgreSQL：**每个服务进程启动时自动跑**。`postgresstore.Open(ctx, cfg.Database, migrations.FS)`（`cmd/orchestrator/main.go:531`、`cmd/auth/main.go:96`），notifier 用另一个 embed 源 `migrations.ReleaseNotifierFS()`（`cmd/notifier/main.go:107`）。底层是 golang-migrate `m.Up()`（`internal/postgres/migrate.go:25-29`），迁移文件由 `//go:embed *.sql` 打进二进制（`migrations/embed.go:12-13,19-20`）——**镜像里没有 `migrations/` 目录，改迁移必须重建镜像**。
+  1. PostgreSQL：**每个连接该库的服务进程启动时自动跑**（当前为 auth/notifier/orchestrator；`cmd/api`/`cmd/operator` 走 SQLite 且不跑迁移）。`postgresstore.Open(context.Background(), s.cfg.Database, migrations.FS)`（`cmd/orchestrator/main.go:617`、`cmd/auth/main.go:97`），notifier 用另一个 embed 源 `migrations.ReleaseNotifierFS()`（`cmd/notifier/main.go:157`）。底层是 golang-migrate `m.Up()`（`internal/postgres/migrate.go:25-29`），迁移文件由 `//go:embed *.sql` 打进二进制（`migrations/embed.go:12-13,19-20`）——**镜像里没有 `migrations/` 目录，改迁移必须重建镜像**。
   2. 失败后果：所有失败统一 `migration_failed` 前缀（含 dirty 版本状态，`internal/postgres/migrate.go:23-24,42-52`），返回给 `Register` → `os.Exit(1)`（`internal/app/app.go:146-149`）→ CrashLoop。**没有单独的「只跑迁移」通道，也不会有半启动的服务对外接客**。
   3. SQLite：**不走 `migrations/`**。启动时执行内嵌 Go DDL/ALTER（`internal/store/sqlite/db.go:88-91` → `internal/store/sqlite/db.go:958+`（`CREATE TABLE IF NOT EXISTS operations` 起始于 :1099））。所以「`migrations/` 里加了列但 SQLite 没有」是真实可能，双引擎必须两边都改（`docs/architecture.md:119-126` 的分环境引擎约束）。
   4. 显式回滚：`RunMigrationsDown`（`internal/postgres/migrate.go:31-40`，注释明确「never normal service startup」），在 dev 生命周期里唯一使用者是 `devseed --reset`（`internal/devfixture/reset.go:49-75`），入口 `make dev-reset-data CONFIRM=1`（`deploy/dev/dev.sh:1681-1861`）。
@@ -305,7 +305,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 | `unauthenticated: invalid token: ...`（含过期） | `ValidateAccessToken` 失败：签名不符、过期、claims 缺字段 | `internal/auth/interceptor.go:65-68`、`internal/auth/jwt.go:64-80` |
 | `unauthenticated: session revoked` | 用户非 active，或 `auth_sessions` 无有效会话 | `internal/auth/interceptor.go:113-124` |
 | `internal: session validation failed` | 会话有效性查询本身失败（含 Redis 不可用） | `internal/auth/interceptor.go:114` |
-| `permission_denied: csrf token mismatch` | cookie 认证下的写操作缺/错 `X-CSRF-Token` | `internal/auth/interceptor.go:82-88` |
+| `permission_denied: csrf token mismatch` | cookie 认证下的写操作缺/错 `X-CSRF-Token` | `internal/auth/interceptor.go:80` |
 | `resource_exhausted: too many login attempts` | 按用户名限流命中 | `internal/auth/service.go:66`、`internal/auth/browser_session.go:21` |
 | `unauthenticated: authentication required`（服务侧） | 无 JWT 且无 service token | `internal/orchestrator/rollback.go:35` |
 | `permission_denied: invalid service token` | bearer 哈希与 current/previous 都不同 | `internal/auth/service_token.go:50-59` |
