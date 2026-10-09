@@ -29,14 +29,14 @@ TypeScript 编译配置为 `strict: true`、`noEmit: true`、`@/* → src/*`（t
 
 | script | 实际命令 | 含义与前置条件 | 是否参与仓库级 CI 门禁 |
 | --- | --- | --- | --- |
-| `npm run dev` | `vite` | 启动 dev server（端口固定 5173，vite.config.ts:24），并按 **proto 包前缀**代理 Connect 请求到本机 8082-8088 服务端口（vite.config.ts:46-90，见 §4）。前置：Node + `npm ci` 安装依赖；要用真实后端需先起对应服务（`make dev-up` 或本地进程）。 | 不参与。`.github/workflows/test.yml` 与 `sync-to-gitcode.yaml` 中不存在任何 npm/node 步骤（对两文件做大小写不敏感 `npm|node|vite|playwright|vitest` 检索为 0 匹配）。 |
-| `npm run build` | `vue-tsc -b && vite build` | 先以 project references 做全量类型检查（含 `tsconfig.node.json` 引用的 vite.config.ts），再产出 `dist/`。 | 不参与（同上）。 |
-| `npm test` | `vitest run` | 跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`（当前 43 个文件）；环境 `happy-dom`、`globals: true`、`restoreMocks: true`（vite.config.ts:13-16）；`e2e/**`、`playwright/**`、`node_modules/**` 被排除，避免 Playwright spec 被 vitest 误跑（vite.config.ts:17-21 注释与 exclude）。 | 不参与（与 lint/build 同）。**Makefile 有转发**：`web-check`（`Makefile:413-416`）依次跑 `npm run lint && npm test && npm run build`，`web-install`（`Makefile:408-410`）跑 `npm ci`；`npm test` 也可在 `web/` 内直接跑（`docs/testing.md:45-48` 明写「Makefile 转发其中三关」）。 |
-| `npm run test:e2e` | `playwright test` | 跑 `web/e2e/` 下的 Playwright spec（playwright.config.ts:9）。默认打 `http://127.0.0.1:5173`（playwright.config.ts:17），且**必须**设置 `E2E_BACKEND=true`，否则整个 suite 显式 skip（e2e/emergency-smoke.spec.ts:12-17）。需要真实后端栈（ADR-013：只走正式 API，不打 mock）。 | 不参与（CI 无 playwright 步骤）。 |
+| `npm run dev` | `vite` | 启动 dev server（端口固定 5173，vite.config.ts:24），并按 **proto 包前缀**代理 Connect 请求到本机 8082-8088 服务端口（vite.config.ts:46-90，见 §4）。前置：Node + `npm ci` 安装依赖；要用真实后端需先起对应服务（`make dev-up` 或本地进程）。 | 不参与（dev server 只在本地）。 |
+| `npm run build` | `vue-tsc -b && vite build` | 先以 project references 做全量类型检查（含 `tsconfig.node.json` 引用的 vite.config.ts），再产出 `dist/`。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。 |
+| `npm test` | `vitest run` | 跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`（当前 **96** 个文件）；环境 `happy-dom`、`globals: true`、`restoreMocks: true`（vite.config.ts:13-16）；`e2e/**`、`playwright/**`、`node_modules/**` 被排除，避免 Playwright spec 被 vitest 误跑（vite.config.ts:17-21 注释与 exclude）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。**Makefile 有转发**：`web-check`（`Makefile:413-416`）依次跑 `npm run lint && npm test && npm run build`，`web-install`（`Makefile:408-410`）跑 `npm ci`；`npm test` 也可在 `web/` 内直接跑（`docs/testing.md:45-48` 明写「Makefile 转发其中三关」）。 |
+| `npm run test:e2e` | `playwright test` | 跑 `web/e2e/` 下的 Playwright spec（playwright.config.ts:9）。默认打 `http://127.0.0.1:5173`（playwright.config.ts:17），且**必须**设置 `E2E_BACKEND=true`，否则整个 suite 显式 skip（e2e/emergency-smoke.spec.ts:12-17）。需要真实后端栈（ADR-013：只走正式 API，不打 mock）。 | **不参与**：CI 无 Playwright 步骤（`test.yml` 的 `web` job 只跑 lint/test/build）。 |
 | `npm run preview` | `vite preview` | 本地预览 `dist/` 构建产物；未在本仓库配置 preview 端口/proxy（vite.config.ts 的 `server` 段只作用于 dev）。 | 不参与。 |
-| `npm run lint` | `eslint .` | flat config：js/ts/vue recommended + prettier 兼容层；忽略 `dist/**`、`src/gen/**`、`*.d.ts`、`*.tsbuildinfo`；规则含 `@typescript-eslint/no-explicit-any: error`（eslint.config.js:7-23）。 | 不参与（CI lint 是 golangci-lint，test.yml:196-200）。 |
+| `npm run lint` | `eslint .` | flat config：js/ts/vue recommended + prettier 兼容层；忽略 `dist/**`、`src/gen/**`、`*.d.ts`、`*.tsbuildinfo`；规则含 `@typescript-eslint/no-explicit-any: error`（eslint.config.js:7-23）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）（与 test/build 同一步）。 |
 
-与 web 相关的唯一 CI 触点：`license-check` job 的 `make check-licenses` 会读取前端 lockfile 的 license 字段做依赖许可门禁（test.yml:61-68、docs/testing.md 命令矩阵），但**不安装、不构建、不测试** web。
+与 web 相关的 CI 触点有**两个**：① `web` job（Node 22 + `npm ci`，依次 `npm run lint`、`npm test`、`npm run build`；见 `test.yml` 的 `web:` 段）；② `license-check` job 的 `make check-licenses` 读取前端 lockfile 的 license 字段做许可门禁（`test.yml:61-68`、`docs/testing.md` 命令矩阵）。**浏览器 E2E（`npm run test:e2e`）仍不在 CI**。
 
 结论：web 的 build/test/lint 目前全部依赖本地人工执行，不在仓库级门禁内。
 
@@ -50,7 +50,7 @@ web/
 ├── env.d.ts                   VITE_* 环境变量的类型声明（env.d.ts:3-13）
 ├── eslint.config.js           lint 配置
 ├── nginx.conf                 容器内静态服务 + Connect 反代（见 §4）
-├── e2e/                       Playwright spec（目前仅 emergency-smoke.spec.ts）
+├── e2e/                       Playwright spec（当前 **3** 个：`emergency-smoke`/`navigation`/`rollback`）
 ├── prototype/                 一次性契约验证脚本（emergency-contract-gate.ts，头部注明 throwaway）
 └── src/
     ├── main.ts                bootstrap：Pinia → auth.initialize() → router → mount（main.ts:8-17）
@@ -74,7 +74,7 @@ web/
 - **`src/gen/**` 是生成代码，禁止手改**；`.gitignore` 之外它被提交进仓库并由 eslint 忽略（eslint.config.js:7；AGENTS.md「生成代码不许手改」）。
 - 改契约的正确流程：修改 `api/proto/**` → 在仓库根执行 `make proto`（Makefile:275-279）。它运行 `buf generate --template api/proto/buf.gen.yaml`，该模板同时产出 Go（`api/gen`，buf.gen.yaml:3-8）与 TS（`web/src/gen`，buf.gen.yaml:9-13，插件 `buf.build/bufbuild/es`，`target=ts`）。因此 **`make proto` 会重写 `web/src/gen`**；buf 缺失时 target 会先 `go install github.com/bufbuild/buf/cmd/buf@latest`（Makefile:276）。remote plugin 需要网络。
 - 仓库里另有一份 web-only 子集模板 `api/proto/buf.gen.web.yaml`（同样的 es 插件、限定 paths）；未找到任何 Makefile 目标或脚本引用它（`grep -rn buf.gen.web Makefile scripts/ .github/` 无匹配）。以真实命令为准：重生成走 `make proto`。
-- 契约变更的验收门（文档约定，未接 CI）：消费方实现前需 `tsc --noEmit` + `buf lint`/`buf breaking` 通过（docs/architecture.md:115；Makefile 中未找到 `buf lint`/`buf breaking` 目标）。
+- 契约变更的验收门（文档约定，未接 CI）：消费方实现前需 `tsc --noEmit` + `buf lint`/`buf breaking` 通过（`docs/architecture.md:115`；`buf lint` 已接入：`make lint-proto` → `buf lint`，见 `Makefile:279-283`；`buf breaking` 在 Makefile 中仍无目标）。
 
 ## 4. 与后端的对接
 
@@ -87,7 +87,7 @@ web/
 
 ## 5. 测试与类型检查现状
 
-- 单元/组件测试：`npm test`（vitest run，happy-dom）。现有 43 个 `*.test.ts`/`*.spec.ts` 分布在 `src/**`。
+- 单元/组件测试：`npm test`（vitest run，happy-dom）。现有 **96** 个 `*.test.ts`/`*.spec.ts`（945 个用例） 分布在 `src/**`。
 - 类型检查：无独立 script，`npm run build` 前半段 `vue-tsc -b` 即全量检查（package.json:8）。
 - 浏览器 E2E：`npm run test:e2e`（Playwright，chromium-only project，`fullyParallel: false`、`retries: 0`、trace retain-on-failure；playwright.config.ts:10-27）；需要真实后端 + `E2E_BACKEND=true`，否则显式 skip（emergency-smoke.spec.ts:12-17）。可覆盖 `E2E_BASE_URL` 指向 staging（playwright.config.ts:17 注释与代码）。
 - 覆盖率：**未配置**——vite.config.ts 的 `test` 段无 `coverage` 配置，CI 也没有任何 npm 步骤（`make test-coverage` 只覆盖 Go，Makefile:404-408）。
