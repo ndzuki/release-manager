@@ -32,13 +32,13 @@ TypeScript 编译配置为 `strict: true`、`noEmit: true`、`@/* → src/*`（t
 | `npm run dev` | `vite` | 启动 dev server（端口固定 5173，vite.config.ts:24），并按 **proto 包前缀**代理 Connect 请求到本机 8082-8088 服务端口（vite.config.ts:46-90，见 §4）。前置：Node + `npm ci` 安装依赖；要用真实后端需先起对应服务（`make dev-up` 或本地进程）。 | 不参与（dev server 只在本地）。 |
 | `npm run build` | `vue-tsc -b && vite build` | 先以 project references 做全量类型检查（含 `tsconfig.node.json` 引用的 vite.config.ts），再产出 `dist/`。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。 |
 | `npm test` | `vitest run` | 跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`（当前 **96** 个文件）；环境 `happy-dom`、`globals: true`、`restoreMocks: true`（vite.config.ts:13-16）；`e2e/**`、`playwright/**`、`node_modules/**` 被排除，避免 Playwright spec 被 vitest 误跑（vite.config.ts:17-21 注释与 exclude）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。**Makefile 有转发**：`web-check`（`Makefile:413-416`）依次跑 `npm run lint && npm test && npm run build`，`web-install`（`Makefile:408-410`）跑 `npm ci`；`npm test` 也可在 `web/` 内直接跑（`docs/testing.md:45-48` 明写「Makefile 转发其中三关」）。 |
-| `npm run test:e2e` | `playwright test` | 跑 `web/e2e/` 下的 Playwright spec（playwright.config.ts:9）。默认打 `http://127.0.0.1:5173`（playwright.config.ts:17），且**必须**设置 `E2E_BACKEND=true`，否则整个 suite 显式 skip（e2e/emergency-smoke.spec.ts:12-17）。需要真实后端栈（ADR-013：只走正式 API，不打 mock）。 | **不参与**：CI 无 Playwright 步骤（`test.yml` 的 `web` job 只跑 lint/test/build）。 |
+| `npm run test:e2e` | `playwright test` | 跑 `web/e2e/` 下的 Playwright spec（playwright.config.ts:9）。默认打 `http://127.0.0.1:5173`（playwright.config.ts:17），且**必须**设置 `E2E_BACKEND=true`，否则整个 suite 显式 skip（e2e/emergency-smoke.spec.ts:12-17）。需要真实后端栈（ADR-013：只走正式 API，不打 mock）。 | **部分参与**：`web` job 本身不跑 E2E；CI 的 `e2e-prerequisite` job（`.github/workflows/test.yml:420-485`，**push / workflow_dispatch 触发，PR 上不跑**）会 `npm ci` + `npx playwright install chromium` + `make e2e-prerequisite-ci`，该 target 经 `test/e2e/prerequisite/console.sh:47` 默认只跑 `web/e2e/rollback.spec.ts`（见 `docs/testing.md:47-49`）。`emergency-smoke`/`navigation` 两个 spec 目前不在 CI 跑。 |
 | `npm run preview` | `vite preview` | 本地预览 `dist/` 构建产物；未在本仓库配置 preview 端口/proxy（vite.config.ts 的 `server` 段只作用于 dev）。 | 不参与。 |
 | `npm run lint` | `eslint .` | flat config：js/ts/vue recommended + prettier 兼容层；忽略 `dist/**`、`src/gen/**`、`*.d.ts`、`*.tsbuildinfo`；规则含 `@typescript-eslint/no-explicit-any: error`（eslint.config.js:7-23）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）（与 test/build 同一步）。 |
 
-与 web 相关的 CI 触点有**两个**：① `web` job（Node 22 + `npm ci`，依次 `npm run lint`、`npm test`、`npm run build`；见 `test.yml` 的 `web:` 段）；② `license-check` job 的 `make check-licenses` 读取前端 lockfile 的 license 字段做许可门禁（`test.yml:61-68`、`docs/testing.md` 命令矩阵）。**浏览器 E2E（`npm run test:e2e`）仍不在 CI**。
+与 web 相关的 CI 触点有**三个**：① `web` job（Node 22 + `npm ci`，依次 `npm run lint`、`npm test`、`npm run build`，PR 与 push 都跑；见 `test.yml` 的 `web:` 段）；② `e2e-prerequisite` job（push/dispatch 上 `npm ci` + Playwright + `make e2e-prerequisite-ci`，只跑 `rollback.spec.ts`；`test.yml:420-485`）；③ `license-check` job 的 `make check-licenses` 读取前端 lockfile 的 license 字段做许可门禁（`test.yml:61-68`）。`make quality` 亦含 `web-check`（`Makefile`），故本地聚合门禁也会跑 web 的 lint/test/build。
 
-结论：web 的 build/test/lint 目前全部依赖本地人工执行，不在仓库级门禁内。
+结论：web 的 lint/test/build **已进仓库级 CI**（`web` job，无 `if` 守卫，PR 与 push 都跑）**且进了本地聚合门禁**（`make web-check` 已并入 `make quality`）；未进 CI 的是浏览器 E2E 的**另外两个 spec**（`emergency-smoke`/`navigation`）与覆盖率采集。
 
 ## 3. 目录结构与关键约定
 
@@ -55,10 +55,10 @@ web/
 └── src/
     ├── main.ts                bootstrap：Pinia → auth.initialize() → router → mount（main.ts:8-17）
     ├── App.vue
-    ├── pages/                 路由级页面（27 项；本项目不叫 views/）
+    ├── pages/                 路由级页面（30 项；本项目不叫 views/）
     ├── components/            按域分组：audit / clusters / common / customers / emergency /
     │                          operations / operators / releases / values
-    ├── stores/                Pinia setup-store（24 项，auth/cluster/operationTimeline/...）
+    ├── stores/                Pinia setup-store（21 项，auth/cluster/operationTimeline/...）
     ├── composables/           useOperatorPolling / useSessionExpiry / useEmergencyEffectObservation
     ├── features/emergency/    紧急变更域逻辑（errors/model/validation）
     ├── connect/               手写 API 客户端层：client.ts（transport + 服务 client）+
@@ -74,7 +74,7 @@ web/
 - **`src/gen/**` 是生成代码，禁止手改**；`.gitignore` 之外它被提交进仓库并由 eslint 忽略（eslint.config.js:7；AGENTS.md「生成代码不许手改」）。
 - 改契约的正确流程：修改 `api/proto/**` → 在仓库根执行 `make proto`（Makefile:275-279）。它运行 `buf generate --template api/proto/buf.gen.yaml`，该模板同时产出 Go（`api/gen`，buf.gen.yaml:3-8）与 TS（`web/src/gen`，buf.gen.yaml:9-13，插件 `buf.build/bufbuild/es`，`target=ts`）。因此 **`make proto` 会重写 `web/src/gen`**；buf 缺失时 target 会先 `go install github.com/bufbuild/buf/cmd/buf@latest`（Makefile:276）。remote plugin 需要网络。
 - 仓库里另有一份 web-only 子集模板 `api/proto/buf.gen.web.yaml`（同样的 es 插件、限定 paths）；未找到任何 Makefile 目标或脚本引用它（`grep -rn buf.gen.web Makefile scripts/ .github/` 无匹配）。以真实命令为准：重生成走 `make proto`。
-- 契约变更的验收门（文档约定，未接 CI）：消费方实现前需 `tsc --noEmit` + `buf lint`/`buf breaking` 通过（`docs/architecture.md:115`；`buf lint` 已接入：`make lint-proto` → `buf lint`，见 `Makefile:279-283`；`buf breaking` 在 Makefile 中仍无目标）。
+- 契约变更的验收门（`buf lint` 已接 CI：由 CI 的 `proto-check` job 调用 `make lint-proto`，`test.yml:612-637`；`buf breaking` 仍是文档约定）：消费方实现前需 `tsc --noEmit` + `buf lint`/`buf breaking` 通过（`docs/architecture.md:115`；`buf lint` 已接入：`make lint-proto` → `buf lint`，见 `Makefile:279-283`；`buf breaking` 在 Makefile 中仍无目标）。
 
 ## 4. 与后端的对接
 
@@ -90,8 +90,8 @@ web/
 - 单元/组件测试：`npm test`（vitest run，happy-dom）。现有 **96** 个 `*.test.ts`/`*.spec.ts`（945 个用例） 分布在 `src/**`。
 - 类型检查：无独立 script，`npm run build` 前半段 `vue-tsc -b` 即全量检查（package.json:8）。
 - 浏览器 E2E：`npm run test:e2e`（Playwright，chromium-only project，`fullyParallel: false`、`retries: 0`、trace retain-on-failure；playwright.config.ts:10-27）；需要真实后端 + `E2E_BACKEND=true`，否则显式 skip（emergency-smoke.spec.ts:12-17）。可覆盖 `E2E_BASE_URL` 指向 staging（playwright.config.ts:17 注释与代码）。
-- 覆盖率：**未配置**——vite.config.ts 的 `test` 段无 `coverage` 配置，CI 也没有任何 npm 步骤（`make test-coverage` 只覆盖 Go，Makefile:404-408）。
-- 门禁归属：如 §2 所述，web 全部检查**不参与**仓库级 CI；不要引用本目录 README 声称「CI 会跑前端」。
+- 覆盖率：**未配置**——vite.config.ts 的 `test` 段无 `coverage` 配置，CI 的 `web` job 会跑 `npm ci`/`lint`/`test`/`build`（但不采集覆盖率）（`make test-coverage` 只覆盖 Go，Makefile:404-408）。
+- 门禁归属：如 §2 所述，web 的 **lint/test/build 已进仓库级 CI**（`web` job，PR 与 push 都跑）；**浏览器 E2E 只在 push/dispatch 的 `e2e-prerequisite` job 跑，且只跑 `rollback.spec.ts`**，`emergency-smoke`/`navigation` 仍不在 CI。
 
 ## 6. 常见坑（均可在代码中证实）
 
