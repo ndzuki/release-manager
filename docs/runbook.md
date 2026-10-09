@@ -18,7 +18,7 @@
 | --- | --- | --- | --- | --- |
 | release-webhook | 8082 | 8082 → NodePort 30082 | `/readyz` + `/health` | `deploy/kustomize/services/webhook.yaml:47-57` |
 | release-orchestrator | 8083 | 8083 → 30083 | `/readyz` + `/health` | `deploy/kustomize/services/orchestrator.yaml:56-75` |
-| operator 网关（orchestrator 的第二个监听） | 8084 | 8084 → 30084 | 无 HTTP 路由 | mTLS only，`cmd/orchestrator/main.go:194-205` |
+| operator 网关（orchestrator 的第二个监听） | 8084 | 8084 → 30084 | 无 HTTP 路由 | mTLS only，`cmd/orchestrator/main.go:166-193` |
 | release-auth | 8085 | 8085 → 30085 | `/readyz` + `/health` | `deploy/kustomize/services/auth.yaml:43-53` |
 | release-notifier | 8086 | 8086 → 30086 | `/readyz` + `/health` | `deploy/kustomize/services/notifier.yaml:36-46` |
 | release-web | 8087 | 8087 → 30087 | `/`（SPA 首页） | `deploy/kustomize/services/web.yaml:27-50` |
@@ -121,7 +121,7 @@ curl -sS http://127.0.0.1:8083/readyz                                     # 期�
   1. PostgreSQL：**每个服务进程启动时自动跑**。`postgresstore.Open(ctx, cfg.Database, migrations.FS)`（`cmd/orchestrator/main.go:531`、`cmd/auth/main.go:96`），notifier 用另一个 embed 源 `migrations.ReleaseNotifierFS()`（`cmd/notifier/main.go:107`）。底层是 golang-migrate `m.Up()`（`internal/postgres/migrate.go:25-29`），迁移文件由 `//go:embed *.sql` 打进二进制（`migrations/embed.go:12-13,19-20`）——**镜像里没有 `migrations/` 目录，改迁移必须重建镜像**。
   2. 失败后果：所有失败统一 `migration_failed` 前缀（含 dirty 版本状态，`internal/postgres/migrate.go:23-24,42-52`），返回给 `Register` → `os.Exit(1)`（`internal/app/app.go:146-149`）→ CrashLoop。**没有单独的「只跑迁移」通道，也不会有半启动的服务对外接客**。
   3. SQLite：**不走 `migrations/`**。启动时执行内嵌 Go DDL/ALTER（`internal/store/sqlite/db.go:88-91` → `internal/store/sqlite/db.go:958+`（`CREATE TABLE IF NOT EXISTS operations` 起始于 :1099））。所以「`migrations/` 里加了列但 SQLite 没有」是真实可能，双引擎必须两边都改（`docs/architecture.md:119-126` 的分环境引擎约束）。
-  4. 显式回滚：`RunMigrationsDown`（`internal/postgres/migrate.go:31-40`，注释明确「never normal service startup」），在 dev 生命周期里唯一使用者是 `devseed --reset`（`internal/devfixture/reset.go:47-75`），入口 `make dev-reset-data CONFIRM=1`（`deploy/dev/dev.sh:1681-1861`）。
+  4. 显式回滚：`RunMigrationsDown`（`internal/postgres/migrate.go:31-40`，注释明确「never normal service startup」），在 dev 生命周期里唯一使用者是 `devseed --reset`（`internal/devfixture/reset.go:49-75`），入口 `make dev-reset-data CONFIRM=1`（`deploy/dev/dev.sh:1681-1861`）。
   5. `cmd/store-migrate` 是 **SQLite → PostgreSQL 的数据搬迁 CLI**（`--source`、`--target-dsn`、`--migrations`；目标 DSN 走 `RELEASE_MANAGER_DATABASE_DSN` 或 flag，`cmd/store-migrate/main.go:35-41`），错误分类 `connection_unavailable|migration_failed|data_import_mismatch`（`cmd/store-migrate/main.go:81-90`），校验不过整体事务回滚（`internal/migration/migrate.go:41-45,105-135`）。它**不在 dev 生命周期内**，且 `--target-dsn` 含明文口令，注意不要写进共享终端历史。
 - 持久性现状（决定处置顺序）：postgres 的数据目录是 `emptyDir`（`deploy/kustomize/postgres/deployment.yaml:56-60`），redis 是 `--appendonly no`（`deploy/kustomize/redis/deployment.yaml:23`）。⇒ **`dev-down`（删集群）即丢全部业务数据**；只有 orchestrator 有 PVC `release-manager-orchestrator-data`（`deploy/kustomize/base/pvc.yaml:1-13`，挂到 `/data`，`deploy/kustomize/services/orchestrator.yaml:102,118-120`），其中存放 agent 网关 CA（`/data/gateway-ca.*`）与审计 spool（§4）。
 
@@ -158,14 +158,14 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **先查什么**
 
 1. agent 侧日志：`operator agent disconnected; reconnecting`（含 `error` 与 `retry_after`，`cmd/operator/main.go:104-105`）。
-2. orchestrator 侧日志：`operator stream established via mTLS`（`internal/operator/service.go:466-472`，带 `operator_id`/`session_id`/`cluster_id`/`last_seen_sequence`）与 `heartbeat failed`（`internal/operator/service.go:580`）。
+2. orchestrator 侧日志：`operator stream established via mTLS`（`internal/operator/service.go:502-508`，带 `operator_id`/`session_id`/`cluster_id`/`last_seen_sequence`）与 `heartbeat failed`（`internal/operator/service.go:580`）。
 3. 会话行的 `status` / `status_reason` / `last_heartbeat`。
-4. 网关拒绝原因：`X-Reason-Code` 响应元数据（`internal/operator/errors.go:28-32`）。
+4. 网关拒绝原因：`X-Reason-Code` 响应元数据（`internal/operator/errors.go:29-32`）。
 
 **确认依据（现状）**
 
 - 超时常量（TASK-098 起**来自配置**）：`sessionTTL = 15 * time.Minute` 仍是构造默认，但心跳阈值走 `operator_session.heartbeat_interval` / `suspect_after` / `offline_after`（默认 15s / 45s / 90s，`internal/config/config.go` 的 `OperatorSessionCfg.WithDefaults`，`configs/orchestrator.dev.yaml` 与 dev overlay 均写出）。`SessionEstablished` 向 agent 广播 `HeartbeatIntervalSeconds = 15`、`HeartbeatTimeoutSeconds = 45`（`internal/operator/service.go`），Establish 路径写的 `ExpiresAt = now + 15m`。
-- 状态机词汇：`SessionStatus` = `online|suspect|offline|revoked`（`internal/store/store.go:653-661`），`SessionStatusReason` = `no_session|heartbeat_timeout|heartbeat_delayed|certificate_revoked|operator_superseded|session_replaced|unknown`（`internal/store/store.go:663-674`）；`OperatorStatus` = `active|superseded|revoked`（`internal/store/store.go:644-651`）。
+- 状态机词汇：`SessionStatus` = `online|suspect|offline|revoked`（`internal/store/store.go:661-667`），`SessionStatusReason` = `no_session|heartbeat_timeout|heartbeat_delayed|certificate_revoked|operator_superseded|session_replaced|unknown`（`internal/store/store.go:663-674`）；`OperatorStatus` = `active|superseded|revoked`（`internal/store/store.go:644-651`）。
 - 读侧投影：`ListOperators` 的 summary 直接映射 session 的 `status` 与 `status_reason`，**查不到会话时写 `SESSION_STATUS_REASON_NO_SESSION`**（`internal/orchestrator/operator.go:310-316`），枚举互转在 `internal/orchestrator/operator.go:470-533` ⇒ 控制台上的 `suspect/offline` 就是库里的列值，不是前端算出来的。
 - 落库语义：`Heartbeat` 只在 `status IN ('online','suspect')` 时更新，并把 `status_reason` 置回 NULL；影响 0 行返回 `ErrNotFound`（`internal/store/postgres/operators.go:572-588`）。`UpdateStatus` 把 `suspect → heartbeat_delayed`、`offline → heartbeat_timeout`，且跳过 `revoked` 行（`internal/store/postgres/operators.go:590-614`）。
 - **判定的真实形状（重要，容易误判）**：
@@ -176,7 +176,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 - 重连与恢复（现状）：
   - agent 重连循环：退避 1s 起、倍增、上限 30s（`cmd/operator/main.go:96-115`）。
   - 重连后第一个动作是 `handleReconnect`：取 `GetNextSequence()`（全局 outbox 序列）与 agent 上报的 `LastSeenSequence` 比对，**有 gap 只发 `ResyncRequest` 并等待，不立即重投**（`internal/operator/service.go:1149-1188`）；无 gap 才重投 `delivered-not-acked`（`internal/operator/service.go:1192-1232`），已完成的下发 `DuplicateResponse`。
-  - 由于序列是全局的（`internal/operator/service.go:1196-1206`），任一 operator 收到过命令都会让别的 operator 判定为 gap ⇒ 「sequence gap detected」日志（`internal/operator/service.go:1204`）**在当前拓扑下是常态噪声**，不是故障证据。真正投递靠 5s 一轮的 `deliverPending`（`internal/operator/service.go:1375`，受 `max_inflight=1` 约束）。
+  - 由于序列是全局的（`internal/operator/service.go:1185-1206`），任一 operator 收到过命令都会让别的 operator 判定为 gap ⇒ 「sequence gap detected」日志（`internal/operator/service.go:1204`）**在当前拓扑下是常态噪声**，不是故障证据。真正投递靠 5s 一轮的 `deliverPending`（`internal/operator/service.go:1375`，受 `max_inflight=1` 约束）。
   - 会话冲突：同一 operator 已有 `online`/`suspect` 且 `instance_id` 不同 → `Establish` 返回 `ErrDuplicateKey` → `already_exists: another session for this operator is already online`（`internal/operator/service.go:496`、`internal/store/sqlite/operators.go:317-333`）。
 - 拒绝原因清单（判 `X-Reason-Code`，`internal/operator/errors.go:9-27`）：enroll 侧 `invalid_token|enroll_token_expired|token_reused|scope_mismatch|customer_disabled|cluster_disabled|csr_invalid|csr_san_mismatch|duplicate_operator_name|operator_name_cross_cluster`；流侧 `operator_superseded`（文案 `operator superseded: re-enroll required`）、`operator_revoked`、`cert_replaced`、`identity_mismatch`（证书声明的 Customer/Cluster 与 operator 记录不符，D-53；续期与流两条身份守卫共用此码），另有 `certificate_invalid` 与 `internal`（`internal/operator/errors.go:20,25-26`）（`certificate serial does not match registered operator`）；证书续期过早 `renew_too_early`（`internal/operator/service.go:1572`），阈值是 `ca.cert_ttl × ca.renew_before_ratio`（dev：`cert_ttl: 168h`、`renew_before_ratio: 0.5`，`configs/orchestrator.dev.yaml:42-46`）。
 - 紧急通道（独立于 outbox）：`DispatchEmergency` 只查**进程内** `emergencyStreams[operatorID]`，没有就直接失败 `operator stream is offline`（`internal/operator/service.go:157-174`），通道容量 8（`internal/operator/service.go:545-548`）。⇒ **orchestrator 重启会清空该 map**，重启窗口内紧急变更必然失败，与 agent 是否在线无关。
