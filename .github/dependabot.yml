@@ -12,6 +12,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+  # deploy/fixtures ships a builder image too; without this entry its digest only
+  # moves when someone remembers to bump it by hand (TASK-265).
+  - package-ecosystem: docker
+    directory: /deploy/fixtures
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
   - package-ecosystem: gomod
     directory: /
     schedule:
