@@ -441,7 +441,8 @@ func retryableInventoryReadFailure(err error) bool {
 }
 
 // authorizedRequest builds a connect request carrying the runner bearer token
-// (package-level helper: generic methods need go1.27, go.mod declares 1.26).
+// (package-level helper: generic methods need go1.27+, which go.mod requires; the patch
+// level is not restated here so a toolchain bump cannot make this comment wrong).
 func authorizedRequest[T any](token string, message *T) *connect.Request[T] {
 	request := connect.NewRequest(message)
 	if token != "" {
