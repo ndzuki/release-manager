@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Run SDK-only static gate
@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # The checker classifies the license text of every module in the build
@@ -75,7 +75,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind
@@ -92,7 +92,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind
@@ -109,7 +109,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Run operator image SDK-only gate
@@ -124,7 +124,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # v1.50.0 is the latest upstream release, so the Node 20 deprecation warning
@@ -207,7 +207,7 @@ jobs:
       - name: Run lint (changed code only)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.13.2
+          version: v2.14.0
           args: --new-from-rev=${{ github.event.pull_request.base.sha || github.event.before || format('origin/{0}', github.event.repository.default_branch) }}
 
   # PostgreSQL is the production engine (ADR-015), but every integration test in
@@ -229,7 +229,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
@@ -279,7 +279,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
@@ -321,7 +321,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # REQ-008 §8-8: dependency vulnerabilities must fail the pipeline, not be
@@ -338,7 +338,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # Wipe first: restoring over read-only module files fails (see test job).
@@ -376,7 +376,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install kind v0.32.0
@@ -431,12 +431,13 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       # dev-up requires k3d >= 5.8 and kustomize on PATH, but only detects them
       # (deploy/dev/lib/host.sh) — hosted runners ship neither, and CI sets
-      # GOTOOLCHAIN=local, so the pinned Go above must come from setup-go.
+      # GOTOOLCHAIN=local, so the pinned Go above must come from setup-go (1.27.2 is the
+      # first release with the net/http fixes GO-2026-6613/6617 need).
       - name: Install dev environment tools
         run: |
           set -euo pipefail
@@ -541,7 +542,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Install dev environment tools
@@ -706,7 +707,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Check the store interface surface
@@ -723,7 +724,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27"
+          go-version: "1.27.2"
           cache: ${{ vars.RUNS_ON != 'self-hosted' }}
 
       - name: Check for unreferenced concrete methods
