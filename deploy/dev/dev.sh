@@ -986,7 +986,14 @@ content_hash() {
   inputs+=("cmd/$service")
   inputs+=(internal)
   if [ "$service" = "web" ]; then
-    inputs+=(web/package.json web/package-lock.json)
+    # The console image is built FROM the front-end sources (Dockerfile.web runs
+    # `npm run build` over `COPY web/ ./`), so its tag must track them. Hashing
+    # only package.json/package-lock.json left every .vue/.ts edit invisible to
+    # the tag: `image_record` reported the manifest as already present, the
+    # applied Deployment kept its image, and the pod kept serving the OLD bundle.
+    # That is how a local `make e2e-prerequisite` could pass against a console the
+    # developer never changed (found while verifying a ValuesEditor fix, TASK-270).
+    inputs+=(web/package.json web/package-lock.json web/index.html web/vite.config.ts web/nginx.conf web/tsconfig.json web/tsconfig.node.json web/env.d.ts web/src)
   fi
   if [ "$service" = "fixture" ]; then
     inputs+=(deploy/fixtures/cmd deploy/fixtures/chart)

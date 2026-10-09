@@ -16,10 +16,22 @@ test.beforeEach(() => {
   );
 });
 
+// The second approver is a DISTINCT actor (self-approval is refused server-side:
+// internal/orchestrator/values_approval.go). The harness (test/e2e/prerequisite/
+// console.sh) supplies the credentials out of band; they are never committed.
 const CREDENTIALS = {
   adminA: { username: process.env.E2E_ADMIN_A_USER ?? 'admin-a', password: process.env.E2E_ADMIN_A_PASS ?? '' },
   adminB: { username: process.env.E2E_ADMIN_B_USER ?? 'admin-b', password: process.env.E2E_ADMIN_B_PASS ?? '' },
 };
+
+// E2E_DEFINITION_ID pins the ReleaseDefinition the single-actor scenario drives.
+// Empty keeps the historical "whatever row renders first" behaviour, which is
+// NOT sufficient for CI: the emergency IMAGE path reads a fresh operator
+// observation (the read model drops one older than 15 minutes), and the operator
+// refreshes that observation per command, so only a definition this run has
+// operated on is reliably actionable. console.sh passes the definition the
+// prerequisite smoke drives last.
+const DEFINITION_ID = process.env.E2E_DEFINITION_ID ?? '';
 
 // D19=A: web-side TTI budget assertion — "route entry → form operable"
 // p95 ≤ 1.5s (REQ-058 performance table). A single E2E sample asserts the
@@ -90,7 +102,9 @@ test('Inventory → Emergency → Execute → Operation Detail (REQUIRE_PROMOTIO
   await emitted.first().waitFor({ state: 'attached', timeout: 20_000 }).catch(() => undefined);
 
   // The entry comes from the ReleaseSummary projection (AC-058-08).
-  const emergencyLink = page.getByRole('link', { name: '紧急变更' }).first();
+  const emergencyLink = DEFINITION_ID === ''
+    ? page.getByRole('link', { name: '紧急变更' }).first()
+    : page.locator(`a.emergency-link[href*="${DEFINITION_ID}"]`).first();
   test.skip((await emergencyLink.count()) === 0, BOUND_RELEASE_PRECONDITION);
   await expect(emergencyLink).toBeVisible();
 
@@ -153,7 +167,7 @@ test('Convergence: Prepare → ValuesEditor draft → Submit → cross-actor App
   const convergenceLink = pageA.getByRole('link', { name: /^收敛\s/ }).first();
   test.skip(
     (await convergenceLink.count()) === 0,
-    'no release row has pending convergence tasks, so the convergence entry does not render (TASK-217: the fixture needs a bound release with a pending_promotion task)',
+    'no release row has pending convergence tasks, so the convergence entry does not render (the AC-066-17 prerequisite smoke leaves one via a REQUIRE_PROMOTION emergency change; run make e2e-prerequisite after make dev-up dev-seed dev-status)',
   );
   await convergenceLink.click();
   await pageA.waitForURL(/\/emergency\/convergence$/);
@@ -170,13 +184,16 @@ test('Convergence: Prepare → ValuesEditor draft → Submit → cross-actor App
   await pageA.getByRole('button', { name: '保存 Draft' }).click();
   await pageA.getByRole('button', { name: '提交' }).click();
   await expect(pageA.getByText('待审批')).toBeVisible();
+  // Capture the convergence URL BEFORE closing context A: page.url() on a closed
+  // context is not a supported read, and this case had never run to this point.
+  const convergenceUrl = new URL(pageA.url()).pathname;
   await contextA.close();
 
   // Cross-actor approval in a second context (AC-058-41).
   const contextB = await browser.newContext();
   const pageB = await contextB.newPage();
   await login(pageB, CREDENTIALS.adminB.username, CREDENTIALS.adminB.password);
-  await pageB.goto(pageA.url().split('?')[0]);
+  await pageB.goto(convergenceUrl);
   await pageB.getByRole('button', { name: '审批通过' }).click();
   await expect(pageB.getByText('已审批')).toBeVisible();
   await contextB.close();
