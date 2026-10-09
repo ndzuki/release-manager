@@ -2126,11 +2126,11 @@ func TestWatchOperation_SnapshotAndReplay(t *testing.T) {
 			}
 		}
 	}()
-	// Give the handler time to send snapshot + replay entries (50ms poll, so 200ms is enough).
+	// (the wait below is driven by the ready signal, not by a time budget)
 	select {
 	case <-ready:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for snapshot + replay entries; the handler stalled rather than the budget being too small")
+		t.Fatal("timed out waiting for snapshot + replay entries; no snapshot + replay entries arrived before the deadline")
 	}
 	cancel()
 	<-done
