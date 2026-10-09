@@ -3,7 +3,7 @@
 本文只回答一个问题：**要让本仓库的 CI 跑起来，需要在 GitHub 上配置哪些机密与变量、谁来配、怎么配、取值必须长什么样。**
 
 - 读者：需要维护本仓库 Actions 的维护者。
-- 事实范围：`.github/workflows/test.yml`（730 行，18 个 job）与 `.github/workflows/sync-to-gitcode.yaml`（40 行，1 个 job）。`.github/workflows/` 之外没有其它 workflow。
+- 事实范围：`.github/workflows/test.yml`（731 行，18 个 job）与 `.github/workflows/sync-to-gitcode.yaml`（40 行，1 个 job）。`.github/workflows/` 之外没有其它 workflow。
 - 本文**不包含任何机密取值**。所有示例值一律写成 `<...>` 占位。
 - 生产部署侧的机密注入**不在本清单内**：`docs/architecture.md:113` 明确「生产 Secret manager 注入与生产配置加载仍由 REQ-011 owner 承接」，dev 范围只做了最小接线。
 
@@ -49,7 +49,7 @@ gh variable delete RUNS_ON --repo ndzuki/release-manager
 1. **`e2e`（`.github/workflows/test.yml:505`）是唯一消费 `:28` 所列 12 个 `DEV_*/E2E_*` secret 的 job。** 它的 `if:` 是 `github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run-e2e)`，而 workflow 的 `push` 只监听 `main`（`.github/workflows/test.yml:4-5`）→ **只有 push main 与手动触发会跑，`pull_request` 一律跳过**（设计意图见 `.github/workflows/test.yml:495-497` 注释：PR 刻意不跑这个特权 job）。
 2. **secret 缺失不会让 `e2e` job 被跳过，只会让它失败。** GitHub 对未定义的 secret 注入空字符串（平台行为，非仓库内证据），因此失败点在脚本内部，而不是在表达式求值：`make dev-up` → `deploy/dev/dev.sh:294-295/342-343/394-395`；`make dev-seed` → `internal/devfixture/files.go:200-215,258-261`；`make e2e-all` → `Makefile:203`。三处都有显式的「ci profile requires X」文案，**这是有意的**：缺机密必须报成配置缺陷，不能被误读成代码回归。
 3. **`e2e-prerequisite`（`.github/workflows/test.yml:420-503`）只在 push main / `workflow_dispatch` 上跑（PR 上不跑），且不需要任何仓库 secret**（`docs/testing.md:382` 同口径）。它没有设 `DEV_PROFILE`，因此走 local profile：口令与密钥由 `dev-seed`/`dev-up` 自行生成到 `data/`（`internal/devfixture/files.go:183-195`），smoke 再从 `data/dev-credentials.env` source 回来（`test/e2e/prerequisite/smoke.sh:86-94`）。**它上传的 artifact（`.github/workflows/test.yml:487-493`）来自本地生成的夹具，不含 CI secret 值。**
-4. **下列 10 个 job（`sdk-check`、`license-check`、`install-sdk`、`upgrade-sdk`、`operator-image-sdk-only`、`test`、`test-sqlite`、`test-sdkcheck`、`docs-check`、`proto-check`）无 `if:`，全部触发都跑，除自动的 `GITHUB_TOKEN` 外不消费任何 secret**（逐个 job 核对步骤：`.github/workflows/test.yml:37-49,50-69,70-86,87-103,104-117,118-221,273-315,332-370,596-611,612-657`）。`test.yml` 共 **18 个 job**：上列 10 个无 `if:`；另 8 个（`test-postgres-integration`/`vulncheck`/`rollout-watch`/`e2e-prerequisite`/`e2e`/`web`/`store-surface`/`dead-methods`）各有 `if:` 或触发条件，不在此列。`install-sdk`/`upgrade-sdk`/`operator-image-sdk-only`/`rollout-watch` 依赖的是 Docker 与 kind，而非机密。`docs-check` 与 `proto-check` 是本次新增的静态门禁，二者同样只在 `contents: read` 下工作，不引入新的机密依赖。
+4. **下列 10 个 job（`sdk-check`、`license-check`、`install-sdk`、`upgrade-sdk`、`operator-image-sdk-only`、`test`、`test-sqlite`、`test-sdkcheck`、`docs-check`、`proto-check`）无 `if:`，全部触发都跑，除自动的 `GITHUB_TOKEN` 外不消费任何 secret**（逐个 job 核对步骤：`.github/workflows/test.yml:37-49,50-69,70-86,87-103,104-117,118-221,273-315,332-370,596-611,612-657`）。`test.yml` 共 **18 个 job**：上列 10 个无 `if:`；另 8 个（`test-postgres-integration`/`vulncheck`/`rollout-watch`/`e2e-prerequisite`/`e2e`/`web`/`store-surface`/`dead-methods`）不在此列；**`test.yml` 里带 `if:` 的只有 `e2e-prerequisite`（`:421`）与 `e2e`（`:505`）**。`install-sdk`/`upgrade-sdk`/`operator-image-sdk-only`/`rollout-watch` 依赖的是 Docker 与 kind，而非机密。`docs-check` 与 `proto-check` 是本次新增的静态门禁，二者同样只在 `contents: read` 下工作，不引入新的机密依赖。
 5. **`gitcode-sync`（`.github/workflows/sync-to-gitcode.yaml:20-21`）只在 push main 跑，且只依赖 `GITCODE_TOKEN`。** 该 job **有** `concurrency`（`.github/workflows/sync-to-gitcode.yaml:14-16`，`group: sync-to-gitcode` + `cancel-in-progress: false`）与 `timeout-minutes: 15`（`:23`）—— 并发 `--mirror` 互踩与无超时挂死都已被覆盖。
 
 **fork PR 的影响（GitHub 平台行为，仓库内无证据）**：`pull_request` 事件对 fork 不注入仓库 secret。因为唯一消费 secret 的 job 已经排除 PR 触发（第 1 条），当前配置天然安全；**建议**新增依赖 secret 的 job 时保持同样的 `if:` 收窄，别把它放到 PR 路径上。
@@ -168,13 +168,13 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 | `upgrade-sdk` | job | 继承 | `:87` | 只读 |
 | `operator-image-sdk-only` | job | 继承 | `:104` | 只读 |
 | `test` | job | 继承 | `:118` | 只读；`GITHUB_TOKEN` 仅传给 buf action（`:144`） |
-| `test-sqlite` | job | 继承 | `:273` | 只读（`:238` 同上） |
+| `test-sqlite` | job | 继承 | `:273` | 只读（`:290` 同上） |
 | `test-sdkcheck` | job | 继承 | `:332` | 只读 |
 | `rollout-watch` | job | 继承 | `:371` | 只读 |
 | `e2e-prerequisite` | job | 继承 | `:420` | 只读；上传 artifact（`:487-493`） |
 | `e2e` | job | **显式重复** `contents: read` | `:508-509` | 只读，与继承值一致（冗余但无害；可理解为「特权 job 处再声明一次」的自觉） |
-| `docs-check` | job | 继承 | `:454` | 只读；不装 Go、不取任何 secret（`make check-docs` 只用 bash/grep/git） |
-| `proto-check` | job | 继承 | `:470` | 只读；`GITHUB_TOKEN` 仅传给 buf action（`:481`），与 `test`/`test-sqlite` 同形 |
+| `docs-check` | job | 继承 | `:596` | 只读；不装 Go、不取任何 secret（`make check-docs` 只用 bash/grep/git） |
+| `proto-check` | job | 继承 | `:612` | 只读；`GITHUB_TOKEN` 仅传给 buf action（`:623`），与 `test`/`test-sqlite` 同形 |
 | `sync-to-gitcode.yaml` | workflow / job | **有 workflow 级 `permissions: contents: read`**（`:9-10`） | 全文件（`:1-25`） | ✅ **写外部系统的 job 已显式收敛为只读**（`:9-10`）。`GITHUB_TOKEN` 因此只读（无需靠平台默认值兜底）。|
 
 据此的纪律性结论与建议：
