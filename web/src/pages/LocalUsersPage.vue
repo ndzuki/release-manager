@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
+import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import { LOCAL_USER_ROLES, type LocalUserRole } from '@/connect/local-user-api';
 import { PASSWORD_MAX_BYTES, passwordTooLong } from '@/connect/auth-api';
@@ -129,25 +130,43 @@ onMounted(() => {
 
       <form class="local-users__create" @submit.prevent="submit">
         <h2>{{ t('localUser.create.title') }}</h2>
-        <label>
-          {{ t('localUser.create.username') }}
-          <input v-model="username" name="username" autocomplete="off" required />
-        </label>
-        <label>
-          {{ t('localUser.create.password') }}
-          <input
-            v-model="password"
-            name="password"
-            type="password"
-            autocomplete="new-password"
-            :aria-invalid="tooLong"
-            required
-          />
-          <small v-if="tooLong" class="error" role="alert">
-            {{ t('localUser.error.passwordTooLong', { max: String(PASSWORD_MAX_BYTES) }) }}
-          </small>
-          <small v-else>{{ t('localUser.create.passwordHint') }}</small>
-        </label>
+        <FormField :label="t('localUser.create.username')" required>
+          <template #default="{ id, describedBy, invalid, required }">
+            <input
+              :id="id"
+              v-model="username"
+              name="username"
+              autocomplete="off"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+              :required="required"
+            />
+          </template>
+        </FormField>
+        <!--
+          The hint and the error are exclusive on this form: FormField renders what it
+          is given, so the page keeps the previous behaviour (the hint disappears while
+          the error is shown) and aria-describedby follows the rendered message.
+        -->
+        <FormField
+          :label="t('localUser.create.password')"
+          :help="tooLong ? '' : t('localUser.create.passwordHint')"
+          :error="tooLong ? t('localUser.error.passwordTooLong', { max: String(PASSWORD_MAX_BYTES) }) : ''"
+          required
+        >
+          <template #default="{ id, describedBy, invalid, required }">
+            <input
+              :id="id"
+              v-model="password"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+              :required="required"
+            />
+          </template>
+        </FormField>
         <label>
           {{ t('localUser.create.role') }}
           <select v-model="role" name="role">
