@@ -352,7 +352,7 @@ fi
 
 # docs/dependencies.md is a release artifact as well: a dependency change that adds or
 # drops a module must not leave it silently stale (TASK-265). When the caller did not
-# ask to write it, regenerate into a temp file and diff, exactly like NOTICE below.
+# ask to write it, regenerate into a temp file and diff, exactly like NOTICE above.
 DEPS_DOC=${DEPS_DOC:-docs/dependencies.md}
 DEPS_FRESH=""
 OUT_LABEL="${OUT:-$DEPS_DOC}"
@@ -405,7 +405,7 @@ if [ -n "$OUT" ]; then
     echo "- 新增依赖若带来清单外的许可证，\`make check-licenses\` 会失败。确有必要时在 \`license-exceptions.tsv\` 中登记模块与理由，该文件会随 PR 被审阅。"
     echo "- 重新生成本清单：\`bash scripts/check-licenses.sh --write docs/dependencies.md\`。"
   } >"$OUT"
-  echo "check-licenses: wrote $OUT"
+  [ -z "$DEPS_FRESH" ] && echo "check-licenses: wrote $OUT"
 fi
 
 printf 'check-licenses: %d Go modules (build closure), %d frontend packages\n' "$go_total" "$fe_total"
