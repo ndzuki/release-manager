@@ -47,8 +47,8 @@ in-memory storage + `kubefake`，**不需要集群**：
 `web/package.json` 提供 `test`（`vitest run`）、`test:e2e`（`playwright test`）、`lint`（`eslint .`）
 与 `build`（`vue-tsc -b && vite build`）。Makefile 转发其中三关（TASK-175，见命令矩阵的
 `make web-install` / `make web-check`）；`make web-check` 已并入 `make quality`，所以本地的
-「全量质量门禁」覆盖前端三关。`test:e2e` 需要完整 dev 栈，仍由 CI 的
-`e2e`/`e2e-prerequisite` job 承担（PR 上不跑，push 与 `workflow_dispatch` 跑）。
+「全量质量门禁」覆盖前端三关。`test:e2e` 需要完整 dev 栈，由 CI 的 `e2e`/`e2e-prerequisite` job 承担：
+**PR 上不跑**，只在 push main / `workflow_dispatch` 跑（spec 车道归属与取证据命令见下文「控制台（浏览器）E2E：CI 车道与 spec 归属」）。
 
 #### 控制台（浏览器）E2E：回滚路径（TASK-240）
 
@@ -435,12 +435,80 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 **扫描产物**：`internal/orchestrator`、`cmd/orchestrator`、`deploy/dev` 三包的同类假设清单见
 `TASK-160` 卡（AC-160-04）；`deploy/dev` 脚本里的 `sleep`（7 处）**多数**在 `while`/`for` 轮询内等真实信号；`deploy/dev/dev.sh:1651` 是固定重试退避（`for attempt in 1 2`），同样不是「等固定预算内完成」的反模式。
 
+## 控制台（浏览器）E2E：CI 车道与 spec 归属（TASK-270）
+
+`web/e2e/` 下三个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
+
+| spec | 覆盖 | 车道 |
+| --- | --- | --- |
+| `web/e2e/rollback.spec.ts` | REQ-056 AC-056-08 浏览器回滚路径（TASK-240） | `e2e-prerequisite`：**push main / `workflow_dispatch`**，PR 不跑 |
+| `web/e2e/emergency-smoke.spec.ts` | REQ-058 紧急变更走查（`REQUIRE_PROMOTION` 成功路径）+ **跨角色审批**（AC-058-41） | 同上（TASK-270 起纳入） |
+| `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑 | **不在 CI 车道**；本地手工跑（需 `E2E_VIEWER_PASS`，见 spec 头注释） |
+
+- **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
+  （`.github/workflows/test.yml` 的 `e2e-prerequisite:` 段），`e2e` job 同理。这是 REQ-066 决策 ⑧ 的
+  刻意取舍——真实 k3d 车道 15–55 分钟，不该绑在 PR 门禁上。**因此浏览器 E2E 的证据只能在 push main 或
+  手动 dispatch 上取得**，取 run id 与日志：
+
+  ```bash
+  gh workflow run test.yml --repo ndzuki/release-manager --ref <branch>   # 手动 dispatch（可指定分支）
+  gh run list --repo ndzuki/release-manager --workflow test.yml --limit 5 # 取 run id
+  gh run view <run-id> --repo ndzuki/release-manager --log                # 读 console-e2e / smoke 结果
+  gh run download <run-id> -n e2e-prerequisite-diagnostics                # 失败 trace 与 smoke-result.json
+  ```
+
+  本地等价入口 `make e2e-prerequisite`（`dev-up dev-seed dev-status` + `smoke.sh` + `console.sh`；
+  需要 k3d/kustomize 与 Chrome，结束不自动 purge）。
+- **跑哪些 spec 由 `console.sh` 决定**：默认
+  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts'`，并显式 `--workers=1`（两个 spec
+  共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>` 可临时收窄。
+- **跨角色审批的第二审批人**：`console.sh` 把 `E2E_ADMIN_B_USER=e2e-runner` 与
+  `E2E_ADMIN_B_PASS=$E2E_RUNNER_PASSWORD` 传给 spec。口令来自 `data/dev-credentials.env`（`e2e-prerequisite`
+  job 没有 `DEV_PROFILE`，走 local profile 由 `dev-seed` 生成；CI 的同名 Secret 只注入 `e2e` job）。
+  `e2e-runner` 是 REQ-065 canonical fixture 既有的 `release_admin` 账号，该角色持有
+  `release.values.approve`（`internal/authorization/store_authorizer.go`）——**不需要新增账号或 Secret，
+  凭据不进仓库**。提交者（`dev-admin`）与审批者必须不同主体，自批被服务端拒绝
+  （`internal/orchestrator/values_approval.go` 的 `self_approval_forbidden`）。
+- **跨角色用例的夹具前提由 `smoke.sh` 备好**：`Convergence task warm-up` 步骤经正式 API 给
+  `e2e-emergency-target` 补一条 `field="replicas"` / `values_path="replicaCount"` 的 promotion mapping，
+  再发一次 `REQUIRE_PROMOTION` 的 SetReplicas 紧急变更，留下一个 `pending_promotion` 收敛任务
+  （幂等：已存在的 pending 任务直接复用）。`values_path` 必须落在已批准的 values 文档
+  （`{"replicaCount":1}`）里，因为审批会核对 locked-path coverage（`validateLockedPathCoverage`）：
+  指向不存在路径的 mapping 会在**审批**处失败，而不是在准备处。
+- **单角色紧急变更场景钉住目标 definition**：`console.sh` 把 `E2E_DEFINITION_ID`（默认 fixture 里的
+  `e2e-release-target`，即 `smoke.sh` 最后 UPGRADE + ROLLBACK 的那个定义）传给 spec，spec 按 href 选中
+  对应行，而不是取「第一条渲染出来的行」。原因不是偏好而是前置：紧急**镜像**路径读的是 operator 上报的
+  **新鲜观测**（`internal/orchestrator/emergency_queries.go` 的 15 分钟陈旧窗口），而 operator 只在命令
+  执行后（以及 5 分钟周期扫描）刷新它——只有本次 run 操作过的 definition 才稳定可用。首次实跑就是栽在
+  这里：第一条紧急变更行属于没被本次 run 操作的定义，镜像入口渲染成「镜像变更暂不可用」。
+- **首次实跑发现的真实产品缺陷（已修）**：`web/src/components/values/ValuesRevisionActions.vue` 的
+  「保存 Draft」按钮原先只在 `revision?.status === 'draft'` 时渲染；而收敛会话（准备收敛后进入
+  ValuesEditor）与「创建首个配置 Revision」时 `revision === null`，于是按钮根本不渲染 —— 但 store 的
+  `save()` 明确支持该路径（`stores/valuesEditor.ts` 以 parent + prepareToken 建 Draft）。结果：跨角色
+  审批在 UI 上**走不到**（页面停在「新建 Revision」且无任何按钮）。修法 = 允许 `revision === null` 时渲染
+  保存按钮（提交/丢弃仍只对已持久化的 Revision 渲染），并加组件测试。这条只有真跑浏览器才暴露得出来。
+- **首次实跑发现的第三处产品缺陷（已修）**：`web/src/connect/values-revision.ts` 的
+  `createValuesRevision` **没有发送 `Idempotency-Key` 头**，而服务端 `CreateValuesRevision` 强制要求它
+  （`internal/orchestrator/values_revision.go` 的 `validateValuesIdempotencyKey`：1–64 字符）⇒ 控制台
+  **任何** Draft 创建都被 `invalid_argument` 拒绝——「创建首个配置 Revision」与收敛 Draft 同样走不通。
+  修法 = 包装层发送该头（缺省每次新键；需要重放语义的调用方可传稳定键），并加 `values-revision.test.ts`
+  钉住「必须发头」。此前 store 的单测把这层整个 mock 掉，所以门禁全绿也发现不了。
+- **本地车道的另一个坑（已修）**：`deploy/dev/dev.sh` 的 `content_hash` 为 `web` 服务只哈希
+  `web/package.json` + lockfile（外加 `internal/`），**不含 `web/src`** ⇒ 前端改动不改变镜像 tag，
+  `make dev-up` 报 unchanged、Deployment 不更新、pod 继续服务**旧 bundle**：本地
+  `make e2e-prerequisite` 可能在你从未改过的控制台上"通过"。修法 = 把 `web/src`、`web/index.html`、
+  `web/vite.config.ts`、`web/nginx.conf`、`web/tsconfig*.json`、`web/env.d.ts` 纳入哈希。
+- **skip 不等于通过**：`E2E_BACKEND` 未设时三个 spec 整体以显式原因 skip；声明栈已起后，`rollback`
+  的入口/凭据缺失是**硬失败**，`emergency-smoke` 的两个前置（绑定 ReleaseDefinition 的 release、
+  `pending_promotion` 任务）各自 **skip 并写明原因**——缺 `smoke.sh` 的 warm-up 步骤时跨角色用例会
+  回到 skip，这正是 TASK-270 要消除的状态。
+
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
 > `.github/workflows/test.yml`（13 个 job 与触发条件）、
 > `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
 > `test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
-> `test/e2e/prerequisite/smoke.sh`、`test/integration/`、
-> `internal/store/postgres/`、`web/package.json`；
+> `test/e2e/prerequisite/smoke.sh`、`test/e2e/prerequisite/console.sh`、`test/integration/`、
+> `internal/store/postgres/`、`web/package.json`、`web/e2e/`；
 > `Projects/001-release-manager/Requirements/REQ-037`、`REQ-061`~`REQ-064`、`REQ-066`；
 > `Notes/contracts/e2e-runner-surface.md`、`Notes/contracts/e2e-environment-config.md`；
 > `Notes/decisions/D-021`、`D-032`、`D-033`、`D-034`。

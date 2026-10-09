@@ -456,9 +456,9 @@ jobs:
           k3d version
           kustomize version
 
-      # TASK-250: the prerequisite gate now also drives the console (browser) path
-      # (web/e2e/rollback.spec.ts) against the in-container console on :8087. That
-      # needs the web toolchain and a browser, neither of which this job had.
+      # TASK-250/TASK-270: the prerequisite gate also drives the console (browser)
+      # specs (rollback + emergency-smoke, incl. the cross-actor approval case)
+      # against the in-container console on :8087, so it needs web toolchain + a browser.
       - uses: actions/setup-node@v7
         with:
           node-version: "22"

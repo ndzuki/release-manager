@@ -534,6 +534,86 @@ else
   skiprec "auth restart precheck (kubectl or kubeconfig unavailable)"
 fi
 
+step "Convergence task warm-up: REQUIRE_PROMOTION leaves a pending task for the browser spec"
+# TASK-270 AC-270-02. web/e2e/emergency-smoke.spec.ts's cross-actor approval case
+# needs a pending_promotion Convergence Task on a ReleaseDefinition; without one
+# the release inventory renders no convergence entry and the case skips (TASK-217
+# AC-217-03). This step leaves exactly one, through the formal Connect API only.
+# It is also the only automated coverage of the REQUIRE_PROMOTION path: the
+# cmd/e2e emergency stage deliberately passes REVERT_ON_NEXT_RECONCILE.
+#
+# Two real product preconditions, not test hooks:
+#   1. e2e-emergency-target carries a field="replicas" promotion mapping whose
+#      values_path must EXIST in the approved values document ({"replicaCount":1}).
+#      The path cannot be invented: approval re-checks locked-path coverage
+#      against the canonical document (validateLockedPathCoverage), so a mapping
+#      pointing at a missing path would fail the browser flow at approval.
+#   2. one REQUIRE_PROMOTION SetReplicas emergency change (set_replicas=2,
+#      target_locks=["replicaCount"]; max_emergency_replicas=4) creates the task.
+# Idempotent: an already-pending task is reused, so re-running this gate neither
+# trips the promotion-path lock nor duplicates the task.
+DEF_JSON="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/GetReleaseDefinition" \
+  "${AUTH_H[@]}" -d "{\"definitionId\":\"$EMERGENCY_DEF_ID\"}")"
+DEF_VERSION="$(jq -r '.definition.version // empty' <<<"$DEF_JSON" 2>/dev/null || true)"
+[ -n "$DEF_VERSION" ] && [ "$DEF_VERSION" -ge 1 ] 2>/dev/null \
+  || fail "cannot read e2e-emergency-target version via GetReleaseDefinition: $DEF_JSON"
+
+# promotion_mappings is a JSON-encoded bytes field: decode the stored list (base64
+# over Connect JSON), append the replicas mapping when it is absent, and send the
+# whole list back through promotion_mappings_replace (the wrapper is the only
+# field that expresses a full list without relying on emptiness semantics).
+EXISTING_MAPPINGS="$(jq -r '(.definition.promotionMappings // "") | @base64d' <<<"$DEF_JSON" 2>/dev/null || true)"
+jq -e 'type == "array"' <<<"${EXISTING_MAPPINGS:-[]}" >/dev/null 2>&1 || EXISTING_MAPPINGS='[]'
+[ -n "$EXISTING_MAPPINGS" ] || EXISTING_MAPPINGS='[]'
+HAS_REPLICAS_MAPPING="$(jq -r --arg k "$WKIND" --arg n "$WNAME" \
+  '[.[] | select((((.workload_kind // "") | ascii_downcase) == ($k | ascii_downcase)) and (.workload_name // "") == $n and (.container // "") == "" and .field == "replicas")] | length' \
+  <<<"$EXISTING_MAPPINGS")"
+if [ "${HAS_REPLICAS_MAPPING:-0}" != "0" ]; then
+  ok "e2e-emergency-target already carries a replicas promotion mapping"
+else
+  WIRE_MAPPINGS="$(jq -c --arg k "$WKIND" --arg n "$WNAME" \
+    '[.[] | {workloadKind: .workload_kind, workloadName: .workload_name, container: (.container // ""), field: .field, valuesPath: .values_path}]
+     + [{workloadKind: $k, workloadName: $n, container: "", field: "replicas", valuesPath: "replicaCount"}]' \
+    <<<"$EXISTING_MAPPINGS")"
+  UPDATE_BODY="$(jq -cn --arg id "$EMERGENCY_DEF_ID" --argjson v "$DEF_VERSION" --argjson items "$WIRE_MAPPINGS" \
+    '{definitionId: $id, expectedVersion: $v, promotionMappingsReplace: {items: $items}}')"
+  UPDATE_RESP="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/UpdateReleaseDefinition" \
+    "${AUTH_H[@]}" -d "$UPDATE_BODY")"
+  MAPPING_COUNT="$(jq -r '(.definition.promotionMappings // "") | @base64d' <<<"$UPDATE_RESP" 2>/dev/null \
+    | jq -r '[.[]? | select(.field == "replicas" and .values_path == "replicaCount")] | length' 2>/dev/null || echo 0)"
+  [ "${MAPPING_COUNT:-0}" != "0" ] \
+    && ok "replicas promotion mapping added to e2e-emergency-target (values_path=replicaCount)" \
+    || fail "UpdateReleaseDefinition did not persist the replicas promotion mapping: $UPDATE_RESP"
+fi
+
+# Read back the pending task list (an empty list serializes as {} because
+# protojson omits empty repeated fields; a Connect error carries .code).
+pending_task_id() {
+  local body
+  body="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/ListConvergenceTasks" \
+    "${AUTH_H[@]}" -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"statusFilter\":\"pending_promotion\"}")"
+  [ -z "$(jq -r '.code // empty' <<<"$body" 2>/dev/null || echo unparseable)" ] \
+    || fail "ListConvergenceTasks refused: $body"
+  jq -r '[.tasks[]? | select((.activeRevisionId // "") == "") | .taskId][0] // ""' <<<"$body"
+}
+
+PENDING_TASK="$(pending_task_id)"
+if [ -n "$PENDING_TASK" ]; then
+  ok "pending_promotion convergence task already present, reused: $PENDING_TASK"
+else
+  CONV="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/ExecuteEmergencyChange" \
+    "${AUTH_H[@]}" \
+    -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":2,\"convergenceStrategy\":\"REQUIRE_PROMOTION\",\"targetLocks\":[\"replicaCount\"],\"idempotencyKey\":\"smoke-convergence-$(date +%s)\"}")"
+  CONV_ID="$(jq -r '.operationId // empty' <<<"$CONV" 2>/dev/null || true)"
+  [ -n "$CONV_ID" ] || fail "ExecuteEmergencyChange(REQUIRE_PROMOTION) rejected: $CONV"
+  ok "REQUIRE_PROMOTION emergency accepted op=$CONV_ID"
+  wait_op "$CONV_ID" 'OPERATION_STATUS_SUCCEEDED' "require-promotion op=$CONV_ID" || true
+  PENDING_TASK="$(pending_task_id)"
+  [ -n "$PENDING_TASK" ] \
+    && ok "pending_promotion convergence task created: $PENDING_TASK (browser spec precondition)" \
+    || bad "REQUIRE_PROMOTION did not create a pending convergence task"
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   finish "AC-066-17 prerequisite smoke PASSED"
   printf 'AC-066-17 prerequisite smoke PASSED\n'
