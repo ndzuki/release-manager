@@ -52,7 +52,12 @@ func seedOperationAt(
 // the aggregate feed (TASK-276, AC-276-04): an operation that is non-terminal
 // but belongs to a definition the caller's organization has no active binding
 // with must be invisible, not merely filtered by status.
-func TestListNonTerminalOperationsScopesToActiveBindings(t *testing.T) {
+// The name says "bound customers" deliberately: this fixture binds the caller to some
+// customers and not others, but it holds no REVOKED binding, so the handler's
+// `Status == BindingActive` filter is not covered here (removing it leaves this test
+// green). Coverage for a revoked binding is tracked as a follow-up; the scoping
+// predicate itself is falsifiable -- dropping it leaks op-hidden and fails this test.
+func TestListNonTerminalOperationsScopesToBoundCustomers(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedDefinition(t, st)

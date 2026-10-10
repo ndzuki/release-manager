@@ -10986,10 +10986,11 @@ func (x *OperationSummary) GetCreatedAt() *timestamppb.Timestamp {
 // operation feed. `customer_id` is optional; when empty the page covers every
 // customer the caller's organization has an active binding with.
 type ListNonTerminalOperationsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PageSize      int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`      // default 20, maximum 100 (clamped)
-	PageToken     string                 `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`    // opaque (created_at, id) cursor
-	CustomerId    string                 `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"` // optional scope narrowing, must be bound to the caller
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	PageSize int32                  `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"` // 0 or unset selects the default 20; above 100 is clamped to 100;
+	// a negative value is rejected with invalid_page_size
+	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`    // opaque (created_at, id) cursor
+	CustomerId    string `protobuf:"bytes,3,opt,name=customer_id,json=customerId,proto3" json:"customer_id,omitempty"` // optional scope narrowing, must be bound to the caller
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

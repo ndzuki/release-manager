@@ -955,8 +955,9 @@ type OrchestratorServiceClient interface {
 	// binding with are visible, and a row outside that scope is ABSENT rather than an
 	// error -- a list over an organization-scoped resource cannot refuse row by row.
 	// `customer_id` narrows the scope to one of those customers; naming a customer
-	// without an active binding answers PERMISSION_DENIED (`binding_revoked`, the
-	// interceptor's binding check enforces the same rule before the handler runs).
+	// without an active binding answers PERMISSION_DENIED. On a real request the
+	// interceptor's binding check fires first and reports `domain_binding_missing`;
+	// the handler re-checks and answers `binding_revoked` only when reached directly.
 	// Omitted `customer_id` does NOT answer PERMISSION_DENIED -- unlike ListBundles
 	// there is no required scope field, because the organization scope itself is the
 	// bounded view.
@@ -2122,8 +2123,9 @@ type OrchestratorServiceHandler interface {
 	// binding with are visible, and a row outside that scope is ABSENT rather than an
 	// error -- a list over an organization-scoped resource cannot refuse row by row.
 	// `customer_id` narrows the scope to one of those customers; naming a customer
-	// without an active binding answers PERMISSION_DENIED (`binding_revoked`, the
-	// interceptor's binding check enforces the same rule before the handler runs).
+	// without an active binding answers PERMISSION_DENIED. On a real request the
+	// interceptor's binding check fires first and reports `domain_binding_missing`;
+	// the handler re-checks and answers `binding_revoked` only when reached directly.
 	// Omitted `customer_id` does NOT answer PERMISSION_DENIED -- unlike ListBundles
 	// there is no required scope field, because the organization scope itself is the
 	// bounded view.

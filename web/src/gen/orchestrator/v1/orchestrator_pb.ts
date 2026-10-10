@@ -4932,13 +4932,15 @@ export const OperationSummarySchema: GenMessage<OperationSummary> = /*@__PURE__*
  */
 export type ListNonTerminalOperationsRequest = Message<"orchestrator.v1.ListNonTerminalOperationsRequest"> & {
   /**
-   * default 20, maximum 100 (clamped)
+   * 0 or unset selects the default 20; above 100 is clamped to 100;
    *
    * @generated from field: int32 page_size = 1;
    */
   pageSize: number;
 
   /**
+   * a negative value is rejected with invalid_page_size
+   *
    * opaque (created_at, id) cursor
    *
    * @generated from field: string page_token = 2;
@@ -6892,8 +6894,9 @@ export const OrchestratorService: GenService<{
    * binding with are visible, and a row outside that scope is ABSENT rather than an
    * error -- a list over an organization-scoped resource cannot refuse row by row.
    * `customer_id` narrows the scope to one of those customers; naming a customer
-   * without an active binding answers PERMISSION_DENIED (`binding_revoked`, the
-   * interceptor's binding check enforces the same rule before the handler runs).
+   * without an active binding answers PERMISSION_DENIED. On a real request the
+   * interceptor's binding check fires first and reports `domain_binding_missing`;
+   * the handler re-checks and answers `binding_revoked` only when reached directly.
    * Omitted `customer_id` does NOT answer PERMISSION_DENIED -- unlike ListBundles
    * there is no required scope field, because the organization scope itself is the
    * bounded view.
