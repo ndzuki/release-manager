@@ -10,7 +10,7 @@ import { t } from '@/i18n/messages';
 // change (ExecuteEmergencyChangeRequest.annotations + annotation_scope) when
 // the page's action selector is on 'annotations'; the server re-validates every
 // (key, scope) pair against the definition's whitelist.
-import { computed, ref, useId, watch } from 'vue';
+import { computed, useId, watch } from 'vue';
 import {
   ANNOTATION_MAX_ENTRIES,
   validateAnnotationEntries,
@@ -45,7 +45,24 @@ const emit = defineEmits<{
   'update:scope': [scope: string];
 }>();
 
-const nextLocalId = ref(1);
+/*
+ * Next free row id. `localId` is a client-only row identity — the `v-for` key and
+ * the update/remove lookup key — and never reaches the wire. It is derived from
+ * the rows currently present instead of a per-mount counter, so an editor opened
+ * with seeded rows cannot mint a duplicate: start after the highest `local-N`,
+ * then step until the candidate is unused. That final loop also covers ids that
+ * are not `local-N` shaped (or that are already duplicated in the seed).
+ */
+function nextFreeLocalId(entries: ReadonlyArray<{ localId: string }>): string {
+  const used = new Set(entries.map((entry) => entry.localId));
+  let candidate = 1;
+  for (const entry of entries) {
+    const match = /^local-(\d+)$/.exec(entry.localId);
+    if (match) candidate = Math.max(candidate, Number(match[1]) + 1);
+  }
+  while (used.has(`local-${candidate}`)) candidate += 1;
+  return `local-${candidate}`;
+}
 
 const drafts = computed<AnnotationEntryDraft[]>(() => props.values);
 
@@ -86,7 +103,7 @@ function addRow(): void {
   if (!canAdd.value) return;
   const used = new Set(drafts.value.map((entry) => entry.key));
   const key = props.approvedKeys.find((candidate) => !used.has(candidate)) ?? props.approvedKeys[0];
-  emit('update', [...drafts.value, { localId: `local-${nextLocalId.value++}`, key, value: '', scope: props.scope }]);
+  emit('update', [...drafts.value, { localId: nextFreeLocalId(drafts.value), key, value: '', scope: props.scope }]);
 }
 
 function removeRow(localId: string): void {
