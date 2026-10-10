@@ -49,6 +49,9 @@ func TestListNonTerminalScopedPagesAndScopes(t *testing.T) {
 	assert.Equal(t, "op-a", first.Rows[0].Operation.ID)
 	assert.Equal(t, "release-a", first.Rows[0].DefinitionName)
 	assert.Equal(t, inScope, first.Rows[0].CustomerID)
+	// TASK-279: the row carries the cluster its definition targets, not a shared
+	// or empty value (each helper definition gets its own random cluster).
+	assert.Equal(t, defA.ClusterID, first.Rows[0].ClusterID)
 	assert.Equal(t, "op-b", first.Rows[1].Operation.ID)
 
 	last := first.Rows[len(first.Rows)-1]

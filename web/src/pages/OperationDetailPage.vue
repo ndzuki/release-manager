@@ -11,6 +11,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import EmergencyResultPanel from '@/components/emergency/EmergencyResultPanel.vue';
+import { getDefinition } from '@/connect/definition-api';
 import { getEmergencyResult } from '@/connect/emergency-api';
 import { correlationLine, describeError } from '@/connect/error-copy';
 import { getPreflightResult } from '@/connect/operation-api';
@@ -28,20 +29,80 @@ const authStore = useAuthStore();
 const operationId = computed(() => String(route.params.operationId ?? ''));
 const releaseName = computed(() => String(route.query.releaseName ?? route.params.releaseId ?? 'Release'));
 /*
- * Two ways in: the release-scoped route carries customer/cluster/release, while the
- * Operation centre's unscoped route (`/operations/:operationId`, TASK-277) carries only
- * the operation id — the aggregate row has no cluster id, and vue-router refuses a named
- * route with empty required params. Everything below that navigates deeper into the
- * release scope must therefore stay behind this flag: an unscoped page has no cluster to
- * build those links from, and pushing one would throw instead of navigating.
+ * The release context this page addresses (TASK-279). The canonical nested route
+ * carries customer/cluster/release in the URL; the Operation centre's scope-less
+ * route (`/operations/:operationId`, TASK-277) carries only the operation id, and
+ * vue-router refuses a named route whose required params are empty. Instead of
+ * masking every release-scoped action there, the page recovers the context from the
+ * operation's own release definition — the same release:read the operation stream
+ * already needs. The operation itself renders while that read is in flight or
+ * refused; only the actions that need the context wait for it.
  */
-const scoped = computed(() => Boolean(route.params.customerId && route.params.clusterId && route.params.releaseId));
+type ReleaseScope = { customerId: string; clusterId: string; releaseId: string };
+
+// The release-scoped routes register together (router/index.ts). Where they are
+// absent (release inventory disabled) there is no scoped page to navigate into, so
+// a resolved definition must not flip this page into scoped rendering.
+const releaseScopedRoutes =
+  router.hasRoute('ReleaseInventory') && router.hasRoute('OperationList') && router.hasRoute('ConvergenceTasks');
+
+function routeReleaseScope(): ReleaseScope | null {
+  const customerId = String(route.params.customerId ?? '');
+  const clusterId = String(route.params.clusterId ?? '');
+  const releaseId = String(route.params.releaseId ?? '');
+  return customerId && clusterId && releaseId ? { customerId, clusterId, releaseId } : null;
+}
+
+const resolvedScope = ref<ReleaseScope | null>(null);
+const releaseScope = computed(() => routeReleaseScope() ?? resolvedScope.value);
+
 // Full route scope: a same operationId under a different customer/cluster/
 // release must reset the store and open a fresh stream (AC-057-15).
 const routeScope = computed(() =>
   [route.params.customerId, route.params.clusterId, route.params.releaseId, route.params.operationId]
     .map(String)
     .join('/'),
+);
+
+/**
+ * Recovers the release context from the operation's release definition when the URL
+ * does not carry it. Failures are deliberately silent here: the page's own error
+ * surface belongs to the operation stream, and a refused definition read must leave
+ * the operation readable rather than replace it with an error state.
+ */
+async function resolveReleaseScope(definitionId: string): Promise<void> {
+  if (!releaseScopedRoutes) return;
+  const currentOperation = operationId.value;
+  try {
+    const definition = await getDefinition(definitionId);
+    // A late response for a previous operation, or a route that now carries its own
+    // scope, must not overwrite the context on screen.
+    if (operationId.value !== currentOperation || routeReleaseScope()) return;
+    resolvedScope.value =
+      definition.customerId && definition.clusterId
+        ? { customerId: definition.customerId, clusterId: definition.clusterId, releaseId: definitionId }
+        : null;
+  } catch {
+    if (operationId.value !== currentOperation) return;
+    resolvedScope.value = null;
+  }
+}
+
+watch(
+  () => [routeScope.value, store.operation?.releaseDefinitionId] as const,
+  () => {
+    if (routeReleaseScope()) {
+      resolvedScope.value = null;
+      return;
+    }
+    const definitionId = store.operation?.releaseDefinitionId ?? '';
+    if (!definitionId) {
+      resolvedScope.value = null;
+      return;
+    }
+    void resolveReleaseScope(definitionId);
+  },
+  { immediate: true },
 );
 
 const liveUpdatesEnabled = import.meta.env.VITE_OPERATION_LIVE_UPDATES !== 'false';
@@ -118,16 +179,28 @@ watch(
   () => [operationId.value, isEmergency.value],
   () => {
     emergencyResult.value = null;
-    const organizationId = authStore.activeOrganization?.id ?? '';
-    const customerId = String(route.params.customerId ?? '');
-    if (organizationId && customerId) {
-      void authorization.load(organizationId, customerId);
-    }
     if (isEmergency.value) {
       void loadEmergencyResult();
       effectObservation.start(operationId.value, () => liveUpdatesEnabled);
     } else {
       effectObservation.stop();
+    }
+  },
+  { immediate: true },
+);
+
+/*
+ * The authorization snapshot is scoped to a customer, not to an operation. The
+ * canonical route carries that customer in the URL; the scope-less route recovers
+ * it from the release definition (TASK-279), so this follows the RESOLVED scope
+ * rather than the raw route params — otherwise the snapshot would never load on
+ * the scope-less entry and the capability projection would stay fail-closed.
+ */
+watch(
+  () => [authStore.activeOrganization?.id ?? '', releaseScope.value?.customerId ?? ''] as const,
+  ([organizationId, customerId]) => {
+    if (organizationId && customerId) {
+      void authorization.load(organizationId, customerId);
     }
   },
   { immediate: true },
@@ -189,17 +262,14 @@ onBeforeUnmount(() => {
 });
 
 function openConvergence(): void {
-  // No release scope (reached from the Operation centre): the convergence route needs
-  // customer/cluster/release ids that this page does not have, so the action is not
-  // offered at all (see the can-create-values-revision binding in the template).
-  if (!scoped.value) return;
+  // The canonical nested route (or a scope recovered from the operation's release
+  // definition, TASK-279) is what makes the convergence route resolvable. Without
+  // it there is nothing to push — vue-router would throw on the empty params.
+  const scope = releaseScope.value;
+  if (!scope) return;
   void router.push({
     name: 'ConvergenceTasks',
-    params: {
-      customerId: String(route.params.customerId ?? ''),
-      clusterId: String(route.params.clusterId ?? ''),
-      releaseId: String(route.params.releaseId ?? ''),
-    },
+    params: { customerId: scope.customerId, clusterId: scope.clusterId, releaseId: scope.releaseId },
   });
 }
 
@@ -211,11 +281,11 @@ function formatTimestamp(value: string | null): string {
 <template>
   <section class="operation-detail">
     <nav class="operation-detail__breadcrumbs" :aria-label="t('values.page.breadcrumb')">
-      <template v-if="scoped">
+      <template v-if="releaseScope">
         <RouterLink
           :to="{
             name: 'ReleaseInventory',
-            params: { customerId: route.params.customerId, clusterId: route.params.clusterId },
+            params: { customerId: releaseScope.customerId, clusterId: releaseScope.clusterId },
           }"
         >
           Releases
@@ -225,9 +295,9 @@ function formatTimestamp(value: string | null): string {
           :to="{
             name: 'OperationList',
             params: {
-              customerId: route.params.customerId,
-              clusterId: route.params.clusterId,
-              releaseId: route.params.releaseId,
+              customerId: releaseScope.customerId,
+              clusterId: releaseScope.clusterId,
+              releaseId: releaseScope.releaseId,
             },
           }"
         >
@@ -343,7 +413,7 @@ function formatTimestamp(value: string | null): string {
         :operation-state="store.operation?.state ?? ''"
         :operation-effect-status="store.operation?.effectStatus ?? ''"
         :observation-status="effectObservation.status.value"
-        :can-create-values-revision="authorization.canCreateValuesRevision && scoped"
+        :can-create-values-revision="authorization.canCreateValuesRevision && releaseScope !== null"
         @open-convergence="openConvergence"
       />
 

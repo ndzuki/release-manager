@@ -140,6 +140,7 @@ func toNonTerminalOperationSummary(row *store.NonTerminalOperationRow) *orchestr
 		ReleaseDefinitionName: row.DefinitionName,
 		CustomerId:            row.CustomerID,
 		CustomerName:          row.CustomerName,
+		ClusterId:             row.ClusterID,
 		OperationType:         string(operation.OperationType),
 		State:                 string(operation.Status),
 		CreatedAt:             timestamppb.New(operation.CreatedAt),

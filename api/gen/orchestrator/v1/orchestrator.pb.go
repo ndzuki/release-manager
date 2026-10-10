@@ -11119,7 +11119,13 @@ type NonTerminalOperationSummary struct {
 	// Helm revision the operation acts on: the ROLLBACK target when one is set,
 	// otherwise the revision it was computed against (same rule as
 	// OperationSummary.revision).
-	Revision      int32 `protobuf:"varint,11,opt,name=revision,proto3" json:"revision,omitempty"`
+	Revision int32 `protobuf:"varint,11,opt,name=revision,proto3" json:"revision,omitempty"`
+	// Cluster the operation's release definition targets (TASK-279). The console
+	// builds the release-scoped detail route
+	// (/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId)
+	// from an aggregate row, and that route requires the cluster id. Only the id
+	// travels: no console surface renders a cluster display name.
+	ClusterId     string `protobuf:"bytes,12,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11229,6 +11235,13 @@ func (x *NonTerminalOperationSummary) GetRevision() int32 {
 		return x.Revision
 	}
 	return 0
+}
+
+func (x *NonTerminalOperationSummary) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
 }
 
 type BundleImage struct {
@@ -12458,7 +12471,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\n" +
 	"operations\x18\x01 \x03(\v2,.orchestrator.v1.NonTerminalOperationSummaryR\n" +
 	"operations\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xdf\x03\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xfe\x03\n" +
 	"\x1bNonTerminalOperationSummary\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x126\n" +
@@ -12474,7 +12487,9 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"updated_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1c\n" +
 	"\temergency\x18\n" +
 	" \x01(\bR\temergency\x12\x1a\n" +
-	"\brevision\x18\v \x01(\x05R\brevision\"x\n" +
+	"\brevision\x18\v \x01(\x05R\brevision\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\f \x01(\tR\tclusterId\"x\n" +
 	"\vBundleImage\x12\x1e\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\tR\n" +

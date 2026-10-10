@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import DataTable from '@/components/common/DataTable.vue';
@@ -27,6 +28,7 @@ import { useOperationFeed } from '@/composables/useOperationFeed';
  */
 const PAGE_SIZE = 20;
 
+const router = useRouter();
 const { items, nextPageToken, loading, error, maintenance, forbidden, load } =
   useOperationFeed({ pageSize: PAGE_SIZE });
 
@@ -94,10 +96,30 @@ function releaseOf(row: Record<string, unknown>): string {
 }
 
 function detailRoute(row: Record<string, unknown>) {
+  const operationId = String(row.operationId ?? '');
+  const releaseName = String(row.releaseDefinitionName ?? '');
+  /*
+   * Prefer the canonical release-scoped detail route (TASK-279). The aggregate row
+   * carries the cluster now, so the centre can hand the detail page the real
+   * customer/cluster/release context — that page is the one able to offer every
+   * release-scoped action, and the context lives in the URL instead of being
+   * re-derived. Deployments that disable the release inventory register no such
+   * route (router/index.ts), so the scope-less route stays the fallback.
+   */
+  const customerId = String(row.customerId ?? '');
+  const clusterId = String(row.clusterId ?? '');
+  const releaseId = String(row.releaseDefinitionId ?? '');
+  if (customerId && clusterId && releaseId && router.hasRoute('OperationDetail')) {
+    return {
+      name: 'OperationDetail',
+      params: { customerId, clusterId, releaseId, operationId },
+      query: { releaseName },
+    };
+  }
   return {
     name: 'OperationCenterDetail',
-    params: { operationId: String(row.operationId ?? '') },
-    query: { releaseName: String(row.releaseDefinitionName ?? '') },
+    params: { operationId },
+    query: { releaseName },
   };
 }
 
