@@ -245,6 +245,7 @@ function formatTimestamp(value: string | null): string {
       :open="editing !== null"
       :title="editorTitle"
       :close-on-backdrop="false"
+      :close-on-escape="!store.saving"
       @close="editing = null"
     >
       <div v-if="editing" class="definitions__editor">

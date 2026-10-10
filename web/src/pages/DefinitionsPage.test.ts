@@ -158,6 +158,39 @@ describe('DefinitionsPage', () => {
     expect(document.getElementById(titleId!)?.textContent).toBe('编辑 e2e-release-target（版本 3）');
   });
 
+  /*
+   * TASK-282: the cancel button is disabled while a save is in flight and Escape
+   * now follows it (`closeOnEscape: !store.saving`) instead of staying enabled.
+   * Closing mid-save is not harmless: a conflict response adopts the fresh version
+   * and re-opens the editor the operator just dismissed.
+   */
+  it('keeps the editor open on Escape while a save is in flight, and closes it otherwise', async () => {
+    let resolveUpdate: ((value: api.DefinitionView) => void) | undefined;
+    mockedUpdate.mockImplementationOnce(() => new Promise((resolve) => { resolveUpdate = resolve; }));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
+
+    await submitEditor();
+    await nextTick();
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.definitions__actions button[type="button"]')?.disabled).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
+
+    resolveUpdate?.(definition({ version: 4n }));
+    await flushPromises();
+    expect(document.querySelector('.definitions__editor')).toBeNull();
+
+    // With no submission in flight Escape still dismisses the editor (unchanged).
+    await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('.definitions__editor')).toBeNull();
+  });
+
   it('refuses to submit a mapping with missing required fields', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
@@ -275,7 +308,14 @@ describe('DefinitionsPage', () => {
     for (const input of inputs) {
       const id = input.getAttribute('id');
       expect(id, 'an input without an id cannot be pointed at by a label').toBeTruthy();
-      expect(root.querySelector(`.definitions__mappings label[for="${id}"]`)?.textContent?.trim()).not.toBe('');
+      /*
+       * Two steps on purpose. A missing label yields `undefined` text and the old
+       * one-liner `expect(...?.textContent?.trim()).not.toBe('')` PASSED on that —
+       * it only caught a present-but-empty label. Existence first, then the text.
+       */
+      const label = root.querySelector(`.definitions__mappings label[for="${id}"]`);
+      expect(label, `no label resolves to the control id ${id}`).not.toBeNull();
+      expect(label?.textContent?.trim()).not.toBe('');
     }
 
     // Unique per row (two rows cannot share an id)…

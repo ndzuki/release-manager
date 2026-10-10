@@ -206,6 +206,17 @@ describe('Operator pages', () => {
     expect(document.querySelector('.app-dialog__panel')).toBeNull();
     expect(createEnrollmentToken).not.toHaveBeenCalled();
 
+    // Destructive confirmation: a backdrop click does not dismiss it.
+    await wrapper.findAll('button').find((button) => button.text() === '替换令牌')?.trigger('click');
+    panel = dialogPanel();
+    document.querySelector<HTMLElement>('.app-dialog')!.click();
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).not.toBeNull();
+    expect(createEnrollmentToken).not.toHaveBeenCalled();
+    clickDialogButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
+
     await wrapper.findAll('button').find((button) => button.text() === '替换令牌')?.trigger('click');
     panel = dialogPanel();
     clickDialogButton(panel, '确认替换');
@@ -236,6 +247,17 @@ describe('Operator pages', () => {
     await flushPromises();
     expect(document.querySelector('.app-dialog__panel')).toBeNull();
     expect(revokePendingEnrollmentToken).not.toHaveBeenCalled();
+
+    // Destructive confirmation: a backdrop click does not dismiss it.
+    await wrapper.findAll('button').find((button) => button.text() === '撤销待用令牌')?.trigger('click');
+    panel = dialogPanel();
+    document.querySelector<HTMLElement>('.app-dialog')!.click();
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).not.toBeNull();
+    expect(revokePendingEnrollmentToken).not.toHaveBeenCalled();
+    clickDialogButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
 
     await wrapper.findAll('button').find((button) => button.text() === '撤销待用令牌')?.trigger('click');
     panel = dialogPanel();

@@ -132,6 +132,7 @@ watch([customerId, clusterId], async () => {
       :title="t('operator.enroll.replaceTitle')"
       :description="t('operator.enroll.replaceConfirm')"
       danger
+      :close-on-backdrop="false"
       @close="replaceDialogOpen = false"
     >
       <template #footer>
@@ -145,6 +146,7 @@ watch([customerId, clusterId], async () => {
       :title="t('operator.enroll.revokeTitle')"
       :description="t('operator.enroll.revokeConfirm')"
       danger
+      :close-on-backdrop="false"
       @close="discardDialogOpen = false"
     >
       <template #footer>

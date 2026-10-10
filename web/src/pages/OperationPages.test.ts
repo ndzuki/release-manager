@@ -748,4 +748,66 @@ describe('operation pages', () => {
     expect(wrapper.find('.preflight-panel').exists()).toBe(false);
     wrapper.unmount();
   });
+
+  /*
+   * TASK-282: the scope watcher reset the store but left the previous operation's
+   * preflight failure in place, so an A(failed) -> B navigation rendered A's banner
+   * until B's read resolved. The read state must reset with the scope.
+   */
+  it('clears the previous preflight failure when the route scope changes', async () => {
+    // The first read rejects (A's banner); every later read stays in flight, so the
+    // assertion can only be observing the scope reset, not B's own outcome.
+    const getOperation = vi.fn().mockImplementation(() => new Promise<never>(() => undefined));
+    getOperation.mockRejectedValueOnce(
+      new ConnectError('preflight read failed', Code.Internal, { 'X-Request-ID': 'req-scope-a' }),
+    );
+    const clients: TestClients = {
+      operations: {
+        // The snapshot must carry the operation the store asked for: it drops a
+        // mismatched one (operationTimeline applySnapshot), and then store.operation
+        // never becomes truthy and the failure block never re-renders at all. The
+        // client receives the request message, not the bare id string.
+        watchOperation: vi.fn().mockImplementation((request: { operationId: string }) => (async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: request.operationId,
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const timelineStore = useOperationTimelineStore(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-scope-a');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(true));
+    expect(wrapper.get('[data-testid="preflight-load-failure"]').text()).toContain('requestId=req-scope-a');
+
+    // Same page, new scope rendered and B's read still in flight: A's banner must
+    // not be what the re-rendered operation shows.
+    await router.push('/customers/cust-1/clusters/cluster-2/releases/def-2/operations/op-scope-b');
+    await vi.waitFor(() => expect(timelineStore.operation?.operationId).toBe('op-scope-b'));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
 });

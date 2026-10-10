@@ -100,6 +100,7 @@ async function confirmDisable() {
         :title="t('cluster.detail.disableTitle')"
         :description="t('cluster.detail.disableConfirm')"
         danger
+        :close-on-backdrop="false"
         @close="disableDialogOpen = false"
       >
         <template #footer>

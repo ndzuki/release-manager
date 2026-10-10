@@ -165,6 +165,12 @@ watch(routeScope, (current, previous) => {
     // load() early-return guard cannot absorb a same-id navigation
     // (AC-057-15: old stream/timers must stop before the new scope loads).
     store.reset();
+    // The preflight read belongs to the scope being left. Clearing both halves
+    // synchronously stops the previous operation's failure banner (or result
+    // panel) from rendering while the new scope's read is still in flight;
+    // loadPreflightResult() below repopulates them from the new scope.
+    preflightResult.value = null;
+    preflightFailure.value = null;
   }
   void store.load(nextOperationId);
   void loadPreflightResult();

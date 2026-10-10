@@ -112,6 +112,18 @@ describe('ClusterDetailPage disable confirmation (TASK-281)', () => {
     expect(disableCluster).not.toHaveBeenCalled();
     expect(document.querySelector('.app-dialog__panel')).toBeNull();
 
+    // A backdrop click is an accidental dismissal for a destructive flow, not a
+    // confirmation: the dialog stays open and nothing runs (closeOnBackdrop=false).
+    await wrapper.findAll('button').find((button) => button.text() === '停用集群')?.trigger('click');
+    panel = dialogPanel();
+    document.querySelector<HTMLElement>('.app-dialog')!.click();
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).not.toBeNull();
+    expect(disableCluster).not.toHaveBeenCalled();
+    clickButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
+
     // Confirm: the same path `window.confirm` used to gate runs unchanged.
     await wrapper.findAll('button').find((button) => button.text() === '停用集群')?.trigger('click');
     panel = dialogPanel();

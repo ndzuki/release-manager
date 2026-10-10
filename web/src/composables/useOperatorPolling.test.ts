@@ -135,14 +135,58 @@ describe('operator polling', () => {
     expect(refresh).toHaveBeenCalledTimes(3);
   });
 
-  // A refresh that rejects is a failure like a resolved `false`, not an unhandled
-  // rejection that silently kills the loop.
-  it('treats a throwing refresh as a retryable failure', async () => {
+  /*
+   * A refresh that rejects is a failure like a resolved `false`, not an unhandled
+   * rejection that silently kills the loop.
+   *
+   * The unhandled-rejection listener is what actually pins the `catch`: without it the
+   * throw still falls through to `finally`, so counting assertions alone stay green and
+   * only the process exit code notices. The delay boundary (nothing at base-1, attempt 2
+   * at base) pins "counted as failure" more tightly than "called twice" would.
+   */
+  it('treats a throwing refresh as a retryable failure without an unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const refresh = vi.fn().mockRejectedValue(new Error('boom'));
+      app = withPolling(refresh);
+
+      // The first automatic attempt rejects; the scheduler must absorb it.
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Node emits unhandledRejection a turn after the rejection itself.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unhandled).toEqual([]);
+      expect(refresh).toHaveBeenCalledTimes(1);
+
+      // …and the failure is counted exactly like a resolved `false`: the base backoff
+      // is what schedules attempt 2, not merely "some timer".
+      await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS - 1);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  // The throwing path must also spend the same bounded budget as a resolved `false`,
+  // so the cap keeps holding when the endpoint is broken rather than merely flaky.
+  it('stops a persistently throwing refresh at the same bounded budget', async () => {
     const refresh = vi.fn().mockRejectedValue(new Error('boom'));
     app = withPolling(refresh);
 
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS);
-    expect(refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 2);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 4);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 8);
+
+    expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
