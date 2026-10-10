@@ -922,18 +922,24 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 const nonTerminalOperationColumns = operationColumns + `,
     release_definitions.name, release_definitions.customer_id, COALESCE(customers.name, '')`
 
-// nonTerminalScopedIndex is the ordered partial index this query pins itself to
-// (migrations/000034_operations_non_terminal_index.up.sql; the SQLite DDL lives
-// at the end of migrationStatements in internal/store/sqlite/db.go). SQLite only
-// picks a partial index when planner statistics prove the query's predicate
-// implies the index's, and it additionally needs sqlite_stat1 row counts to
-// prefer the index scan over driving from release_definitions; dev/test
-// databases are migrated fresh and never ANALYZEd, so without the hint below the
-// index is silently unused and the page falls back to scanning every historical
-// operation of the in-scope definitions plus "USE TEMP B-TREE FOR ORDER BY"
-// (measured at 30k operations / 120 definitions: 4.7ms -> 0.2ms with the index,
-// TASK-278). The hint is therefore the load-bearing half of the fix, not a
-// micro-optimisation; SQLite-only, so it cannot leak into the PostgreSQL path.
+// nonTerminalScopedIndex is the ordered partial index behind the cross-release
+// non-terminal feed (migrations/000034_operations_non_terminal_index.up.sql; the
+// SQLite DDL lives at the end of migrationStatements in
+// internal/store/sqlite/db.go). The feed query deliberately does NOT pin it with
+// INDEXED BY: the pin ignored scope selectivity and forced a full walk of the
+// global non-terminal index for narrow scopes. Measured in-process on modernc
+// SQLite (2026-10-11; 90k operations / 1k definitions / 100 customers, the
+// narrow customer's ten non-terminal rows newest in the timeline, page 20 plus
+// the next-page probe, three warmups and thirty timed runs taking the median, no
+// -race): a narrow page took 18.2ms pinned versus 154us with the planner's own
+// choice (~115x), while a wide page took 28.6ms with no statistics and 413us
+// once the migration's PRAGMA optimize (optimizePlannerStatistics, db.go)
+// published sqlite_stat1. Column order and predicate are still load-bearing:
+// TestListNonTerminalScopedPlanUsesOrderedPartialIndex requires the wide feed to
+// read this index with no TEMP B-TREE, and
+// TestNonTerminalScopedSQLDoesNotPinTheIndex guards against reintroducing the
+// pin. SQLite-only; the PostgreSQL feed query is unmodified and PostgreSQL
+// selects the index through its own planner.
 const nonTerminalScopedIndex = "idx_operations_non_terminal_created"
 
 // nonTerminalScopedSQL builds the page query for one scope size. It is a named
@@ -952,7 +958,7 @@ func nonTerminalScopedSQL(customerCount int, hasCursor bool) string {
 	//nolint:gosec // only static column lists and generated "?" placeholders are concatenated; every value stays a bound parameter
 	return `
 		SELECT ` + nonTerminalOperationColumns + `
-		FROM operations INDEXED BY ` + nonTerminalScopedIndex + operationJoin + `
+		FROM operations` + operationJoin + `
 		JOIN release_definitions ON release_definitions.id = operations.release_definition_id
 		LEFT JOIN customers ON customers.id = release_definitions.customer_id
 		WHERE ` + where + `
