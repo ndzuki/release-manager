@@ -64,6 +64,13 @@ describe('decodeApprovedAnnotationKeys', () => {
     );
 
     expect(decoded.violation).toBeNull();
+    /*
+     * `promotionValuesPath` has NO production consumer today (TASK-274 leftover 10.4):
+     * the emergency editor offers key/scope only, and nothing else reads the view. The
+     * assertion is kept on purpose — the field is part of the Go type's JSON shape
+     * (internal/store/store.go:1149), so a drifted JSON name has to stay loud here for
+     * the day a consumer appears rather than silently decoding to ''.
+     */
     expect(decoded.value).toEqual([
       { key: 'tier', scope: 'WORKLOAD_METADATA', promotionValuesPath: '' },
       { key: 'zone', scope: 'POD_TEMPLATE_METADATA', promotionValuesPath: 'labels.zone' },

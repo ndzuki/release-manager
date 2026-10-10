@@ -4,7 +4,6 @@ import { create, fromBinary } from '@bufbuild/protobuf';
 import { describe, expect, it, vi } from 'vitest';
 import { useEmergencyChangeStore } from '@/stores/emergencyChange';
 import type { EmergencyConflictDisplay } from '@/connect/emergency-api';
-import type { DefinitionView } from '@/connect/definition-api';
 import { ExecuteEmergencyChangeRequestSchema } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { ReleaseDefinitionSchema } from '@/gen/common/v1/domain_pb';
 import type { CandidateArtifactDisplay, EmergencyTargetDisplay } from '@/features/emergency/model';
@@ -38,29 +37,6 @@ vi.mock('@/connect/definition-api', () => ({
     approvedAnnotationKeysViolation: null,
   })),
 }));
-
-function definitionView(overrides: Partial<DefinitionView> = {}): DefinitionView {
-  return {
-    id: 'def1',
-    name: 'def',
-    customerId: 'cust1',
-    clusterId: 'cluster-1',
-    namespace: 'ns',
-    releaseName: 'rel',
-    chartName: 'chart',
-    status: 'active',
-    version: 1n,
-    hpaManaged: false,
-    maxEmergencyReplicas: 8,
-    createdAt: null,
-    updatedAt: null,
-    promotionMappings: [],
-    promotionMappingsViolation: null,
-    approvedAnnotationKeys: [],
-    approvedAnnotationKeysViolation: null,
-    ...overrides,
-  };
-}
 
 function target(overrides: Partial<EmergencyTargetDisplay> = {}): EmergencyTargetDisplay {
   return {
@@ -716,12 +692,28 @@ describe('emergencyChange store', () => {
   it('reports an undecodable whitelist as a violation instead of an empty one', async () => {
     setActivePinia(createPinia());
     const store = useEmergencyChangeStore();
+    /*
+     * The REAL decoder sees the bytes (independent review, TASK-274 leftover 10.2): the
+     * seam is the connect client call, not a hand-built view whose violation flag was
+     * pre-set. `approved_annotation_keys` is JSON-encoded bytes on the wire, so "not
+     * json" is exactly the payload the server would have to store to reach this branch,
+     * and this fails if decodeApprovedAnnotationKeys ever stops reporting it.
+     */
+    const { getDefinition } = await vi.importActual<typeof import('@/connect/definition-api')>(
+      '@/connect/definition-api',
+    );
+    const client = await import('@/connect/client');
+    const spy = vi.spyOn(client.orchestratorClient, 'getReleaseDefinition').mockResolvedValue({
+      definition: create(ReleaseDefinitionSchema, {
+        id: 'def1',
+        approvedAnnotationKeys: new TextEncoder().encode('not json'),
+      }),
+    } as never);
     store.configure({
       loadConflict: async () => noConflict(),
       loadTargets: async () => [multiActionTarget()],
       loadArtifacts: async () => [artifact()],
-      loadDefinition: async () =>
-        definitionView({ approvedAnnotationKeysViolation: '无法解析服务端返回的 JSON（…）' }),
+      loadDefinition: getDefinition,
     });
 
     await store.loadScope(SCOPE);
@@ -729,7 +721,9 @@ describe('emergencyChange store', () => {
     expect(store.annotationWhitelistState).toBe('violation');
     store.setActionKind('annotations');
     store.setAnnotationScope('WORKLOAD_METADATA');
+    // Narrower, never wider: an undecodable whitelist is not an empty one.
     expect(store.approvedAnnotationKeys.map((entry) => entry.key)).toEqual(['tier', 'zone']);
+    spy.mockRestore();
   });
 
   // The "combination" state and its connect input: with BOTH payloads filled in

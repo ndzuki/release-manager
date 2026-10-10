@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { mount } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import EmergencyChangePage from './EmergencyChangePage.vue';
 import EmergencyAnnotationEditor from '@/components/emergency/EmergencyAnnotationEditor.vue';
 import EmergencyReplicasInput from '@/components/emergency/EmergencyReplicasInput.vue';
+import { t } from '@/i18n/messages';
 import { useEmergencyChangeStore } from '@/stores/emergencyChange';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import type { EmergencyTargetDisplay } from '@/features/emergency/model';
@@ -191,5 +193,44 @@ describe('EmergencyChangePage container picker', () => {
     await editor.find('input.field-input').setValue('web');
     expect(store.annotationEntries[0]).toMatchObject({ key: 'tier', value: 'web', scope: 'WORKLOAD_METADATA' });
     expect(store.annotationValidation.valid).toBe(true);
+  });
+
+  /*
+   * TASK-274 leftover (independent review 10.1). The page maps the store's
+   * `annotationWhitelistState` to one of two notices, and nothing connected that mapping
+   * to the editor: swapping the violation/unavailable copies left all 1021 tests green.
+   * This drives the real store ref and asserts the prop AND the rendered status text per
+   * state, so a swap fails here.
+   */
+  it('maps each whitelist state to its own notice on the editor', async () => {
+    await loadAuthorized();
+    const store = useEmergencyChangeStore();
+    const target = annotationsOnlyTarget();
+    store.targets = [target];
+    store.selectTarget(target.workloadRef);
+
+    const wrapper = mountPage();
+    const editor = wrapper.findComponent(EmergencyAnnotationEditor);
+    const notice = () => wrapper.get('.annotation-editor [role="status"]').text();
+
+    // No problem with the read: the editor is told nothing.
+    expect(editor.props('whitelistNotice')).toBeNull();
+    expect(wrapper.find('.annotation-editor [role="status"]').exists()).toBe(false);
+
+    store.annotationWhitelistState = 'violation';
+    await nextTick();
+    expect(editor.props('whitelistNotice')).toBe(t('annotation.whitelist.violation'));
+    expect(editor.props('whitelistNotice')).not.toBe(t('annotation.whitelist.unavailable'));
+    expect(notice()).toBe(t('annotation.whitelist.violation'));
+
+    store.annotationWhitelistState = 'unavailable';
+    await nextTick();
+    expect(editor.props('whitelistNotice')).toBe(t('annotation.whitelist.unavailable'));
+    expect(notice()).toBe(t('annotation.whitelist.unavailable'));
+
+    store.annotationWhitelistState = 'loaded';
+    await nextTick();
+    expect(editor.props('whitelistNotice')).toBeNull();
+    expect(wrapper.find('.annotation-editor [role="status"]').exists()).toBe(false);
   });
 });
