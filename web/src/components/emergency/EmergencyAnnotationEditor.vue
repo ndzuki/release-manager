@@ -49,19 +49,42 @@ const emit = defineEmits<{
  * Next free row id. `localId` is a client-only row identity — the `v-for` key and
  * the update/remove lookup key — and never reaches the wire. It is derived from
  * the rows currently present instead of a per-mount counter, so an editor opened
- * with seeded rows cannot mint a duplicate: start after the highest `local-N`,
- * then step until the candidate is unused. That final loop also covers ids that
- * are not `local-N` shaped (or that are already duplicated in the seed).
+ * with seeded rows cannot mint a duplicate: start after the highest usable
+ * `local-N` suffix, then step to the first id not already present.
+ *
+ * A suffix is usable as a sequence base only while it can still be stepped past:
+ * a double stops advancing by one at 2^53, so a seed suffix that is not a safe
+ * integer, or whose successor is not, is skipped rather than used as the base.
+ * Such a seed id is not rewritten — the row keeps it — the search just never
+ * hands it out again.
  */
 function nextFreeLocalId(entries: ReadonlyArray<{ localId: string }>): string {
   const used = new Set(entries.map((entry) => entry.localId));
   let candidate = 1;
   for (const entry of entries) {
     const match = /^local-(\d+)$/.exec(entry.localId);
-    if (match) candidate = Math.max(candidate, Number(match[1]) + 1);
+    if (!match) continue;
+    const suffix = Number(match[1]);
+    if (!Number.isSafeInteger(suffix) || !Number.isSafeInteger(suffix + 1)) continue;
+    candidate = Math.max(candidate, suffix + 1);
   }
-  while (used.has(`local-${candidate}`)) candidate += 1;
-  return `local-${candidate}`;
+  // A uniqueness guard, not a repair pass. It does NOT cover ids of other shapes
+  // or duplicated seed ids: those can never equal `candidate` (the highest usable
+  // suffix plus one, or 1), so for them the body never runs. It runs only when a
+  // suffix the scan skipped (at or above the 2^53 precision cliff) happens to sit
+  // exactly on `candidate`; the step count is bounded by the row count so a
+  // candidate that has stopped advancing exits instead of spinning.
+  for (let steps = 0; steps <= used.size; steps += 1) {
+    if (!used.has(`local-${candidate}`)) return `local-${candidate}`;
+    const next = candidate + 1;
+    if (next === candidate) break;
+    candidate = next;
+  }
+  // Restart from 1. This terminates: at most `used.size` rows have a local-N id,
+  // so one of the `used.size + 1` candidates 1..used.size+1 is necessarily free.
+  let fallback = 1;
+  while (used.has(`local-${fallback}`)) fallback += 1;
+  return `local-${fallback}`;
 }
 
 const drafts = computed<AnnotationEntryDraft[]>(() => props.values);
