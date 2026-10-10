@@ -6,7 +6,7 @@
 
 ### 1.1 规模
 
-14 个 proto 文件、8 个 proto 包（`audit.v1`、`auth.v1`、`common.v1`、`notifier.v1`、`operator.v1`、`orchestrator.v1`、`trust.v1`、`webhook.v1`）、13 个 `service`、105 个 RPC。统计方法：对 `api/proto/*/*/*.proto` 逐个匹配行首 `service X {` 与其中的 `rpc Y(` 声明；下表逐条列出，第 7 节的 13 张表与之总数一致（各服务方法名已用脚本与 proto 声明做过集合相等校验）。
+14 个 proto 文件、8 个 proto 包（`audit.v1`、`auth.v1`、`common.v1`、`notifier.v1`、`operator.v1`、`orchestrator.v1`、`trust.v1`、`webhook.v1`）、13 个 `service`、106 个 RPC。统计方法：对 `api/proto/*/*/*.proto` 逐个匹配行首 `service X {` 与其中的 `rpc Y(` 声明；下表逐条列出，第 7 节的 13 张表与之总数一致（各服务方法名已用脚本与 proto 声明做过集合相等校验）。
 
 | 包 | service | RPC 数 | service 声明位置 | 归属二进制 | dev 端口 |
 | --- | --- | --- | --- | --- | --- |
@@ -19,12 +19,12 @@
 | `notifier.v1` | `NotifierService` | 2 | `api/proto/notifier/v1/notifier.proto:81` | `release-notifier`（`cmd/notifier`） | 8086 |
 | `operator.v1` | `OperatorService` | 4 | `api/proto/operator/v1/operator.proto:348` | `release-orchestrator` 网关/管理端口、`release-operator` gateway 模式 | 8083 / 8084 |
 | `orchestrator.v1` | `BundleService` | 4 | `api/proto/orchestrator/v1/orchestrator.proto:156` | `release-orchestrator`（`cmd/orchestrator`） | 8083 |
-| `orchestrator.v1` | `OrchestratorService` | 53 | `api/proto/orchestrator/v1/orchestrator.proto:1064` | `release-orchestrator` | 8083（+ 网关 8084 仅 `SyncInventory`） |
+| `orchestrator.v1` | `OrchestratorService` | 54 | `api/proto/orchestrator/v1/orchestrator.proto:1064` | `release-orchestrator` | 8083（+ 网关 8084 仅 `SyncInventory`） |
 | `orchestrator.v1` | `CleanupService` | 2 | `api/proto/orchestrator/v1/cleanup.proto:21` | `release-orchestrator` | 8083 |
 | `trust.v1` | `TrustService` | 6 | `api/proto/trust/v1/trust.proto:158` | `release-orchestrator` | 8083 |
 | `webhook.v1` | `WebhookService` | 1 | `api/proto/webhook/v1/webhook.proto:46` | `release-webhook`（`cmd/webhook`） | 8082 |
 
-合计 3+11+9+4+3+3+2+4+4+53+2+6+1 = 105。RPC 类型：103 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1138`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:399`），无 client-streaming。
+合计 3+11+9+4+3+3+2+4+4+54+2+6+1 = 106。RPC 类型：104 个 unary、1 个 server-streaming（`WatchOperation`，`api/proto/orchestrator/v1/orchestrator.proto:1138`）、1 个 bidirectional-streaming（`CommandStream`，`api/proto/operator/v1/operator.proto:399`），无 client-streaming。
 
 `api/proto/common/v1/domain.proto`、`api/proto/common/v1/health.proto`、`api/proto/common/v1/trust.proto`、`api/proto/common/v1/types.proto`、`api/proto/operator/v1/upgrade_result.proto`、`api/proto/orchestrator/v1/vulnerability.proto` 只定义共享消息/枚举，`service` 计数为 0。
 
@@ -55,7 +55,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 ### 2.2 URL、方法与请求头
 
 - 路径固定为 `/<pkg>.<Service>/<Method>`，来自生成代码的 `*Procedure` 常量（例如 `cmd/orchestrator/main.go:203` 用 `orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure` 注册为 `"POST /orchestrator.v1.OrchestratorService/SyncInventory"`）。
-- **所有 105 个 RPC 只能 POST**。connect-go 只在 unary + `option idempotency = no_side_effects` 时才注册 GET 方法（`protocol_connect.go:70-76`，模块 `connectrpc.com/connect@v1.20.0`），而本仓库 `api/proto/**` 中 `option idempotency`/`option timeout`/任何 rpc 级 option 出现次数为 0（14 个 proto 文件、105 条 `rpc` 声明全部无 option）（检索 `api/proto/*/*/*.proto` 的 `option ` 行，只有 `syntax`/`go_package`/`file` 级 option）。因此 GET 一律 **405 + `Allow: POST`**，而不是 404：业务服务用生成代码返回的子树 pattern 注册（例如 `api/gen/auth/v1/authv1connect/auth.connect.go:576` 返回 `"/auth.v1.AuthService/"`，`cmd/auth/main.go:191` 原样 `mux.Handle`），请求会进到 connect handler 再由它按方法表拒绝（`handler.go:274-279`）；只有网关上 `cmd/orchestrator/main.go:191` 用了 `"POST "` 前缀 pattern，此时 405 由 `http.ServeMux` 自己给出。附带一条：`Content-Type` 不在协议表内会返回 **415 Unsupported Media Type**（`handler.go:291-294`），所以漏写 `-H 'Content-Type: application/json'` 的 curl 不会得到业务错误而是 415。
+- **所有 106 个 RPC 只能 POST**。connect-go 只在 unary + `option idempotency = no_side_effects` 时才注册 GET 方法（`protocol_connect.go:70-76`，模块 `connectrpc.com/connect@v1.20.0`），而本仓库 `api/proto/**` 中 `option idempotency`/`option timeout`/任何 rpc 级 option 出现次数为 0（14 个 proto 文件、106 条 `rpc` 声明全部无 option）（检索 `api/proto/*/*/*.proto` 的 `option ` 行，只有 `syntax`/`go_package`/`file` 级 option）。因此 GET 一律 **405 + `Allow: POST`**，而不是 404：业务服务用生成代码返回的子树 pattern 注册（例如 `api/gen/auth/v1/authv1connect/auth.connect.go:576` 返回 `"/auth.v1.AuthService/"`，`cmd/auth/main.go:191` 原样 `mux.Handle`），请求会进到 connect handler 再由它按方法表拒绝（`handler.go:274-279`）；只有网关上 `cmd/orchestrator/main.go:191` 用了 `"POST "` 前缀 pattern，此时 405 由 `http.ServeMux` 自己给出。附带一条：`Content-Type` 不在协议表内会返回 **415 Unsupported Media Type**（`handler.go:291-294`），所以漏写 `-H 'Content-Type: application/json'` 的 curl 不会得到业务错误而是 415。
 - 编码：`Content-Type: application/json`（Connect JSON）或 `application/proto`（Connect 二进制）；gRPC 用 `application/grpc(+proto)`；gRPC-Web 用 `application/grpc-web(+proto)`。仓库内真实用例统一用 `Content-Type: application/json`（`test/e2e/prerequisite/smoke.sh:164`、`:175`、`:180`）。
 - 追踪/关联头：`X-Request-ID`（`internal/contracts/errors.go:14`）。入站带头则沿用、否则生成 UUID，并在响应头与错误 metadata 中回显（`internal/contracts/interceptor/requestid.go:28-42`）。
 - 浏览器会话相关：Cookie `rm_access`/`rm_refresh` 与 CSRF 双提交头 `X-CSRF-Token`（`internal/auth/service.go:17-20`，`internal/auth/interceptor.go:80-86`）。仅当 cookie 认证且 action 非 `read` 时才校验 CSRF。
@@ -179,7 +179,7 @@ TASK-102 之后 bundle/Harbor ingress 共三把独立、可分别轮换的凭据
 5. `enforceRequestBinding`（customer 绑定/禁用一致性）→ `:88-97`。
 6. 策略行 `mode == modeCasbin` 时执行 `enforcer.Enforce(userID, domain, object, action)` → `:98-109`；`modeHandler` 的 procedure 跳过 Casbin，由 handler 自证授权。
 
-TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:62-182` 的**显式 procedure → 授权登记表**（105 行，一行一个 procedure；TASK-103 新增 `AuthorizationService/AuthorizeAccess`）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
+TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToObject`/`mapMethodToAction`）整体删除，改为 `internal/auth/procedure_policy.go:66-186` 的**显式 procedure → 授权登记表**（106 行，一行一个 procedure；TASK-103 新增 `AuthorizationService/AuthorizeAccess`）。每行的 `mode` 取值：`modeCasbin`（拦截器裁决）、`modeHandler`（handler 自证）、`modePublic`、`modePrincipalScope`（release-api 审计面）、`modeMTLS`、`modeUnintercepted`。两条门禁测试锁死这张表：`internal/auth/procedure_policy_test.go:90` 遍历 proto registry，新增 procedure 未登记即失败；`:121` 断言每个 `modeCasbin` 的 `(object, action)` 必须落在默认角色矩阵（非通配角色）的授予集合内，或显式标注 `adminOnly`。
 
 角色 → 策略规则（`internal/auth/casbin.go:425-477`，角色常量 `internal/store/store.go:807-812`，仅 4 个角色）：
 
@@ -303,7 +303,7 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 | detail | proto 位置 | 构造点 |
 | --- | --- | --- |
 | `orchestrator.v1.OperatorErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:802-805` | `internal/orchestrator/operator.go:426-436` |
-| `orchestrator.v1.EmergencyErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:1739-1743` | `internal/orchestrator/emergency.go:740-752` |
+| `orchestrator.v1.EmergencyErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:1765-1769` | `internal/orchestrator/emergency.go:740-752` |
 | `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:229-232` | `internal/orchestrator/service.go:1327-1335` |
 | `orchestrator.v1.RouteValidationDetail` | `api/proto/orchestrator/v1/orchestrator.proto:842-847` | `internal/orchestrator/cluster.go:323-330` |
 
@@ -328,8 +328,9 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 | --- | --- | --- | --- |
 | `ListOperators` | `page_size`, `page_token` | `next_page_token`, `total_count` | `api/proto/orchestrator/v1/orchestrator.proto:632`、`:637-638`、`:643-644` |
 | `ListReleases` | `page_size`, `cursor` | `next_cursor`, `total_count` | `api/proto/orchestrator/v1/orchestrator.proto:923`、`:928-929`、`:934-935` |
-| `ListValuesRevisions` | `page_size`, `cursor` | `next_cursor` | `api/proto/orchestrator/v1/orchestrator.proto:842`、`:845-846`、`:851` |
-| `ListOperations` | `limit`, `cursor` | `next_cursor` | `api/proto/orchestrator/v1/orchestrator.proto:1836`、`:1839-1840`、`:1845` |
+| `ListValuesRevisions` | `page_size`, `cursor` | `next_cursor` | `api/proto/orchestrator/v1/orchestrator.proto:925`、`:928-929`、`:934` |
+| `ListOperations` | `limit`, `cursor` | `next_cursor` | `api/proto/orchestrator/v1/orchestrator.proto:1976`、`:1979-1980`、`:1986` |
+| `ListNonTerminalOperations` | `page_size`, `page_token` | `next_page_token` | `api/proto/orchestrator/v1/orchestrator.proto:2001`、`:2002-2003`、`:2010` |
 | `ListLocalUsers` | `cursor`, `page_size` | `next_cursor` | `api/proto/auth/v1/auth.proto:164`、`:165-166`、`:171` |
 
 `docs/architecture.md:104` 写的是「默认 `pageSize=50`、上限 `100`」，而共享 Go 助手 `internal/contracts/pagination.go:73-88` 的实际语义是：`NormalizePageSize(n)` → `n<=0` 得 **20**、`n>100` 静默夹到 100。二者不一致，且各 RPC 行为又分三种：
@@ -354,7 +355,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 
 29 个 enum（`api/proto/*/*/*.proto` 逐个 `^enum ` 声明计数），全部有 `*_UNSPECIFIED = 0`；值名一律 `ENUM_NAME_VALUE` 前缀式 SCREAMING_SNAKE，仅 4 个值例外（见下文命名豁免）。JSON 线上枚举以 **NAME 字符串**序列化（`api/kulala/audit.http:53` 的 `"kind": "ACTOR_KIND_USER"` 即为证据）。proto3 enum 是开放的，越界值会直达 handler，因此 handler 必须做显式 `switch + default` 并映射为 `invalid_argument`（例如 `internal/orchestrator/operator.go:457-483`、`internal/orchestrator/inventory_query.go:196-209`）。UNSPECIFIED 是「按字段」而非全局拒绝：`ConvergenceStrategy`/`ArtifactType`/`ImageValueKind`/`ReleaseMode` 拒绝它，`ValuesStatus`/`ReleaseInventoryStatus` 把它当「不过滤」，`OperatorSessionStatus` 把它重载为「无会话」。已知两处未收敛：`internal/orchestrator/route.go:152-187` 把未知值映射为空 store 值，`internal/orchestrator/emergency.go:759-764` 把任何非 `REVERT` 值（含未知）当成 `REQUIRE_PROMOTION`。反向（store → proto）映射未知一律回落 `*_UNSPECIFIED`。
 
-命名豁免有 2 处：`ConvergenceStrategy` 的 `REVERT_ON_NEXT_RECONCILE`/`REQUIRE_PROMOTION` 带 `buf:lint:ignore ENUM_VALUE_PREFIX` 与理由注释（`api/proto/orchestrator/v1/orchestrator.proto:1616-1623`）；`ReleaseMode` 的 `NOT_APPLIED_PROVEN`、`AUDITED_OVERRIDE`（`api/proto/orchestrator/v1/orchestrator.proto:1731`、`:1736`）**没有** ignore 注释，`buf lint` 目前会因此报错。本仓库 CI 不跑 `buf lint`，属潜在破损；写文档时不要把当前契约描述成 lint-clean。
+命名豁免有 2 处：`ConvergenceStrategy` 的 `REVERT_ON_NEXT_RECONCILE`/`REQUIRE_PROMOTION` 带 `buf:lint:ignore ENUM_VALUE_PREFIX` 与理由注释（`api/proto/orchestrator/v1/orchestrator.proto:1749-1755`）；`ReleaseMode` 的 `NOT_APPLIED_PROVEN`、`AUDITED_OVERRIDE`（`api/proto/orchestrator/v1/orchestrator.proto:1871`、`:1876`）**没有** ignore 注释，`buf lint` 目前会因此报错。本仓库 CI 不跑 `buf lint`，属潜在破损；写文档时不要把当前契约描述成 lint-clean。
 
 ### 5.4 ID
 
@@ -524,7 +525,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | --- | --- | --- | --- | --- |
 | `SubmitReleaseBundle` | 接收 CI 回调并转发到 `BundleService.SubmitBundle` | CI API key（`ServiceTokenInterceptor` 收窄到本 procedure；出站另用 webhook service token） | `internal/webhook/service.go:35` | `unauthenticated`（缺/错 key）、`permission_denied`（key 无权访问该 procedure）、`unavailable`（未配置下游 client）；其余透传 orchestrator 的 `bundleError` 形态；`Idempotency-Key` 透传 |
 
-### 7.13 orchestrator.v1.OrchestratorService（53 个，`release-orchestrator` 8083）
+### 7.13 orchestrator.v1.OrchestratorService（54 个，`release-orchestrator` 8083）
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
@@ -579,11 +580,12 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `ListReleases` | 分页查询发布清单视图 | authz(release/read) | `internal/orchestrator/inventory_query.go:31` | `invalid_argument`（`:37`）、`not_found`（`:54`）、`internal`（`:57`）；维护期**不放行**（白名单无此项） |
 | `ListReleaseInventory` | 返回全部清单快照 | authz(release/read) | `internal/orchestrator/inventory_observation.go:19` | `unauthenticated`（`:25`）；无请求字段、无分页；维护期放行 |
 | `ListOperations` | 分页查询 Operation（最新在前，keyset 游标） | authz(release/read) | `internal/orchestrator/operations_query.go:34` | `invalid_argument`（`:32`、`:39`、`:56`、`:135`）、`not_found`（`:44`）、`permission_denied`（binding/membership） |
+| `ListNonTerminalOperations` | 跨 Release 分页查询非终态 Operation（最久在前，`created_at,id` keyset 游标；页面限于调用者组织持有 active binding 的 customer） | authz(release/read) + 请求 `customer_id` 的 binding 检查 | `internal/orchestrator/non_terminal_operations.go:37` | `unauthenticated`（`:43`）、`invalid_argument`（`:86`、`:92`）、`permission_denied`（`:112`、`:118`） |
 | `TriggerInventorySync` | 主动触发清单同步 | authz(release/write) | `internal/orchestrator/inventory_query.go:112` | `invalid_argument`（`:116` 起）、`unavailable`（operator offline）、`already_exists`（sync in progress） |
 | `SyncInventory` | agent 上报集群清单（快照 + 对账） | 网关 8084：证书；管理端口 8083：authz(release/write) | `internal/orchestrator/inventory.go:21` | `unauthenticated`/`permission_denied`（`internal/orchestrator/sync_inventory_auth.go:30-60`）、`invalid_argument`（`sync_id` 必填，`:40-42`） |
 
 ## 8. 事实源
 
-统计口径：`service`/`rpc` 声明逐文件计数（13 个 service、105 个 RPC、8 个包）；挂载事实取 `cmd/*/main.go` 中 `connect.New*ServiceHandler` 与 `mux.Handle` 的全部出现处；错误 code 计数为非测试 Go 源码中 `connect.Code*` 的实测出现次数。
+统计口径：`service`/`rpc` 声明逐文件计数（13 个 service、106 个 RPC、8 个包）；挂载事实取 `cmd/*/main.go` 中 `connect.New*ServiceHandler` 与 `mux.Handle` 的全部出现处；错误 code 计数为非测试 Go 源码中 `connect.Code*` 的实测出现次数。
 
 > 事实源：`.github/workflows/test.yml`、`AGENTS.md`、`CONTRIBUTING.md`、`Makefile`、`README.md`、`api/gen/auth/v1/authv1connect/auth.connect.go`、`api/gen/orchestrator/v1/orchestrator.pb.go`、`api/kulala/audit.http`、`api/kulala/auth.http`、`api/kulala/notifier.http`、`api/kulala/operator.http`、`api/kulala/orchestrator.http`、`api/kulala/webhook.http`、`api/proto/audit/v1/audit.proto`、`api/proto/auth/v1/auth.proto`、`api/proto/buf.gen.web.yaml`、`api/proto/buf.gen.yaml`、`api/proto/common/v1/domain.proto`、`api/proto/common/v1/health.proto`、`api/proto/common/v1/trust.proto`、`api/proto/common/v1/types.proto`、`api/proto/notifier/v1/notifier.proto`、`api/proto/operator/v1/operator.proto`、`api/proto/operator/v1/upgrade_result.proto`、`api/proto/orchestrator/v1/cleanup.proto`、`api/proto/orchestrator/v1/orchestrator.proto`、`api/proto/orchestrator/v1/vulnerability.proto`、`api/proto/trust/v1/trust.proto`、`api/proto/webhook/v1/webhook.proto`、`buf.yaml`、`cmd/api/main.go`、`cmd/auth/main.go`、`cmd/notifier/main.go`、`cmd/operator/main.go`、`cmd/orchestrator/main.go`、`cmd/webhook/main.go`、`configs/api.dev.yaml`、`configs/auth.dev.yaml`、`configs/notifier.dev.yaml`、`configs/operator.dev.yaml`、`configs/orchestrator.dev.yaml`、`configs/webhook.dev.yaml`、`deploy/dev/dev.sh`、`deploy/kustomize/dev/configs/orchestrator.dev.yaml`、`deploy/kustomize/services/web.yaml`、`docs/architecture.md`、`docs/decisions/ADR-002-connect-protobuf-single-port-contract.md`、`docs/decisions/ADR-006-server-authoritative-organization-authorization.md`、`docs/decisions/ADR-018-sha256-certder-10-hex-renew.md`、`http-client.env.json`、`internal/app/app.go`、`internal/app/maintenance.go`、`internal/audit/audit_service_handler.go`、`internal/audit/emitter.go`、`internal/audit/interceptor.go`、`internal/audit/normalize.go`、`internal/audit/service.go`、`internal/auth/authorization_snapshot.go`、`internal/auth/binding_service.go`、`internal/auth/browser_session.go`、`internal/auth/casbin.go`、`internal/auth/customer_resolver.go`、`internal/auth/errors.go`、`internal/auth/external_idp_service.go`、`internal/auth/id.go`、`internal/auth/interceptor.go`、`internal/auth/jwt.go`、`internal/auth/local_users.go`、`internal/auth/local_users_test.go`、`internal/auth/multi_auth.go`、`internal/auth/org_service.go`、`internal/auth/service.go`、`internal/auth/service_token.go`、`internal/config/config.go`、`internal/contracts/errors.go`、`internal/contracts/interceptor/errorsanitize.go`、`internal/contracts/interceptor/requestid.go`、`internal/contracts/pagination.go`、`internal/devfixture/bundle.go`、`internal/handler/health.go`、`internal/handler/ready.go`、`internal/jwtauth/jwt.go`、`internal/notifier/service.go`、`internal/operator/active_session.go`、`internal/operator/errors.go`、`internal/operator/identity_handler.go`、`internal/operator/service.go`、`internal/orchestrator/bundle_service.go`、`internal/orchestrator/cleanup.go`、`internal/orchestrator/cluster.go`、`internal/orchestrator/customer.go`、`internal/orchestrator/definition.go`、`internal/orchestrator/emergency.go`、`internal/orchestrator/emergency_queries.go`、`internal/orchestrator/emergency_stuck.go`、`internal/orchestrator/enrollment.go`、`internal/orchestrator/inventory.go`、`internal/orchestrator/inventory_observation.go`、`internal/orchestrator/inventory_query.go`、`internal/orchestrator/operator.go`、`internal/orchestrator/preflight/command.go`、`internal/orchestrator/preflight/coordinator.go`、`internal/orchestrator/prepare_sessions.go`、`internal/orchestrator/rollback.go`、`internal/orchestrator/route.go`、`internal/orchestrator/service.go`、`internal/orchestrator/sync_inventory_auth.go`、`internal/orchestrator/values_approval.go`、`internal/orchestrator/values_revision.go`、`internal/store/postgres/audit.go`、`internal/store/postgres/bundles.go`、`internal/store/postgres/users.go`、`internal/store/sqlite/audit.go`、`internal/store/sqlite/bundles.go`、`internal/store/sqlite/cleanup_idempotency_unsupported.go`、`internal/store/sqlite/db.go`、`internal/store/sqlite/users.go`、`internal/store/store.go`、`internal/trust/service.go`、`internal/webhook/service.go`、`migrations/000006_schema_parity.up.sql`、`test/e2e/prerequisite/smoke.sh`、`web/src/connect/client.ts`、`web/src/connect/emergency-api.ts`、`web/src/gen/orchestrator/v1/orchestrator_pb.ts`、`web/vite.config.ts`

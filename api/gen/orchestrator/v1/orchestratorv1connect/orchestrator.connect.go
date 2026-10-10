@@ -225,6 +225,9 @@ const (
 	// OrchestratorServiceListOperationsProcedure is the fully-qualified name of the
 	// OrchestratorService's ListOperations RPC.
 	OrchestratorServiceListOperationsProcedure = "/orchestrator.v1.OrchestratorService/ListOperations"
+	// OrchestratorServiceListNonTerminalOperationsProcedure is the fully-qualified name of the
+	// OrchestratorService's ListNonTerminalOperations RPC.
+	OrchestratorServiceListNonTerminalOperationsProcedure = "/orchestrator.v1.OrchestratorService/ListNonTerminalOperations"
 	// OrchestratorServiceTriggerInventorySyncProcedure is the fully-qualified name of the
 	// OrchestratorService's TriggerInventorySync RPC.
 	OrchestratorServiceTriggerInventorySyncProcedure = "/orchestrator.v1.OrchestratorService/TriggerInventorySync"
@@ -942,6 +945,33 @@ type OrchestratorServiceClient interface {
 	// Implemented since TASK-095 (internal/orchestrator/operations_query.go); the
 	// "always UNIMPLEMENTED" note that used to sit here was stale.
 	ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error)
+	// Cross-release feed of NON-TERMINAL operations, oldest first, keyset-paginated
+	// on (created_at, id). This is not ListOperations: that one is scoped to a single
+	// release definition and walks its newest-first history, while this one is the
+	// "waiting the longest, handle first" queue the console Operation hub and the
+	// home "to do" widget read (TASK-276/277).
+	// The page is scoped to the caller's organization: only operations whose release
+	// definition belongs to a customer the caller's organization has an ACTIVE
+	// binding with are visible, and a row outside that scope is ABSENT rather than an
+	// error -- a list over an organization-scoped resource cannot refuse row by row.
+	// `customer_id` narrows the scope to one of those customers; naming a customer
+	// without an active binding answers PERMISSION_DENIED. On a real request the
+	// interceptor's binding check fires first and reports `domain_binding_missing`;
+	// the handler re-checks and answers `binding_revoked` only when reached directly.
+	// Omitted `customer_id` does NOT answer PERMISSION_DENIED -- unlike ListBundles
+	// there is no required scope field, because the organization scope itself is the
+	// bounded view.
+	// `page_size` defaults to 20 and is clamped to [1, 100]
+	// (contracts.NormalizePageSize); a negative value answers INVALID_ARGUMENT
+	// (`invalid_page_size`). `page_token` is an opaque (created_at, id) cursor minted
+	// by the previous response's next_page_token; a malformed token answers
+	// INVALID_ARGUMENT (`invalid_page_token`).
+	// Terminal operations (succeeded/failed/cancelled/timeout) are excluded by
+	// definition, so there is no status filter. Each row carries the release
+	// definition and customer display identity inline, so a page costs one read.
+	// UNAUTHENTICATED when no caller identity can be resolved.
+	// Requires release/read (the pair ListOperations and GetOperation use).
+	ListNonTerminalOperations(context.Context, *connect.Request[v1.ListNonTerminalOperationsRequest]) (*connect.Response[v1.ListNonTerminalOperationsResponse], error)
 	// Asks the orchestrator to schedule an inventory refresh for one cluster and
 	// returns immediately; the agent reports the result through SyncInventory
 	// later.
@@ -1285,6 +1315,12 @@ func NewOrchestratorServiceClient(httpClient connect.HTTPClient, baseURL string,
 			connect.WithSchema(orchestratorServiceMethods.ByName("ListOperations")),
 			connect.WithClientOptions(opts...),
 		),
+		listNonTerminalOperations: connect.NewClient[v1.ListNonTerminalOperationsRequest, v1.ListNonTerminalOperationsResponse](
+			httpClient,
+			baseURL+OrchestratorServiceListNonTerminalOperationsProcedure,
+			connect.WithSchema(orchestratorServiceMethods.ByName("ListNonTerminalOperations")),
+			connect.WithClientOptions(opts...),
+		),
 		triggerInventorySync: connect.NewClient[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse](
 			httpClient,
 			baseURL+OrchestratorServiceTriggerInventorySyncProcedure,
@@ -1353,6 +1389,7 @@ type orchestratorServiceClient struct {
 	listReleases                 *connect.Client[v1.ListReleasesRequest, v1.ListReleasesResponse]
 	listReleaseInventory         *connect.Client[v1.ListReleaseInventoryRequest, v1.ListReleaseInventoryResponse]
 	listOperations               *connect.Client[v1.ListOperationsRequest, v1.ListOperationsResponse]
+	listNonTerminalOperations    *connect.Client[v1.ListNonTerminalOperationsRequest, v1.ListNonTerminalOperationsResponse]
 	triggerInventorySync         *connect.Client[v1.TriggerInventorySyncRequest, v1.TriggerInventorySyncResponse]
 	syncInventory                *connect.Client[v1.SyncInventoryRequest, v1.SyncInventoryResponse]
 }
@@ -1611,6 +1648,11 @@ func (c *orchestratorServiceClient) ListReleaseInventory(ctx context.Context, re
 // ListOperations calls orchestrator.v1.OrchestratorService.ListOperations.
 func (c *orchestratorServiceClient) ListOperations(ctx context.Context, req *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error) {
 	return c.listOperations.CallUnary(ctx, req)
+}
+
+// ListNonTerminalOperations calls orchestrator.v1.OrchestratorService.ListNonTerminalOperations.
+func (c *orchestratorServiceClient) ListNonTerminalOperations(ctx context.Context, req *connect.Request[v1.ListNonTerminalOperationsRequest]) (*connect.Response[v1.ListNonTerminalOperationsResponse], error) {
+	return c.listNonTerminalOperations.CallUnary(ctx, req)
 }
 
 // TriggerInventorySync calls orchestrator.v1.OrchestratorService.TriggerInventorySync.
@@ -2071,6 +2113,33 @@ type OrchestratorServiceHandler interface {
 	// Implemented since TASK-095 (internal/orchestrator/operations_query.go); the
 	// "always UNIMPLEMENTED" note that used to sit here was stale.
 	ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error)
+	// Cross-release feed of NON-TERMINAL operations, oldest first, keyset-paginated
+	// on (created_at, id). This is not ListOperations: that one is scoped to a single
+	// release definition and walks its newest-first history, while this one is the
+	// "waiting the longest, handle first" queue the console Operation hub and the
+	// home "to do" widget read (TASK-276/277).
+	// The page is scoped to the caller's organization: only operations whose release
+	// definition belongs to a customer the caller's organization has an ACTIVE
+	// binding with are visible, and a row outside that scope is ABSENT rather than an
+	// error -- a list over an organization-scoped resource cannot refuse row by row.
+	// `customer_id` narrows the scope to one of those customers; naming a customer
+	// without an active binding answers PERMISSION_DENIED. On a real request the
+	// interceptor's binding check fires first and reports `domain_binding_missing`;
+	// the handler re-checks and answers `binding_revoked` only when reached directly.
+	// Omitted `customer_id` does NOT answer PERMISSION_DENIED -- unlike ListBundles
+	// there is no required scope field, because the organization scope itself is the
+	// bounded view.
+	// `page_size` defaults to 20 and is clamped to [1, 100]
+	// (contracts.NormalizePageSize); a negative value answers INVALID_ARGUMENT
+	// (`invalid_page_size`). `page_token` is an opaque (created_at, id) cursor minted
+	// by the previous response's next_page_token; a malformed token answers
+	// INVALID_ARGUMENT (`invalid_page_token`).
+	// Terminal operations (succeeded/failed/cancelled/timeout) are excluded by
+	// definition, so there is no status filter. Each row carries the release
+	// definition and customer display identity inline, so a page costs one read.
+	// UNAUTHENTICATED when no caller identity can be resolved.
+	// Requires release/read (the pair ListOperations and GetOperation use).
+	ListNonTerminalOperations(context.Context, *connect.Request[v1.ListNonTerminalOperationsRequest]) (*connect.Response[v1.ListNonTerminalOperationsResponse], error)
 	// Asks the orchestrator to schedule an inventory refresh for one cluster and
 	// returns immediately; the agent reports the result through SyncInventory
 	// later.
@@ -2410,6 +2479,12 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 		connect.WithSchema(orchestratorServiceMethods.ByName("ListOperations")),
 		connect.WithHandlerOptions(opts...),
 	)
+	orchestratorServiceListNonTerminalOperationsHandler := connect.NewUnaryHandler(
+		OrchestratorServiceListNonTerminalOperationsProcedure,
+		svc.ListNonTerminalOperations,
+		connect.WithSchema(orchestratorServiceMethods.ByName("ListNonTerminalOperations")),
+		connect.WithHandlerOptions(opts...),
+	)
 	orchestratorServiceTriggerInventorySyncHandler := connect.NewUnaryHandler(
 		OrchestratorServiceTriggerInventorySyncProcedure,
 		svc.TriggerInventorySync,
@@ -2526,6 +2601,8 @@ func NewOrchestratorServiceHandler(svc OrchestratorServiceHandler, opts ...conne
 			orchestratorServiceListReleaseInventoryHandler.ServeHTTP(w, r)
 		case OrchestratorServiceListOperationsProcedure:
 			orchestratorServiceListOperationsHandler.ServeHTTP(w, r)
+		case OrchestratorServiceListNonTerminalOperationsProcedure:
+			orchestratorServiceListNonTerminalOperationsHandler.ServeHTTP(w, r)
 		case OrchestratorServiceTriggerInventorySyncProcedure:
 			orchestratorServiceTriggerInventorySyncHandler.ServeHTTP(w, r)
 		case OrchestratorServiceSyncInventoryProcedure:
@@ -2741,6 +2818,10 @@ func (UnimplementedOrchestratorServiceHandler) ListReleaseInventory(context.Cont
 
 func (UnimplementedOrchestratorServiceHandler) ListOperations(context.Context, *connect.Request[v1.ListOperationsRequest]) (*connect.Response[v1.ListOperationsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListOperations is not implemented"))
+}
+
+func (UnimplementedOrchestratorServiceHandler) ListNonTerminalOperations(context.Context, *connect.Request[v1.ListNonTerminalOperationsRequest]) (*connect.Response[v1.ListNonTerminalOperationsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator.v1.OrchestratorService.ListNonTerminalOperations is not implemented"))
 }
 
 func (UnimplementedOrchestratorServiceHandler) TriggerInventorySync(context.Context, *connect.Request[v1.TriggerInventorySyncRequest]) (*connect.Response[v1.TriggerInventorySyncResponse], error) {
