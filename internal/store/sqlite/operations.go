@@ -922,6 +922,44 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 const nonTerminalOperationColumns = operationColumns + `,
     release_definitions.name, release_definitions.customer_id, COALESCE(customers.name, '')`
 
+// nonTerminalScopedIndex is the ordered partial index this query pins itself to
+// (migrations/000034_operations_non_terminal_index.up.sql; the SQLite DDL lives
+// at the end of migrationStatements in internal/store/sqlite/db.go). SQLite only
+// picks a partial index when planner statistics prove the query's predicate
+// implies the index's, and it additionally needs sqlite_stat1 row counts to
+// prefer the index scan over driving from release_definitions; dev/test
+// databases are migrated fresh and never ANALYZEd, so without the hint below the
+// index is silently unused and the page falls back to scanning every historical
+// operation of the in-scope definitions plus "USE TEMP B-TREE FOR ORDER BY"
+// (measured at 30k operations / 120 definitions: 4.7ms -> 0.2ms with the index,
+// TASK-278). The hint is therefore the load-bearing half of the fix, not a
+// micro-optimisation; SQLite-only, so it cannot leak into the PostgreSQL path.
+const nonTerminalScopedIndex = "idx_operations_non_terminal_created"
+
+// nonTerminalScopedSQL builds the page query for one scope size. It is a named
+// function so the plan regression test can EXPLAIN the exact shipping SQL
+// (TestListNonTerminalScopedPlanUsesOrderedPartialIndex) instead of a copy that
+// can drift.
+func nonTerminalScopedSQL(customerCount int, hasCursor bool) string {
+	// The keyset predicate cannot use contracts.KeysetPredicate here: it emits
+	// unqualified created_at/id and this query joins release_definitions, which
+	// has both columns, so the reference would be ambiguous.
+	where := `operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+	  AND release_definitions.customer_id IN (` + placeholders(customerCount) + `)`
+	if hasCursor {
+		where += ` AND (operations.created_at > ? OR (operations.created_at = ? AND operations.id > ?))`
+	}
+	//nolint:gosec // only static column lists and generated "?" placeholders are concatenated; every value stays a bound parameter
+	return `
+		SELECT ` + nonTerminalOperationColumns + `
+		FROM operations INDEXED BY ` + nonTerminalScopedIndex + operationJoin + `
+		JOIN release_definitions ON release_definitions.id = operations.release_definition_id
+		LEFT JOIN customers ON customers.id = release_definitions.customer_id
+		WHERE ` + where + `
+		ORDER BY operations.created_at ASC, operations.id ASC
+		LIMIT ?`
+}
+
 // ListNonTerminalScoped is the page-safe cross-release feed (TASK-276): the same
 // non-terminal predicate as ListNonTerminal, but closed over an explicit customer
 // scope and keyset-paginated on (created_at, id) ascending. It deliberately does
@@ -937,13 +975,7 @@ func (s *operationStore) ListNonTerminalScoped(
 	for _, customerID := range query.CustomerIDs {
 		args = append(args, customerID)
 	}
-	// The keyset predicate cannot use contracts.KeysetPredicate here: it emits
-	// unqualified created_at/id and this query joins release_definitions, which
-	// has both columns, so the reference would be ambiguous.
-	where := `operations.status NOT IN ('succeeded','failed','cancelled','timeout')
-	  AND release_definitions.customer_id IN (` + placeholders(len(query.CustomerIDs)) + `)`
 	if query.HasCursor {
-		where += ` AND (operations.created_at > ? OR (operations.created_at = ? AND operations.id > ?))`
 		// SQLite stores created_at as RFC3339 TEXT (createOperation), so the
 		// cursor must be bound in the same text form; a time.Time argument would
 		// serialize to a format whose lexicographic order does not match.
@@ -953,15 +985,7 @@ func (s *operationStore) ListNonTerminalScoped(
 	// Fetch one extra row to learn whether a next page exists without an extra
 	// round trip, then trim it off.
 	args = append(args, query.PageSize+1)
-	//nolint:gosec // only static column lists and generated "?" placeholders are concatenated; every value stays a bound parameter
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+nonTerminalOperationColumns+`
-		FROM operations`+operationJoin+`
-		JOIN release_definitions ON release_definitions.id = operations.release_definition_id
-		LEFT JOIN customers ON customers.id = release_definitions.customer_id
-		WHERE `+where+`
-		ORDER BY operations.created_at ASC, operations.id ASC
-		LIMIT ?`, args...)
+	rows, err := s.db.QueryContext(ctx, nonTerminalScopedSQL(len(query.CustomerIDs), query.HasCursor), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list scoped non-terminal operations: %w", err)
 	}

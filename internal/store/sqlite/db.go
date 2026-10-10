@@ -2000,6 +2000,17 @@ var migrationStatements = []string{
 	// fresh databases match. Mirrors
 	// migrations/000031_drop_preflight_results.up.sql.
 	`DROP TABLE IF EXISTS preflight_results`,
+
+	// TASK-278 (follow-up to TASK-276 review A3): ordered partial index behind the
+	// cross-release non-terminal feed (ListNonTerminalScoped). Mirrors
+	// migrations/000034_operations_non_terminal_index.up.sql: the predicate
+	// repeats store.OperationStatus.IsTerminal's terminal set and the key order
+	// mirrors the feed's ORDER BY (created_at ASC, id ASC). PostgreSQL uses this
+	// index through its own planner; the SQLite query pins it with INDEXED BY
+	// because fresh dev/test databases carry no sqlite_stat1 row counts.
+	`CREATE INDEX IF NOT EXISTS idx_operations_non_terminal_created
+	 ON operations(created_at, id)
+	 WHERE status NOT IN ('succeeded','failed','cancelled','timeout')`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
