@@ -14,6 +14,8 @@ import {
   WorkloadRefSchema,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import {
+  annotationScopes,
+  approvedAnnotationKeysForScope,
   mapCandidateArtifact,
   mapConvergencePolicy,
   mapConvergenceTask,
@@ -25,6 +27,7 @@ import {
   mapRunningOperation,
   parseScopedAnnotationKey,
   workloadRefToWire,
+  type EmergencyTargetDisplay,
 } from '@/features/emergency/model';
 
 describe('model mapping (generated → display)', () => {
@@ -355,5 +358,77 @@ describe('model mapping (generated → display)', () => {
       startedAt: '2026-08-22T08:00:00.000Z',
     });
     expect(mapRunningOperation(undefined)).toBeNull();
+  });
+});
+
+/*
+ * TASK-274. The read model projects approved ∩ observed, so on its own it can
+ * never offer a key that has not appeared on the workload yet. The definition's
+ * whitelist is the source of truth for what may be SELECTED; the read model stays
+ * the OBSERVED subset the editor labels. The (key, scope) pair is the unit: the
+ * same key approved under a different scope is a different entry.
+ */
+describe('annotation whitelist projection (TASK-274)', () => {
+  function observedTarget(): EmergencyTargetDisplay {
+    const workload = { workloadKind: 'DEPLOYMENT', workloadName: 'api', container: '' };
+    return {
+      workloadRef: { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' },
+      containers: [],
+      supportedOperations: ['SET_APPROVED_ANNOTATION'],
+      promotions: [{ ...workload, field: 'tier', valuesPath: 'labels.tier' }],
+      imageActions: [],
+      replicasAction: null,
+      annotationActions: [
+        {
+          key: 'tier',
+          scope: 'WORKLOAD_METADATA',
+          currentValue: 'web',
+          availability: { available: true },
+          promotions: [{ ...workload, field: 'tier', valuesPath: 'labels.tier' }],
+        },
+      ],
+      annotationAvailability: { available: true },
+    };
+  }
+
+  const approved = [
+    { key: 'tier', scope: 'WORKLOAD_METADATA' },
+    { key: 'owner', scope: 'WORKLOAD_METADATA' },
+    { key: 'owner', scope: 'POD_TEMPLATE_METADATA' },
+  ];
+
+  it('falls back to the observed projection when the definition read is missing', () => {
+    expect(approvedAnnotationKeysForScope(observedTarget(), 'WORKLOAD_METADATA')).toEqual([
+      { key: 'tier', scope: 'WORKLOAD_METADATA' },
+    ]);
+    expect(annotationScopes(observedTarget())).toEqual(['WORKLOAD_METADATA']);
+  });
+
+  it('adds approved keys the workload has not observed, keyed by (key, scope)', () => {
+    expect(approvedAnnotationKeysForScope(observedTarget(), 'WORKLOAD_METADATA', approved)).toEqual([
+      { key: 'tier', scope: 'WORKLOAD_METADATA' },
+      { key: 'owner', scope: 'WORKLOAD_METADATA' },
+    ]);
+    // The same key under another scope is its own entry, not a duplicate.
+    expect(approvedAnnotationKeysForScope(observedTarget(), 'POD_TEMPLATE_METADATA', approved)).toEqual([
+      { key: 'owner', scope: 'POD_TEMPLATE_METADATA' },
+    ]);
+  });
+
+  it('offers approved-only scopes after the observed ones', () => {
+    expect(annotationScopes(observedTarget(), approved)).toEqual(['WORKLOAD_METADATA', 'POD_TEMPLATE_METADATA']);
+  });
+
+  it('never hides a key the read model observed but the whitelist omitted', () => {
+    // Defensive: the server re-filters at read time, but hiding an observed key
+    // would be worse than offering one the server later refuses.
+    expect(
+      approvedAnnotationKeysForScope(observedTarget(), 'WORKLOAD_METADATA', [
+        { key: 'unrelated', scope: 'WORKLOAD_METADATA' },
+      ]),
+    ).toEqual([
+      { key: 'unrelated', scope: 'WORKLOAD_METADATA' },
+      { key: 'tier', scope: 'WORKLOAD_METADATA' },
+    ]);
   });
 });

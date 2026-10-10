@@ -4,10 +4,10 @@
  *
  * The wire field is a flat int32 with no presence: 0 means "replicas not
  * requested" and selects the image branch server-side
- * (internal/orchestrator/emergency.go:1095-1099), so the control starts at 1
- * and the parent owns that rule (features/emergency/validation.ts
- * validateReplicasChange). The control only renders the value and the server
- * rejection the parent routed to it.
+ * (internal/orchestrator/emergency.go:1095-1099), so the control starts EMPTY
+ * (null) and rejects anything below min=1; the parent owns that rule
+ * (features/emergency/validation.ts validateReplicasChange). The control only
+ * renders the value and the server rejection the parent routed to it.
  *
  * A11y: FormField owns the label/help/error relations (label for, aria-invalid,
  * aria-describedby, role="alert"); the slot props are bound here so the

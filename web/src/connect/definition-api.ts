@@ -3,6 +3,7 @@ import { create } from '@bufbuild/protobuf';
 import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import { PromotionMappingListSchema, PromotionMappingSchema } from '@/gen/orchestrator/v1/orchestrator_pb';
 import {
+  GetReleaseDefinitionRequestSchema,
   ListReleaseDefinitionsRequestSchema,
   UpdateReleaseDefinitionRequestSchema,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
@@ -36,6 +37,23 @@ export interface PromotionMappingView {
   valuesPath: string;
 }
 
+/**
+ * One entry of the definition's annotation whitelist.
+ *
+ * The server writes `[]store.ApprovedAnnotationKey` through `mustJSON`
+ * (internal/orchestrator/definition.go:313,350-356), and that type's JSON tags
+ * are `key` / `scope` / `promotion_values_path,omitempty`
+ * (internal/store/store.go:1149-1153). Unlike the emergency read model's
+ * `current_annotations`, this list contains keys that are approved but not yet
+ * OBSERVED on the workload (TASK-274).
+ */
+export interface ApprovedAnnotationKeyView {
+  key: string;
+  scope: string;
+  /** Empty when the whitelist entry carries no promotion path. */
+  promotionValuesPath: string;
+}
+
 export interface DefinitionView {
   id: string;
   name: string;
@@ -53,6 +71,10 @@ export interface DefinitionView {
   promotionMappings: PromotionMappingView[];
   /** Set when the stored JSON could not be decoded — a contract violation. */
   promotionMappingsViolation: string | null;
+  /** Decoded `approved_annotation_keys`; empty when the field is empty. */
+  approvedAnnotationKeys: ApprovedAnnotationKeyView[];
+  /** Set when the whitelist JSON could not be decoded — a contract violation. */
+  approvedAnnotationKeysViolation: string | null;
 }
 
 export interface DefinitionFilters {
@@ -113,6 +135,50 @@ export function decodePromotionMappings(raw: Uint8Array): { value: PromotionMapp
   return { value: mappings, violation: null };
 }
 
+const REQUIRED_APPROVED_ANNOTATION_KEYS = ['key', 'scope'] as const;
+
+/**
+ * Decodes the JSON bytes the server stores for `approved_annotation_keys`.
+ *
+ * Same contract as {@link decodePromotionMappings}: an undecodable value is a
+ * CONTRACT VIOLATION, and "parseable but wrong shape" counts — `{}`, a bare
+ * string or an element without a string `key`/`scope` is reported instead of
+ * silently becoming an empty whitelist (which would hide every approved key).
+ * `promotion_values_path` is optional and defaults to ''.
+ */
+export function decodeApprovedAnnotationKeys(
+  raw: Uint8Array,
+): { value: ApprovedAnnotationKeyView[] | null; violation: string | null } {
+  if (!raw || raw.length === 0) return { value: null, violation: null };
+  const text = new TextDecoder().decode(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { value: null, violation: `无法解析服务端返回的 JSON（${text.slice(0, 80)}）` };
+  }
+  if (!Array.isArray(parsed)) {
+    return { value: null, violation: `注解白名单不是 JSON 数组（${text.slice(0, 80)}）` };
+  }
+  const keys: ApprovedAnnotationKeyView[] = [];
+  for (const [index, element] of parsed.entries()) {
+    if (typeof element !== 'object' || element === null || Array.isArray(element)) {
+      return { value: null, violation: `第 ${index + 1} 条注解白名单不是对象（${text.slice(0, 80)}）` };
+    }
+    const record = element as Record<string, unknown>;
+    const missing = REQUIRED_APPROVED_ANNOTATION_KEYS.filter((key) => typeof record[key] !== 'string');
+    if (missing.length > 0) {
+      return { value: null, violation: `第 ${index + 1} 条注解白名单缺少字段 ${missing.join('/')}` };
+    }
+    keys.push({
+      key: record.key as string,
+      scope: record.scope as string,
+      promotionValuesPath: typeof record.promotion_values_path === 'string' ? record.promotion_values_path : '',
+    });
+  }
+  return { value: keys, violation: null };
+}
+
 function toIso(value: Timestamp | undefined): string | null {
   return value ? timestampDate(value).toISOString() : null;
 }
@@ -120,6 +186,7 @@ function toIso(value: Timestamp | undefined): string | null {
 function toView(definition: ReleaseDefinition): DefinitionView {
   const decoded = decodePromotionMappings(definition.promotionMappings);
   const mappings = decoded.value ?? [];
+  const approved = decodeApprovedAnnotationKeys(definition.approvedAnnotationKeys);
   return {
     id: definition.id,
     name: definition.name,
@@ -136,7 +203,20 @@ function toView(definition: ReleaseDefinition): DefinitionView {
     updatedAt: toIso(definition.updatedAt),
     promotionMappings: mappings,
     promotionMappingsViolation: decoded.violation,
+    approvedAnnotationKeys: approved.value ?? [],
+    approvedAnnotationKeysViolation: approved.violation,
   };
+}
+
+/**
+ * Reads one definition. GetReleaseDefinition returns the same read message as
+ * ListReleaseDefinitions, JSON bytes included, so the decode above applies.
+ */
+export async function getDefinition(definitionId: string): Promise<DefinitionView> {
+  const response = await orchestratorClient.getReleaseDefinition(
+    create(GetReleaseDefinitionRequestSchema, { definitionId }),
+  );
+  return toView(response.definition!);
 }
 
 export async function listDefinitions(filters: DefinitionFilters = {}): Promise<DefinitionView[]> {
