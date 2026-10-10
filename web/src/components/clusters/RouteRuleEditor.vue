@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 import { computed } from 'vue';
+import FormField from '@/components/common/FormField.vue';
 import RoutePreview from './RoutePreview.vue';
 import type { ArtifactType, FieldViolation, RouteMode, RouteRuleInput, RoutingEndpoints } from '@/types/cluster';
 import { ruleKey } from '@/utils/cluster-routing';
@@ -68,49 +69,74 @@ function isConflictingRule(rule: RouteRuleInput, index: number): boolean {
       </header>
 
       <div class="rule-grid">
-        <label>
-          {{ t('cluster.rules.mode') }}
-          <select v-model="rule.mode" :disabled="readonly" :aria-invalid="Boolean(fieldError(index, 'mode'))">
-            <option
-              v-for="mode in modes"
-              :key="mode.value"
-              :value="mode.value"
-              :disabled="mode.disabled"
-              :title="mode.title"
+        <!--
+         TASK-271: each field's error is rendered by FormField (TASK-268) OUTSIDE its
+         `label for`, referenced from the control with aria-describedby. Inside a
+         wrapping <label> the same text was part of the control's accessible NAME, so
+         a describedby pointing at it would announce the message twice.
+        -->
+        <FormField
+          :label="t('cluster.rules.mode')"
+          :help="artifactType === 'chart' ? t('cluster.rules.modeHint') : ''"
+          :error="fieldError(index, 'mode')"
+        >
+          <template #default="{ id, describedBy, invalid }">
+            <select
+              :id="id"
+              v-model="rule.mode"
+              :disabled="readonly"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
             >
-              {{ mode.label }}{{ mode.disabled ? ' — unavailable' : '' }}
-            </option>
-          </select>
-          <small v-if="artifactType === 'chart'" class="hint">{{ t('cluster.rules.modeHint') }}</small>
-          <small v-if="fieldError(index, 'mode')" class="field-error">{{ fieldError(index, 'mode') }}</small>
-        </label>
+              <option
+                v-for="mode in modes"
+                :key="mode.value"
+                :value="mode.value"
+                :disabled="mode.disabled"
+                :title="mode.title"
+              >
+                {{ mode.label }}{{ mode.disabled ? ' — unavailable' : '' }}
+              </option>
+            </select>
+          </template>
+        </FormField>
 
-        <label>
-          {{ t('cluster.rules.provider') }}
-          <input v-model="rule.provider" :readonly="readonly" :placeholder="t('cluster.rules.providerPlaceholder')" />
-        </label>
+        <FormField :label="t('cluster.rules.provider')">
+          <template #default="{ id }">
+            <input
+              :id="id"
+              v-model="rule.provider"
+              :readonly="readonly"
+              :placeholder="t('cluster.rules.providerPlaceholder')"
+            />
+          </template>
+        </FormField>
 
-        <label>
-          {{ t('cluster.rules.sourcePrefix') }}
-          <input
-            v-model="rule.sourcePrefix"
-            :readonly="readonly"
-            :placeholder="t('cluster.rules.sourceExample')"
-            :aria-invalid="Boolean(fieldError(index, 'sourcePrefix'))"
-          />
-          <small v-if="fieldError(index, 'sourcePrefix')" class="field-error">{{ fieldError(index, 'sourcePrefix') }}</small>
-        </label>
+        <FormField :label="t('cluster.rules.sourcePrefix')" :error="fieldError(index, 'sourcePrefix')">
+          <template #default="{ id, describedBy, invalid }">
+            <input
+              :id="id"
+              v-model="rule.sourcePrefix"
+              :readonly="readonly"
+              :placeholder="t('cluster.rules.sourceExample')"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+            />
+          </template>
+        </FormField>
 
-        <label>
-          {{ t('cluster.rules.targetPrefix') }}
-          <input
-            v-model="rule.targetPrefix"
-            :readonly="readonly"
-            :placeholder="t('cluster.rules.targetExample')"
-            :aria-invalid="Boolean(fieldError(index, 'targetPrefix'))"
-          />
-          <small v-if="fieldError(index, 'targetPrefix')" class="field-error">{{ fieldError(index, 'targetPrefix') }}</small>
-        </label>
+        <FormField :label="t('cluster.rules.targetPrefix')" :error="fieldError(index, 'targetPrefix')">
+          <template #default="{ id, describedBy, invalid }">
+            <input
+              :id="id"
+              v-model="rule.targetPrefix"
+              :readonly="readonly"
+              :placeholder="t('cluster.rules.targetExample')"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+            />
+          </template>
+        </FormField>
       </div>
 
       <RoutePreview :rule="rule" :endpoints="endpoints" />
@@ -127,11 +153,9 @@ function isConflictingRule(rule: RouteRuleInput, index: number): boolean {
 .rule-card--conflict { border-color: var(--color-danger); box-shadow: 0 0 0 2px var(--color-danger-border-soft); }
 .rule-card__id { color: var(--color-muted); font-family: monospace; font-size: var(--font-size-xs); }
 .rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-label { display: grid; gap: 0.375rem; font-weight: 600; }
+/* Slotted into FormField, so these still carry this component's scope id. */
 input, select { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 [aria-invalid='true'] { border-color: var(--color-danger); }
-.field-error { color: var(--color-danger); }
-.hint { color: var(--color-muted); font-weight: 400; }
 button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
 button.danger { color: var(--color-error); }
 @media (max-width: 720px) { .rule-grid { grid-template-columns: 1fr; } }

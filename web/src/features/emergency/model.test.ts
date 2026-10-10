@@ -397,7 +397,16 @@ describe('annotation whitelist projection (TASK-274)', () => {
     { key: 'owner', scope: 'POD_TEMPLATE_METADATA' },
   ];
 
-  it('falls back to the observed projection when the definition read is missing', () => {
+  /*
+   * Scope of this case (independent review, TASK-274 leftover 10.3): it covers the
+   * `undefined` whitelist, and that is ALL this pure function can see. "not read yet",
+   * "the read failed" and "the bytes did not decode" all reach it as `undefined` by
+   * design — the difference is carried separately by the store's
+   * `annotationWhitelistState` (asserted in `stores/emergencyChange.test.ts` and in
+   * `pages/EmergencyChangePage.spec.ts`). The title used to claim the read had failed,
+   * which this input cannot distinguish.
+   */
+  it('falls back to the observed projection when no whitelist was supplied', () => {
     expect(approvedAnnotationKeysForScope(observedTarget(), 'WORKLOAD_METADATA')).toEqual([
       { key: 'tier', scope: 'WORKLOAD_METADATA' },
     ]);

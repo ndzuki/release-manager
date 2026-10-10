@@ -50,7 +50,9 @@ export interface PromotionMappingView {
 export interface ApprovedAnnotationKeyView {
   key: string;
   scope: string;
-  /** Empty when the whitelist entry carries no promotion path. */
+  /** Empty when the whitelist entry carries no promotion path. Decoded and asserted for
+   * parity with the Go JSON shape, but it currently has NO production consumer
+   * (TASK-274 independent review, leftover 10.4). */
   promotionValuesPath: string;
 }
 

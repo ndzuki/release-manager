@@ -52,3 +52,35 @@ describe('CustomerForm', () => {
     expect(wrapper.text()).toContain('标识格式不合法');
   });
 });
+
+/*
+ * TASK-271 (A11y subset ②): a field error must be a DESCRIPTION of its control, never
+ * part of its accessible NAME. The name is what `label[for]` contributes, and the error
+ * used to sit inside the wrapping label, so pointing aria-describedby at the same node
+ * would have made a screen reader say the sentence twice. The two halves are asserted
+ * separately for BOTH fields, so removing either relation fails here.
+ */
+describe('CustomerForm field errors are described, not named', () => {
+  const cases = [
+    { field: 'name', description: '名称必填', inputIndex: 0 },
+    { field: 'slug', description: '标识格式不合法', inputIndex: 1 },
+  ] as const;
+
+  it.each(cases)('describes the $field control with its alert', ({ field, description, inputIndex }) => {
+    const wrapper = mountForm({ fieldViolations: [{ field, description }] });
+    const input = wrapper.findAll('input')[inputIndex]!;
+    const id = input.attributes('id');
+    const describedBy = input.attributes('aria-describedby');
+    const label = wrapper.get(`label[for="${id}"]`);
+
+    // ① the accessible name is the label text only — the error is not in it ...
+    expect(label.attributes('for')).toBe(id);
+    expect(label.text()).not.toContain(description);
+    expect(label.find('.form-field__error').exists()).toBe(false);
+    // ② ... it is reachable as the control's description instead.
+    expect(describedBy).toBeTruthy();
+    expect(wrapper.get(`#${describedBy}`).text()).toContain(description);
+    expect(wrapper.get(`#${describedBy}`).attributes('role')).toBe('alert');
+    expect(input.attributes('aria-invalid')).toBe('true');
+  });
+});
