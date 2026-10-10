@@ -87,10 +87,14 @@ export function createAppRouter(
             component: () => import('@/pages/OperationCenterPage.vue'),
             meta: { requiresAuth: true, feature: 'releaseOperations' },
           }, {
-            // Same detail component on an unscoped path: the aggregate row carries the
-            // operation id but no cluster id, and vue-router refuses a named route whose
-            // required params are empty. The page renders a single breadcrumb when the
-            // release scope is absent.
+            // Same detail component on an unscoped path, kept as its own route record:
+            // vue-router refuses a named route whose required params are empty, so the
+            // scope-less entry needs a distinct path. It stays the fallback where the
+            // release-scoped routes are not registered (release inventory off). The
+            // aggregate row carries the cluster since TASK-279, so the Operation centre
+            // prefers the canonical route; on this entry the page recovers the release
+            // context from the operation's release definition, and renders a single
+            // breadcrumb when it cannot.
             path: '/operations/:operationId',
             name: 'OperationCenterDetail',
             component: () => import('@/pages/OperationDetailPage.vue'),
