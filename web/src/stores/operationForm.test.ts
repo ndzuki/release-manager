@@ -309,6 +309,57 @@ describe('operation form store', () => {
     expect(store.validate()).toEqual({});
   });
 
+  /*
+   * TASK-280 scope/generation guard. When the route scope changes before the first
+   * approved-revision response lands, that stale response belongs to another scope: it
+   * must not overwrite the new scope's list, and it must not reconcile the new scope's
+   * draft against the old scope's ids. Doing either silently destroys the user's
+   * legitimate restored selection -- and persists the destruction into the new scope's
+   * draft, so the new scope's own late response cannot repair it.
+   */
+  it('ignores a stale scope response instead of destroying the new scope draft', async () => {
+    const pending = new Map<string, (revisions: ValuesRevision[]) => void>();
+    mockedApproved.mockImplementation(
+      (releaseDefinitionId: string) =>
+        new Promise<ValuesRevision[]>((resolve) => { pending.set(releaseDefinitionId, resolve); }),
+    );
+    sessionStorage.setItem('op-draft:def-2', JSON.stringify({
+      operationType: 'UPGRADE',
+      bundleId: 'bundle-1',
+      valuesRevisionId: 'vr-2',
+      patch: [],
+      targetRevision: null,
+    }));
+
+    const store = useOperationFormStore();
+    const firstScope = store.setScope('def-1');
+    await vi.waitFor(() => expect(mockedApproved).toHaveBeenCalledWith('def-1'));
+
+    // Leave def-1 while its list is in flight; def-2 restores its own draft selection.
+    const secondScope = store.setScope('def-2');
+    await vi.waitFor(() => expect(mockedApproved).toHaveBeenCalledWith('def-2'));
+    expect(store.fields.valuesRevisionId).toBe('vr-2');
+
+    // def-1's response arrives last for a scope we already left.
+    pending.get('def-1')?.([approvedRevision('vr-1')]);
+    await firstScope;
+
+    expect(store.fields.valuesRevisionId).toBe('vr-2');
+    await vi.waitFor(() => {
+      expect(JSON.parse(sessionStorage.getItem('op-draft:def-2') ?? '{}').valuesRevisionId).toBe('vr-2');
+    });
+
+    // def-2's own list still lands, and the restored selection stays submittable: the
+    // guard drops the stale response, it is not a blanket refusal of restored drafts.
+    store.fields.expectedCurrentRevision = 3;
+    pending.get('def-2')?.([approvedRevision('vr-2', 2)]);
+    await secondScope;
+
+    expect(store.approvedRevisions.map((revision) => revision.id)).toEqual(['vr-2']);
+    expect(store.fields.valuesRevisionId).toBe('vr-2');
+    expect(store.validate()).toEqual({});
+  });
+
   // validate() is the always-on guard for ids that never came from the draft: the
   // store's own field is writable, so membership cannot live in the loader alone.
   it('refuses a revision id written straight into the field', async () => {

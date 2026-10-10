@@ -135,12 +135,29 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     await loadApprovedRevisions();
   }
 
+  // TASK-280: one monotonic token per approved-revision request. Two loads overlap
+  // whenever the route scope changes (or loadOptions is re-called) before the first
+  // response lands, so a response is only allowed to touch state while it is still the
+  // newest request for the scope it was issued for.
+  let revisionsRequestSeq = 0;
+
   async function loadApprovedRevisions(): Promise<void> {
-    if (!releaseDefinitionId.value) return;
+    const scope = releaseDefinitionId.value;
+    if (!scope) return;
+    const requestSeq = ++revisionsRequestSeq;
+    // Both halves are needed: the token rejects an older response of a same-scope race,
+    // while the scope snapshot rejects a response whose scope changed during the await
+    // without a newer load (releaseDefinitionId is an exposed, writable ref).
+    const isCurrentRequest = (): boolean => requestSeq === revisionsRequestSeq && scope === releaseDefinitionId.value;
     revisionsLoading.value = true;
     revisionsError.value = null;
     try {
-      approvedRevisions.value = await listApprovedValuesRevisions(releaseDefinitionId.value);
+      const revisions = await listApprovedValuesRevisions(scope);
+      // A superseded or out-of-scope response must neither overwrite this scope's list
+      // nor reconcile this scope's draft against the other scope's approved ids, which
+      // would silently destroy a legitimate restored selection.
+      if (!isCurrentRequest()) return;
+      approvedRevisions.value = revisions;
       // Reconcile only once the real list is in hand. `approvedRevisions` is empty
       // while this await is in flight -- and stays empty after a failed load -- so
       // reconciling any earlier would throw away a legitimate restored draft on every
@@ -148,10 +165,11 @@ export const useOperationFormStore = defineStore('operationForm', () => {
       // unknown, not empty, and validate() already refuses to submit without a match.
       reconcileValuesRevision();
     } catch (error) {
+      if (!isCurrentRequest()) return;
       approvedRevisions.value = [];
       revisionsError.value = mapOperationError(error).message;
     } finally {
-      revisionsLoading.value = false;
+      if (isCurrentRequest()) revisionsLoading.value = false;
     }
   }
 
