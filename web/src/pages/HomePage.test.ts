@@ -146,6 +146,21 @@ describe('HomePage pending work', () => {
     expect(wrapper.findAll('[data-testid^="home-todo-"]')).toHaveLength(2);
   });
 
+  /*
+   * "There is more" has two sources and only one of them is the row count: the aggregate
+   * returns no total, so a page that is not even full still means the queue continues
+   * when it carries a next_page_token. The probe row alone would read "2 条".
+   */
+  it('adds "+" when a short page still carries a next page token', async () => {
+    const { wrapper } = await mountHome(
+      ['viewer'],
+      async () => page([summary(), summary({ operationId: 'op-2' })], 'tok-1'),
+    );
+
+    expect(wrapper.get('.home-page__todo-count').text()).toBe('待我处理 2+ 条');
+    expect(wrapper.findAll('[data-testid^="home-todo-"]')).toHaveLength(2);
+  });
+
   it('says nothing is waiting instead of showing an empty list', async () => {
     const { wrapper } = await mountHome(['viewer'], async () => page([], ''));
 

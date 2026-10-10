@@ -162,6 +162,10 @@ describe('OperationCenterPage degradations', () => {
     expect(wrapper.get('[data-testid="operation-center-maintenance"]').text()).toContain(
       '维护中不可用：平台正处于维护模式',
     );
+    // The copy above and useOperationFeed's comment both say no retry can work until the
+    // cutover ends, and the home panel offers none either — so this block must not either.
+    expect(wrapper.find('[data-testid="operation-center-maintenance"] button').exists()).toBe(false);
+    expect(wrapper.findAll('button')).toHaveLength(0);
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     // Not an endless spinner either: the degradation is terminal until the cutover ends.
     expect(wrapper.find('.loading-state').exists()).toBe(false);
@@ -169,14 +173,16 @@ describe('OperationCenterPage degradations', () => {
     expect(wrapper.find('.operation-center__pager').exists()).toBe(false);
   });
 
-  it('degrades to the forbidden state when the scope is refused', async () => {
+  it('degrades to the forbidden state when the read is refused', async () => {
     feedClient(async () => {
-      throw new ConnectError('customer not bound to caller', Code.PermissionDenied);
+      throw new ConnectError('release:read denied', Code.PermissionDenied);
     });
 
     const wrapper = await mountCenter();
 
-    expect(wrapper.get('.forbidden-state').text()).toContain('该客户不在你的组织授权范围内。');
+    // This UI never sends a customerId, so the refusal is the authorization decision on
+    // the read (casbin release:read, or an inactive membership) — not a customer scope.
+    expect(wrapper.get('.forbidden-state').text()).toContain('无读取权限：当前账号无权读取该作用域内的 Operation。');
     expect(wrapper.find('table').exists()).toBe(false);
     // A refusal is not retryable: repeating the same scope cannot succeed.
     expect(wrapper.find('[role="alert"] button').exists()).toBe(false);
@@ -217,6 +223,57 @@ describe('OperationCenterPage pagination', () => {
     expect(mock.mock.calls[2]![0].pageToken).toBe('');
     expect(wrapper.text()).toContain('op-1');
     expect(wrapper.get('.operation-center__page').text()).toBe('第 1 页');
+  });
+
+  /*
+   * The cursor stack IS the paging contract, and a two-page round trip cannot see it:
+   * from page 2, "previous" replays the empty first cursor whether or not the stack was
+   * ever recorded. Three pages make each stored cursor observable, so this test asserts
+   * the exact cursor sequence that reached the wire — request by request, not just the
+   * rows that happened to render.
+   */
+  it('walks a three-page cursor stack back and forward, sending each stored cursor', async () => {
+    const pages: Record<string, FeedPage> = {
+      '': page([summary({ operationId: 'op-1' })], 't1'),
+      t1: page([summary({ operationId: 'op-2' })], 't2'),
+      t2: page([summary({ operationId: 'op-3' })], ''),
+    };
+    const mock = feedClient(async (request) => pages[request.pageToken] ?? page([]));
+
+    const wrapper = await mountCenter();
+    const goNextOnce = async () => {
+      await nextButton(wrapper).trigger('click');
+      await flushPromises();
+    };
+    const goPrevOnce = async () => {
+      await prevButton(wrapper).trigger('click');
+      await flushPromises();
+    };
+    const firstRow = () => wrapper.get('tbody tr').text();
+
+    expect(firstRow()).toContain('op-1');
+
+    await goNextOnce(); // page 2: the stack records t1 for position 1
+    expect(firstRow()).toContain('op-2');
+    await goNextOnce(); // page 3: the stack records t2 for position 2
+    expect(firstRow()).toContain('op-3');
+    expect(wrapper.get('.operation-center__page').text()).toBe('第 3 页');
+
+    await goPrevOnce(); // back to page 2 by REPLAYING cursors[1] = t1
+    expect(firstRow()).toContain('op-2');
+    await goPrevOnce(); // back to page 1 by REPLAYING cursors[0] = ''
+    expect(firstRow()).toContain('op-1');
+    expect(wrapper.get('.operation-center__page').text()).toBe('第 1 页');
+
+    await goNextOnce(); // forward again re-enters position 1 with its recorded cursor
+    expect(firstRow()).toContain('op-2');
+    await goNextOnce();
+    expect(firstRow()).toContain('op-3');
+
+    // '' → t1 → t2 (forward), then t1 → '' (back, replaying the stack), then t1 → t2.
+    expect(mock.mock.calls.map((call) => call[0].pageToken)).toEqual([
+      '', 't1', 't2', 't1', '', 't1', 't2',
+    ]);
   });
 
   it('disables the next page on a single-page result', async () => {

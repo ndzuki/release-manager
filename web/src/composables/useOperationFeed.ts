@@ -18,8 +18,11 @@ import { correlationLine, describeError } from '@/connect/error-copy';
  *   - maintenance: the orchestrator refuses this RPC while it is in maintenance mode
  *     (the procedure is not in orchestratorReadOnlyProcedures), and no retry can work
  *     until the cutover ends;
- *   - forbidden: PERMISSION_DENIED, which is the answer for an out-of-scope scope
- *     (TASK-276). Repeating the same request cannot succeed either.
+ *   - forbidden: PERMISSION_DENIED, which is the authorization refusal on the read
+ *     (`release:read` denied by casbin, or an inactive membership). Neither surface
+ *     using this composable sends `customerId`, so the "customer outside your active
+ *     bindings" answer TASK-276 defines is NOT reachable from this UI. Repeating the
+ *     same request cannot succeed either way.
  * Loading / empty / rows stay exactly the DataTable contract.
  */
 export interface OperationFeedError {

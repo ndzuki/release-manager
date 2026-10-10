@@ -608,7 +608,7 @@ const zhCN = {
   'operationCenter.emergency': '紧急',
   'operationCenter.emptyMessage': '当前作用域内没有非终态的 Operation。',
   'operationCenter.maintenance': '维护中不可用：平台正处于维护模式，Operation 中心暂时无法读取。',
-  'operationCenter.forbidden': '该客户不在你的组织授权范围内。',
+  'operationCenter.forbidden': '无读取权限：当前账号无权读取该作用域内的 Operation。',
   'operationCenter.pagination': 'Operation 分页',
   'operationCenter.previous': '上一页',
   'operationCenter.next': '下一页',

@@ -142,7 +142,6 @@ onMounted(() => {
       data-testid="operation-center-maintenance"
     >
       <p>{{ t('operationCenter.maintenance') }}</p>
-      <button type="button" class="operation-center__retry" @click="reload">{{ t('action.retry') }}</button>
     </section>
 
     <ForbiddenState v-else-if="forbidden" :message="t('operationCenter.forbidden')" />
@@ -235,15 +234,6 @@ onMounted(() => {
 
 .operation-center__maintenance p {
   margin: 0;
-}
-
-.operation-center__retry {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  font: inherit;
-  cursor: pointer;
 }
 
 .operation-center__state {
