@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -13,7 +13,9 @@ import {
   revokePendingEnrollmentToken,
 } from '@/connect/operator-api';
 import type * as OperatorApi from '@/connect/operator-api';
+import { t } from '@/i18n/messages';
 import { useAuthStore } from '@/stores/auth';
+import { useOperatorStore } from '@/stores/operator';
 vi.mock('@/connect/operator-api', async (importOriginal) => {
   const original = await importOriginal<typeof OperatorApi>();
   return {
@@ -266,4 +268,58 @@ describe('Operator pages', () => {
     expect(revokePendingEnrollmentToken).toHaveBeenCalledWith('customer-1', 'cluster-1');
     wrapper.unmount();
   });
+
+  /*
+   * TASK-275 (A11y subset ②, continued). Both enrollment field errors used to render
+   * INSIDE the wrapping <label> (as `<span class="error">`, which TASK-269's <small>-based
+   * scan missed), so the sentence was part of the control's accessible NAME — and a
+   * describedby pointing at the same node would have announced it twice. FormField
+   * (TASK-268) owns the clean shape and the hint moved out of the label with it. Both
+   * halves are asserted per field.
+   */
+  it('describes the enrollment field errors instead of naming the controls with them', async () => {
+    authenticate('release_admin');
+    vi.mocked(getEnrollmentTokenStatus).mockResolvedValue({
+      state: 'none',
+      createdAt: null,
+      expiresAt: null,
+      createdByDisplayName: null,
+    });
+    const wrapper = await mountEnrollPage();
+
+    // Drive the real local validator (no server call): both fields are invalid.
+    const store = useOperatorStore();
+    store.enrollmentForm.operatorName = 'INVALID_NAME';
+    store.enrollmentForm.ttlMinutes = 2000;
+    await store.generateToken('customer-1', 'cluster-1');
+    await flushPromises();
+
+    expectFieldErrorIsDescription(wrapper, 'Operator 名称', t('operator.validation.name'));
+    expectFieldErrorIsDescription(wrapper, 'TTL 分钟', t('operator.validation.ttl'));
+  });
 });
+
+/*
+ * The name is what `label[for]` contributes; the error must be reachable as a
+ * DESCRIPTION instead. Asserting both halves separately means removing either relation
+ * fails here rather than silently changing what a screen reader says.
+ */
+function expectFieldErrorIsDescription(wrapper: VueWrapper, fieldLabel: string, description: string): void {
+  const label = wrapper.findAll('label').find((candidate) => candidate.text().includes(fieldLabel));
+  if (!label) throw new Error(`no label containing "${fieldLabel}"`);
+  const id = label.attributes('for');
+  expect(id, `label "${fieldLabel}" must point at its control with for`).toBeTruthy();
+  const control = wrapper.get(`[id="${id}"]`);
+
+  // ① the error is not inside the label, so it is not part of the accessible name ...
+  expect(label.text()).not.toContain(description);
+  expect(label.find('.form-field__error').exists()).toBe(false);
+  // ② ... it is referenced as the control's description, with alert semantics.
+  const describedBy = control.attributes('aria-describedby');
+  expect(describedBy).toBeTruthy();
+  expect(describedBy!.split(' ')).toContain(`${id}-error`);
+  const errorNode = wrapper.get(`[id="${id}-error"]`);
+  expect(errorNode.text()).toContain(description);
+  expect(errorNode.attributes('role')).toBe('alert');
+  expect(control.attributes('aria-invalid')).toBe('true');
+}

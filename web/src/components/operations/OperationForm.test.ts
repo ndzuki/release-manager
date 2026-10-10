@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import OperationForm from './OperationForm.vue';
@@ -155,5 +155,68 @@ describe('OperationForm approved ValuesRevision selector', () => {
     expect(store.validate()).toEqual({ valuesRevisionId: '请选择已审批的配置版本' });
     expect(store.step).toBe('form');
     expect(mockedCreate).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * TASK-275 (A11y subset ②, continued). The bundle / expected-current-revision /
+ * target-revision errors used to render inside an implicitly wrapping <label> (they
+ * used <span>, so TASK-269's <small>-based scan missed them), which made the sentence
+ * part of the control's accessible NAME — pointing aria-describedby at the same node
+ * would then announce it twice. FormField (TASK-268) owns the clean shape. Both halves
+ * are asserted per field: the name carries only the label copy, the description carries
+ * the alert.
+ */
+function labelContaining(wrapper: VueWrapper, fieldLabel: string): DOMWrapper<Element> {
+  const label = wrapper.findAll('label').find((candidate) => candidate.text().includes(fieldLabel));
+  if (!label) throw new Error(`no label containing "${fieldLabel}"`);
+  return label;
+}
+
+function expectErrorDescribesNotNames(wrapper: VueWrapper, fieldLabel: string, description: string): void {
+  const label = labelContaining(wrapper, fieldLabel);
+  const id = label.attributes('for');
+  expect(id, `label "${fieldLabel}" must point at its control with for`).toBeTruthy();
+  const control = wrapper.get(`[id="${id}"]`);
+
+  // ① the accessible name is the label text only — the error is not inside it ...
+  expect(label.text()).not.toContain(description);
+  expect(label.find('.form-field__error').exists()).toBe(false);
+  // ② ... the control reaches it as a description instead.
+  const describedBy = control.attributes('aria-describedby');
+  expect(describedBy).toBeTruthy();
+  expect(describedBy!.split(' ')).toContain(`${id}-error`);
+  const errorNode = wrapper.get(`[id="${id}-error"]`);
+  expect(errorNode.text()).toContain(description);
+  expect(errorNode.attributes('role')).toBe('alert');
+  expect(control.attributes('aria-invalid')).toBe('true');
+}
+
+describe('OperationForm field errors are described, not named', () => {
+  it('describes the bundle control with its alert', async () => {
+    const { wrapper } = await mountForm();
+
+    await wrapper.get('form').trigger('submit');
+
+    expect(wrapper.get('[data-testid="operation-bundle"]').element.tagName).toBe('SELECT');
+    expectErrorDescribesNotNames(wrapper, '制品 Bundle', '请选择制品');
+  });
+
+  it('describes the expected-current-revision control with its alert', async () => {
+    const { wrapper, store } = await mountForm();
+    store.setOperationType('UPGRADE');
+
+    await wrapper.get('form').trigger('submit');
+
+    expectErrorDescribesNotNames(wrapper, '当前 Revision', '无法确定当前 Revision');
+  });
+
+  it('describes the target-revision control with its alert', async () => {
+    const { wrapper, store } = await mountForm();
+    store.setOperationType('ROLLBACK');
+
+    await wrapper.get('form').trigger('submit');
+
+    expectErrorDescribesNotNames(wrapper, '回滚目标 Revision', '请填写回滚目标 Revision');
   });
 });

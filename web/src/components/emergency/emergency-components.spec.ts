@@ -139,6 +139,58 @@ describe('emergency components (Step 4)', () => {
     expect(wrapper.text()).toContain('0 / 1000 字节');
   });
 
+  /*
+   * TASK-275 (A11y subset ②, continued). The reason error used to render INSIDE the
+   * wrapping <label> (as `<span class="error-text">`, which TASK-269's <small>-based scan
+   * missed), so it was part of the textarea's accessible NAME. FormField (TASK-268) owns
+   * the clean shape; the byte counter rides in the slot and is described too. Both halves
+   * asserted separately, so dropping either relation fails here.
+   */
+  it('ChangeForm describes the reason error instead of naming the textarea with it (TASK-275)', () => {
+    const wrapper = mount(EmergencyChangeForm, {
+      props: {
+        reason: '',
+        convergencePolicy: 'REQUIRE_PROMOTION',
+        requirePromotionAvailable: true,
+        mappingComplete: true,
+        submitError: null,
+      },
+    });
+    const textarea = wrapper.get('textarea');
+    const id = textarea.attributes('id');
+    const label = wrapper.get(`label[for="${id}"]`);
+
+    // ① the accessible name is the label copy only — the error is not inside it ...
+    expect(label.text()).not.toContain('请填写变更原因');
+    expect(label.find('.form-field__error').exists()).toBe(false);
+    // ② ... it is the textarea's described alert instead, and the counter stays a hint.
+    const describedBy = textarea.attributes('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(describedBy!.split(' ')).toEqual(expect.arrayContaining([`${id}-error`, 'emergency-reason-byte-count']));
+    const errorNode = wrapper.get(`#${id}-error`);
+    expect(errorNode.text()).toContain('请填写变更原因');
+    expect(errorNode.attributes('role')).toBe('alert');
+    expect(textarea.attributes('aria-invalid')).toBe('true');
+    expect(wrapper.get('#emergency-reason-byte-count').text()).toContain('0 / 1000 字节');
+  });
+
+  it('ChangeForm drops the reason alert and aria-invalid while the reason is valid (TASK-275)', () => {
+    const wrapper = mount(EmergencyChangeForm, {
+      props: {
+        reason: '修复镜像',
+        convergencePolicy: 'REQUIRE_PROMOTION',
+        requirePromotionAvailable: true,
+        mappingComplete: true,
+        submitError: null,
+      },
+    });
+    const textarea = wrapper.get('textarea');
+
+    expect(wrapper.find('.form-field__error').exists()).toBe(false);
+    expect(textarea.attributes('aria-invalid')).toBeUndefined();
+    expect(textarea.attributes('aria-describedby')).toBe('emergency-reason-byte-count');
+  });
+
   it('AnnotationEditor binds rows to the whitelist and validates duplicates (AC-058-02/13)', async () => {
     const wrapper = mount(EmergencyAnnotationEditor, {
       props: { approvedKeys: ['tier', 'zone'], scope: 'WORKLOAD_METADATA', values: [] },

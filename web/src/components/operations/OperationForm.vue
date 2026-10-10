@@ -51,16 +51,37 @@ function prepareConfirmation(): void {
       </label>
     </fieldset>
 
-    <label v-if="store.fields.operationType !== 'ROLLBACK'" class="operation-form__field">
-      {{ t('operation.form.bundle') }}
-      <select v-model="store.fields.bundleId" required data-testid="operation-bundle">
-        <option :value="null">{{ t('operation.form.selectArtifact') }}</option>
-        <option v-for="bundle in store.availableBundles" :key="bundle.bundleId" :value="bundle.bundleId">
-          {{ bundle.name }}@{{ bundle.chartVersion }} · {{ bundle.digest }}
-        </option>
-      </select>
-      <span v-if="errors.bundleId" class="operation-form__error">{{ errors.bundleId }}</span>
-    </label>
+    <!--
+     TASK-275: the error used to live INSIDE this implicitly wrapping <label>, so it was
+     part of the control's accessible NAME and an aria-describedby pointing at the same
+     node would announce it twice. FormField (TASK-268) owns the clean shape instead:
+     `label for` + slotted control + `aria-describedby` on the rendered message +
+     `role="alert"` on the error + `aria-invalid` only while there is one.
+    -->
+    <FormField
+      v-if="store.fields.operationType !== 'ROLLBACK'"
+      :label="t('operation.form.bundle')"
+      :error="errors.bundleId"
+      required
+    >
+      <template #default="{ id, describedBy, invalid, disabled, required: fieldRequired }">
+        <select
+          :id="id"
+          v-model="store.fields.bundleId"
+          class="operation-form__control"
+          :aria-describedby="describedBy"
+          :aria-invalid="invalid"
+          :disabled="disabled"
+          :required="fieldRequired"
+          data-testid="operation-bundle"
+        >
+          <option :value="null">{{ t('operation.form.selectArtifact') }}</option>
+          <option v-for="bundle in store.availableBundles" :key="bundle.bundleId" :value="bundle.bundleId">
+            {{ bundle.name }}@{{ bundle.chartVersion }} · {{ bundle.digest }}
+          </option>
+        </select>
+      </template>
+    </FormField>
 
     <FormField
       v-if="store.fields.operationType !== 'ROLLBACK'"
@@ -70,6 +91,7 @@ function prepareConfirmation(): void {
     >
       <template #default="{ id, describedBy, invalid, disabled, required: fieldRequired }">
         <select
+          class="operation-form__control"
           :id="id"
           v-model="store.fields.valuesRevisionId"
           :aria-describedby="[describedBy, revisionsDescribedBy].filter(Boolean).join(' ') || undefined"
@@ -94,17 +116,48 @@ function prepareConfirmation(): void {
       </template>
     </FormField>
 
-    <label v-if="store.fields.operationType !== 'INSTALL'" class="operation-form__field">
-      {{ t('operation.form.currentRevision') }}
-      <input v-model.number="store.fields.expectedCurrentRevision" type="number" min="1" required />
-      <span v-if="errors.expectedCurrentRevision" class="operation-form__error">{{ errors.expectedCurrentRevision }}</span>
-    </label>
+    <!-- TASK-275: same shape as the bundle field above — the error is FormField's child, not the label's. -->
+    <FormField
+      v-if="store.fields.operationType !== 'INSTALL'"
+      :label="t('operation.form.currentRevision')"
+      :error="errors.expectedCurrentRevision"
+      required
+    >
+      <template #default="{ id, describedBy, invalid, disabled, required: fieldRequired }">
+        <input
+          :id="id"
+          v-model.number="store.fields.expectedCurrentRevision"
+          class="operation-form__control"
+          type="number"
+          min="1"
+          :aria-describedby="describedBy"
+          :aria-invalid="invalid"
+          :disabled="disabled"
+          :required="fieldRequired"
+        />
+      </template>
+    </FormField>
 
-    <label v-if="store.fields.operationType === 'ROLLBACK'" class="operation-form__field">
-      {{ t('operation.form.targetRevision') }}
-      <input v-model.number="store.fields.targetRevision" type="number" min="1" required />
-      <span v-if="errors.targetRevision" class="operation-form__error">{{ errors.targetRevision }}</span>
-    </label>
+    <FormField
+      v-if="store.fields.operationType === 'ROLLBACK'"
+      :label="t('operation.form.targetRevision')"
+      :error="errors.targetRevision"
+      required
+    >
+      <template #default="{ id, describedBy, invalid, disabled, required: fieldRequired }">
+        <input
+          :id="id"
+          v-model.number="store.fields.targetRevision"
+          class="operation-form__control"
+          type="number"
+          min="1"
+          :aria-describedby="describedBy"
+          :aria-invalid="invalid"
+          :disabled="disabled"
+          :required="fieldRequired"
+        />
+      </template>
+    </FormField>
 
     <PatchOverrideEditor
       v-if="store.fields.operationType !== 'ROLLBACK'"
@@ -121,9 +174,13 @@ function prepareConfirmation(): void {
 .operation-form { display: grid; gap: 1.25rem; padding: 1.5rem; border: 1px solid var(--color-border); border-radius: 0.8rem; background: var(--color-surface); }
 .operation-form__types { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.65rem; }
 .operation-form__types label { display: flex; align-items: center; gap: 0.4rem; font-weight: 700; }
-.operation-form__field { display: grid; gap: 0.4rem; color: var(--color-text-secondary); font-weight: 650; }
-.operation-form__field select, .operation-form__field input { min-height: 2.6rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-subtle); border-radius: 0.4rem; background: var(--color-surface); }
+/*
+ * TASK-275: the three controls now live in FormField's slot, which compiles in THIS
+ * component's scope, so a plain class rule still reaches them; the field chrome
+ * (label/error/spacing) belongs to FormField. The class is explicit so the radio
+ * inputs inside the fieldset keep the UA default look.
+ */
+.operation-form__control { min-height: 2.6rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-subtle); border-radius: 0.4rem; background: var(--color-surface); }
 .operation-form__status { margin: 0; color: var(--color-muted); font-size: var(--font-size-sm); }
-.operation-form__error { color: var(--color-error); font-size: var(--font-size-sm); font-weight: 500; }
 .operation-form__submit { width: fit-content; justify-self: end; padding: 0.7rem 1rem; border: 0; border-radius: 0.45rem; background: var(--color-primary); color: var(--color-on-accent); font-weight: 700; }
 </style>
