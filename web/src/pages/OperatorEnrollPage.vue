@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
+import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import EnrollmentTokenModal from '@/components/operators/EnrollmentTokenModal.vue';
 import PendingTokenPanel from '@/components/operators/PendingTokenPanel.vue';
@@ -20,6 +21,20 @@ const clusterId = computed(() => String(route.params.clusterId));
 const showTokenModal = shallowRef(false);
 const replacePendingToken = shallowRef(false);
 const pendingLoading = shallowRef(false);
+
+/*
+ * TASK-275: both field errors used to render INSIDE the wrapping <label>, so their text
+ * was part of the control's accessible NAME and a describedby pointing at the same node
+ * would have announced it twice. FormField (TASK-268) owns the clean shape; the page
+ * hands it the violation for each field. The server/local validator emits at most one
+ * violation per field, so taking the first is lossless.
+ */
+const operatorNameError = computed(
+  () => store.error?.fieldViolations?.find((item) => item.field === 'operatorName')?.description ?? '',
+);
+const ttlMinutesError = computed(
+  () => store.error?.fieldViolations?.find((item) => item.field === 'ttlMinutes')?.description ?? '',
+);
 
 async function loadPending(): Promise<void> {
   pendingLoading.value = true;
@@ -103,22 +118,47 @@ watch([customerId, clusterId], async () => {
 
       <form class="card" @submit.prevent="openGenerate(false)">
         <h2>{{ t('operator.enroll.parameters') }}</h2>
-        <label>
-          {{ t('operator.enroll.name') }}
-          <input v-model="store.enrollmentForm.operatorName" type="text" maxlength="63" autocomplete="off" placeholder="operator-staging" />
-          <small>{{ t('operator.enroll.nameHint') }}</small>
-          <span v-if="store.error?.fieldViolations?.find((item) => item.field === 'operatorName')" class="error">
-            {{ store.error.fieldViolations.find((item) => item.field === 'operatorName')?.description }}
-          </span>
-        </label>
-        <label>
-          {{ t('operator.enroll.ttl') }}
-          <input v-model.number="store.enrollmentForm.ttlMinutes" type="number" min="0" max="1440" />
-          <small>{{ t('operator.enroll.ttlHint') }}</small>
-          <span v-if="store.error?.fieldViolations?.find((item) => item.field === 'ttlMinutes')" class="error">
-            {{ store.error.fieldViolations.find((item) => item.field === 'ttlMinutes')?.description }}
-          </span>
-        </label>
+        <!--
+         TASK-275: the error is FormField's child (outside `label for`); the hint moved
+         from an in-label <small> to FormField's help, which is described too.
+        -->
+        <FormField
+          :label="t('operator.enroll.name')"
+          :help="t('operator.enroll.nameHint')"
+          :error="operatorNameError"
+        >
+          <template #default="{ id, describedBy, invalid, disabled }">
+            <input
+              :id="id"
+              v-model="store.enrollmentForm.operatorName"
+              type="text"
+              maxlength="63"
+              autocomplete="off"
+              placeholder="operator-staging"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+              :disabled="disabled"
+            />
+          </template>
+        </FormField>
+        <FormField
+          :label="t('operator.enroll.ttl')"
+          :help="t('operator.enroll.ttlHint')"
+          :error="ttlMinutesError"
+        >
+          <template #default="{ id, describedBy, invalid, disabled }">
+            <input
+              :id="id"
+              v-model.number="store.enrollmentForm.ttlMinutes"
+              type="number"
+              min="0"
+              max="1440"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+              :disabled="disabled"
+            />
+          </template>
+        </FormField>
         <p v-if="store.error" class="error" role="alert">{{ store.error.message }}</p>
         <button type="submit" class="primary" :disabled="store.saving || store.pending?.state === 'pending'">
           {{ t('operator.enroll.submit') }}
@@ -173,9 +213,9 @@ h1, h2, p { margin: 0; }
 .eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
 .page__header button, .card button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
 .card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
-.card label { display: grid; gap: 0.35rem; font-weight: 700; }
+/* TASK-275: the label/hint chrome now belongs to FormField; only the control is styled here. */
 .card input { padding: 0.65rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
-.card small, .hint { color: var(--color-muted); font-weight: 400; }
+.hint { color: var(--color-muted); font-weight: 400; }
 .card .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .card button:disabled { cursor: not-allowed; opacity: 0.5; }
 .error { color: var(--color-error); }
