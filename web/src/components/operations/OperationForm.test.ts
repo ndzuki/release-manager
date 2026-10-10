@@ -132,4 +132,28 @@ describe('OperationForm approved ValuesRevision selector', () => {
     expect(alert.text()).toContain('已审批配置版本加载失败');
     expect(alert.text()).toContain('revision list unavailable');
   });
+
+  // REQ-056 D10 invariant at the form boundary: a draft from the old free-text form
+  // must not survive behind the disabled, empty selector and become submittable.
+  it('does not submit a restored draft revision when nothing is approved', async () => {
+    mockedApproved.mockResolvedValue([]);
+    sessionStorage.setItem('op-draft:def-1', JSON.stringify({
+      operationType: 'INSTALL',
+      bundleId: 'bundle-1',
+      valuesRevisionId: 'vr-typed-before-upgrade',
+      patch: [],
+      targetRevision: null,
+    }));
+
+    const { wrapper, store } = await mountForm();
+
+    const select = wrapper.get<HTMLSelectElement>('[data-testid="operation-values-revision"]');
+    expect(select.element.disabled).toBe(true);
+    expect(store.fields.valuesRevisionId).toBeNull();
+
+    await wrapper.get('form').trigger('submit');
+    expect(store.validate()).toEqual({ valuesRevisionId: '请选择已审批的配置版本' });
+    expect(store.step).toBe('form');
+    expect(mockedCreate).not.toHaveBeenCalled();
+  });
 });

@@ -141,12 +141,34 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     revisionsError.value = null;
     try {
       approvedRevisions.value = await listApprovedValuesRevisions(releaseDefinitionId.value);
+      // Reconcile only once the real list is in hand. `approvedRevisions` is empty
+      // while this await is in flight -- and stays empty after a failed load -- so
+      // reconciling any earlier would throw away a legitimate restored draft on every
+      // scope entry. The failure path deliberately keeps the draft value: the list is
+      // unknown, not empty, and validate() already refuses to submit without a match.
+      reconcileValuesRevision();
     } catch (error) {
       approvedRevisions.value = [];
       revisionsError.value = mapOperationError(error).message;
     } finally {
       revisionsLoading.value = false;
     }
+  }
+
+  /*
+   * REQ-056 D10 invariant: the pending ValuesRevision id must belong to the approved
+   * list. A draft written by the old free-text form, or a revision that was
+   * superseded after it was selected, used to survive the selector (which renders
+   * blank/disabled for it) and reach CreateOperation, earning a server-side
+   * revision_not_approved round trip. Clearing it here keeps the form's own state
+   * consistent with what the selector shows; validate() is the second, always-on
+   * guard that also covers ids written straight into the field.
+   */
+  function reconcileValuesRevision(): void {
+    const revisionId = fields.valuesRevisionId;
+    if (!revisionId) return;
+    if (approvedRevisions.value.some((revision) => revision.id === revisionId)) return;
+    fields.valuesRevisionId = null;
   }
 
   function setOperationType(operationType: OperationType): void {
@@ -170,7 +192,13 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     if (fields.operationType !== 'ROLLBACK') {
       if (!fields.bundleId) errors.bundleId = '请选择制品';
       else if (!selectedBundle.value) errors.bundleId = '所选制品未通过验证';
-      if (!fields.valuesRevisionId || fields.valuesRevisionId.trim() === '') {
+      // Membership, not just non-emptiness (REQ-056 D10): the selector only offers
+      // approved ids, so an id outside the list means a stale draft or a field write
+      // and must fail here rather than at the server.
+      const revisionId = fields.valuesRevisionId;
+      if (!revisionId || revisionId.trim() === '') {
+        errors.valuesRevisionId = '请选择已审批的配置版本';
+      } else if (!approvedRevisions.value.some((revision) => revision.id === revisionId)) {
         errors.valuesRevisionId = '请选择已审批的配置版本';
       }
     }

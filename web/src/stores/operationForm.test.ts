@@ -191,4 +191,136 @@ describe('operation form store', () => {
     expect(store.approvedRevisions).toEqual([]);
     expect(store.revisionsError).toContain('revision list unavailable');
   });
+
+  /*
+   * REQ-056 D10 invariant. Picking from the selector is not enough: a draft written
+   * by the old free-text form, or a revision superseded after it was selected, must
+   * never reach CreateOperation only to be refused with revision_not_approved. The
+   * three entries are covered here -- the restored draft (below), the empty approved
+   * list, and an id written straight into the field.
+   */
+  it('drops a restored draft revision that is not in the approved list and refuses to submit', async () => {
+    mockedApproved.mockResolvedValue([approvedRevision('vr-1')]);
+    const clients = mockClients();
+    setOperationClientForTest(clients.operations, clients.bundles);
+    sessionStorage.setItem('op-draft:def-1', JSON.stringify({
+      operationType: 'UPGRADE',
+      bundleId: 'bundle-1',
+      valuesRevisionId: 'vr-typed-before-upgrade',
+      patch: [],
+      targetRevision: null,
+    }));
+
+    const store = useOperationFormStore();
+    await store.setScope('def-1');
+    store.fields.expectedCurrentRevision = 3;
+
+    expect(store.fields.valuesRevisionId).toBeNull();
+    expect(store.validate()).toEqual({ valuesRevisionId: '请选择已审批的配置版本' });
+    expect(await store.submit()).toBeNull();
+    expect(clients.operations.createOperation).not.toHaveBeenCalled();
+  });
+
+  // The empty list is what disables the selector; a value only a stale draft can
+  // still carry must not make the form submittable behind that disabled control.
+  it('refuses to submit a draft revision when no revision is approved', async () => {
+    mockedApproved.mockResolvedValue([]);
+    const clients = mockClients();
+    setOperationClientForTest(clients.operations, clients.bundles);
+    sessionStorage.setItem('op-draft:def-1', JSON.stringify({
+      operationType: 'UPGRADE',
+      bundleId: 'bundle-1',
+      valuesRevisionId: 'vr-1',
+      patch: [],
+      targetRevision: null,
+    }));
+
+    const store = useOperationFormStore();
+    await store.setScope('def-1');
+    store.fields.expectedCurrentRevision = 3;
+
+    expect(store.approvedRevisions).toEqual([]);
+    expect(store.fields.valuesRevisionId).toBeNull();
+    expect(store.validate()).toEqual({ valuesRevisionId: '请选择已审批的配置版本' });
+    expect(await store.submit()).toBeNull();
+    expect(clients.operations.createOperation).not.toHaveBeenCalled();
+  });
+
+  // Negative control for the two above: an approved draft id still submits, so the
+  // guard is not a blanket refusal of restored drafts.
+  it('submits a restored draft revision that is in the approved list', async () => {
+    mockedApproved.mockResolvedValue([approvedRevision('vr-1')]);
+    const clients = mockClients();
+    setOperationClientForTest(clients.operations, clients.bundles);
+    sessionStorage.setItem('op-draft:def-1', JSON.stringify({
+      operationType: 'UPGRADE',
+      bundleId: 'bundle-1',
+      valuesRevisionId: 'vr-1',
+      patch: [],
+      targetRevision: null,
+    }));
+
+    const store = useOperationFormStore();
+    await store.setScope('def-1');
+    store.fields.expectedCurrentRevision = 3;
+
+    expect(store.fields.valuesRevisionId).toBe('vr-1');
+    expect(store.validate()).toEqual({});
+    await expect(store.submit()).resolves.toBe('op-created');
+    expect(clients.operations.createOperation).toHaveBeenCalledTimes(1);
+    const request = vi.mocked(clients.operations.createOperation).mock.calls[0]?.[0];
+    expect(request?.valuesRevisionId).toBe('vr-1');
+  });
+
+  /*
+   * The async-ordering risk of the reconciliation: `approvedRevisions` is empty while
+   * the list is in flight, so clearing the draft at that moment would silently drop
+   * every legitimate restored selection. The value must survive the await; only a
+   * resolved list may clear it.
+   */
+  it('keeps a restored draft revision while the approved list is still loading', async () => {
+    let resolveApproved: (revisions: ValuesRevision[]) => void = () => {};
+    mockedApproved.mockImplementation(
+      () => new Promise<ValuesRevision[]>((resolve) => { resolveApproved = resolve; }),
+    );
+    sessionStorage.setItem('op-draft:def-1', JSON.stringify({
+      operationType: 'UPGRADE',
+      bundleId: 'bundle-1',
+      valuesRevisionId: 'vr-1',
+      patch: [],
+      targetRevision: null,
+    }));
+
+    const store = useOperationFormStore();
+    const scope = store.setScope('def-1');
+    await vi.waitFor(() => expect(mockedApproved).toHaveBeenCalled());
+
+    expect(store.revisionsLoading).toBe(true);
+    expect(store.fields.valuesRevisionId).toBe('vr-1');
+    store.fields.expectedCurrentRevision = 3;
+    // While the list is unknown the submit is fail-closed (validate() cannot confirm
+    // membership), but the draft value itself is untouched.
+    expect(store.validate()).toEqual({ valuesRevisionId: '请选择已审批的配置版本' });
+
+    resolveApproved([approvedRevision('vr-1')]);
+    await scope;
+
+    expect(store.fields.valuesRevisionId).toBe('vr-1');
+    expect(store.validate()).toEqual({});
+  });
+
+  // validate() is the always-on guard for ids that never came from the draft: the
+  // store's own field is writable, so membership cannot live in the loader alone.
+  it('refuses a revision id written straight into the field', async () => {
+    const clients = mockClients();
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const store = useOperationFormStore();
+    await store.setScope('def-1');
+    store.fields.bundleId = 'bundle-1';
+    store.fields.valuesRevisionId = 'vr-not-approved';
+
+    expect(store.validate()).toEqual({ valuesRevisionId: '请选择已审批的配置版本' });
+    expect(await store.submit()).toBeNull();
+    expect(clients.operations.createOperation).not.toHaveBeenCalled();
+  });
 });
