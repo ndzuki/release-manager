@@ -536,6 +536,40 @@ func migrateLegacy(db *sql.DB) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}
+	if err := optimizePlannerStatistics(db); err != nil {
+		return err
+	}
+	return nil
+}
+
+// optimizePlannerStatistics refreshes SQLite planner statistics once the DDL
+// above has been committed, so the planner can choose the ordered partial index
+// behind ListNonTerminalScoped on its own merits instead of being pinned to it
+// with INDEXED BY (TASK-278 review follow-up).
+//
+// It is deliberately PRAGMA optimize and not a bare ANALYZE. On an empty
+// database ANALYZE writes a degenerate sqlite_stat1 row ("operations",
+// "idx_operations_non_terminal_created", "0 0 0"); the fresh-database fast path
+// clones that schema template into every new store, and once real rows arrive
+// the stale zero row makes the planner treat the partial index as free and pin
+// BOTH narrow and wide scopes to it -- exactly the regression the pin caused.
+// PRAGMA optimize reads the schema cookie and the existing stat1 rows and is a
+// no-op when there is nothing worth analyzing (empty database, or fresh
+// statistics), so the empty-database case leaves no misleading statistics behind
+// and the steady-state cost is a schema check, not another full scan. On a
+// database that already carries operations it runs the analysis the planner
+// needs; on the first upgrade it does so because the new index changes the
+// schema.
+//
+// The trade-off is explicit: a database that starts empty and is populated later
+// keeps the planner's default plan until the next Open runs the migration again
+// (a process restart or store reopen). That matches the "statistics arrive with
+// the next migration" contract of the index itself, and it is strictly better
+// than the pin, which was wrong for every narrow scope regardless of statistics.
+func optimizePlannerStatistics(db *sql.DB) error {
+	if _, err := db.ExecContext(context.Background(), "PRAGMA optimize"); err != nil {
+		return fmt.Errorf("optimize planner statistics: %w", err)
+	}
 	return nil
 }
 
@@ -664,6 +698,9 @@ func migrateFresh(db *sql.DB, ddl, seed string) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
+	}
+	if err := optimizePlannerStatistics(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -2000,6 +2037,22 @@ var migrationStatements = []string{
 	// fresh databases match. Mirrors
 	// migrations/000031_drop_preflight_results.up.sql.
 	`DROP TABLE IF EXISTS preflight_results`,
+
+	// TASK-278 (follow-up to TASK-276 review A3): ordered partial index behind the
+	// cross-release non-terminal feed (ListNonTerminalScoped). Mirrors
+	// migrations/000034_operations_non_terminal_index.up.sql: the predicate
+	// repeats store.OperationStatus.IsTerminal's terminal set and the key order
+	// mirrors the feed's ORDER BY (created_at ASC, id ASC). The feed SQL is not
+	// pinned on either engine. PostgreSQL selects the index on its own for a wide
+	// scope (PostgreSQL 16, real migrations, ANALYZE, 30k operations with one
+	// non-terminal row per definition: Index Scan with no Sort, 0.11ms / 66
+	// buffers versus a Seq Scan, Hash Join and Sort at 3.0ms / 635 buffers once
+	// the index is dropped). SQLite is given sqlite_stat1 by the post-commit
+	// PRAGMA optimize below (optimizePlannerStatistics), which keeps the narrow
+	// definition-driven plan and takes this index for a wide one.
+	`CREATE INDEX IF NOT EXISTS idx_operations_non_terminal_created
+	 ON operations(created_at, id)
+	 WHERE status NOT IN ('succeeded','failed','cancelled','timeout')`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

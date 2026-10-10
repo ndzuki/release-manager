@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	authctx "github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/contracts"
 	"github.com/ndzuki/release-manager/internal/store"
 )
@@ -136,6 +137,123 @@ func TestListNonTerminalOperationsScopesToBoundCustomers(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.Equal(t, "binding_revoked", connectErrorReason(err))
+}
+
+// seedOrgMember creates an organization with one deployer member so a test can
+// issue the feed as an actor whose scope is independent of seedDefinition's
+// org-001.
+func seedOrgMember(t *testing.T, st store.Store, orgID, userID string) {
+	t.Helper()
+	require.NoError(t, st.Organizations().Create(t.Context(), &store.Organization{ID: orgID, Name: orgID}))
+	require.NoError(t, st.Users().Create(t.Context(), &store.User{
+		ID: userID, Username: userID, Status: store.UserActive,
+	}))
+	require.NoError(t, st.OrgMembers().Create(t.Context(), &store.OrganizationMember{
+		OrgID: orgID, UserID: userID, Role: store.RoleDeployer,
+	}))
+}
+
+// TestListNonTerminalOperationsHidesRevokedBindings covers AC-278-01: a binding
+// that was active and has since been revoked must take its customer's
+// non-terminal operations out of the feed. The scoping fixture above binds the
+// caller to some customers and not others but holds no revoked binding, so the
+// handler's `binding.Status == store.BindingActive` filter is only falsifiable
+// here -- treating every listed binding as active makes this test fail while the
+// rest of the suite stays green (TASK-278 mutation evidence).
+func TestListNonTerminalOperationsHidesRevokedBindings(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	require.NoError(t, createCustomerViaManagement(t.Context(), st, &store.Customer{
+		ID: "cust-revoked", Name: "Revoked Customer", Slug: "revoked-customer",
+	}))
+	require.NoError(t, st.Bindings().Create(t.Context(), &store.OrgCustomerBinding{
+		ID: "binding-revoked", OrgID: "org-001", CustomerID: "cust-revoked",
+	}))
+	// The binding is created active and revoked afterwards, so the fixture
+	// exercises the status transition rather than a missing row.
+	require.NoError(t, st.Bindings().SetStatus(t.Context(), "binding-revoked", store.BindingRevoked))
+	revoked, err := st.Bindings().Get(t.Context(), "binding-revoked")
+	require.NoError(t, err)
+	require.Equal(t, store.BindingRevoked, revoked.Status, "fixture must actually revoke the binding")
+
+	seedBoundDefinition(t, st, "def-revoked", "revoked-release", "cust-revoked")
+
+	base := time.Date(2026, time.October, 10, 3, 0, 0, 0, time.UTC)
+	seedOperationAt(t, st, "op-visible", "def-001", store.OperationInstall, store.StatusRunning, base)
+	seedOperationAt(t, st, "op-revoked", "def-revoked", store.OperationUpgrade, store.StatusQueued, base.Add(time.Minute))
+
+	resp, err := svc.ListNonTerminalOperations(deployerCtx(), connect.NewRequest(
+		&orchestratorv1.ListNonTerminalOperationsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.GetOperations(), 1, "a revoked binding's operations must not be visible")
+	assert.Equal(t, "op-visible", resp.Msg.GetOperations()[0].GetOperationId())
+
+	// The excluded row is genuinely non-terminal: the unscoped enumeration still
+	// sees it, so the exclusion above is the binding status at work.
+	unscoped, err := st.Operations().ListNonTerminal(t.Context())
+	require.NoError(t, err)
+	unscopedIDs := make([]string, 0, len(unscoped))
+	for _, operation := range unscoped {
+		unscopedIDs = append(unscopedIDs, operation.ID)
+	}
+	assert.Contains(t, unscopedIDs, "op-revoked")
+
+	// Naming the revoked customer is refused, not silently empty.
+	_, err = svc.ListNonTerminalOperations(deployerCtx(), connect.NewRequest(
+		&orchestratorv1.ListNonTerminalOperationsRequest{CustomerId: "cust-revoked"}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+	assert.Equal(t, "binding_revoked", connectErrorReason(err))
+}
+
+// TestListNonTerminalOperationsEmptyScopeReturnsEmptyPage covers AC-278-02: an
+// organization whose scope resolves to nothing -- no binding at all, or only a
+// revoked one -- gets a well-formed empty page (no error, no next_page_token)
+// rather than a fallback to the unscoped feed.
+func TestListNonTerminalOperationsEmptyScopeReturnsEmptyPage(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+
+	// A revoked customer holding a non-terminal operation of its own, so the
+	// empty page cannot be explained by an empty operations table.
+	require.NoError(t, createCustomerViaManagement(t.Context(), st, &store.Customer{
+		ID: "cust-revoked", Name: "Revoked Customer", Slug: "revoked-customer",
+	}))
+	seedBoundDefinition(t, st, "def-revoked", "revoked-release", "cust-revoked")
+	base := time.Date(2026, time.October, 10, 4, 0, 0, 0, time.UTC)
+	seedOperationAt(t, st, "op-revoked", "def-revoked", store.OperationInstall, store.StatusRunning, base)
+	seedOperationAt(t, st, "op-cust001", "def-001", store.OperationInstall, store.StatusPending, base.Add(time.Minute))
+
+	// org-002 has exactly one binding, to cust-revoked, and it is revoked.
+	seedOrgMember(t, st, "org-002", "user-002")
+	require.NoError(t, st.Bindings().Create(t.Context(), &store.OrgCustomerBinding{
+		ID: "binding-002", OrgID: "org-002", CustomerID: "cust-revoked",
+	}))
+	require.NoError(t, st.Bindings().SetStatus(t.Context(), "binding-002", store.BindingRevoked))
+	// org-003 has no bindings at all.
+	seedOrgMember(t, st, "org-003", "user-003")
+
+	tests := []struct {
+		name, orgID, userID string
+	}{
+		{name: "only a revoked binding", orgID: "org-002", userID: "user-002"},
+		{name: "no bindings", orgID: "org-003", userID: "user-003"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := authctx.WithActor(context.Background(), authctx.Actor{
+				UserID: tt.userID, OrganizationID: tt.orgID, Roles: []string{string(store.RoleDeployer)},
+			})
+			resp, err := svc.ListNonTerminalOperations(ctx, connect.NewRequest(
+				&orchestratorv1.ListNonTerminalOperationsRequest{}))
+			require.NoError(t, err, "an empty scope is a valid page, not an error")
+			assert.Empty(t, resp.Msg.GetOperations())
+			assert.Empty(t, resp.Msg.GetNextPageToken(), "an empty page has no continuation")
+		})
+	}
 }
 
 // TestListNonTerminalOperationsPaginatesOldestFirst walks the cursor across a
