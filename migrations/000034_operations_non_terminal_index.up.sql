@@ -2,24 +2,36 @@
 -- (ListNonTerminalScoped) filters status NOT IN (the terminal set) and orders by
 -- (created_at, id) ascending. The pre-existing operations indexes cannot serve
 -- that order -- idx_operations_definition is keyed (release_definition_id, status)
--- -- so for a wide scope the planner drove from the in-scope definitions and had
--- to sort the survivors. Observed on PostgreSQL 16 with the real migrations, 30k
--- operations / 1k definitions and every customer in scope: Seq Scan on operations
--- with 29,000 rows removed by the status filter, Hash Join, then a Sort of the
--- survivors (3.0ms, 635 buffers). A narrow scope is cheap on that plan, so the
--- index must not be pinned: forced onto it, a narrow page walks the whole global
--- non-terminal index instead (SQLite, same shape: 18.2ms pinned versus 154us with
--- the planner's own choice).
+-- -- so without this one the planner drives from the in-scope definitions and
+-- sorts the survivors. A narrow scope is cheap on that plan, so the index must
+-- not be pinned: forced onto it, a narrow page walks the whole global non-terminal
+-- index instead.
+--
+-- PostgreSQL 16 (real migrations, EXPLAIN (ANALYZE, BUFFERS) through psql, so
+-- no -race applies; 30k operations / 1k definitions / 3.3% non-terminal, every
+-- customer in scope, page 20 plus the next-page probe). Without the index: Seq
+-- Scan on operations with 29,000 rows removed by the status filter, Hash Join,
+-- then a Sort of the survivors (3.0ms, 635 buffers). With it: Index Scan with no
+-- Sort (0.11ms, 66 buffers) -- the planner selects it on its own, with no hint.
+--
+-- SQLite (modernc driver, 90k operations / 1k definitions / 100 customers, the
+-- narrow customer's ten non-terminal rows newest in the timeline, page 20 plus
+-- the probe, three warmups and the median of thirty timed runs, no -race). With
+-- no statistics the wide page takes 28.6ms; once the migration's post-commit
+-- sqlite_stat1 lands (optimizePlannerStatistics, internal/store/sqlite/db.go) the
+-- planner takes this index and the page drops to 413us. Pinned, the same plan
+-- ignores scope selectivity: a narrow page over one customer of that backlog
+-- took 18.2ms versus 154us with the planner's own choice (~115x), and that
+-- regression grows with the non-terminal share of the table (4.5x at 1%
+-- non-terminal, 21.6x at 10% in the TASK-278 review harness, 255x on its first
+-- fixture, whose share was higher and was not recorded).
 --
 -- This partial index keeps only non-terminal rows, in feed order, so the page
 -- becomes an ordered index scan that can stop at LIMIT. Column order mirrors the
 -- ORDER BY (created_at ASC, id ASC); id is required so rows sharing one
 -- created_at need no secondary sort. The predicate repeats the terminal set of
 -- store.OperationStatus.IsTerminal (internal/store/store.go) and of the
--- engine implementations' ListNonTerminalScoped. Neither engine pins it: with the
--- index present PostgreSQL selects it for the wide feed on its own (Index Scan,
--- no Sort; 0.11ms, 66 buffers), and SQLite learns it from the migration-time
--- PRAGMA optimize.
+-- engine implementations' ListNonTerminalScoped. Neither engine pins it.
 CREATE INDEX IF NOT EXISTS idx_operations_non_terminal_created
     ON operations(created_at, id)
     WHERE status NOT IN ('succeeded', 'failed', 'cancelled', 'timeout');

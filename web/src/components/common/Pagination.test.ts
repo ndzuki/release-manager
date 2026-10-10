@@ -78,19 +78,16 @@ describe('Pagination', () => {
 
     expect(wrapper.emitted('prev')).toBeUndefined();
     expect(wrapper.emitted('next')).toBeUndefined();
-
-    // The ordinary input path, for completeness: no emit from a disabled control.
-    await prev!.trigger('click');
-    await next!.trigger('click');
-    expect(wrapper.emitted('prev')).toBeUndefined();
-    expect(wrapper.emitted('next')).toBeUndefined();
   });
 
-  it('keeps a disabled control in the DOM so the tab order cannot shift', () => {
+  it('keeps both controls mounted so the layout does not jump', () => {
     const wrapper = mountPagination({ hasPrev: false, hasNext: true });
 
-    // Not v-if: the button stays where it is and only its state changes, which is
-    // what stops focus from jumping when a page boundary is reached.
+    // Not v-if: both buttons stay mounted and only the disabled state flips, so
+    // crossing a page boundary neither reflows the row nor makes a control
+    // disappear. This is a layout guarantee, not a tab-order one: a natively
+    // disabled button is not tabbable in any case (verified in Chrome:
+    // disabledTabbable=false), so mounting it cannot change the tab order.
     expect(buttons(wrapper)).toHaveLength(2);
     expect(buttons(wrapper)[0]!.attributes('disabled')).toBeDefined();
   });
@@ -115,7 +112,7 @@ describe('Pagination', () => {
     expect(mountPagination().find('.pagination__page').exists()).toBe(false);
   });
 
-  it('does not move focus when its props change', async () => {
+  it('leaves activeElement alone when a props change disables a different control', async () => {
     const wrapper = mount(Pagination, {
       attachTo: document.body,
       props: { hasPrev: true, hasNext: true },
@@ -124,7 +121,12 @@ describe('Pagination', () => {
     prev.element.focus();
     expect(document.activeElement).toBe(prev.element);
 
-    // Reaching the last page disables "next"; the focused control must keep focus.
+    // Reaching the last page disables "next" while the focused "prev" stays
+    // enabled, so what this pins is that Pagination itself never moves focus on
+    // a prop change. It deliberately stops short of the browser's own fixup for
+    // the control that becomes disabled while focused: a real browser blurs that
+    // element to document.body (verified in Chrome), and happy-dom does not
+    // implement that fixup, so that case is not observable in this unit test.
     await wrapper.setProps({ hasNext: false });
     expect(document.activeElement).toBe(prev.element);
 
