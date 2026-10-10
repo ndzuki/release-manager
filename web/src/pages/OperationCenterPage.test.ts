@@ -36,6 +36,7 @@ function summary(overrides: Record<string, unknown> = {}) {
     releaseDefinitionName: 'checkout',
     customerId: 'cust-1',
     customerName: 'Acme',
+    clusterId: 'cluster-1',
     createdAt: timestampFromDate(new Date('2026-10-01T00:00:00Z')),
     updatedAt: timestampFromDate(new Date('2026-10-01T00:05:00Z')),
     revision: 7,
@@ -54,8 +55,8 @@ function feedClient(handler: (request: ListNonTerminalOperationsRequest) => Prom
   return mock;
 }
 
-async function mountCenter(): Promise<VueWrapper> {
-  const router = createAppRouter(createMemoryHistory(), true, true, true);
+async function mountCenter(releaseInventoryEnabled = true): Promise<VueWrapper> {
+  const router = createAppRouter(createMemoryHistory(), releaseInventoryEnabled, true, true);
   await router.push('/operations');
   await router.isReady();
   const wrapper = mount(OperationCenterPage, { global: { plugins: [router] } });
@@ -131,8 +132,25 @@ describe('OperationCenterPage states', () => {
     expect(rows[1]!.text()).toContain('紧急');
     expect(rows[0]!.get('a').attributes('href')).toContain('/operations/op-1');
     expect(rows[0]!.get('a').attributes('href')).toContain('releaseName=checkout');
+    // TASK-279: the row links into the canonical release-scoped route, built from
+    // the cluster the aggregate row now carries, so the detail page gets the real
+    // context (and therefore its full action set) instead of the scope-less fallback.
+    expect(rows[0]!.get('a').attributes('href')).toBe(
+      '/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-1?releaseName=checkout',
+    );
     // The centre's page size is part of the contract the server clamps.
     expect(mock.mock.calls[0]![0].pageSize).toBe(20);
+  });
+
+  it('falls back to the scope-less detail link when the release inventory is disabled', async () => {
+    feedClient(async () => page([summary()]));
+
+    // With the release inventory off, router/index.ts registers no nested
+    // release-scoped route; the centre must not link at a URL the router answers
+    // with NotFound (TASK-279 keeps the scope-less route as that fallback).
+    const wrapper = await mountCenter(false);
+
+    expect(wrapper.get('tbody tr a').attributes('href')).toBe('/operations/op-1?releaseName=checkout');
   });
 
   it('renders a retryable error state when the read fails for another reason', async () => {

@@ -2032,6 +2032,12 @@ message NonTerminalOperationSummary {
   // otherwise the revision it was computed against (same rule as
   // OperationSummary.revision).
   int32 revision = 11;
+  // Cluster the operation's release definition targets (TASK-279). The console
+  // builds the release-scoped detail route
+  // (/customers/:customerId/clusters/:clusterId/releases/:releaseId/operations/:operationId)
+  // from an aggregate row, and that route requires the cluster id. Only the id
+  // travels: no console surface renders a cluster display name.
+  string cluster_id = 12;
 }
 
 message BundleImage {

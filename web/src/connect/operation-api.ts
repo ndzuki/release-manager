@@ -244,6 +244,12 @@ export type NonTerminalOperationItem = {
   releaseDefinitionName: string;
   customerId: string;
   customerName: string;
+  /**
+   * Cluster the operation's release definition targets (TASK-279). The detail
+   * page's canonical route is release-scoped, so this is what lets the centre
+   * hand it the real cluster context instead of the scope-less fallback.
+   */
+  clusterId: string;
   createdAt: string | null;
   updatedAt: string | null;
   emergency: boolean;
@@ -294,6 +300,7 @@ export async function listNonTerminalOperations(
       releaseDefinitionName: item.releaseDefinitionName,
       customerId: item.customerId,
       customerName: item.customerName,
+      clusterId: item.clusterId,
       createdAt: item.createdAt ? timestampDate(item.createdAt).toISOString() : null,
       updatedAt: item.updatedAt ? timestampDate(item.updatedAt).toISOString() : null,
       emergency: item.emergency,

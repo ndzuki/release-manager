@@ -2064,12 +2064,15 @@ type NonTerminalOperationPage struct {
 // NonTerminalOperationRow is one aggregated read row: the operation plus the
 // release definition and customer display identity the console renders. The
 // identity is joined in the same query so a page costs one read (no N+1 name
-// lookup).
+// lookup). ClusterID (TASK-279) is the cluster the definition targets: the
+// console needs it to build the release-scoped detail route from an aggregate
+// row, whose nested route requires customer, cluster and release.
 type NonTerminalOperationRow struct {
 	Operation      *Operation
 	DefinitionName string
 	CustomerID     string
 	CustomerName   string
+	ClusterID      string
 }
 
 // OperationStateChangedEvent is emitted when an operation's status changes (REQ-023).

@@ -919,8 +919,12 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 // The customer name is coalesced because the join is a LEFT JOIN: a definition
 // whose customer row is missing still belongs in an operations queue (the scope
 // key is release_definitions.customer_id, which is always present).
+// release_definitions.cluster_id carries the cluster the operation targets
+// (TASK-279) so the console can build the release-scoped detail route; the
+// column is selected from the definition already joined for the scope
+// predicate, so it adds no join and leaves the plan regression's shape alone.
 const nonTerminalOperationColumns = operationColumns + `,
-    release_definitions.name, release_definitions.customer_id, COALESCE(customers.name, '')`
+    release_definitions.name, release_definitions.customer_id, COALESCE(customers.name, ''), release_definitions.cluster_id`
 
 // nonTerminalScopedIndex is the ordered partial index behind the cross-release
 // non-terminal feed (migrations/000034_operations_non_terminal_index.up.sql; the
@@ -1075,12 +1079,12 @@ func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 }
 
 // scanNonTerminalOperationRow scans the joined shape of ListNonTerminalScoped:
-// operationColumns followed by the release definition name, customer id and
-// customer name.
+// operationColumns followed by the release definition name, customer id,
+// customer name and the definition's cluster id.
 func scanNonTerminalOperationRow(row interface{ Scan(...interface{}) error }) (*store.NonTerminalOperationRow, error) {
 	scan := &operationRowScan{}
-	var definitionName, customerID, customerName string
-	dests := append(scan.dests(), &definitionName, &customerID, &customerName)
+	var definitionName, customerID, customerName, clusterID string
+	dests := append(scan.dests(), &definitionName, &customerID, &customerName, &clusterID)
 	if err := row.Scan(dests...); err != nil {
 		return nil, fmt.Errorf("scan non-terminal operation row: %w", err)
 	}
@@ -1093,6 +1097,7 @@ func scanNonTerminalOperationRow(row interface{ Scan(...interface{}) error }) (*
 		DefinitionName: definitionName,
 		CustomerID:     customerID,
 		CustomerName:   customerName,
+		ClusterID:      clusterID,
 	}, nil
 }
 

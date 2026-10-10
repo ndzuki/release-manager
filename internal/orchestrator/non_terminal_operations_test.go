@@ -95,6 +95,9 @@ func TestListNonTerminalOperationsScopesToBoundCustomers(t *testing.T) {
 	assert.Equal(t, "my-release", first.GetReleaseDefinitionName())
 	assert.Equal(t, "cust-001", first.GetCustomerId())
 	assert.Equal(t, "Test Customer", first.GetCustomerName())
+	// TASK-279 / AC-279-01: the row carries the cluster its definition targets,
+	// so the console can build the release-scoped detail route from the feed.
+	assert.Equal(t, "cls-001", first.GetClusterId())
 	assert.Equal(t, string(store.OperationUpgrade), first.GetOperationType())
 	assert.Equal(t, string(store.StatusRunning), first.GetState())
 	assert.Equal(t, base, first.GetCreatedAt().AsTime())
@@ -137,6 +140,34 @@ func TestListNonTerminalOperationsScopesToBoundCustomers(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
 	assert.Equal(t, "binding_revoked", connectErrorReason(err))
+}
+
+// TestListNonTerminalOperationsCarriesEachRowsCluster covers the per-row half of
+// TASK-279 AC-279-01: two rows in one page whose definitions target different
+// clusters must each carry their own definition's cluster. A mapping that reuses
+// one row's cluster for the page, or drops it, fails here while a single-row
+// assertion cannot tell those apart.
+func TestListNonTerminalOperationsCarriesEachRowsCluster(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st) // def-001 -> cust-001 / cls-001
+
+	require.NoError(t, st.Definitions().Create(t.Context(), &store.ReleaseDefinition{
+		ID: "def-cluster-2", Name: "second-release", CustomerID: "cust-001", ClusterID: "cls-002",
+		Namespace: "default", ReleaseName: "def-cluster-2", Status: store.DefStatusActive,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}, nil))
+
+	base := time.Date(2026, time.October, 10, 5, 0, 0, 0, time.UTC)
+	seedOperationAt(t, st, "op-cluster-1", "def-001", store.OperationInstall, store.StatusRunning, base)
+	seedOperationAt(t, st, "op-cluster-2", "def-cluster-2", store.OperationUpgrade, store.StatusQueued, base.Add(time.Minute))
+
+	resp, err := svc.ListNonTerminalOperations(deployerCtx(), connect.NewRequest(
+		&orchestratorv1.ListNonTerminalOperationsRequest{}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.GetOperations(), 2)
+	assert.Equal(t, "cls-001", resp.Msg.GetOperations()[0].GetClusterId())
+	assert.Equal(t, "cls-002", resp.Msg.GetOperations()[1].GetClusterId())
 }
 
 // seedOrgMember creates an organization with one deployer member so a test can
