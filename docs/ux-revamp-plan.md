@@ -265,7 +265,7 @@ Bundle 与 Candidate Artifact 浏览/ChangePassword —— 35 项探测 **14 项
 | C1 | 13 篇 contracts 标 `last_verified: 2026-09-22@4f820b7`，该 SHA 在本地任何 ref 均不存在 | `git cat-file -t 4f820b7` → `Not a valid object name` |
 | C2 | `ReleaseSummary.emergency_conflict` proto 是 `bool`、`revert_status_summary` 是 `string`，契约要求结构化对象 | `api/proto/orchestrator/v1/orchestrator.proto:943,945` |
 | C3 | 幂等键位置三方不一致：`connect-surface.md`/`emergency-execution.md` 说 header-only；proto 与 `REQ-058` D14=A 说 body（`idempotency_key = 8`、`request_hash = 9`） | `api/proto/orchestrator/v1/orchestrator.proto`（ExecuteEmergencyChangeRequest）、`Requirements/REQ-058-web-emergency-change.md` |
-| C4 | `ListEmergencyTargetsResponse` 只有 `targets`，无契约要求的 availability/cursor | `api/proto/orchestrator/v1/orchestrator.proto:1528` |
+| C4 | `ListEmergencyTargetsResponse` 只有 `targets`，无契约要求的 availability/cursor | `api/proto/orchestrator/v1/orchestrator.proto:1629-1631` |
 | C5 | `docs/api.md` 关于审计查询字段的陈述与实现相反 | `docs/api.md`（审计章节）vs `internal/audit/audit_service_handler.go:228-259` |
 | C6 | 契约说「`QueryAuditEvents` 只回 4 字段」→ 据此会误判审计页不可用 | 同上 |
 | C7 | `contracts/convergence-flow.md` 仍写 cursor 分页，与 `REQ-058` D18=C「前端本地分页」相反 | 静态清单（`Requirements/REQ-058` 决策记录） |

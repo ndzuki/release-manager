@@ -2025,6 +2025,10 @@ type OperationStore interface {
 	List(ctx context.Context, definitionID string) ([]*Operation, error)
 	GetActiveForDefinition(ctx context.Context, definitionID string) (*Operation, error)
 	ListNonTerminal(ctx context.Context) ([]*Operation, error)
+	// ListNonTerminalScoped is ListNonTerminal with the two properties that make
+	// it safe to expose: a closed customer scope and keyset pagination. The
+	// unscoped ListNonTerminal stays internal to recovery/emergency paths.
+	ListNonTerminalScoped(ctx context.Context, query NonTerminalOperationQuery) (*NonTerminalOperationPage, error)
 	// SavePreflightResult persists the preflight stage results for an operation
 	// (TASK-149 / REQ-056 AC-056-03). The coordinator computes them but only the
 	// error code reaches last_error, so a failed preflight could not show which
@@ -2033,6 +2037,39 @@ type OperationStore interface {
 	// GetPreflightResult reads them back; a nil result means the operation has
 	// not finished preflight yet.
 	GetPreflightResult(ctx context.Context, operationID string) (json.RawMessage, error)
+}
+
+// NonTerminalOperationQuery scopes one page of the cross-release non-terminal
+// operation feed (TASK-276).
+//
+// CustomerIDs is the closed set of customers the caller was authorized for; the
+// store never widens it. An empty set returns no rows, which is the correct
+// answer for an organization with no active binding -- not an unbounded read.
+type NonTerminalOperationQuery struct {
+	CustomerIDs []string
+	PageSize    int
+	HasCursor   bool
+	CursorTime  time.Time
+	CursorID    string
+}
+
+// NonTerminalOperationPage is one page of the feed, oldest first. HasMore is
+// true when at least one row remains after the page, so the caller can mint the
+// next cursor without an extra empty round trip.
+type NonTerminalOperationPage struct {
+	Rows    []*NonTerminalOperationRow
+	HasMore bool
+}
+
+// NonTerminalOperationRow is one aggregated read row: the operation plus the
+// release definition and customer display identity the console renders. The
+// identity is joined in the same query so a page costs one read (no N+1 name
+// lookup).
+type NonTerminalOperationRow struct {
+	Operation      *Operation
+	DefinitionName string
+	CustomerID     string
+	CustomerName   string
 }
 
 // OperationStateChangedEvent is emitted when an operation's status changes (REQ-023).

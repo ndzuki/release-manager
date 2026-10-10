@@ -171,6 +171,7 @@ var procedurePolicies = map[string]procedurePolicy{
 	orchestratorv1connect.OrchestratorServiceListReleasesProcedure:                 {mode: modeCasbin, object: "release", action: "read"},
 	orchestratorv1connect.OrchestratorServiceListReleaseInventoryProcedure:         {mode: modeCasbin, object: "release", action: "read"},
 	orchestratorv1connect.OrchestratorServiceListOperationsProcedure:               {mode: modeCasbin, object: "release", action: "read"},
+	orchestratorv1connect.OrchestratorServiceListNonTerminalOperationsProcedure:    {mode: modeCasbin, object: "release", action: "read", reason: "cross-release non-terminal feed: the interceptor enforces release/read and the request customer_id binding; the handler narrows the page to the organization's active bindings"},
 	orchestratorv1connect.OrchestratorServiceTriggerInventorySyncProcedure:         {mode: modeCasbin, object: "release", action: "write", reason: "manual sync enqueues an operator command, so it is a release write"},
 	orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure:                {mode: modeCasbin, object: "release", action: "write", reason: "also served on the agent gateway leg, where identity comes from the client certificate"},
 	// TrustService

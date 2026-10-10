@@ -32,6 +32,10 @@ const operationSelectColumns = `operations.id, operations.operation_type, operat
 	operations.actor, operations.created_at, operations.updated_at, operations.terminal_at, operations.deadline, operations.last_error,
 	ei.delivery_status, ei.effect_status`
 
+// operationJoin is the emergency_intent projection join every scan of
+// operationSelectColumns needs. SQLite names the same fragment operationJoin.
+const operationJoin = ` LEFT JOIN emergency_intents ei ON ei.operation_id = operations.id`
+
 func (s *operationStore) Create(ctx context.Context, op *store.Operation) error {
 	return createOperation(ctx, s.gorm, op)
 }
@@ -723,6 +727,69 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 	return collectRows(rows, scanOperationFromRows)
 }
 
+// nonTerminalOperationColumns is the joined page shape: the standard operation
+// columns plus the release definition and customer identity the console renders.
+// The customer name is coalesced because the join is a LEFT JOIN: a definition
+// whose customer row is missing still belongs in an operations queue (the scope
+// key is release_definitions.customer_id, which is always present).
+const nonTerminalOperationColumns = operationSelectColumns + `,
+	release_definitions.name, release_definitions.customer_id, COALESCE(customers.name, '')`
+
+// ListNonTerminalScoped is the page-safe cross-release feed (TASK-276): the same
+// non-terminal predicate as ListNonTerminal, but closed over an explicit customer
+// scope and keyset-paginated on (created_at, id) ascending. It deliberately does
+// not accept an empty scope as "all" -- an empty CustomerIDs returns no rows.
+func (s *operationStore) ListNonTerminalScoped(
+	ctx context.Context,
+	query store.NonTerminalOperationQuery,
+) (*store.NonTerminalOperationPage, error) {
+	if len(query.CustomerIDs) == 0 {
+		return &store.NonTerminalOperationPage{}, nil
+	}
+	args := make([]any, 0, len(query.CustomerIDs)+4)
+	for _, customerID := range query.CustomerIDs {
+		args = append(args, customerID)
+	}
+	// The keyset predicate cannot use contracts.KeysetPredicate here: it emits
+	// unqualified created_at/id and this query joins release_definitions, which
+	// has both columns, so the reference would be ambiguous.
+	where := `operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+	  AND release_definitions.customer_id IN (` + placeholders(len(query.CustomerIDs)) + `)`
+	if query.HasCursor {
+		where += ` AND (operations.created_at > ? OR (operations.created_at = ? AND operations.id > ?))`
+		args = append(args, query.CursorTime, query.CursorTime, query.CursorID)
+	}
+	// Fetch one extra row to learn whether a next page exists without an extra
+	// round trip, then trim it off.
+	args = append(args, query.PageSize+1)
+	rows, err := s.gorm.QueryContext(ctx, `
+		SELECT `+nonTerminalOperationColumns+`
+		FROM operations`+operationJoin+`
+		JOIN release_definitions ON release_definitions.id = operations.release_definition_id
+		LEFT JOIN customers ON customers.id = release_definitions.customer_id
+		WHERE `+where+`
+		ORDER BY operations.created_at ASC, operations.id ASC
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list scoped non-terminal operations: %w", err)
+	}
+	defer rows.Close()
+
+	page := &store.NonTerminalOperationPage{}
+	for rows.Next() {
+		row, err := scanNonTerminalOperationRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Rows) == query.PageSize {
+			page.HasMore = true
+			break
+		}
+		page.Rows = append(page.Rows, row)
+	}
+	return page, rows.Err()
+}
+
 type operationQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -746,77 +813,83 @@ func (s *operationStore) GetActiveForDefinition(ctx context.Context, definitionI
 	return scanOperation(row)
 }
 
-func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
-	var (
-		id, opType, status, defID, idemKey, idemScope, reqHash string
-		stateVer, expectedRev, targetRev                       int
-		bundleID, bundleChartRef, bundleChartDigest            string
-		imageRefsJSON, imageDigestsJSON                        []byte
-		policyVersion, valuesRevID, targetOperationID          string
-		valuesPatch                                            []byte
-		patchDigest, effectiveDigest, reason                   string
-		actorJSON                                              string
-		createdAt, updatedAt                                   string
-		terminalAt, deadline                                   *string
-		lastError                                              string
-		deliveryStatus, effectStatus                           sql.NullString
-	)
+// operationRowScan holds the scan destinations for one operations row, in the
+// exact order of operationSelectColumns. scanOperation, scanOperationFromRows and
+// the joined non-terminal page share it so a column can never be added in one
+// place only (the 16-vs-30 mismatch this file documents).
+type operationRowScan struct {
+	id, opType, status, defID, idemKey, idemScope, reqHash string
+	stateVer, expectedRev, targetRev                       int
+	bundleID, bundleChartRef, bundleChartDigest            string
+	imageRefsJSON, imageDigestsJSON                        []byte
+	policyVersion, valuesRevID, targetOperationID          string
+	valuesPatch                                            []byte
+	patchDigest, effectiveDigest, reason                   string
+	actorJSON                                              string
+	createdAt, updatedAt                                   string
+	terminalAt, deadline                                   *string
+	lastError                                              string
+	deliveryStatus, effectStatus                           sql.NullString
+}
 
-	err := row.Scan(
-		&id, &opType, &status, &defID,
-		&idemKey, &idemScope, &reqHash, &stateVer,
-		&bundleID, &bundleChartRef, &bundleChartDigest, &imageRefsJSON, &imageDigestsJSON, &policyVersion,
-		&valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch, &patchDigest, &effectiveDigest, &reason,
-		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
-		&deliveryStatus, &effectStatus,
-	)
-	if err != nil {
+func (r *operationRowScan) dests() []any {
+	return []any{
+		&r.id, &r.opType, &r.status, &r.defID,
+		&r.idemKey, &r.idemScope, &r.reqHash, &r.stateVer,
+		&r.bundleID, &r.bundleChartRef, &r.bundleChartDigest, &r.imageRefsJSON, &r.imageDigestsJSON, &r.policyVersion,
+		&r.valuesRevID, &r.expectedRev, &r.targetRev, &r.targetOperationID, &r.valuesPatch, &r.patchDigest, &r.effectiveDigest, &r.reason,
+		&r.actorJSON, &r.createdAt, &r.updatedAt, &r.terminalAt, &r.deadline, &r.lastError,
+		&r.deliveryStatus, &r.effectStatus,
+	}
+}
+
+func (r *operationRowScan) operation() (*store.Operation, error) {
+	return buildOperation(r.id, r.opType, r.status, r.defID, r.idemKey, r.idemScope, r.reqHash,
+		r.stateVer, r.bundleID, r.bundleChartRef, r.bundleChartDigest, r.imageRefsJSON, r.imageDigestsJSON, r.policyVersion,
+		r.valuesRevID, r.expectedRev, r.targetRev, r.targetOperationID, r.valuesPatch, r.patchDigest, r.effectiveDigest, r.reason,
+		r.actorJSON, r.createdAt, r.updatedAt, r.terminalAt, r.deadline, r.lastError,
+		r.deliveryStatus, r.effectStatus)
+}
+
+func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
+	scan := &operationRowScan{}
+	if err := row.Scan(scan.dests()...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan operation: %w", err)
 	}
-
-	return buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash,
-		stateVer, bundleID, bundleChartRef, bundleChartDigest, imageRefsJSON, imageDigestsJSON, policyVersion,
-		valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch, patchDigest, effectiveDigest, reason,
-		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError,
-		deliveryStatus, effectStatus)
+	return scan.operation()
 }
 
 func scanOperationFromRows(row rowScanner) (*store.Operation, error) {
-	var (
-		id, opType, status, defID, idemKey, idemScope, reqHash string
-		stateVer, expectedRev, targetRev                       int
-		bundleID, bundleChartRef, bundleChartDigest            string
-		imageRefsJSON, imageDigestsJSON                        []byte
-		policyVersion, valuesRevID, targetOperationID          string
-		valuesPatch                                            []byte
-		patchDigest, effectiveDigest, reason                   string
-		actorJSON                                              string
-		createdAt, updatedAt                                   string
-		terminalAt, deadline                                   *string
-		lastError                                              string
-		deliveryStatus, effectStatus                           sql.NullString
-	)
-
-	err := row.Scan(
-		&id, &opType, &status, &defID,
-		&idemKey, &idemScope, &reqHash, &stateVer,
-		&bundleID, &bundleChartRef, &bundleChartDigest, &imageRefsJSON, &imageDigestsJSON, &policyVersion,
-		&valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch, &patchDigest, &effectiveDigest, &reason,
-		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
-		&deliveryStatus, &effectStatus,
-	)
-	if err != nil {
+	scan := &operationRowScan{}
+	if err := row.Scan(scan.dests()...); err != nil {
 		return nil, fmt.Errorf("scan operation row: %w", err)
 	}
+	return scan.operation()
+}
 
-	return buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash,
-		stateVer, bundleID, bundleChartRef, bundleChartDigest, imageRefsJSON, imageDigestsJSON, policyVersion,
-		valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch, patchDigest, effectiveDigest, reason,
-		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError,
-		deliveryStatus, effectStatus)
+// scanNonTerminalOperationRow scans the joined shape of ListNonTerminalScoped:
+// operationSelectColumns followed by the release definition name, customer id and
+// customer name.
+func scanNonTerminalOperationRow(row rowScanner) (*store.NonTerminalOperationRow, error) {
+	scan := &operationRowScan{}
+	var definitionName, customerID, customerName string
+	dests := append(scan.dests(), &definitionName, &customerID, &customerName)
+	if err := row.Scan(dests...); err != nil {
+		return nil, fmt.Errorf("scan non-terminal operation row: %w", err)
+	}
+	operation, err := scan.operation()
+	if err != nil {
+		return nil, err
+	}
+	return &store.NonTerminalOperationRow{
+		Operation:      operation,
+		DefinitionName: definitionName,
+		CustomerID:     customerID,
+		CustomerName:   customerName,
+	}, nil
 }
 
 func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash string,

@@ -89,7 +89,8 @@ func nonWildcardGrants() map[string]bool {
 // its procedure.
 func TestProcedurePolicyRegistryIsExhaustive(t *testing.T) {
 	procedures := declaredProcedures(t)
-	require.Len(t, procedures, 105, "the contract procedure count changed; classify the new/removed RPCs")
+	// TASK-276 added ListNonTerminalOperations (orchestrator.v1, release/read).
+	require.Len(t, procedures, 106, "the contract procedure count changed; classify the new/removed RPCs")
 	for _, problem := range registryProblems(procedures) {
 		t.Error(problem)
 	}

@@ -1509,6 +1509,32 @@ service OrchestratorService {
   // Implemented since TASK-095 (internal/orchestrator/operations_query.go); the
   // "always UNIMPLEMENTED" note that used to sit here was stale.
   rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+  // Cross-release feed of NON-TERMINAL operations, oldest first, keyset-paginated
+  // on (created_at, id). This is not ListOperations: that one is scoped to a single
+  // release definition and walks its newest-first history, while this one is the
+  // "waiting the longest, handle first" queue the console Operation hub and the
+  // home "to do" widget read (TASK-276/277).
+  // The page is scoped to the caller's organization: only operations whose release
+  // definition belongs to a customer the caller's organization has an ACTIVE
+  // binding with are visible, and a row outside that scope is ABSENT rather than an
+  // error -- a list over an organization-scoped resource cannot refuse row by row.
+  // `customer_id` narrows the scope to one of those customers; naming a customer
+  // without an active binding answers PERMISSION_DENIED (`binding_revoked`, the
+  // interceptor's binding check enforces the same rule before the handler runs).
+  // Omitted `customer_id` does NOT answer PERMISSION_DENIED -- unlike ListBundles
+  // there is no required scope field, because the organization scope itself is the
+  // bounded view.
+  // `page_size` defaults to 20 and is clamped to [1, 100]
+  // (contracts.NormalizePageSize); a negative value answers INVALID_ARGUMENT
+  // (`invalid_page_size`). `page_token` is an opaque (created_at, id) cursor minted
+  // by the previous response's next_page_token; a malformed token answers
+  // INVALID_ARGUMENT (`invalid_page_token`).
+  // Terminal operations (succeeded/failed/cancelled/timeout) are excluded by
+  // definition, so there is no status filter. Each row carries the release
+  // definition and customer display identity inline, so a page costs one read.
+  // UNAUTHENTICATED when no caller identity can be resolved.
+  // Requires release/read (the pair ListOperations and GetOperation use).
+  rpc ListNonTerminalOperations(ListNonTerminalOperationsRequest) returns (ListNonTerminalOperationsResponse);
   // Asks the orchestrator to schedule an inventory refresh for one cluster and
   // returns immediately; the agent reports the result through SyncInventory
   // later.
@@ -1965,6 +1991,45 @@ message OperationSummary {
   string state = 3;
   int32 revision = 4;
   google.protobuf.Timestamp created_at = 5;
+}
+
+// ── Cross-release non-terminal operation feed (TASK-276) ──────────
+
+// ListNonTerminalOperationsRequest pages the cross-release non-terminal
+// operation feed. `customer_id` is optional; when empty the page covers every
+// customer the caller's organization has an active binding with.
+message ListNonTerminalOperationsRequest {
+  int32 page_size = 1; // default 20, maximum 100 (clamped)
+  string page_token = 2; // opaque (created_at, id) cursor
+  string customer_id = 3; // optional scope narrowing, must be bound to the caller
+}
+
+message ListNonTerminalOperationsResponse {
+  repeated NonTerminalOperationSummary operations = 1;
+  // Empty on the last page. Echo it back as page_token to continue.
+  string next_page_token = 2;
+}
+
+// NonTerminalOperationSummary is one aggregated row: the operation plus the
+// release definition and customer identity the console renders. They travel
+// inline so one page costs a single store read instead of an N+1 name lookup.
+message NonTerminalOperationSummary {
+  string operation_id = 1;
+  string release_definition_id = 2;
+  string release_definition_name = 3;
+  string customer_id = 4;
+  string customer_name = 5;
+  string operation_type = 6; // INSTALL / UPGRADE / ROLLBACK / EMERGENCY
+  string state = 7; // non-terminal operation state
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+  // True when the operation is an EMERGENCY change, i.e. it carries an emergency
+  // intent; the console badges these so an emergency is never buried in the queue.
+  bool emergency = 10;
+  // Helm revision the operation acts on: the ROLLBACK target when one is set,
+  // otherwise the revision it was computed against (same rule as
+  // OperationSummary.revision).
+  int32 revision = 11;
 }
 
 message BundleImage {
