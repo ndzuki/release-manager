@@ -175,6 +175,16 @@ const zhCN = {
    * editors cannot tell which row they are on. `{field}` is itself a catalog value.
    */
   'common.labelledRowField': '{field}（第 {index} 行）',
+  /*
+   * Shared pagination primitive (TASK-283). The wording of a pager is the same on
+   * every list, so it lives here once instead of once per page; `pagination.label`
+   * is the primitive's fallback landmark name, and a page with a domain name for
+   * its region (Operation 分页) passes its own `label`.
+   */
+  'pagination.label': '分页',
+  'pagination.previous': '上一页',
+  'pagination.next': '下一页',
+  'pagination.page': '第 {page} 页',
   // Wave 4: operator management
   'operator.token.oneTimeSecret': '一次性密钥',
   'operator.token.closeWarning': '关闭该对话框会从浏览器中永久移除明文。',
@@ -649,9 +659,6 @@ const zhCN = {
   'operationCenter.maintenance': '维护中不可用：平台正处于维护模式，Operation 中心暂时无法读取。',
   'operationCenter.forbidden': '无读取权限：当前账号无权读取该作用域内的 Operation。',
   'operationCenter.pagination': 'Operation 分页',
-  'operationCenter.previous': '上一页',
-  'operationCenter.next': '下一页',
-  'operationCenter.page': '第 {page} 页',
   'operation.create.eyebrow': '新建操作',
   'operation.create.subtitle': '发布操作',
   'operation.list.eyebrow': '操作历史',

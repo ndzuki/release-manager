@@ -4,6 +4,7 @@ import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import DataTable from '@/components/common/DataTable.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
+import Pagination from '@/components/common/Pagination.vue';
 import { useOperationFeed } from '@/composables/useOperationFeed';
 
 /*
@@ -180,15 +181,19 @@ onMounted(() => {
       </template>
     </DataTable>
 
-    <nav v-if="showPager" class="operation-center__pager" :aria-label="t('operationCenter.pagination')">
-      <button type="button" :disabled="!hasPrev || loading" @click="goPrev">
-        {{ t('operationCenter.previous') }}
-      </button>
-      <p class="operation-center__page" role="status">{{ t('operationCenter.page', { page: pageNumber }) }}</p>
-      <button type="button" :disabled="!hasNext || loading" @click="goNext">
-        {{ t('operationCenter.next') }}
-      </button>
-    </nav>
+    <!-- The shared primitive owns the controls, the wording and the region's name.
+         "loading" is folded into reachability here: the pager cannot know a page is
+         in flight, and a second click while one is would overwrite cursors[index]. -->
+    <Pagination
+      v-if="showPager"
+      class="operation-center__pager"
+      :has-prev="hasPrev && !loading"
+      :has-next="hasNext && !loading"
+      :page="pageNumber"
+      :label="t('operationCenter.pagination')"
+      @prev="goPrev"
+      @next="goNext"
+    />
   </section>
 </template>
 
@@ -265,29 +270,10 @@ onMounted(() => {
   font-weight: var(--font-weight-bold);
 }
 
-.operation-center__pager {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-}
-
-.operation-center__pager button {
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  font: inherit;
-  cursor: pointer;
-}
-
-.operation-center__pager button:disabled {
-  color: var(--color-subtle);
-  cursor: not-allowed;
-}
-
-.operation-center__page {
-  margin: 0;
-  color: var(--color-muted);
-  font-size: var(--font-size-sm);
-}
+/*
+ * `.operation-center__pager` carries no declarations: it is the page's DOM hook on
+ * the primitive's root `<nav>` (attribute fallthrough), and the pager's look — the
+ * button padding/border, the disabled colour and the page indicator — moved into
+ * Pagination.vue in TASK-283. The page's own `display: grid` gap already spaces it.
+ */
 </style>

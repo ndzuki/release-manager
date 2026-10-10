@@ -201,7 +201,7 @@ describe('OperationCenterPage pagination', () => {
 
     expect(prevButton(wrapper).attributes('disabled')).toBeDefined();
     expect(nextButton(wrapper).attributes('disabled')).toBeUndefined();
-    expect(wrapper.get('.operation-center__page').text()).toBe('第 1 页');
+    expect(wrapper.get('.operation-center__pager .pagination__page').text()).toBe('第 1 页');
 
     await nextButton(wrapper).trigger('click');
     await flushPromises();
@@ -210,7 +210,7 @@ describe('OperationCenterPage pagination', () => {
     expect(mock.mock.calls[1]![0].pageToken).toBe('tok-1');
     expect(wrapper.findAll('tbody tr')).toHaveLength(1);
     expect(wrapper.text()).toContain('op-2');
-    expect(wrapper.get('.operation-center__page').text()).toBe('第 2 页');
+    expect(wrapper.get('.operation-center__pager .pagination__page').text()).toBe('第 2 页');
     // The last page has no token, so "next" is disabled — not hidden, so the keyboard
     // order does not shift under the user.
     expect(nextButton(wrapper).attributes('disabled')).toBeDefined();
@@ -222,7 +222,7 @@ describe('OperationCenterPage pagination', () => {
     // Going back replays the cursor that produced the first page.
     expect(mock.mock.calls[2]![0].pageToken).toBe('');
     expect(wrapper.text()).toContain('op-1');
-    expect(wrapper.get('.operation-center__page').text()).toBe('第 1 页');
+    expect(wrapper.get('.operation-center__pager .pagination__page').text()).toBe('第 1 页');
   });
 
   /*
@@ -257,13 +257,13 @@ describe('OperationCenterPage pagination', () => {
     expect(firstRow()).toContain('op-2');
     await goNextOnce(); // page 3: the stack records t2 for position 2
     expect(firstRow()).toContain('op-3');
-    expect(wrapper.get('.operation-center__page').text()).toBe('第 3 页');
+    expect(wrapper.get('.operation-center__pager .pagination__page').text()).toBe('第 3 页');
 
     await goPrevOnce(); // back to page 2 by REPLAYING cursors[1] = t1
     expect(firstRow()).toContain('op-2');
     await goPrevOnce(); // back to page 1 by REPLAYING cursors[0] = ''
     expect(firstRow()).toContain('op-1');
-    expect(wrapper.get('.operation-center__page').text()).toBe('第 1 页');
+    expect(wrapper.get('.operation-center__pager .pagination__page').text()).toBe('第 1 页');
 
     await goNextOnce(); // forward again re-enters position 1 with its recorded cursor
     expect(firstRow()).toContain('op-2');
