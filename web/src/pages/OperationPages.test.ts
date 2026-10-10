@@ -260,6 +260,60 @@ describe('operation pages', () => {
     });
   }
 
+  /*
+   * TASK-277: the Operation centre reaches the detail through an UNSCOPED route, because
+   * the aggregate row carries no cluster id and vue-router refuses a named route whose
+   * required params are empty. The page must therefore drop the release-scoped
+   * breadcrumbs instead of building links from params it does not have — those pushes
+   * would throw "Missing required param" rather than navigate.
+   */
+  it('TASK-277: renders the unscoped detail route with an Operation centre breadcrumb', async () => {
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-center',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/operations/:operationId', name: 'OperationCenterDetail', component: OperationDetailPage },
+        { path: '/operations', name: 'OperationCenter', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/operations/op-center?releaseName=checkout');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('op-center'));
+
+    const crumbs = wrapper.get('.operation-detail__breadcrumbs');
+    expect(crumbs.find('a[href="/operations"]').exists()).toBe(true);
+    expect(crumbs.text()).toContain('checkout');
+    // The release-scoped crumbs are absent, not broken.
+    expect(crumbs.text()).not.toContain('Releases');
+    expect(crumbs.find('a[href^="/customers/"]').exists()).toBe(false);
+  });
+
   it('AC-13: renders a disabled 取消中… button while the operation is cancelling', async () => {
     const clients: TestClients = {
       operations: {

@@ -6,6 +6,7 @@ import {
   CancelOperationRequestSchema,
   CreateOperationRequestSchema,
   GetOperationRequestSchema,
+  ListNonTerminalOperationsRequestSchema,
   ListOperationsRequestSchema,
   ListBundlesRequestSchema,
   OrchestratorService,
@@ -157,6 +158,15 @@ function summaryState(raw: string): OperationState {
   return (OPERATION_STATES as string[]).includes(value) ? (value as OperationState) : 'pending';
 }
 
+/**
+ * The summary carries the STORE operation type ("INSTALL", internal/store/store.go:130-133),
+ * not the proto enum. Anything unrecognised is read as INSTALL, matching the CreateOperation
+ * contract where INSTALL is the only type carrying no extra constraint.
+ */
+function operationTypeOf(raw: string): OperationType {
+  return raw === 'UPGRADE' || raw === 'ROLLBACK' || raw === 'EMERGENCY' ? raw : 'INSTALL';
+}
+
 
 // RollbackRelease is a standalone RPC, not a CreateOperation variant: CreateOperation accepts
 // INSTALL/UPGRADE only, and the canonical rollback request carries target_revision. The
@@ -206,14 +216,90 @@ export async function listOperations(
   return {
     operations: response.operations.map((item) => ({
       operationId: item.operationId,
-      operationType: item.operationType === 'UPGRADE' || item.operationType === 'ROLLBACK' || item.operationType === 'EMERGENCY'
-        ? item.operationType
-        : 'INSTALL',
+      operationType: operationTypeOf(item.operationType),
       state: summaryState(item.state),
       revision: item.revision,
       createdAt: item.createdAt ? timestampDate(item.createdAt).toISOString() : null,
     })),
     nextCursor: response.nextCursor,
+  };
+}
+
+/**
+ * One row of the cross-release non-terminal feed (REQ-100 handoff H9 / TASK-276).
+ *
+ * The definition and customer identity travel INLINE on purpose, so rendering a page
+ * costs one store read instead of a name lookup per row, and `state`/`operationType`
+ * arrive as the STORE strings — normalised through the same two helpers as
+ * OperationSummaryItem so one server value reads the same on both lists.
+ *
+ * A `type`, not an `interface`, on purpose: DataTable takes `Record<string, unknown>[]`
+ * rows and TypeScript only gives object-literal aliases an implicit index signature.
+ */
+export type NonTerminalOperationItem = {
+  operationId: string;
+  operationType: OperationType;
+  state: OperationState;
+  releaseDefinitionId: string;
+  releaseDefinitionName: string;
+  customerId: string;
+  customerName: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  emergency: boolean;
+  revision: number;
+};
+
+export interface NonTerminalOperationPage {
+  operations: NonTerminalOperationItem[];
+  /** Empty on the last page; echo it back as `pageToken` to continue. */
+  nextPageToken: string;
+}
+
+export interface NonTerminalOperationQuery {
+  /**
+   * 0/unset selects the server default (20); the server clamps above 100 and rejects a
+   * negative value with `invalid_page_size`. Deliberately passed through unclamped so
+   * the wire assertion can prove the contract is the server's, not a client guess.
+   */
+  pageSize?: number;
+  /** Opaque (created_at, id) cursor from the previous response's nextPageToken. */
+  pageToken?: string;
+  /** Optional narrowing; a customer outside the caller's active bindings is denied. */
+  customerId?: string;
+}
+
+/**
+ * Cross-release, non-terminal operations, oldest wait first (TASK-276).
+ *
+ * Scope is the caller's organization's ACTIVE bindings: rows outside it are simply
+ * absent, while an explicit out-of-scope `customerId` answers PERMISSION_DENIED. The
+ * order is `created_at ASC, id ASC` and is owned by the server, so this wrapper never
+ * re-sorts and never invents a total: `nextPageToken` is the only end-of-list signal.
+ */
+export async function listNonTerminalOperations(
+  query: NonTerminalOperationQuery = {},
+): Promise<NonTerminalOperationPage> {
+  const response = await operationClient.listNonTerminalOperations(create(ListNonTerminalOperationsRequestSchema, {
+    pageSize: query.pageSize ?? 0,
+    pageToken: query.pageToken ?? '',
+    customerId: query.customerId ?? '',
+  }));
+  return {
+    operations: response.operations.map((item) => ({
+      operationId: item.operationId,
+      operationType: operationTypeOf(item.operationType),
+      state: summaryState(item.state),
+      releaseDefinitionId: item.releaseDefinitionId,
+      releaseDefinitionName: item.releaseDefinitionName,
+      customerId: item.customerId,
+      customerName: item.customerName,
+      createdAt: item.createdAt ? timestampDate(item.createdAt).toISOString() : null,
+      updatedAt: item.updatedAt ? timestampDate(item.updatedAt).toISOString() : null,
+      emergency: item.emergency,
+      revision: item.revision,
+    })),
+    nextPageToken: response.nextPageToken,
   };
 }
 
@@ -336,6 +422,25 @@ export function mapOperationError(error: unknown): OperationAPIError {
     default:
       return { code: reason || 'unknown', message: connectError.rawMessage || '操作请求失败', operationId, retryable: false };
   }
+}
+
+/**
+ * True when the orchestrator refused the call because it is in MAINTENANCE MODE.
+ *
+ * `ListNonTerminalOperations` is deliberately NOT in orchestratorReadOnlyProcedures()
+ * (cmd/orchestrator/main.go), so maintenance answers UNAVAILABLE with the raw message
+ * `maintenance` — the same token CleanupService sends (see cleanup-api.ts). The token is
+ * matched EXACTLY, never as a substring: a transport outage is also UNAVAILABLE and must
+ * stay a retryable network error rather than be mislabelled as planned maintenance.
+ *
+ * This is a separate predicate rather than a new code inside mapOperationError because
+ * the operation stream treats `network_error` as "reconnect" (stores/operationTimeline.ts);
+ * maintenance must not silently change that behaviour on the write paths.
+ */
+export function isMaintenanceError(error: unknown): boolean {
+  const connectError = ConnectError.from(error);
+  const raw = (connectError.rawMessage ?? connectError.message ?? '').trim().toLowerCase();
+  return connectError.code === Code.Unavailable && raw === 'maintenance';
 }
 
 function parseBigIntHeader(value: string | null | undefined): bigint | undefined {

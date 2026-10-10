@@ -61,6 +61,7 @@ async function handleLogout(): Promise<void> {
         </div>
         <RouterLink v-if="operationsEnabled && auth.canRunCleanup" class="app-shell__password" :to="{ name: 'ArtifactLifecycle' }">制品生命周期</RouterLink>
         <RouterLink v-if="operationsEnabled && auth.canReadBundles" class="app-shell__password" :to="{ name: 'Bundles' }">发布 Bundle</RouterLink>
+        <RouterLink v-if="operationsEnabled" class="app-shell__password" :to="{ name: 'OperationCenter' }">{{ t('operationCenter.title') }}</RouterLink>
         <RouterLink v-if="operationsEnabled" class="app-shell__password" :to="{ name: 'Definitions' }">发布定义</RouterLink>
         <RouterLink v-if="operationsEnabled" class="app-shell__password" :to="{ name: 'StuckLocks' }">紧急锁</RouterLink>
         <RouterLink class="app-shell__password" :to="{ name: 'TrustPolicy' }">信任根</RouterLink>
