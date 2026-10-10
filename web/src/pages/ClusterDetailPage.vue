@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -31,8 +32,13 @@ const endpoints = {
 
 onMounted(() => store.loadCluster(clusterId));
 
-async function handleDisable() {
-  if (!window.confirm(t('cluster.detail.disableConfirm'))) return;
+// TASK-281: the confirmation moved from `window.confirm` to the shared AppDialog
+// primitive (ADR-029 clause 3): styleable, keyboard-enumerable and focus-trapped.
+// Cancelling never reaches `store.disable`; confirming runs the same path as before.
+const disableDialogOpen = ref(false);
+
+async function confirmDisable() {
+  disableDialogOpen.value = false;
   await store.disable(clusterId);
 }
 </script>
@@ -64,7 +70,7 @@ async function handleDisable() {
             :to="{ name: 'OperatorList', params: { customerId, clusterId } }"
           >{{ t('cluster.detail.operators') }}</RouterLink>
           <RouterLink v-if="auth.canWrite" :to="{ name: 'ClusterEdit', params: { customerId, clusterId } }">{{ t('customer.list.edit') }}</RouterLink>
-          <button v-if="auth.canWrite && store.current.enabled" type="button" class="danger" @click="handleDisable">{{ t('cluster.detail.disable') }}</button>
+          <button v-if="auth.canWrite && store.current.enabled" type="button" class="danger" @click="disableDialogOpen = true">{{ t('cluster.detail.disable') }}</button>
         </div>
       </header>
 
@@ -88,6 +94,19 @@ async function handleDisable() {
         :endpoints="endpoints"
         readonly
       />
+
+      <AppDialog
+        :open="disableDialogOpen"
+        :title="t('cluster.detail.disableTitle')"
+        :description="t('cluster.detail.disableConfirm')"
+        danger
+        @close="disableDialogOpen = false"
+      >
+        <template #footer>
+          <button type="button" @click="disableDialogOpen = false">{{ t('action.cancel') }}</button>
+          <button type="button" class="danger" @click="confirmDisable">{{ t('cluster.detail.disableAction') }}</button>
+        </template>
+      </AppDialog>
     </template>
   </section>
 </template>

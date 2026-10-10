@@ -256,8 +256,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/DefinitionsPage.vue',
-    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '名称', '状态', '版本', '操作', '无法解析', '编辑', '编辑 （版本 ）', '提交时会带上读到的版本号；若期间被他人修改，服务端会拒绝（乐观锁），页面会刷新后提示重试。', '删除', '新增映射', '取消', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '第 ${index + 1} 行映射缺少必填项（workload kind/name、field、values path）'],
-    reason: 'release definitions converged to Chinese (wave 6)',
+    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '名称', '状态', '版本', '操作', '无法解析', '编辑', '提交时会带上读到的版本号；若期间被他人修改，服务端会拒绝（乐观锁），页面会刷新后提示重试。', '删除', '新增映射', '取消', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '第 ${index + 1} 行映射缺少必填项（workload kind/name、field、values path）'],
+    reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281)',
   },
   {
     file: 'src/pages/NotFoundPage.vue',

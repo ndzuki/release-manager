@@ -12,6 +12,7 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import EmergencyResultPanel from '@/components/emergency/EmergencyResultPanel.vue';
 import { getEmergencyResult } from '@/connect/emergency-api';
+import { correlationLine, describeError } from '@/connect/error-copy';
 import { getPreflightResult } from '@/connect/operation-api';
 import { useEmergencyEffectObservation } from '@/composables/useEmergencyEffectObservation';
 import { useAuthStore } from '@/stores/auth';
@@ -50,21 +51,39 @@ const liveUpdatesEnabled = import.meta.env.VITE_OPERATION_LIVE_UPDATES !== 'fals
 // it is fetched alongside the stream and re-fetched when the operation moves on
 // (the coordinator persists it as preflight concludes).
 const preflightResult = ref<PreflightResult | null>(null);
+/*
+ * TASK-281: a failed preflight read is NOT the same as "the operation returned no
+ * preflight result yet". Keeping the failure in its own state makes the two
+ * distinguishable, gives the operator a retry entry point, and carries the
+ * correlation line (code · requestId) so a failure can be handed to the server logs.
+ */
+const preflightFailure = ref<{ message: string; details: string } | null>(null);
 
 async function loadPreflightResult(): Promise<void> {
   const current = operationId.value;
   if (!current) {
     preflightResult.value = null;
+    preflightFailure.value = null;
     return;
   }
   try {
     const result = await getPreflightResult(current);
     // A late response for a previous operation must not overwrite the current
     // one (same guard the store applies to its own async reads).
-    if (operationId.value === current) preflightResult.value = result;
-  } catch {
-    // Best effort: the operation and its last_error still render.
-    if (operationId.value === current) preflightResult.value = null;
+    if (operationId.value === current) {
+      preflightResult.value = result;
+      preflightFailure.value = null;
+    }
+  } catch (error) {
+    // The operation and its last_error still render, but the read failure is
+    // surfaced rather than swallowed: message plus the correlation line.
+    if (operationId.value === current) {
+      preflightResult.value = null;
+      preflightFailure.value = {
+        message: t('operation.preflight.loadFailedHint'),
+        details: correlationLine(describeError(error)),
+      };
+    }
   }
 }
 
@@ -237,7 +256,16 @@ function formatTimestamp(value: string | null): string {
       @action="store.retryInitial"
     />
     <template v-else>
-      <PreflightResultPanel :result="preflightResult" />
+      <ErrorState
+        v-if="preflightFailure"
+        data-testid="preflight-load-failure"
+        :title="t('operation.preflight.loadFailed')"
+        :message="preflightFailure.message"
+        :details="preflightFailure.details"
+        :action-label="t('action.retry')"
+        @action="loadPreflightResult"
+      />
+      <PreflightResultPanel v-else :result="preflightResult" />
 
       <header class="operation-detail__header">
         <div>

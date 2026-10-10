@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { mount, type VueWrapper } from '@vue/test-utils';
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -636,6 +636,116 @@ describe('operation pages', () => {
     // click path resolves with fewer microtask turns than trigger() did, so wait
     // for the state instead of asserting on it immediately.
     await vi.waitFor(() => expect(timelineStore.operation?.state).toBe('cancelling'));
+    wrapper.unmount();
+  });
+
+  /*
+   * TASK-281: `loadPreflightResult()` used to swallow every read failure into
+   * `preflightResult = null`, which is exactly the "no preflight result yet" state —
+   * so a broken read was invisible. A failure now renders its own feedback (plus the
+   * correlation line's requestId for on-call) with a retry entry point, and stays
+   * distinguishable from the genuinely empty state.
+   */
+  it('surfaces a preflight read failure with its requestId and can retry', async () => {
+    const getOperation = vi.fn().mockRejectedValue(
+      new ConnectError('preflight read failed', Code.Internal, { 'X-Request-ID': 'req-preflight-1' }),
+    );
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-preflight',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-preflight');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(true));
+    const failure = wrapper.get('[data-testid="preflight-load-failure"]');
+    expect(failure.text()).toContain('预检结果加载失败');
+    // The correlation line carries the server-side requestId for on-call triage.
+    expect(failure.text()).toContain('requestId=req-preflight-1');
+
+    // Retry re-reads; the second read returns no result and the failure clears.
+    getOperation.mockResolvedValue(create(GetOperationResponseSchema, {
+      operation: create(OperationSchema, { operationId: 'op-preflight' }),
+    }));
+    await failure.findAll('button').find((button) => button.text() === '重试')?.trigger('click');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(false));
+    expect(wrapper.find('.preflight-panel').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('treats a missing preflight result as an empty state, not a failure', async () => {
+    const getOperation = vi.fn().mockResolvedValue(create(GetOperationResponseSchema, {
+      operation: create(OperationSchema, {
+        operationId: 'op-empty-preflight',
+        operationType: 'INSTALL',
+        state: OperationStatus.RUNNING,
+        stateVersion: 1n,
+      }),
+    }));
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-empty-preflight',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-empty-preflight');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(getOperation).toHaveBeenCalled());
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(false);
+    expect(wrapper.find('.preflight-panel').exists()).toBe(false);
     wrapper.unmount();
   });
 });

@@ -2,6 +2,7 @@
 import { t } from '@/i18n/messages';
 import { computed, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -34,14 +35,27 @@ function openGenerate(replace = false): void {
   showTokenModal.value = true;
 }
 
-async function replacePending(): Promise<void> {
-  if (window.confirm(t('operator.enroll.replaceConfirm'))) {
-    openGenerate(true);
-  }
+// TASK-281: replacement and revocation confirm through the shared AppDialog
+// primitive instead of `window.confirm`. Cancelling runs neither original path;
+// confirming runs exactly what the confirm branch used to run.
+const replaceDialogOpen = shallowRef(false);
+const discardDialogOpen = shallowRef(false);
+
+function requestReplace(): void {
+  replaceDialogOpen.value = true;
 }
 
-async function discardPending(): Promise<void> {
-  if (!window.confirm(t('operator.enroll.revokeConfirm'))) return;
+function requestDiscard(): void {
+  discardDialogOpen.value = true;
+}
+
+function confirmReplace(): void {
+  replaceDialogOpen.value = false;
+  openGenerate(true);
+}
+
+async function confirmDiscard(): Promise<void> {
+  discardDialogOpen.value = false;
   await store.discardPending(customerId.value, clusterId.value);
 }
 
@@ -83,8 +97,8 @@ watch([customerId, clusterId], async () => {
         :pending="store.pending"
         :can-manage="auth.canEnrollOperators"
         :busy="store.saving"
-        @replace="replacePending"
-        @discard="discardPending"
+        @replace="requestReplace"
+        @discard="requestDiscard"
       />
 
       <form class="card" @submit.prevent="openGenerate(false)">
@@ -113,6 +127,32 @@ watch([customerId, clusterId], async () => {
       </form>
     </template>
 
+    <AppDialog
+      :open="replaceDialogOpen"
+      :title="t('operator.enroll.replaceTitle')"
+      :description="t('operator.enroll.replaceConfirm')"
+      danger
+      @close="replaceDialogOpen = false"
+    >
+      <template #footer>
+        <button type="button" @click="replaceDialogOpen = false">{{ t('action.cancel') }}</button>
+        <button type="button" class="dialog-danger" @click="confirmReplace">{{ t('operator.enroll.replaceAction') }}</button>
+      </template>
+    </AppDialog>
+
+    <AppDialog
+      :open="discardDialogOpen"
+      :title="t('operator.enroll.revokeTitle')"
+      :description="t('operator.enroll.revokeConfirm')"
+      danger
+      @close="discardDialogOpen = false"
+    >
+      <template #footer>
+        <button type="button" @click="discardDialogOpen = false">{{ t('action.cancel') }}</button>
+        <button type="button" class="dialog-danger" @click="confirmDiscard">{{ t('operator.enroll.revokeAction') }}</button>
+      </template>
+    </AppDialog>
+
     <EnrollmentTokenModal
       v-if="showTokenModal"
       :customer-id="customerId"
@@ -137,4 +177,6 @@ h1, h2, p { margin: 0; }
 .card .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .card button:disabled { cursor: not-allowed; opacity: 0.5; }
 .error { color: var(--color-error); }
+/* Slotted into AppDialog's footer, whose baseline must lose to a danger variant. */
+.dialog-danger { border-color: var(--color-danger-border); color: var(--color-error); }
 </style>
