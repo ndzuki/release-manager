@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 // Annotation batch editor (plan v3 Step 4, AC-058-02/13): rows are bound to
-// the server-approved annotation keys only (whitelist), share one scope, use
+// the definition's approved annotation keys (whitelist), share one scope, use
 // stable local IDs, and validate through the pure rules in
-// features/emergency/validation.ts. The batch is submitted with the emergency
+// features/emergency/validation.ts. The whitelist is the definition's
+// `approved_annotation_keys`, so a key that is approved but NOT yet observed on
+// the workload is selectable too; `observedKeys` labels which keys the read
+// model has actually seen (TASK-274). The batch is submitted with the emergency
 // change (ExecuteEmergencyChangeRequest.annotations + annotation_scope) when
 // the page's action selector is on 'annotations'; the server re-validates every
 // (key, scope) pair against the definition's whitelist.
@@ -22,10 +25,19 @@ const props = withDefaults(
     values: Array<{ localId: string; key: string; value: string; scope: string }>;
     /** Scopes the target approves keys for; when empty the row scope is fixed. */
     availableScopes?: string[];
+    /**
+     * Keys with a fresh observation on the workload. When supplied, a key
+     * outside it is labelled "approved, not yet observed" so the operator can
+     * tell the whitelist from the observation (TASK-274); null means the
+     * observation state is unknown and the bare key is shown.
+     */
+    observedKeys?: string[] | null;
+    /** Why the full whitelist is unavailable, when it is (TASK-274). */
+    whitelistNotice?: string | null;
     /** Server-side rejection routed to this field (D7 double-track). */
     error?: string | null;
   }>(),
-  { availableScopes: () => [], error: null },
+  { availableScopes: () => [], observedKeys: null, whitelistNotice: null, error: null },
 );
 
 const emit = defineEmits<{
@@ -57,6 +69,17 @@ const errorId = computed(() => `${rowIdPrefix}-annotation-error`);
 
 function rowFieldId(localId: string, field: 'key' | 'value'): string {
   return `${rowIdPrefix}-annotation-${localId}-${field}`;
+}
+
+/**
+ * Option label for a whitelisted key. `observedKeys` (when supplied) comes from
+ * the read model, which projects approved ∩ OBSERVED; every other whitelist
+ * entry is approved but has not appeared on the workload yet, and the operator
+ * should see which is which before submitting (TASK-274).
+ */
+function keyOptionLabel(key: string): string {
+  if (!props.observedKeys) return key;
+  return props.observedKeys.includes(key) ? t('annotation.key.observed', { key }) : t('annotation.key.notObserved', { key });
 }
 
 function addRow(): void {
@@ -92,6 +115,7 @@ watch(
 <template>
   <div class="annotation-editor">
     <p class="hint">{{ t('annotation.hint') }}</p>
+    <p v-if="whitelistNotice" class="hint" role="status">{{ whitelistNotice }}</p>
     <label v-if="availableScopes.length > 0" class="scope-field">
       <span class="scope-label">{{ t('annotation.scope') }}</span>
       <select
@@ -125,7 +149,7 @@ watch(
               :aria-describedby="validation.valid ? undefined : errorId"
               @change="updateRow(entry.localId, { key: ($event.target as HTMLSelectElement).value })"
             >
-              <option v-for="key in approvedKeys" :key="key" :value="key">{{ key }}</option>
+              <option v-for="key in approvedKeys" :key="key" :value="key">{{ keyOptionLabel(key) }}</option>
             </select>
           </td>
           <td>

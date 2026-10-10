@@ -93,6 +93,12 @@ export interface EmergencyAnnotationActionDisplay {
   promotions: PromotionMappingDisplay[];
 }
 
+/** One (key, scope) pair of the definition's approved annotation whitelist. */
+export interface ApprovedAnnotationKeyDisplay {
+  key: string;
+  scope: string;
+}
+
 export interface EmergencyTargetDisplay {
   workloadRef: WorkloadRefDisplay;
   containers: string[];
@@ -353,26 +359,58 @@ export function availableEmergencyActions(target: EmergencyTargetDisplay): Emerg
   return actions;
 }
 
-/** Distinct scopes among the target's approved annotation keys, in stable order. */
-export function annotationScopes(target: EmergencyTargetDisplay): string[] {
-  return [...new Set(target.annotationActions.map((action) => action.scope))].sort();
+/** Distinct scopes among the target's annotation keys, in stable order.
+ *
+ * With an `approved` whitelist this is the UNION of the observed scopes and the
+ * definition's approved scopes, so a scope whose keys are all unobserved is
+ * still selectable (TASK-274). Observed scopes come first: they are the ones the
+ * operator can see a current value for, and keeping them in front preserves the
+ * pre-TASK-274 default selection when the whitelist adds nothing. */
+export function annotationScopes(
+  target: EmergencyTargetDisplay,
+  approved?: ApprovedAnnotationKeyDisplay[],
+): string[] {
+  const observed = [...new Set(target.annotationActions.map((action) => action.scope))].sort();
+  if (!approved) return observed;
+  const approvedOnly = [...new Set(approved.map((entry) => entry.scope))]
+    .filter((scope) => !observed.includes(scope))
+    .sort();
+  return [...observed, ...approvedOnly];
 }
 
 /**
- * The definition's approved (key, scope) projection for one scope. The read
- * model only carries approved keys the operator has actually observed
- * (internal/orchestrator/emergency_queries.go:206-243 filters the observation
- * against the definition's whitelist), so a key that is approved but not yet
- * present on the workload is not offered — the emergency contract exposes no
- * other whitelist read.
+ * The (key, scope) pairs the annotation editor may offer for one scope.
+ *
+ * `approved` is the definition's decoded `approved_annotation_keys` whitelist
+ * (REQ-058; internal/orchestrator/definition.go:313). When it is supplied it is
+ * the source of truth, so a key that is approved but NOT yet present on the
+ * workload is selectable: the read model's `current_annotations` is only the
+ * intersection of approved and OBSERVED
+ * (internal/orchestrator/emergency_queries.go:206-243,334-344), which is the
+ * subset the operator has reported so far, not the whitelist.
+ *
+ * `undefined` (the definition read did not complete) falls back to the observed
+ * projection, which is the pre-TASK-274 behaviour. Observed keys that a
+ * supplied whitelist does not list are kept for display — hiding a key the read
+ * model reports would be worse than offering one the server will refuse.
  */
 export function approvedAnnotationKeysForScope(
   target: EmergencyTargetDisplay,
   scope: string,
+  approved?: ApprovedAnnotationKeyDisplay[],
 ): Array<{ key: string; scope: string }> {
-  return target.annotationActions
+  const observed = target.annotationActions
     .filter((action) => action.scope === scope)
     .map((action) => ({ key: action.key, scope: action.scope }));
+  if (!approved) return observed;
+  const merged = new Map<string, { key: string; scope: string }>();
+  for (const entry of approved) {
+    if (entry.scope === scope) merged.set(entry.key, { key: entry.key, scope: entry.scope });
+  }
+  for (const entry of observed) {
+    if (!merged.has(entry.key)) merged.set(entry.key, entry);
+  }
+  return [...merged.values()];
 }
 
 export function mapCandidateArtifact(artifact: ProtoCandidateArtifactSummary): CandidateArtifactDisplay {

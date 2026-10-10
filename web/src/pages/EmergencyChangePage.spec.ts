@@ -180,6 +180,9 @@ describe('EmergencyChangePage container picker', () => {
     expect(editor.props('approvedKeys')).toEqual(['tier', 'zone']);
     expect(editor.props('scope')).toBe('WORKLOAD_METADATA');
     expect(editor.props('availableScopes')).toEqual(['WORKLOAD_METADATA']);
+    // TASK-274: the observed subset travels beside the whitelist so the editor
+    // can label a key "approved, not yet observed".
+    expect(editor.props('observedKeys')).toEqual(['tier', 'zone']);
 
     // The row is added and edited through the mounted page, so the entry that
     // would be submitted is the one the store holds.

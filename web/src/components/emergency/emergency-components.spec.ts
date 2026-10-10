@@ -184,9 +184,29 @@ describe('emergency components (Step 4)', () => {
     expect(wrapper.get(`#${describedBy}`).attributes('role')).toBe('alert');
   });
 
-  // TASK-273: the replicas control exists, starts at 1 (0 means "not requested"
-  // on the wire and selects the image branch server-side) and renders the
-  // FormField relations for its label/help/error.
+  // TASK-274: with the definition whitelist the editor can offer a key the
+  // workload has never carried. The option label must say which keys are
+  // approved-but-unobserved, and the fallback notice must be announced.
+  it('labels approved-but-unobserved keys and announces the whitelist fallback (TASK-274)', () => {
+    const wrapper = mount(EmergencyAnnotationEditor, {
+      props: {
+        approvedKeys: ['tier', 'owner'],
+        scope: 'WORKLOAD_METADATA',
+        values: [{ localId: 'local-1', key: 'tier', value: '', scope: 'WORKLOAD_METADATA' }],
+        observedKeys: ['tier'],
+        whitelistNotice: '注解白名单暂不可用：未能读取该发布定义，这里只列出已观测到的注解键。',
+      },
+    });
+
+    const options = wrapper.findAll('select.field-input option').map((option) => option.text());
+    expect(options).toEqual(['tier（已观测）', 'owner（已批准，未观测）']);
+    const notice = wrapper.get('[role="status"]');
+    expect(notice.text()).toContain('注解白名单暂不可用');
+  });
+
+  // TASK-273: the replicas control exists, renders min=1 (0 means "not
+  // requested" on the wire and selects the image branch server-side) and wires
+  // the FormField relations for its label/help/error.
   it('ReplicasInput wires its label/error relations and emits the parsed value (TASK-273)', async () => {
     const wrapper = mount(EmergencyReplicasInput, {
       props: { value: 3, currentReplicas: 2, max: 8, available: true, error: '副本数超出允许范围' },
@@ -226,8 +246,10 @@ describe('emergency components (Step 4)', () => {
     expect(wrapper.text()).toContain('副本数由 HPA 管理');
   });
 
-  // TASK-273: one action per request. The selector keeps an unavailable action
-  // visible but disabled WITH its reason, and only emits for a selectable one.
+  // TASK-273/TASK-274: one action per request. The selector keeps an unavailable
+  // action visible but disabled WITH the reason its own availability carries:
+  // "never observed an approved annotation" and "this operator cannot set
+  // annotations" are different operator problems, so they must not share copy.
   it('ActionSelector disables unavailable actions with their reason (TASK-273)', async () => {
     const base = target();
     const wrapper = mount(EmergencyActionSelector, { props: { target: base, selected: 'image' } });
@@ -237,11 +259,21 @@ describe('emergency components (Step 4)', () => {
     expect(wrapper.text()).toContain('副本数由 HPA 管理');
     const annotations = wrapper.get('input[value="annotations"]');
     expect((annotations.element as HTMLInputElement).disabled).toBe(true);
+    // base carries reasonCode 'not_observed'
+    expect(wrapper.text()).toContain('尚未观测到该工作负载上的已批准注解');
+    expect(wrapper.text()).not.toContain('不支持设置已批准注解');
 
     // The image action is selectable, so its radio is enabled (and already
     // checked, which is why the emit assertion below uses another action).
     const image = wrapper.get('input[value="image"]');
     expect((image.element as HTMLInputElement).disabled).toBe(false);
+
+    // A different availability cause must produce different copy.
+    await wrapper.setProps({
+      target: { ...base, annotationAvailability: { available: false, reasonCode: 'unsupported_operation' } },
+    });
+    expect(wrapper.text()).toContain('不支持设置已批准注解');
+    expect(wrapper.text()).not.toContain('尚未观测到该工作负载上的已批准注解');
 
     await wrapper.setProps({
       target: {

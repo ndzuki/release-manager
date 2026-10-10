@@ -113,8 +113,12 @@ export interface AnnotationEntryDraft {
  *
  * `approvedKeys` is the definition's whitelist projection for the target
  * (key + scope pairs). When supplied, an entry outside it is refused here with
- * the same stable code the server emits (`annotation_key_not_allowed`), so the
- * obvious typo is caught before a round trip — the server remains the authority
+ * the same stable code the server emits (`annotation_key_not_allowed`). This is
+ * a defense-in-depth guard for entries that did not come from the editor's
+ * whitelist `<select>` — the store validates every submitted row, and a row can
+ * also be carried over from state the select never offered. It is NOT a typo
+ * path: the production key control is a `<select>` over `approvedKeys`, so a
+ * misspelled key is not typeable there. The server remains the authority
  * (internal/orchestrator/emergency.go:653-680).
  */
 export function validateAnnotationEntries(

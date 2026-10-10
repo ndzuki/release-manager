@@ -54,6 +54,20 @@ const submittingError = computed(() => store.submitError);
 /** Whitelist keys for the selected annotation scope, in the target's order. */
 const approvedAnnotationKeyNames = computed(() => store.approvedAnnotationKeys.map((entry) => entry.key));
 
+/** The subset of those keys the read model has actually observed (TASK-274). */
+const observedAnnotationKeyNames = computed(() => store.observedAnnotationKeys);
+
+/**
+ * Why the full definition whitelist is missing, when it is. The editor falls
+ * back to the observed keys, and the operator has to know that the list is
+ * shorter for a reason (TASK-274) rather than assume a key was never approved.
+ */
+const annotationWhitelistNotice = computed<string | null>(() => {
+  if (store.annotationWhitelistState === 'violation') return t('annotation.whitelist.violation');
+  if (store.annotationWhitelistState === 'unavailable') return t('annotation.whitelist.unavailable');
+  return null;
+});
+
 /** Localized reason the replicas input is defensive-disabled (availability can
  * change when the target projection refreshes). */
 const replicasUnavailableReason = computed(() => {
@@ -226,6 +240,8 @@ async function onConfirm(): Promise<void> {
           :scope="store.annotationScope"
           :values="store.annotationEntries"
           :available-scopes="store.annotationScopesAvailable"
+          :observed-keys="observedAnnotationKeyNames"
+          :whitelist-notice="annotationWhitelistNotice"
           :error="store.annotationError"
           @update="store.setAnnotationEntries"
           @update:scope="store.setAnnotationScope"

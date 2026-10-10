@@ -23,6 +23,7 @@ import {
   type EmergencyConflictDisplay,
   type ExecuteEmergencyInput,
 } from '@/connect/emergency-api';
+import { getDefinition, type DefinitionView } from '@/connect/definition-api';
 import { mapEmergencyError, type EmergencyErrorDisplay } from '@/features/emergency/errors';
 import {
   annotationMappingComplete,
@@ -40,6 +41,7 @@ import {
   approvedAnnotationKeysForScope,
   availableEmergencyActions,
   workloadRefToWire,
+  type ApprovedAnnotationKeyDisplay,
   type CandidateArtifactDisplay,
   type ConvergencePolicy,
   type EmergencyActionKind,
@@ -57,6 +59,8 @@ export interface EmergencyChangeOptions {
   /** Test seams: replace RPC loaders/executor and identity generators. */
   loadConflict?: (releaseDefinitionId: string, signal: AbortSignal) => Promise<EmergencyConflictDisplay>;
   loadTargets?: (releaseDefinitionId: string, signal: AbortSignal) => Promise<EmergencyTargetDisplay[]>;
+  /** Reads the definition's approved annotation whitelist (TASK-274). */
+  loadDefinition?: (releaseDefinitionId: string, signal: AbortSignal) => Promise<DefinitionView>;
   loadArtifacts?: (
     input: { organizationId: string; releaseDefinitionId: string; workloadRef: string; container: string; operationVersion: string },
     signal: AbortSignal,
@@ -65,6 +69,16 @@ export interface EmergencyChangeOptions {
   abortController?: () => AbortController;
   randomUUID?: () => string;
 }
+
+/**
+ * Where the annotation whitelist came from.
+ *
+ * `unknown` before loadScope, `loaded` when the definition's JSON decoded,
+ * `violation` when it was present but undecodable, `unavailable` when the read
+ * itself failed. Anything but `loaded` falls back to the observed projection —
+ * narrower, never wider — and the page states why (TASK-274).
+ */
+export type AnnotationWhitelistState = 'unknown' | 'loaded' | 'violation' | 'unavailable';
 
 // Deterministic business rejections invalidate the frozen key: retrying the
 // same content after a business rejection needs a fresh intent (AC-058-16/17).
@@ -143,6 +157,11 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   const replicasValue = ref<number | null>(null);
   const annotationScope = ref('');
   const annotationEntries = ref<AnnotationEntryDraft[]>([]);
+  // The definition-level whitelist read (TASK-274). `null` means "not loaded",
+  // which is distinct from a loaded-but-empty list: only a successful decode
+  // may replace the read-model fallback with the (possibly longer) whitelist.
+  const annotationWhitelist = ref<ApprovedAnnotationKeyDisplay[] | null>(null);
+  const annotationWhitelistState = ref<AnnotationWhitelistState>('unknown');
 
   const confirmedIntent = ref<ConfirmedEmergencyIntent | null>(null);
   const confirmOpen = ref(false);
@@ -186,10 +205,27 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   );
 
   const annotationScopesAvailable = computed(() =>
-    selectedTargetDisplay.value ? annotationScopes(selectedTargetDisplay.value) : [],
+    selectedTargetDisplay.value ? annotationScopes(selectedTargetDisplay.value, annotationWhitelist.value ?? undefined) : [],
   );
+  /**
+   * The keys the annotation editor may offer for the selected scope: the
+   * definition's whitelist when it decoded, otherwise the observed projection.
+   * The read model below stays available as the OBSERVED subset so the editor
+   * can label a key "approved, not yet observed" (TASK-274).
+   */
   const approvedAnnotationKeys = computed(() =>
-    selectedTargetDisplay.value ? approvedAnnotationKeysForScope(selectedTargetDisplay.value, annotationScope.value) : [],
+    selectedTargetDisplay.value
+      ? approvedAnnotationKeysForScope(
+          selectedTargetDisplay.value,
+          annotationScope.value,
+          annotationWhitelist.value ?? undefined,
+        )
+      : [],
+  );
+  const observedAnnotationKeys = computed(() =>
+    selectedTargetDisplay.value
+      ? approvedAnnotationKeysForScope(selectedTargetDisplay.value, annotationScope.value).map((entry) => entry.key)
+      : [],
   );
   const annotationValidation = computed(() =>
     validateAnnotationEntries(
@@ -266,11 +302,26 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
         const target = selectedTargetDisplay.value;
         if (!target || !annotationsMappingCompleteForSelection.value) return [];
         const keys = new Set(annotationEntries.value.map((entry) => entry.key));
+        /*
+         * Derive the locks from the target's promotion mappings, not from its
+         * OBSERVED annotation actions: a key that is approved and mapped but not
+         * yet observed on the workload has no annotation action, so reading the
+         * locks off that list would silently drop its path while
+         * annotationMappingComplete (which reads target.promotions) reported the
+         * mapping complete. The predicates must agree (TASK-274).
+         */
         return [
           ...new Set(
-            target.annotationActions
-              .filter((action) => action.scope === annotationScope.value && keys.has(action.key))
-              .flatMap((action) => action.promotions.map((promotion) => promotion.valuesPath)),
+            target.promotions
+              .filter(
+                (mapping) =>
+                  mapping.workloadKind === target.workloadRef.kind &&
+                  mapping.workloadName === target.workloadRef.name &&
+                  mapping.container === '' &&
+                  keys.has(mapping.field) &&
+                  mapping.valuesPath !== '',
+              )
+              .map((mapping) => mapping.valuesPath),
           ),
         ];
       }
@@ -391,6 +442,8 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     replicasValue.value = null;
     annotationScope.value = '';
     annotationEntries.value = [];
+    annotationWhitelist.value = null;
+    annotationWhitelistState.value = 'unknown';
     confirmedIntent.value = null;
     confirmOpen.value = false;
     submitting.value = false;
@@ -399,6 +452,7 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
 
     const loadConflict = options.value.loadConflict ?? checkEmergencyConflict;
     const loadTargets = options.value.loadTargets ?? listEmergencyTargets;
+    const loadDefinition = options.value.loadDefinition ?? getDefinition;
 
     try {
       checkingConflict.value = true;
@@ -408,10 +462,33 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
       if (conflictResult.hasConflict) return;
 
       loadingTargets.value = true;
-      const targetList = await loadTargets(input.releaseDefinitionId, signalOrOwn(signal, controller));
+      /*
+       * The definition read is independent of the target read. Its whitelist is
+       * the only place a key that is approved but not yet OBSERVED appears (the
+       * target read model projects approved ∩ observed), but the emergency form
+       * must stay usable when it fails: the fallback is the observed projection,
+       * which is narrower and never offers a key the server would refuse. The
+       * failure is surfaced through annotationWhitelistState, not swallowed.
+       */
+      const [targetList, definition] = await Promise.all([
+        loadTargets(input.releaseDefinitionId, signalOrOwn(signal, controller)),
+        loadDefinition(input.releaseDefinitionId, signalOrOwn(signal, controller)).catch(() => {
+          if (signalOrOwn(signal, controller).aborted) return null;
+          annotationWhitelistState.value = 'unavailable';
+          return null;
+        }),
+      ]);
       if (captured !== generation || scopeKey.value !== nextScopeKey) return;
       targets.value = targetList;
       loadingTargets.value = false;
+      if (definition) {
+        if (definition.approvedAnnotationKeysViolation) {
+          annotationWhitelistState.value = 'violation';
+        } else {
+          annotationWhitelist.value = definition.approvedAnnotationKeys.map(({ key, scope }) => ({ key, scope }));
+          annotationWhitelistState.value = 'loaded';
+        }
+      }
 
       // Auto-select the only executable action when a single target exists.
       if (targetList.length === 1) {
@@ -442,7 +519,9 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     // replicas otherwise — the selector's order).
     replicasValue.value = null;
     annotationEntries.value = [];
-    annotationScope.value = annotationScopes(target)[0] ?? '';
+    // The scope list follows the definition whitelist when it was read, so a
+    // scope whose keys are all unobserved is still selectable (TASK-274).
+    annotationScope.value = annotationScopes(target, annotationWhitelist.value ?? undefined)[0] ?? '';
     actionKind.value = availableEmergencyActions(target)[0] ?? 'image';
     confirmedIntent.value = null;
     void loadArtifactsForSelection();
@@ -521,7 +600,7 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
   function setAnnotationScope(scope: string): void {
     annotationScope.value = scope;
     const approved = selectedTargetDisplay.value
-      ? approvedAnnotationKeysForScope(selectedTargetDisplay.value, scope)
+      ? approvedAnnotationKeysForScope(selectedTargetDisplay.value, scope, annotationWhitelist.value ?? undefined)
       : [];
     const allowed = new Set(approved.map((entry) => entry.key));
     annotationEntries.value = annotationEntries.value
@@ -669,6 +748,8 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     replicasValue.value = null;
     annotationScope.value = '';
     annotationEntries.value = [];
+    annotationWhitelist.value = null;
+    annotationWhitelistState.value = 'unknown';
     confirmedIntent.value = null;
     confirmOpen.value = false;
     submitting.value = false;
@@ -715,6 +796,8 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
     replicasError,
     annotationScopesAvailable,
     approvedAnnotationKeys,
+    observedAnnotationKeys,
+    annotationWhitelistState,
     annotationValidation,
     annotationError,
     reasonValid,

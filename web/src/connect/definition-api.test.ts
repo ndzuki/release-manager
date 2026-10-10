@@ -1,6 +1,6 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { describe, expect, it, vi } from 'vitest';
-import { decodePromotionMappings, mapDefinitionError } from './definition-api';
+import { decodeApprovedAnnotationKeys, decodePromotionMappings, mapDefinitionError } from './definition-api';
 import type { UpdateReleaseDefinitionRequest } from '@/gen/orchestrator/v1/orchestrator_pb';
 
 function failed(message: string, code: Code) {
@@ -40,6 +40,80 @@ describe('decodePromotionMappings', () => {
 
     expect(decoded.value).toBeNull();
     expect(decoded.violation).not.toBeNull();
+  });
+});
+
+/*
+ * TASK-274: the definition's `approved_annotation_keys` JSON bytes are the only
+ * read that carries keys approved but NOT yet observed on the workload, and the
+ * emergency editor's whole "add a key that does not exist yet" path depends on
+ * this decode. The shape is fixed by the Go type it marshals
+ * (internal/store/store.go:1149, `key` / `scope` / `promotion_values_path`), so
+ * a drifted field name must be loud here, not an empty whitelist downstream.
+ */
+describe('decodeApprovedAnnotationKeys', () => {
+  it('treats empty bytes as "not configured"', () => {
+    expect(decodeApprovedAnnotationKeys(new Uint8Array())).toEqual({ value: null, violation: null });
+  });
+
+  it('decodes key + scope pairs and defaults the optional promotion path', () => {
+    const decoded = decodeApprovedAnnotationKeys(
+      bytes(
+        '[{"key":"tier","scope":"WORKLOAD_METADATA"},{"key":"zone","scope":"POD_TEMPLATE_METADATA","promotion_values_path":"labels.zone"}]',
+      ),
+    );
+
+    expect(decoded.violation).toBeNull();
+    expect(decoded.value).toEqual([
+      { key: 'tier', scope: 'WORKLOAD_METADATA', promotionValuesPath: '' },
+      { key: 'zone', scope: 'POD_TEMPLATE_METADATA', promotionValuesPath: 'labels.zone' },
+    ]);
+  });
+
+  // "parseable but wrong shape" is a contract violation here too: silently
+  // degrading it to [] would hide every approved key from the emergency form.
+  it.each([
+    ['not json at all', 'not json at all'],
+    ['an object', '{}'],
+    ['a bare string', '"x"'],
+    ['a non-object element', '[1]'],
+    ['an element missing key', '[{"scope":"WORKLOAD_METADATA"}]'],
+    ['an element with a non-string scope', '[{"key":"tier","scope":7}]'],
+  ])('reports %s as a violation', (_label, raw) => {
+    const decoded = decodeApprovedAnnotationKeys(bytes(raw));
+
+    expect(decoded.value).toBeNull();
+    expect(decoded.violation).not.toBeNull();
+  });
+});
+
+describe('getDefinition', () => {
+  it('sends the id and exposes the decoded whitelist on the view', async () => {
+    const { create } = await import('@bufbuild/protobuf');
+    const { GetReleaseDefinitionRequestSchema } = await import('@/gen/orchestrator/v1/orchestrator_pb');
+    const { ReleaseDefinitionSchema } = await import('@/gen/common/v1/domain_pb');
+    const client = await import('./client');
+    const spy = vi.spyOn(client.orchestratorClient, 'getReleaseDefinition').mockResolvedValue({
+      definition: create(ReleaseDefinitionSchema, {
+        id: 'def-1',
+        approvedAnnotationKeys: bytes('[{"key":"tier","scope":"WORKLOAD_METADATA"}]'),
+      }),
+    } as never);
+
+    const { getDefinition } = await import('./definition-api');
+    const view = await getDefinition('def-1');
+
+    const request = spy.mock.calls[0][0] as unknown as {
+      $typeName: string;
+      definitionId: string;
+    };
+    expect(request.$typeName).toBe(GetReleaseDefinitionRequestSchema.typeName);
+    expect(request.definitionId).toBe('def-1');
+    expect(view.approvedAnnotationKeys).toEqual([
+      { key: 'tier', scope: 'WORKLOAD_METADATA', promotionValuesPath: '' },
+    ]);
+    expect(view.approvedAnnotationKeysViolation).toBeNull();
+    spy.mockRestore();
   });
 });
 

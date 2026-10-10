@@ -5,9 +5,13 @@
  * ExecuteEmergencyChange carries exactly ONE action, so the form must ask which
  * one before it renders a payload. Availability comes from the same target
  * projection the badges use (model.ts availableEmergencyActions), and an
- * unavailable action stays visible but disabled WITH its reason — hiding it
- * would make the absence look like a platform gap instead of a target property
- * (AC-058-01/09).
+ * unavailable action stays visible but disabled, each with the reason ITS
+ * availability carries — hiding it would make the absence look like a platform
+ * gap instead of a target property (AC-058-01/09). Replicas distinguishes
+ * `hpa_managed` from the generic cause, annotations distinguishes
+ * `unsupported_operation` from `not_observed` (TASK-274): "the operator never
+ * reported an approved annotation" and "this operator cannot set annotations"
+ * call for different operator actions.
  */
 import { computed } from 'vue';
 import { t, type MessageKey } from '@/i18n/messages';
@@ -42,7 +46,9 @@ function unavailableReason(action: EmergencyActionKind): string | null {
       ? t('emergency.replicas.unavailable.hpa')
       : t('emergency.action.unavailable.replicas');
   }
-  return t('emergency.action.unavailable.annotations');
+  return target.annotationAvailability.reasonCode === 'unsupported_operation'
+    ? t('emergency.action.unavailable.annotations.unsupported')
+    : t('emergency.action.unavailable.annotations.notObserved');
 }
 
 function select(action: EmergencyActionKind): void {
