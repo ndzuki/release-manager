@@ -12,6 +12,38 @@ import {
 import { BundleStatus } from '@/gen/common/v1/domain_pb';
 import { create } from '@bufbuild/protobuf';
 import { useOperationFormStore } from './operationForm';
+import * as valuesApi from '@/connect/values-revision';
+import type { ValuesRevision } from '@/types/valuesRevision';
+
+/*
+ * The approved-revision list (REQ-056 D10) is loaded through this wrapper; the
+ * store must not fall back to a free-text id, and a failed list load must not hide
+ * the bundles the form also needs.
+ */
+vi.mock('@/connect/values-revision', async (importOriginal) => {
+  const original = await importOriginal<typeof valuesApi>();
+  return { ...original, listApprovedValuesRevisions: vi.fn() };
+});
+
+const mockedApproved = vi.mocked(valuesApi.listApprovedValuesRevisions);
+
+function approvedRevision(id: string, revision = 1): ValuesRevision {
+  return {
+    id,
+    releaseDefinitionId: 'def-1',
+    revision,
+    stateVersion: '3',
+    document: '{}',
+    valuesDigest: `sha256:${id}`,
+    status: 'approved',
+    parentRevisionId: null,
+    secretRefs: [],
+    createdByUserId: 'u-1',
+    createdAt: '2026-10-01T00:00:00Z',
+    convergenceTaskIds: [],
+    lockedPaths: [],
+  };
+}
 
 function mockClients(): { operations: Client<typeof OrchestratorService>; bundles: Client<typeof BundleService> } {
   return {
@@ -43,13 +75,14 @@ describe('operation form store', () => {
     setActivePinia(createPinia());
     const clients = mockClients();
     setOperationClientForTest(clients.operations, clients.bundles);
+    mockedApproved.mockReset().mockResolvedValue([approvedRevision('vr-1'), approvedRevision('vr-2', 2)]);
   });
 
   it('enforces operation-specific required fields', async () => {
     const store = useOperationFormStore();
     await store.setScope('def-1');
 
-    expect(store.validate()).toEqual({ bundleId: '请选择制品', valuesRevisionId: '请填写已审批的配置版本 ID' });
+    expect(store.validate()).toEqual({ bundleId: '请选择制品', valuesRevisionId: '请选择已审批的配置版本' });
 
     store.setOperationType('UPGRADE');
     store.fields.bundleId = 'bundle-1';
@@ -132,5 +165,30 @@ describe('operation form store', () => {
 
     expect(store.step).toBe('form');
     expect(clients.operations.createOperation).not.toHaveBeenCalled();
+  });
+
+  // REQ-056 D10: the form's revision ids come from the approved-revision loader,
+  // never from a typed value.
+  it('loads the approved revisions for the release scope', async () => {
+    const store = useOperationFormStore();
+
+    await store.setScope('def-1');
+
+    expect(mockedApproved).toHaveBeenCalledWith('def-1');
+    expect(store.approvedRevisions.map((revision) => revision.id)).toEqual(['vr-1', 'vr-2']);
+    expect(store.revisionsError).toBeNull();
+  });
+
+  // A failing revision list must not hide the bundles: the selector renders its own
+  // empty/error state instead.
+  it('keeps the bundles when the approved-revision load fails', async () => {
+    mockedApproved.mockRejectedValue(new Error('revision list unavailable'));
+    const store = useOperationFormStore();
+
+    await store.setScope('def-1');
+
+    expect(store.availableBundles.map((bundle) => bundle.bundleId)).toEqual(['bundle-1']);
+    expect(store.approvedRevisions).toEqual([]);
+    expect(store.revisionsError).toContain('revision list unavailable');
   });
 });

@@ -7,11 +7,13 @@ import {
   rollbackRelease,
   type OperationAPIError,
 } from '@/connect/operation-api';
+import { listApprovedValuesRevisions } from '@/connect/values-revision';
 import type {
   BundleSummary,
   OperationType,
   PatchOverride,
 } from '@/types/operation';
+import type { ValuesRevision } from '@/types/valuesRevision';
 
 interface DraftPayload {
   operationType: OperationType;
@@ -54,6 +56,12 @@ export const useOperationFormStore = defineStore('operationForm', () => {
   const availableBundles = ref<BundleSummary[]>([]);
   const optionsLoading = ref(false);
   const optionsError = ref<string | null>(null);
+  // REQ-056 D10: the approved ValuesRevisions the operation may bind to. It used to
+  // be a free-text id, so the form could carry an id the server would refuse
+  // (values_not_approved) with no way to see what was actually approved.
+  const approvedRevisions = ref<ValuesRevision[]>([]);
+  const revisionsLoading = ref(false);
+  const revisionsError = ref<string | null>(null);
   const step = ref<'form' | 'confirm'>('form');
   const submitting = ref(false);
   const submitError = ref<OperationAPIError | null>(null);
@@ -122,6 +130,23 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     } finally {
       optionsLoading.value = false;
     }
+    // The revision list loads independently: a failure there must not hide the
+    // bundles, and the empty selector still tells the operator why it is empty.
+    await loadApprovedRevisions();
+  }
+
+  async function loadApprovedRevisions(): Promise<void> {
+    if (!releaseDefinitionId.value) return;
+    revisionsLoading.value = true;
+    revisionsError.value = null;
+    try {
+      approvedRevisions.value = await listApprovedValuesRevisions(releaseDefinitionId.value);
+    } catch (error) {
+      approvedRevisions.value = [];
+      revisionsError.value = mapOperationError(error).message;
+    } finally {
+      revisionsLoading.value = false;
+    }
   }
 
   function setOperationType(operationType: OperationType): void {
@@ -146,7 +171,7 @@ export const useOperationFormStore = defineStore('operationForm', () => {
       if (!fields.bundleId) errors.bundleId = '请选择制品';
       else if (!selectedBundle.value) errors.bundleId = '所选制品未通过验证';
       if (!fields.valuesRevisionId || fields.valuesRevisionId.trim() === '') {
-        errors.valuesRevisionId = '请填写已审批的配置版本 ID';
+        errors.valuesRevisionId = '请选择已审批的配置版本';
       }
     }
     if (fields.operationType !== 'INSTALL' && (!fields.expectedCurrentRevision || fields.expectedCurrentRevision < 1)) {
@@ -282,6 +307,8 @@ export const useOperationFormStore = defineStore('operationForm', () => {
   function resetTransient(): void {
     availableBundles.value = [];
     optionsError.value = null;
+    approvedRevisions.value = [];
+    revisionsError.value = null;
     step.value = 'form';
     submitting.value = false;
     submitError.value = null;
@@ -301,6 +328,9 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     availableBundles,
     optionsLoading,
     optionsError,
+    approvedRevisions,
+    revisionsLoading,
+    revisionsError,
     step,
     submitting,
     submitError,

@@ -20,9 +20,39 @@ import {
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { BundleStatus } from '@/gen/common/v1/domain_pb';
 import { setOperationClientForTest } from '@/connect/operation-api';
+import * as valuesApi from '@/connect/values-revision';
 import OperationCreatePage from './OperationCreatePage.vue';
 import { useOperationTimelineStore } from '@/stores/operationTimeline';
 import OperationDetailPage from './OperationDetailPage.vue';
+import type { ValuesRevision } from '@/types/valuesRevision';
+
+/*
+ * The release-operation form binds to APPROVED revisions loaded through this wrapper
+ * (REQ-056 D10); it is a separate module-level client from operation-api's injectable
+ * one, so it is mocked here the same way the store test does.
+ */
+vi.mock('@/connect/values-revision', async (importOriginal) => {
+  const original = await importOriginal<typeof valuesApi>();
+  return { ...original, listApprovedValuesRevisions: vi.fn() };
+});
+
+function approvedRevision(id: string): ValuesRevision {
+  return {
+    id,
+    releaseDefinitionId: 'def-1',
+    revision: 1,
+    stateVersion: '3',
+    document: '{}',
+    valuesDigest: `sha256:${id}`,
+    status: 'approved',
+    parentRevisionId: null,
+    secretRefs: [],
+    createdByUserId: 'u-1',
+    createdAt: '2026-10-01T00:00:00Z',
+    convergenceTaskIds: [],
+    lockedPaths: [],
+  };
+}
 
 interface TestClients {
   operations: Client<typeof OrchestratorService>;
@@ -75,8 +105,9 @@ async function mountCreatePage(clients: TestClients) {
 }
 
 async function fillBundleAndValues(wrapper: VueWrapper): Promise<void> {
-  await wrapper.find('select').setValue('bundle-1');
-  await wrapper.find('input[aria-label="ValuesRevision 标识"]').setValue('vr-1');
+  await wrapper.find('[data-testid="operation-bundle"]').setValue('bundle-1');
+  // REQ-056 D10: the approved revision is chosen from the loaded list, not typed.
+  await wrapper.find('[data-testid="operation-values-revision"]').setValue('vr-1');
 }
 
 function emptyOptionsClients(): TestClients {
@@ -92,6 +123,9 @@ describe('operation pages', () => {
   beforeEach(() => {
     sessionStorage.clear();
     setActivePinia(createPinia());
+    vi.mocked(valuesApi.listApprovedValuesRevisions)
+      .mockReset()
+      .mockResolvedValue([approvedRevision('vr-1')]);
   });
 
   it('shows the correct fields for INSTALL, UPGRADE, and ROLLBACK', async () => {
@@ -110,7 +144,7 @@ describe('operation pages', () => {
     expect(wrapper.text()).toContain('当前 Revision');
     expect(wrapper.text()).toContain('回滚目标 Revision');
     expect(wrapper.text()).not.toContain('制品 Bundle');
-    expect(wrapper.text()).not.toContain('已审批 ValuesRevision ID');
+    expect(wrapper.text()).not.toContain('已审批 ValuesRevision');
     expect(wrapper.text()).not.toContain('Patch 覆盖');
     expect(wrapper.text()).not.toContain('回退目标 Operation');
   });
