@@ -78,6 +78,25 @@ export function createAppRouter(
             meta: { requiresAuth: true, feature: 'releaseOperations' },
           }]
         : []),
+      ...(operationsEnabled
+        ? [{
+            // TASK-277 / REQ-100 H9: the cross-release non-terminal queue. It needs no
+            // release inventory (it is organization-scoped), only the operations switch.
+            path: '/operations',
+            name: 'OperationCenter',
+            component: () => import('@/pages/OperationCenterPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }, {
+            // Same detail component on an unscoped path: the aggregate row carries the
+            // operation id but no cluster id, and vue-router refuses a named route whose
+            // required params are empty. The page renders a single breadcrumb when the
+            // release scope is absent.
+            path: '/operations/:operationId',
+            name: 'OperationCenterDetail',
+            component: () => import('@/pages/OperationDetailPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }]
+        : []),
       {
         // A1 (UX plan §6.1): membership management had no console surface; the
         // four RPCs exist since REQ-026.

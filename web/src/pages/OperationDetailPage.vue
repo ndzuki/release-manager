@@ -26,6 +26,15 @@ const store = useOperationTimelineStore();
 const authStore = useAuthStore();
 const operationId = computed(() => String(route.params.operationId ?? ''));
 const releaseName = computed(() => String(route.query.releaseName ?? route.params.releaseId ?? 'Release'));
+/*
+ * Two ways in: the release-scoped route carries customer/cluster/release, while the
+ * Operation centre's unscoped route (`/operations/:operationId`, TASK-277) carries only
+ * the operation id — the aggregate row has no cluster id, and vue-router refuses a named
+ * route with empty required params. Everything below that navigates deeper into the
+ * release scope must therefore stay behind this flag: an unscoped page has no cluster to
+ * build those links from, and pushing one would throw instead of navigating.
+ */
+const scoped = computed(() => Boolean(route.params.customerId && route.params.clusterId && route.params.releaseId));
 // Full route scope: a same operationId under a different customer/cluster/
 // release must reset the store and open a fresh stream (AC-057-15).
 const routeScope = computed(() =>
@@ -155,6 +164,10 @@ onBeforeUnmount(() => {
 });
 
 function openConvergence(): void {
+  // No release scope (reached from the Operation centre): the convergence route needs
+  // customer/cluster/release ids that this page does not have, so the action is not
+  // offered at all (see the can-create-values-revision binding in the template).
+  if (!scoped.value) return;
   void router.push({
     name: 'ConvergenceTasks',
     params: {
@@ -173,28 +186,35 @@ function formatTimestamp(value: string | null): string {
 <template>
   <section class="operation-detail">
     <nav class="operation-detail__breadcrumbs" :aria-label="t('values.page.breadcrumb')">
-      <RouterLink
-        :to="{
-          name: 'ReleaseInventory',
-          params: { customerId: route.params.customerId, clusterId: route.params.clusterId },
-        }"
-      >
-        Releases
-      </RouterLink>
-      <span aria-hidden="true">/</span>
-      <RouterLink
-        :to="{
-          name: 'OperationList',
-          params: {
-            customerId: route.params.customerId,
-            clusterId: route.params.clusterId,
-            releaseId: route.params.releaseId,
-          },
-        }"
-      >
-        操作历史
-      </RouterLink>
-      <span aria-hidden="true">/</span><span>{{ releaseName }}</span><span aria-hidden="true">/</span>
+      <template v-if="scoped">
+        <RouterLink
+          :to="{
+            name: 'ReleaseInventory',
+            params: { customerId: route.params.customerId, clusterId: route.params.clusterId },
+          }"
+        >
+          Releases
+        </RouterLink>
+        <span aria-hidden="true">/</span>
+        <RouterLink
+          :to="{
+            name: 'OperationList',
+            params: {
+              customerId: route.params.customerId,
+              clusterId: route.params.clusterId,
+              releaseId: route.params.releaseId,
+            },
+          }"
+        >
+          操作历史
+        </RouterLink>
+        <span aria-hidden="true">/</span>
+      </template>
+      <template v-else>
+        <RouterLink :to="{ name: 'OperationCenter' }">{{ t('operationCenter.title') }}</RouterLink>
+        <span aria-hidden="true">/</span>
+      </template>
+      <span>{{ releaseName }}</span><span aria-hidden="true">/</span>
       <strong>{{ operationId }}</strong>
     </nav>
 
@@ -289,7 +309,7 @@ function formatTimestamp(value: string | null): string {
         :operation-state="store.operation?.state ?? ''"
         :operation-effect-status="store.operation?.effectStatus ?? ''"
         :observation-status="effectObservation.status.value"
-        :can-create-values-revision="authorization.canCreateValuesRevision"
+        :can-create-values-revision="authorization.canCreateValuesRevision && scoped"
         @open-convergence="openConvergence"
       />
 
