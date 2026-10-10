@@ -76,7 +76,7 @@ async function viewExistingOperation(): Promise<void> {
     <EmptyState
       v-else-if="store.isEmpty"
       title="没有可创建操作的选项"
-      message="请先准备 validated Bundle；已审批的 ValuesRevision ID 需从配置中心获取后手动填写。"
+      message="请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。"
       action-label="重新加载"
       @action="store.loadOptions"
     />

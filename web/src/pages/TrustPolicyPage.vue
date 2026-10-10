@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import TrustRootEditor from '@/components/trust/TrustRootEditor.vue';
 import { TRUST_ENVIRONMENTS, allowedActions, type TrustAction, type TrustRootView } from '@/connect/trust-api';
 import { useTrustPolicyStore } from '@/stores/trustPolicy';
 
@@ -20,6 +21,25 @@ import { useTrustPolicyStore } from '@/stores/trustPolicy';
 const store = useTrustPolicyStore();
 const auth = useAuthStore();
 const pendingAction = ref<{ root: TrustRootView; action: TrustAction } | null>(null);
+// Create / rotate share one editor panel: create has no target root, rotate pre-seeds
+// the old root id so the request cannot rotate a different row than the one clicked.
+const editorOpen = ref(false);
+const rotateTarget = ref<TrustRootView | null>(null);
+
+function openCreate(): void {
+  rotateTarget.value = null;
+  editorOpen.value = true;
+}
+
+function openRotate(root: TrustRootView): void {
+  rotateTarget.value = root;
+  editorOpen.value = true;
+}
+
+function closeEditor(): void {
+  editorOpen.value = false;
+  rotateTarget.value = null;
+}
 
 const environments = TRUST_ENVIRONMENTS;
 
@@ -84,9 +104,20 @@ function formatTimestamp(value: string | null): string {
           </span>
         </p>
       </div>
-      <button type="button" :disabled="store.loading" @click="store.load(store.environment)">
-        {{ store.loading ? '刷新中…' : '刷新' }}
-      </button>
+      <div class="trust__header-actions">
+        <button type="button" :disabled="store.loading" @click="store.load(store.environment)">
+          {{ store.loading ? '刷新中…' : '刷新' }}
+        </button>
+        <button
+          v-if="auth.canManageTrustRoots"
+          type="button"
+          :disabled="store.saving"
+          data-testid="trust-create-entry"
+          @click="openCreate"
+        >
+          {{ t('trust.create.entry') }}
+        </button>
+      </div>
     </header>
 
     <p v-if="store.notice" class="trust__notice" role="status" data-testid="trust-notice">{{ store.notice }}</p>
@@ -98,6 +129,13 @@ function formatTimestamp(value: string | null): string {
       :details="store.failure.details"
       action-label="刷新策略"
       @action="store.load(store.environment)"
+    />
+
+    <TrustRootEditor
+      v-if="editorOpen"
+      :mode="rotateTarget ? 'rotate' : 'create'"
+      :root="rotateTarget"
+      @close="closeEditor"
     />
 
     <LoadingState v-if="store.loading && !store.policy" message="正在读取信任策略…" />
@@ -134,6 +172,15 @@ function formatTimestamp(value: string | null): string {
             <small>宽限至 {{ formatTimestamp(root.graceUntil) }}</small>
           </td>
           <td v-if="auth.canManageTrustRoots" class="trust__actions">
+            <button
+              v-if="root.state === 'active'"
+              type="button"
+              :disabled="store.saving"
+              :data-testid="`trust-rotate-${root.keyId}`"
+              @click="openRotate(root)"
+            >
+              {{ t('trust.rotate.entry') }}
+            </button>
             <button
               v-for="action in allowedActions(root.state)"
               :key="action"
@@ -265,7 +312,14 @@ function formatTimestamp(value: string | null): string {
   gap: var(--space-2);
 }
 
+.trust__header-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
 .trust__actions button,
+.trust__header-actions button,
 .trust__confirm-actions button {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
@@ -280,7 +334,8 @@ function formatTimestamp(value: string | null): string {
   color: var(--color-error);
 }
 
-.trust__actions button:disabled {
+.trust__actions button:disabled,
+.trust__header-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }

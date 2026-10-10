@@ -1,12 +1,14 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { correlationLine, describeError } from './error-copy';
 import { create } from '@bufbuild/protobuf';
-import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
+import { timestampDate, timestampFromDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import {
+  CreateTrustRootRequestSchema,
   EndGraceRequestSchema,
   GetTrustPolicyRequestSchema,
   RetireTrustRootRequestSchema,
   RevokeTrustRootRequestSchema,
+  RotateTrustRootRequestSchema,
   TrustRootState,
   type TrustRoot,
 } from '@/gen/trust/v1/trust_pb';
@@ -101,11 +103,123 @@ export async function getTrustPolicy(environment: string): Promise<TrustPolicyVi
 }
 
 /*
+ * Write surface (TASK-280 D11): create and rotate were the only two TrustService
+ * RPCs with no console code path at all.
+ *
+ * MATERIAL REQUIREMENT — read from the contract, not guessed:
+ *  - CreateTrustRootRequest.public_key_pem (api/proto/trust/v1/trust.proto:78) and
+ *    RotateTrustRootRequest.public_key_pem (trust.proto:94) both carry PUBLIC key
+ *    material only;
+ *  - internal/trust/service.go:392-408 (toDomainRootFromRotate) feeds that field to
+ *    Root.Validate, which runs ParsePublicKey (internal/trust/types.go:72);
+ *  - ParsePublicKey rejects a PEM block whose type contains "PRIVATE"
+ *    (internal/trust/types.go:112-114).
+ * So rotation DOES need new key material, but only the public half: no private key
+ * ever has to enter the browser or the wire. The console therefore does not
+ * generate key pairs (that would put a private key in a non-encrypted path) — the
+ * operator pastes the public PEM produced by the signer's KMS/CI, and the checks
+ * below refuse anything that looks private before it is sent.
+ */
+export interface TrustRootInput {
+  environment: string;
+  keyId: string;
+  publicKeyPem: string;
+  issuer: string;
+  subjectPattern: string;
+  operator: string;
+  /** Omitted ⇒ the server uses its own now (internal/trust/service.go:384-388). */
+  validFrom?: Date;
+}
+
+export interface RotateTrustRootInput extends TrustRootInput {
+  oldRootId: string;
+  /**
+   * End of the old root's grace window. Omitting it expires the old root
+   * immediately — a hard cutover (trust.proto:174-176) — so the form always
+   * decides this explicitly.
+   */
+  graceUntil?: Date;
+}
+
+/** Failure shapes the UI must distinguish before it ever reaches the wire. */
+export type PublicKeyPemIssue = 'empty' | 'private_key' | 'not_public_key';
+
+/**
+ * Shape check only: the server is the authority on whether the PEM parses as an
+ * Ed25519 public key (internal/trust/types.go:116-127). The point of this helper is
+ * the one mistake that must not leave the browser — pasting a PRIVATE key — plus a
+ * cheap guard against sending obviously wrong text.
+ */
+export function inspectPublicKeyPem(publicKeyPem: string): PublicKeyPemIssue | null {
+  const trimmed = publicKeyPem.trim();
+  if (trimmed === '') return 'empty';
+  if (/PRIVATE KEY/.test(trimmed)) return 'private_key';
+  if (!/-----BEGIN [A-Z ]*PUBLIC KEY-----/.test(trimmed) || !/-----END [A-Z ]*PUBLIC KEY-----/.test(trimmed)) {
+    return 'not_public_key';
+  }
+  return null;
+}
+
+/** Refuses private material before it can be serialized into a request body. */
+function assertPublicKeyMaterial(publicKeyPem: string): void {
+  const issue = inspectPublicKeyPem(publicKeyPem);
+  if (issue === null) return;
+  throw new ConnectError(
+    issue === 'private_key'
+      ? 'refusing to send private key material'
+      : 'public_key_pem must be one PEM public key block',
+    Code.InvalidArgument,
+  );
+}
+
+/** Registers a NEW root and activates it immediately (not idempotent). */
+export async function createTrustRoot(input: TrustRootInput): Promise<TrustRootView> {
+  assertPublicKeyMaterial(input.publicKeyPem);
+  const response = await trustClient.createTrustRoot(create(CreateTrustRootRequestSchema, {
+    environment: input.environment,
+    keyId: input.keyId,
+    publicKeyPem: input.publicKeyPem,
+    issuer: input.issuer,
+    subjectPattern: input.subjectPattern,
+    operator: input.operator,
+    validFrom: input.validFrom ? timestampFromDate(input.validFrom) : undefined,
+  }));
+  if (!response.root) throw new ConnectError('create trust root response is empty', Code.Internal);
+  return toView(response.root);
+}
+
+/**
+ * Introduces the replacement root and moves the old one into its grace window in one
+ * step; the old root must be ACTIVE or the server answers FAILED_PRECONDITION.
+ */
+export async function rotateTrustRoot(
+  input: RotateTrustRootInput,
+): Promise<{ oldRoot: TrustRootView | null; newRoot: TrustRootView }> {
+  assertPublicKeyMaterial(input.publicKeyPem);
+  const response = await trustClient.rotateTrustRoot(create(RotateTrustRootRequestSchema, {
+    environment: input.environment,
+    oldRootId: input.oldRootId,
+    keyId: input.keyId,
+    publicKeyPem: input.publicKeyPem,
+    issuer: input.issuer,
+    subjectPattern: input.subjectPattern,
+    operator: input.operator,
+    validFrom: input.validFrom ? timestampFromDate(input.validFrom) : undefined,
+    graceUntil: input.graceUntil ? timestampFromDate(input.graceUntil) : undefined,
+  }));
+  if (!response.newRoot) throw new ConnectError('rotate trust root response is empty', Code.Internal);
+  return {
+    oldRoot: response.oldRoot ? toView(response.oldRoot) : null,
+    newRoot: toView(response.newRoot),
+  };
+}
+
+/*
  * Which lifecycle actions the server will accept for a root state (mirrors the RPC
  * comments): ACTIVE can be retired or revoked, GRACE can end its window, be retired
- * or revoked, and PENDING/RETIRED/REVOKED accept nothing. Rotation is deliberately
- * absent — it needs new key material and is a separate card, not a state-machine gap
- * (the server does allow rotating while a single root is live).
+ * or revoked, and PENDING/RETIRED/REVOKED accept nothing. Rotation is a write of its
+ * own (rotateTrustRoot above) rather than a state-machine row action, because it
+ * carries a new public key.
  */
 export function allowedActions(state: TrustRootStateName): TrustAction[] {
   if (state === 'active') return ['retire', 'revoke'];

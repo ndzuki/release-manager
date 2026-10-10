@@ -14,6 +14,40 @@ import {
 import { RollbackReleaseResponseSchema } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { BundleStatus } from '@/gen/common/v1/domain_pb';
 import { useOperationFormStore } from './operationForm';
+import * as valuesApi from '@/connect/values-revision';
+import type { ValuesRevision } from '@/types/valuesRevision';
+
+/*
+ * TASK-280 / REQ-056 D10: setScope loads the approved ValuesRevisions, and validate()
+ * now requires the pending id to be one of them. These dispatch tests drive the id
+ * directly and predate the selector, so the loader must actually return it: the real
+ * (unmocked) load fails in the test environment, which would rightly refuse the
+ * INSTALL/UPGRADE submit exercised below.
+ */
+vi.mock('@/connect/values-revision', async (importOriginal) => {
+  const original = await importOriginal<typeof valuesApi>();
+  return { ...original, listApprovedValuesRevisions: vi.fn() };
+});
+
+const mockedApproved = vi.mocked(valuesApi.listApprovedValuesRevisions);
+
+function approvedRevision(id: string): ValuesRevision {
+  return {
+    id,
+    releaseDefinitionId: 'def-1',
+    revision: 1,
+    stateVersion: '3',
+    document: '{}',
+    valuesDigest: `sha256:${id}`,
+    status: 'approved',
+    parentRevisionId: null,
+    secretRefs: [],
+    createdByUserId: 'u-1',
+    createdAt: '2026-10-01T00:00:00Z',
+    convergenceTaskIds: [],
+    lockedPaths: [],
+  };
+}
 
 type OperationsClient = Client<typeof OrchestratorService>;
 
@@ -58,6 +92,7 @@ describe('rollback form dispatch (TASK-153)', () => {
     setActivePinia(createPinia());
     clients = rollbackClients();
     setOperationClientForTest(clients.operations, clients.bundles);
+    mockedApproved.mockReset().mockResolvedValue([approvedRevision('vr-1')]);
   });
 
   // AC-1/AC-2 + AC-5 negative control: ROLLBACK goes through its own RPC, never CreateOperation.

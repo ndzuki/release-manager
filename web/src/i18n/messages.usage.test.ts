@@ -117,8 +117,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationForm.vue',
-    allowed: ['vr-…'],
-    reason: 'placeholder showing the shape of a ValuesRevision id, not copy',
+    allowed: [],
+    reason: 'everything renders from the catalog; the revision id placeholder was replaced by the approved-revision selector (TASK-280 D10)',
   },
   {
     file: 'src/components/operations/PatchOverrideEditor.vue',
@@ -357,7 +357,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationCreatePage.vue',
-    allowed: ['创建发布操作', '选择制品和已审批配置，确认完整目标后启动 Preflight。', '返回 Releases', '查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；已审批的 ValuesRevision ID 需从配置中心获取后手动填写。', '操作创建失败'],
+    allowed: ['创建发布操作', '选择制品和已审批配置，确认完整目标后启动 Preflight。', '返回 Releases', '查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。', '操作创建失败'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
