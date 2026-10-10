@@ -220,4 +220,48 @@ describe('OperationDetailPage convergence context (TASK-279)', () => {
     expect(wrapper.get('.operation-detail__breadcrumbs').text()).not.toContain('Releases');
     expect(convergenceButton(wrapper)).toBeUndefined();
   });
+
+  it('hides the convergence action when no scope is recovered but the snapshot is retained', async () => {
+    /*
+     * TASK-285: the `releaseScope !== null` guard is what keeps a retained capability
+     * from becoming a dead button. The capability comes from the customer-scoped
+     * Authorization Snapshot in a global store, not from the URL; when the resolved
+     * scope is absent (the definition read is refused here) the page has no
+     * customer/cluster/release to build the convergence route from, so the action must
+     * be absent rather than rendered with a click handler that returns early.
+     *
+     * This pins the retained-snapshot state directly rather than moving routes in
+     * place: an in-place move of an EMERGENCY operation additionally trips the
+     * effect-observation reset (useEmergencyEffectObservation.stop -> timeline.reset),
+     * which kills the reload before the panel can re-render. The snapshot loaded below
+     * is the state the guard has to survive, and what is asserted here is the guard.
+     */
+    vi.mocked(getDefinition).mockRejectedValue(new Error('release:read denied'));
+
+    // Loaded through the store's real path, for cust-1, before this page mounts. The
+    // page's own load is keyed on the resolved customer, which never resolves here, so
+    // nothing clears it and the capability stays projectable.
+    await useEmergencyAuthorizationStore().load('org-1', 'cust-1');
+
+    const client = operationsClient();
+    setOperationClientForTest(client);
+    setEmergencyClientForTest(client);
+
+    const router = createAppRouter(createMemoryHistory(), true, true, true);
+    await router.push('/operations/op-1?releaseName=checkout');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [router] } });
+
+    // The panel is in the state that renders the CTA -- effect APPLIED, no convergence
+    // task yet -- so the only thing that can keep the button off screen is the scope.
+    await vi.waitFor(() => expect(wrapper.text()).toContain('结果已生效，等待创建收敛任务。'));
+    await vi.waitFor(() => expect(getDefinition).toHaveBeenCalledWith('def-1'));
+
+    // The release scope is genuinely absent (scope-less breadcrumb) while the snapshot
+    // still grants the capability...
+    expect(wrapper.get('.operation-detail__breadcrumbs').text()).not.toContain('Releases');
+    expect(useEmergencyAuthorizationStore().canCreateValuesRevision).toBe(true);
+    // ...and the action is absent rather than dead.
+    expect(convergenceButton(wrapper)).toBeUndefined();
+  });
 });

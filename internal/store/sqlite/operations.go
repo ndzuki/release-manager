@@ -931,14 +931,15 @@ const nonTerminalOperationColumns = operationColumns + `,
 // SQLite DDL lives at the end of migrationStatements in
 // internal/store/sqlite/db.go). The feed query deliberately does NOT pin it with
 // INDEXED BY: the pin ignored scope selectivity and forced a full walk of the
-// global non-terminal index for narrow scopes. Measured in-process on modernc
-// SQLite (2026-10-11; 90k operations / 1k definitions / 100 customers, the
-// narrow customer's ten non-terminal rows newest in the timeline, page 20 plus
-// the next-page probe, three warmups and thirty timed runs taking the median, no
-// -race): a narrow page took 18.2ms pinned versus 154us with the planner's own
-// choice (~115x), while a wide page took 28.6ms with no statistics and 413us
-// once the migration's PRAGMA optimize (optimizePlannerStatistics, db.go)
-// published sqlite_stat1. Column order and predicate are still load-bearing:
+// global non-terminal index for narrow scopes, so a narrow page regressed
+// against the planner's own choice by a factor set by the non-terminal share of
+// the table. That share is the controlling variable and was not recorded for the
+// fixture that produced the previous timings here, so they are gone rather than
+// repeated without it: the measured factors and their harness are recorded with
+// optimizePlannerStatistics (db.go) and in the migration note. Qualitatively, a
+// wide page needs the migration's PRAGMA optimize (optimizePlannerStatistics,
+// db.go) to publish sqlite_stat1 before the planner chooses this index. Column
+// order and predicate are still load-bearing:
 // TestListNonTerminalScopedPlanUsesOrderedPartialIndex requires the wide feed to
 // read this index with no TEMP B-TREE, and
 // TestNonTerminalScopedSQLDoesNotPinTheIndex guards against reintroducing the

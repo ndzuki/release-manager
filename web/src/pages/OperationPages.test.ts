@@ -295,11 +295,13 @@ describe('operation pages', () => {
   }
 
   /*
-   * TASK-277: the Operation centre reaches the detail through an UNSCOPED route, because
-   * the aggregate row carries no cluster id and vue-router refuses a named route whose
-   * required params are empty. The page must therefore drop the release-scoped
-   * breadcrumbs instead of building links from params it does not have — those pushes
-   * would throw "Missing required param" rather than navigate.
+   * TASK-277: the Operation centre can reach the detail through an UNSCOPED route, and
+   * this case registers only that pair — the deployment where the release inventory is
+   * off and the release-scoped routes do not exist. The aggregate row carries the
+   * cluster since TASK-279, so the centre prefers the canonical route where it is
+   * registered; on this entry the page must drop the release-scoped breadcrumbs instead
+   * of building links from params it does not have — those pushes would throw "Missing
+   * required param" rather than navigate.
    */
   it('TASK-277: renders the unscoped detail route with an Operation centre breadcrumb', async () => {
     const clients: TestClients = {
