@@ -559,21 +559,29 @@ func migrateLegacy(db *sql.DB) error {
 // and the steady-state cost is a schema check, not another full scan. On a
 // database that already carries operations it runs the analysis the planner
 // needs; on the first upgrade it does so because the new index changes the
-// schema. Only migrateLegacy calls it: a fresh database holds no rows worth
-// analyzing, so PRAGMA optimize is a no-op there (review M5: deleting the
-// migrateFresh call left all three plan/statistics tests passing), and
-// migrateFresh therefore does not call it. The statistics for a database that
-// starts empty arrive on the next Open, which by then takes the migrateLegacy
-// path.
+// schema. Only migrateLegacy calls it. It is not called on the fresh path, and
+// there is nothing to analyze there: freshTemplate builds the template by
+// running this same legacy migration against an empty template, and the caller's
+// database starts empty too -- the only rows either holds are the two migration
+// seeds (authorization_source_version and policy_version), which no feed query
+// plans against. On that empty database PRAGMA optimize writes no statistics at
+// all; it does not even create the sqlite_stat1 table (probe on a store created
+// empty: sqlite_master contains no sqlite_stat1 entry either before or after the
+// call). The earlier observation that deleting the migrateFresh call left all
+// three plan/statistics tests passing is consistent with that, but it is not the
+// evidence -- those tests are not sensitive to the call. migrateFresh therefore
+// does not call it (removed in the TASK-284 review follow-ups), and the
+// statistics for a database that starts empty arrive on the next Open, which by
+// then takes the migrateLegacy path.
 //
 // The trade-off is explicit: a database that starts empty and is populated later
 // keeps the planner's default plan until the next Open runs the migration again
 // (a process restart or store reopen). That matches the "statistics arrive with
 // the next migration" contract of the index itself. This is NOT strictly better
-// than the pin: on the widest scope the planner adds a BLOOM FILTER and runs
-// ~68% slower than the forced index, which is small in absolute terms (both
-// under a millisecond; the SQLite timings behind these numbers are without
-// -race). What it buys is the worst case and the failure mode: the pin's narrow
+// than the pin: on the widest scope the planner's own choice can be a little
+// slower than the forced index (in the TASK-278 harness both plans stayed in
+// the sub-millisecond range, and the SQLite timings there are without -race).
+// What it buys is the worst case and the failure mode: the pin's narrow
 // regression grows with the non-terminal share of the table (4.5x at 1%
 // non-terminal and 21.6x at 10% in the TASK-278 review harness, 255x on its
 // first fixture, whose share was higher and was not recorded), and the pin

@@ -44,13 +44,14 @@ func seedFeedPlanFixture(t *testing.T, db *sql.DB) {
 }
 
 // analyzeFeedPlanFixture rebuilds planner statistics after the fixture is
-// loaded. It is explicit rather than relying on the migration: the migration's
-// PRAGMA optimize runs on the empty database during Open, before these rows
-// exist, and a fresh SQLite database carries no sqlite_stat1 otherwise. The
-// deliberate ANALYZE keeps this test independent of where the statistics happen
-// to come from, so it still discriminates a missing index or a wrong column
-// order (see TestMigrateBuildsPlannerStatisticsForTheFeedIndex for the migration
-// half).
+// loaded. It is explicit because the store is created empty and nothing else
+// would leave statistics behind: Open takes the fresh path for a new database,
+// and migrateFresh does not run PRAGMA optimize (see optimizePlannerStatistics
+// in db.go), so without this ANALYZE the query below would have no sqlite_stat1
+// to plan against. The deliberate ANALYZE keeps this test independent of where
+// the statistics happen to come from, so it still discriminates a missing index
+// or a wrong column order (see TestMigrateBuildsPlannerStatisticsForTheFeedIndex
+// for the migration half).
 func analyzeFeedPlanFixture(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db, `ANALYZE`)

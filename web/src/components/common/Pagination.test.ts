@@ -80,16 +80,18 @@ describe('Pagination', () => {
     expect(wrapper.emitted('next')).toBeUndefined();
   });
 
-  it('keeps both controls mounted so the layout does not jump', () => {
+  it('keeps both controls mounted when one is unreachable', () => {
     const wrapper = mountPagination({ hasPrev: false, hasNext: true });
 
-    // Not v-if: both buttons stay mounted and only the disabled state flips, so
-    // crossing a page boundary neither reflows the row nor makes a control
-    // disappear. This is a layout guarantee, not a tab-order one: a natively
-    // disabled button is not tabbable in any case (verified in Chrome:
+    // Not v-if: both buttons stay mounted and only the disabled state flips. The
+    // assertion is deliberately about mounting alone -- a unit test on the DOM
+    // cannot measure whether the row reflows, so the name claims no layout
+    // property. It is not a tab-order guarantee either: a natively disabled
+    // button is not tabbable in any case (verified in Chrome:
     // disabledTabbable=false), so mounting it cannot change the tab order.
     expect(buttons(wrapper)).toHaveLength(2);
     expect(buttons(wrapper)[0]!.attributes('disabled')).toBeDefined();
+    expect(buttons(wrapper)[1]!.attributes('disabled')).toBeUndefined();
   });
 
   it('emits each direction exactly once when it is reachable', async () => {
