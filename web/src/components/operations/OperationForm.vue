@@ -91,6 +91,7 @@ function prepareConfirmation(): void {
     >
       <template #default="{ id, describedBy, invalid, disabled, required: fieldRequired }">
         <select
+          class="operation-form__control"
           :id="id"
           v-model="store.fields.valuesRevisionId"
           :aria-describedby="[describedBy, revisionsDescribedBy].filter(Boolean).join(' ') || undefined"
