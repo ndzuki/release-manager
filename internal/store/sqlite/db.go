@@ -559,13 +559,34 @@ func migrateLegacy(db *sql.DB) error {
 // and the steady-state cost is a schema check, not another full scan. On a
 // database that already carries operations it runs the analysis the planner
 // needs; on the first upgrade it does so because the new index changes the
-// schema.
+// schema. Only migrateLegacy calls it. It is not called on the fresh path, and
+// there is nothing to analyze there: freshTemplate builds the template by
+// running this same legacy migration against an empty template, and the caller's
+// database starts empty too -- the only rows either holds are the two migration
+// seeds (authorization_source_version and policy_version), which no feed query
+// plans against. On that empty database PRAGMA optimize writes no statistics at
+// all; it does not even create the sqlite_stat1 table (probe on a store created
+// empty: sqlite_master contains no sqlite_stat1 entry either before or after the
+// call). The earlier observation that deleting the migrateFresh call left all
+// three plan/statistics tests passing is consistent with that, but it is not the
+// evidence -- those tests are not sensitive to the call. migrateFresh therefore
+// does not call it (removed in the TASK-284 review follow-ups), and the
+// statistics for a database that starts empty arrive on the next Open, which by
+// then takes the migrateLegacy path.
 //
 // The trade-off is explicit: a database that starts empty and is populated later
 // keeps the planner's default plan until the next Open runs the migration again
 // (a process restart or store reopen). That matches the "statistics arrive with
-// the next migration" contract of the index itself, and it is strictly better
-// than the pin, which was wrong for every narrow scope regardless of statistics.
+// the next migration" contract of the index itself. This is NOT strictly better
+// than the pin: on the widest scope the planner's own choice can be a little
+// slower than the forced index (in the TASK-278 harness both plans stayed in
+// the sub-millisecond range, and the SQLite timings there are without -race).
+// What it buys is the worst case and the failure mode: the pin's narrow
+// regression grows with the non-terminal share of the table (4.5x at 1%
+// non-terminal and 21.6x at 10% in the TASK-278 review harness, 255x on its
+// first fixture, whose share was higher and was not recorded), and the pin
+// turned a predicate drift or a missing index into a hard "no query solution" /
+// "no such index" read error instead of a slower scan.
 func optimizePlannerStatistics(db *sql.DB) error {
 	if _, err := db.ExecContext(context.Background(), "PRAGMA optimize"); err != nil {
 		return fmt.Errorf("optimize planner statistics: %w", err)
@@ -698,9 +719,6 @@ func migrateFresh(db *sql.DB, ddl, seed string) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
-	}
-	if err := optimizePlannerStatistics(db); err != nil {
-		return err
 	}
 	return nil
 }
@@ -2044,12 +2062,14 @@ var migrationStatements = []string{
 	// repeats store.OperationStatus.IsTerminal's terminal set and the key order
 	// mirrors the feed's ORDER BY (created_at ASC, id ASC). The feed SQL is not
 	// pinned on either engine. PostgreSQL selects the index on its own for a wide
-	// scope (PostgreSQL 16, real migrations, ANALYZE, 30k operations with one
-	// non-terminal row per definition: Index Scan with no Sort, 0.11ms / 66
-	// buffers versus a Seq Scan, Hash Join and Sort at 3.0ms / 635 buffers once
-	// the index is dropped). SQLite is given sqlite_stat1 by the post-commit
+	// scope (PostgreSQL 16, real migrations, EXPLAIN (ANALYZE, BUFFERS), 30k
+	// operations / 1k definitions, 3.3% non-terminal; measured through psql, so
+	// the Go race detector does not apply). Without the index: Seq Scan, Hash
+	// Join, Sort (3.0ms / 635 buffers); with it: Index Scan with no Sort (0.11ms
+	// / 66 buffers). SQLite is given sqlite_stat1 by migrateLegacy's post-commit
 	// PRAGMA optimize below (optimizePlannerStatistics), which keeps the narrow
-	// definition-driven plan and takes this index for a wide one.
+	// definition-driven plan and takes this index for a wide one; migrateFresh
+	// deliberately does not run it (a fresh database has nothing to analyze).
 	`CREATE INDEX IF NOT EXISTS idx_operations_non_terminal_created
 	 ON operations(created_at, id)
 	 WHERE status NOT IN ('succeeded','failed','cancelled','timeout')`,
