@@ -72,18 +72,30 @@ const routeScope = computed(() =>
  */
 async function resolveReleaseScope(definitionId: string): Promise<void> {
   if (!releaseScopedRoutes) return;
-  const currentOperation = operationId.value;
+  const requestedOperationId = operationId.value;
+  /*
+   * The route param alone is not "the operation on screen": across a same-id
+   * scope switch it stays the same while the store is reset (operationId null)
+   * and reloaded. The store's own identity is the authority for which operation
+   * this definition read belongs to; `routeReleaseScope()` still stops a route
+   * that has since gained its own scope from being overwritten. TASK-286.
+   */
+  const stillCurrent = (): boolean =>
+    operationId.value === requestedOperationId &&
+    !routeReleaseScope() &&
+    store.operationId === requestedOperationId &&
+    store.operation?.releaseDefinitionId === definitionId;
   try {
     const definition = await getDefinition(definitionId);
-    // A late response for a previous operation, or a route that now carries its own
-    // scope, must not overwrite the context on screen.
-    if (operationId.value !== currentOperation || routeReleaseScope()) return;
+    // A late response for a previous operation must not overwrite the context
+    // on screen.
+    if (!stillCurrent()) return;
     resolvedScope.value =
       definition.customerId && definition.clusterId
         ? { customerId: definition.customerId, clusterId: definition.clusterId, releaseId: definitionId }
         : null;
   } catch {
-    if (operationId.value !== currentOperation) return;
+    if (!stillCurrent()) return;
     resolvedScope.value = null;
   }
 }
@@ -237,6 +249,15 @@ watch(routeScope, (current, previous) => {
     // Scope changed (possibly with the same operationId): reset first so the
     // load() early-return guard cannot absorb a same-id navigation
     // (AC-057-15: old stream/timers must stop before the new scope loads).
+    //
+    // TASK-286: tear the EMERGENCY effect observation down FIRST. stop() resets
+    // the timeline store (its own scope generation++), and doing that after the
+    // load() below discards the fresh stream — the page then hangs on
+    // "正在加载 Operation…". The isEmergency watcher would otherwise call this
+    // same stop() once the reset operation reads as non-EMERGENCY; after the
+    // explicit teardown that second call is a no-op (currentOperationId is null),
+    // so nothing invalidates the stream opened here.
+    effectObservation.stop();
     store.reset();
     // The preflight read belongs to the scope being left. Clearing both halves
     // synchronously stops the previous operation's failure banner (or result
