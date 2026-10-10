@@ -1,7 +1,8 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import DefinitionsPage from './DefinitionsPage.vue';
 import * as api from '@/connect/definition-api';
@@ -10,6 +11,52 @@ vi.mock('@/connect/definition-api', async (importOriginal) => {
   const original = await importOriginal<typeof api>();
   return { ...original, listDefinitions: vi.fn(), updateDefinition: vi.fn() };
 });
+
+const mounted: Array<{ unmount: () => void }> = [];
+
+/*
+ * TASK-281: the editor is an AppDialog now, and AppDialog teleports to document.body,
+ * so Vue Test Utils' wrapper scoping no longer reaches the editor. Page-level nodes
+ * stay on the wrapper; dialog content is queried in the document (the pattern the
+ * other page tests use for teleported overlays).
+ */
+afterEach(() => {
+  for (const wrapper of mounted.splice(0)) wrapper.unmount();
+  document.body.innerHTML = '';
+});
+
+function editorRoot(): HTMLElement {
+  const root = document.querySelector<HTMLElement>('.definitions__editor');
+  if (!root) throw new Error('definitions editor dialog not rendered');
+  return root;
+}
+
+function editorDialogPanel(): HTMLElement {
+  const panel = document.querySelector<HTMLElement>('.app-dialog__panel');
+  if (!panel) throw new Error('definitions editor dialog not rendered');
+  return panel;
+}
+
+async function clickTestId(id: string): Promise<void> {
+  const element = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+  if (!element) throw new Error(`missing data-testid=${id}`);
+  element.click();
+  await nextTick();
+}
+
+function setEditorInput(name: string, value: string): void {
+  const input = document.querySelector<HTMLInputElement>(`.definitions__editor input[name="${name}"]`);
+  if (!input) throw new Error(`missing editor input ${name}`);
+  input.value = value;
+  input.dispatchEvent(new Event('input'));
+}
+
+async function submitEditor(): Promise<void> {
+  const form = editorRoot().querySelector('form');
+  if (!form) throw new Error('editor form not rendered');
+  form.dispatchEvent(new Event('submit'));
+  await flushPromises();
+}
 
 const mockedList = vi.mocked(api.listDefinitions);
 const mockedUpdate = vi.mocked(api.updateDefinition);
@@ -45,6 +92,7 @@ async function mountPage() {
   await router.push('/definitions');
   await router.isReady();
   const wrapper = mount(DefinitionsPage, { global: { plugins: [router] } });
+  mounted.push(wrapper);
   await flushPromises();
   return wrapper;
 }
@@ -86,39 +134,85 @@ describe('DefinitionsPage', () => {
     const wrapper = await mountPage();
 
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
-    expect(wrapper.findAll('[data-testid^="mapping-row-"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-testid^="mapping-row-"]')).toHaveLength(0);
 
-    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
-    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
-    expect(wrapper.findAll('[data-testid^="mapping-row-"]')).toHaveLength(2);
+    await clickTestId('mapping-add');
+    await clickTestId('mapping-add');
+    expect(document.querySelectorAll('[data-testid^="mapping-row-"]')).toHaveLength(2);
 
-    await wrapper.get('[data-testid="mapping-remove-0"]').trigger('click');
-    expect(wrapper.findAll('[data-testid^="mapping-row-"]')).toHaveLength(1);
+    await clickTestId('mapping-remove-0');
+    expect(document.querySelectorAll('[data-testid^="mapping-row-"]')).toHaveLength(1);
+  });
+
+  // TASK-281: the title semantics the hand-rolled `<h2 id="definitions-editor-title">`
+  // carried are preserved by AppDialog's own labelled heading.
+  it('renders the editor in the shared dialog with a labelled title', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
+
+    const panel = editorDialogPanel();
+    expect(panel.getAttribute('role')).toBe('dialog');
+    expect(panel.getAttribute('aria-modal')).toBe('true');
+    const titleId = panel.getAttribute('aria-labelledby');
+    expect(titleId).toBeTruthy();
+    expect(document.getElementById(titleId!)?.textContent).toBe('编辑 e2e-release-target（版本 3）');
+  });
+
+  /*
+   * TASK-282: the cancel button is disabled while a save is in flight and Escape
+   * now follows it (`closeOnEscape: !store.saving`) instead of staying enabled.
+   * Closing mid-save is not harmless: a conflict response adopts the fresh version
+   * and re-opens the editor the operator just dismissed.
+   */
+  it('keeps the editor open on Escape while a save is in flight, and closes it otherwise', async () => {
+    let resolveUpdate: ((value: api.DefinitionView) => void) | undefined;
+    mockedUpdate.mockImplementationOnce(() => new Promise((resolve) => { resolveUpdate = resolve; }));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
+
+    await submitEditor();
+    await nextTick();
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.definitions__actions button[type="button"]')?.disabled).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
+
+    resolveUpdate?.(definition({ version: 4n }));
+    await flushPromises();
+    expect(document.querySelector('.definitions__editor')).toBeNull();
+
+    // With no submission in flight Escape still dismisses the editor (unchanged).
+    await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('.definitions__editor')).toBeNull();
   });
 
   it('refuses to submit a mapping with missing required fields', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
-    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
+    await clickTestId('mapping-add');
 
-    await wrapper.get('form.definitions__editor form, .definitions__editor form').trigger('submit');
-    await flushPromises();
+    await submitEditor();
 
-    expect(wrapper.get('[data-testid="definitions-validation"]').text()).toContain('第 1 行映射缺少必填项');
+    expect(document.querySelector('[data-testid="definitions-validation"]')?.textContent).toContain('第 1 行映射缺少必填项');
     expect(mockedUpdate).not.toHaveBeenCalled();
   });
 
   it('submits the mappings with the version it read and closes the editor', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
-    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
+    await clickTestId('mapping-add');
 
-    await wrapper.get('input[name="kind-0"]').setValue('Deployment');
-    await wrapper.get('input[name="name-0"]').setValue('api');
-    await wrapper.get('input[name="field-0"]').setValue('image');
-    await wrapper.get('input[name="valuesPath-0"]').setValue('image.tag');
-    await wrapper.get('.definitions__editor form').trigger('submit');
-    await flushPromises();
+    setEditorInput('kind-0', 'Deployment');
+    setEditorInput('name-0', 'api');
+    setEditorInput('field-0', 'image');
+    setEditorInput('valuesPath-0', 'image.tag');
+    await nextTick();
+    await submitEditor();
 
     expect(mockedUpdate).toHaveBeenCalledWith({
       definitionId: 'def-1',
@@ -128,7 +222,7 @@ describe('DefinitionsPage', () => {
       chartName: 'chart',
       promotionMappings: [{ workloadKind: 'Deployment', workloadName: 'api', container: '', field: 'image', valuesPath: 'image.tag' }],
     });
-    expect(wrapper.find('.definitions__editor').exists()).toBe(false);
+    expect(document.querySelector('.definitions__editor')).toBeNull();
     expect(wrapper.get('[data-testid="definitions-notice"]').text()).toContain('版本 4');
   });
 
@@ -143,9 +237,8 @@ describe('DefinitionsPage', () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
 
-    await wrapper.get('[data-testid="mapping-remove-0"]').trigger('click');
-    await wrapper.get('.definitions__editor form').trigger('submit');
-    await flushPromises();
+    await clickTestId('mapping-remove-0');
+    await submitEditor();
 
     expect(mockedUpdate).toHaveBeenCalledTimes(1);
     const sent = mockedUpdate.mock.calls[0][0];
@@ -158,9 +251,9 @@ describe('DefinitionsPage', () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
 
-    await wrapper.get('input[name="releaseName"]').setValue('');
-    await wrapper.get('.definitions__editor form').trigger('submit');
-    await flushPromises();
+    setEditorInput('releaseName', '');
+    await nextTick();
+    await submitEditor();
 
     expect(mockedUpdate).toHaveBeenCalledTimes(1);
     expect(mockedUpdate.mock.calls[0][0].releaseName).toBe('');
@@ -173,15 +266,13 @@ describe('DefinitionsPage', () => {
     mockedList.mockResolvedValue([definition({ version: 4n })]);
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
-    await wrapper.get('.definitions__editor form').trigger('submit');
-    await flushPromises();
+    await submitEditor();
 
-    expect(wrapper.find('.definitions__editor').exists()).toBe(true);
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
 
     // The second attempt must carry the version the server now holds (4), not 3.
     mockedUpdate.mockResolvedValueOnce(definition({ version: 5n }));
-    await wrapper.get('.definitions__editor form').trigger('submit');
-    await flushPromises();
+    await submitEditor();
 
     expect(mockedUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ expectedVersion: 4n }));
   });
@@ -191,11 +282,10 @@ describe('DefinitionsPage', () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
 
-    await wrapper.get('.definitions__editor form').trigger('submit');
-    await flushPromises();
+    await submitEditor();
 
     expect(wrapper.get('.error-state').text()).toContain('版本冲突');
-    expect(wrapper.find('.definitions__editor').exists()).toBe(true);
+    expect(document.querySelector('.definitions__editor')).not.toBeNull();
   });
 
   /*
@@ -208,23 +298,34 @@ describe('DefinitionsPage', () => {
   it('labels every mapping-row input with its column and row', async () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-testid="definition-edit-def-1"]').trigger('click');
-    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
-    await wrapper.get('[data-testid="mapping-add"]').trigger('click');
+    await clickTestId('mapping-add');
+    await clickTestId('mapping-add');
 
-    const inputs = wrapper.findAll('.definitions__mappings tbody input');
+    const root = editorRoot();
+    const inputs = Array.from(root.querySelectorAll<HTMLInputElement>('.definitions__mappings tbody input'));
     expect(inputs).toHaveLength(10);
 
     for (const input of inputs) {
-      const id = input.attributes('id');
+      const id = input.getAttribute('id');
       expect(id, 'an input without an id cannot be pointed at by a label').toBeTruthy();
-      expect(wrapper.get(`.definitions__mappings label[for="${id}"]`).text()).not.toBe('');
+      /*
+       * Two steps on purpose. A missing label yields `undefined` text and the old
+       * one-liner `expect(...?.textContent?.trim()).not.toBe('')` PASSED on that —
+       * it only caught a present-but-empty label. Existence first, then the text.
+       */
+      const label = root.querySelector(`.definitions__mappings label[for="${id}"]`);
+      expect(label, `no label resolves to the control id ${id}`).not.toBeNull();
+      expect(label?.textContent?.trim()).not.toBe('');
     }
 
     // Unique per row (two rows cannot share an id)…
-    expect(new Set(inputs.map((input) => input.attributes('id'))).size).toBe(10);
+    expect(new Set(inputs.map((input) => input.getAttribute('id'))).size).toBe(10);
     // …and the row number is what tells the two rows' Workload 类型 inputs apart.
-    expect(wrapper.get('.definitions__mappings label[for$="-0-kind"]').text()).toBe('Workload 类型（第 1 行）');
-    expect(wrapper.get('.definitions__mappings label[for$="-1-kind"]').text()).toBe('Workload 类型（第 2 行）');
-    expect(wrapper.get('.definitions__mappings label[for$="-1-values-path"]').text()).toBe('Values 路径（第 2 行）');
+    expect(root.querySelector('.definitions__mappings label[for$="-0-kind"]')?.textContent?.trim())
+      .toBe('Workload 类型（第 1 行）');
+    expect(root.querySelector('.definitions__mappings label[for$="-1-kind"]')?.textContent?.trim())
+      .toBe('Workload 类型（第 2 行）');
+    expect(root.querySelector('.definitions__mappings label[for$="-1-values-path"]')?.textContent?.trim())
+      .toBe('Values 路径（第 2 行）');
   });
 });
