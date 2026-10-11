@@ -18,7 +18,10 @@ import (
 var errUnavailable = errors.New("livewire: connector is unavailable")
 
 // authorizedRequest carries the runner bearer token. It is a package-level
-// generic helper because Go 1.26 cannot declare generic methods.
+// function, not a method, because several files in this package share it and
+// its callers pass tokens from more than one type, so no single receiver owns
+// it. (Generic methods are legal under the Go version go.mod requires; sharing
+// across those callers, not the language, is what fixes the shape here.)
 func authorizedRequest[T any](token string, message *T) *connect.Request[T] {
 	request := connect.NewRequest(message)
 	if token != "" {

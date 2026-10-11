@@ -256,8 +256,10 @@ func collectBaseline(config *e2e.Config, options runOptions, runID string, logge
 		logger.Warn("baseline revision collection failed; cleanup revision restore will degrade", "error", safeErrorMessage(revisionErr))
 	}
 	baseline.Identity.ReleaseInventories = revisions
-	// The embedded snapshot time is assigned after the literal because go1.26
-	// disallows promoted fields in a composite literal of the outer type.
+	// CollectedAt is promoted from the embedded snapshot and is assigned here,
+	// after the collection calls above, so the timestamp marks when collection
+	// finished rather than when the literal was built. (The Go version go.mod
+	// requires also allows keying a promoted field in the outer literal.)
 	baseline.CollectedAt = time.Now().UTC()
 	baselineDigest, err := e2e.StableDigest(baseline)
 	if err != nil {
