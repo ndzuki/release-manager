@@ -196,21 +196,27 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   的调用只有这两处（`internal/audit/emitter.go:160`、`internal/audit/spool.go:71`）。
 - **状态：部分实现（存在绕过 emitter 的审计直写）**。Operator 管理与审计导出两条链路在写事务内用裸 SQL
   直接插入 `audit_events`，不经过 `Normalize`：
-  `internal/store/sqlite/operator_management.go:477-497`（同一文件另有 7 处调用点，如
-  `internal/store/sqlite/operator_management.go:104,134,161,187,393,440`）、
-  PostgreSQL 等价实现 `internal/store/postgres/operator_management.go:446`，
+  `internal/store/sqlite/operator_management.go:477-497`（同一文件另有 6 处调用点，如
+  `internal/store/sqlite/operator_management.go:104,134,161,187,394,441`）、
+  PostgreSQL 等价实现 `internal/store/postgres/operator_management.go:450`，
   以及导出事件 `internal/store/sqlite/audit_exports.go:57`（PG `internal/store/postgres/audit_exports.go:55`，
-  由 `internal/audit/audit_service_handler.go:142-153` 触发）。
+  由 `internal/audit/audit_service_handler.go:211` 触发，即 `ExportAuditEvents`，
+  `internal/audit/audit_service_handler.go:155-220`）。
   这违反 `AGENTS.md:27`（硬约束 6「不要绕过 emitter 直接写审计表」）。
   已核实的缓解：这些事件的 payload 由服务端固定 key 构造——`internal/orchestrator/operator.go:321-352`
   把 `ChangeSummary` 写成常量、`internal/orchestrator/operator.go:139-144` 只记录
   `reason_present`/`reason_length` 而不记录 reason 原文；导出事件的 `ActorKind` 恒为 system 且无 metadata。
   另外归档写盘前会**二次脱敏**（`internal/audit/archiver.go:80` →
-  `internal/audit/sanitize.go:29-42`）。查询投影**会**把库里的 `change_summary`/`metadata` 原样回填到响应
+  `internal/audit/sanitize.go:29-42`）。Operator 管理的裸写还有一道**插入前**控制：两个引擎的
+  `insertOperatorAuditEvent` 都无条件调用 `store.SanitizeAuditEvent(event)`
+  （`internal/store/sqlite/operator_management.go:469`、`internal/store/postgres/operator_management.go:441`），
+  它与 `Normalize` 共用 `internal/redact` 词表、脱敏强度等价（`ChangeSummary` 走内容扫描，`Metadata`
+  先按字段名再按内容两遍；差别只在 `Normalize` 另做 actor/必填字段校验）；但导出链路的裸写
+  （`internal/store/sqlite/audit_exports.go:56-77`）没有这一步。查询投影**会**把库里的 `change_summary`/`metadata` 原样回填到响应
   （`internal/audit/audit_service_handler.go:228-256`，字段在 `:249`/`:250`）；查询侧唯一的掩码是 `actor`
   ——非 `platform_admin`/`release_admin` 调用者看到 `actor.id` 被截断、`role` 清空（`:232-235`），
-  而非这两个字段缺失。所以目前**未见明文泄露证据**，其依据是上面两条（直写 payload 由服务端固定 key
-  构造 + 归档二次脱敏），**不是**查询不返回这两个字段；但「所有审计写入都过脱敏」
+  而非这两个字段缺失。所以目前**未见明文泄露证据**，其依据是上面三条（直写 payload 由服务端固定 key
+  构造 + 归档二次脱敏 + operator 裸写插入前的 `SanitizeAuditEvent`），**不是**查询不返回这两个字段；但「所有审计写入都过脱敏」
   并非结构性保证。**建议**：把直写改为经过 `Normalize`，或在 store 层再兜一道。
 - **状态：已实现（审计租户边界与角色判定由服务端强制；TASK-095 组织域 + TASK-103/ADR-021 角色判定）**。
   release-api 不内嵌 Casbin、不读 release-auth 的库；它把调用方自己的 Bearer 透传给 release-auth 的
