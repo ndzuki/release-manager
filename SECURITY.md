@@ -206,8 +206,11 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   把 `ChangeSummary` 写成常量、`internal/orchestrator/operator.go:139-144` 只记录
   `reason_present`/`reason_length` 而不记录 reason 原文；导出事件的 `ActorKind` 恒为 system 且无 metadata。
   另外归档写盘前会**二次脱敏**（`internal/audit/archiver.go:80` →
-  `internal/audit/sanitize.go:29-42`），查询投影也不返回 `change_summary`/`metadata`
-  （`internal/audit/audit_service_handler.go:164-174`）。因此目前**未见明文泄露证据**，但「所有审计写入都过脱敏」
+  `internal/audit/sanitize.go:29-42`）。查询投影**会**把库里的 `change_summary`/`metadata` 原样回填到响应
+  （`internal/audit/audit_service_handler.go:228-256`，字段在 `:249`/`:250`）；查询侧唯一的掩码是 `actor`
+  ——非 `platform_admin`/`release_admin` 调用者看到 `actor.id` 被截断、`role` 清空（`:232-235`），
+  而非这两个字段缺失。所以目前**未见明文泄露证据**，其依据是上面两条（直写 payload 由服务端固定 key
+  构造 + 归档二次脱敏），**不是**查询不返回这两个字段；但「所有审计写入都过脱敏」
   并非结构性保证。**建议**：把直写改为经过 `Normalize`，或在 store 层再兜一道。
 - **状态：已实现（审计租户边界与角色判定由服务端强制；TASK-095 组织域 + TASK-103/ADR-021 角色判定）**。
   release-api 不内嵌 Casbin、不读 release-auth 的库；它把调用方自己的 Bearer 透传给 release-auth 的

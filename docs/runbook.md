@@ -73,7 +73,7 @@
 - 启动期任何一步失败都会直接退出进程：配置加载失败 `failed to load config` → `os.Exit(1)`；`Register` 失败（含 store 打开、PostgreSQL 迁移、Redis ping）`failed to register service` → `os.Exit(1)`（`internal/app/app.go:125-149`）。这两条日志就是 CrashLoop 的第一现场。
 - 探针时间预算是显式的（TASK-099）：每个应用容器有 `startupProbe`（httpGet `/health`，period 5s，HTTP `timeoutSeconds: 3`）——orchestrator/auth/notifier/webhook/notification-sink `failureThreshold: 120`（10 分钟启动预算），customer agent 60；startup 通过后 liveness 才有发言权。`readinessProbe` 指 `/readyz`（timeout 3s、failureThreshold 3；agent 为 12 以容忍重连窗），`livenessProbe` 指 `/health`（timeout 3s、failureThreshold 3）。防漂移：`make check-probes`。**曾经的形态（迁移前的风险）**：全树无 `startupProbe`、K8s 默认 `timeoutSeconds=1`，而迁移在 `Register` 内同步跑完才开始监听（`internal/app/app.go:146` → `cmd/orchestrator/main.go:524-545`）⇒ 一次慢迁移可能被 liveness 打断，表现为反复 CrashLoop 且每轮日志都从头重放迁移——若再次看到该形态，说明 manifest 被回退。
 - 关停预算只有 5 秒（HTTP server + extra 网关 + `Shutdowner` + `Close`，`internal/app/app.go:211-227`）。审计刷盘超过 5s 会留下 `audit emitter shutdown: context deadline exceeded`（`internal/audit/emitter.go:115-120`）。
-- 8084 网关不是 HTTP 服务：只有 OperatorService 与 SyncInventory 两条路由，`ReadHeaderTimeout: 10s`、TLS1.3、`VerifyClientCertIfGiven`（`cmd/orchestrator/main.go:178-218`）。用普通 HTTP 探测它会得到 `Client sent an HTTP request to an HTTPS server`，dev 生命周期因此只做 TCP 连通性探测（`deploy/dev/dev.sh:1176-1180`）。**对 8084 做 HTTP 探针失败不是故障**。
+- 8084 网关不是 HTTP 服务：只有 OperatorService 与 SyncInventory 两条路由，`ReadHeaderTimeout: 10s`、TLS1.3、`VerifyClientCertIfGiven`（`cmd/orchestrator/main.go:193-221`）。用普通 HTTP 探测它会得到 `Client sent an HTTP request to an HTTPS server`，dev 生命周期因此只做 TCP 连通性探测（`deploy/dev/dev.sh:1176-1180`）。**对 8084 做 HTTP 探针失败不是故障**。
 - web 的探针指向 `/`（`deploy/kustomize/services/web.yaml:27-50`），nginx 才把 `/health`、`/readyz`、`/environment` 反代到 orchestrator（`web/nginx.conf:123-146`）：所以 **8087 的 `/readyz` 报的是 orchestrator 的健康度**，不要据此判断 web 自身。
 
 **处置动作**
@@ -308,7 +308,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 | `permission_denied: csrf token mismatch` | cookie 认证下的写操作缺/错 `X-CSRF-Token` | `internal/auth/interceptor.go:80` |
 | `resource_exhausted: too many login attempts` | 按用户名限流命中 | `internal/auth/service.go:66`、`internal/auth/browser_session.go:21` |
 | `unauthenticated: authentication required`（服务侧） | 无 JWT 且无 service token | `internal/orchestrator/rollback.go:35` |
-| `permission_denied: invalid service token` | bearer 哈希与 current/previous 都不同 | `internal/auth/service_token.go:50-59` |
+| `unauthenticated: invalid service token` | bearer 哈希与 current/previous 都不同 | `internal/auth/service_token.go:61` |
 
 配置与常量（现状）：
 
@@ -371,7 +371,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **确认依据（现状）**
 
 - 合法状态转移只有这些边：`pending → preflight|queued|cancelled|timeout`、`preflight → queued|failed|cancelled|timeout`、`queued → running|cancelled|timeout`、`running → succeeded|failed|cancelling|timeout`、`cancelling → cancelled|failed|timeout`（`internal/orchestrator/operation/state.go:33-62`）；终态吸收一切后续事件（`internal/orchestrator/operation/state.go:66-69`）。标准 `INSTALL/UPGRADE/ROLLBACK` 必经 preflight，`EMERGENCY` 跳过（`internal/orchestrator/operation/state.go:84-98`）。⇒ **停在 `preflight` 是设计内的等待**（`docs/architecture.md:127-136` 的 CAS + outbox 语义）。
-- **只有 EMERGENCY Operation 有 `deadline`**：`deadline = now + emergency.operation_timeout` 并写进 Operation（`internal/orchestrator/emergency.go:184-187,213-219`），超时判定也只挑带 deadline 的 EMERGENCY（`internal/orchestrator/emergency.go:297-333`，1 秒一轮扫，`cmd/orchestrator/main.go:747-756`）。⇒ **标准 Operation 的 `deadline` 为空，永远不会被系统判 timeout**，只能等 operator 重连或人工 `CancelOperation`。这是「发布卡住」与「真故障」的第一分水岭。
+- **只有 EMERGENCY Operation 有 `deadline`**：`deadline = now + emergency.operation_timeout` 并写进 Operation（`internal/orchestrator/emergency.go:207,250`），超时判定也只挑带 deadline 的 EMERGENCY（`internal/orchestrator/emergency.go:297-333`，1 秒一轮扫，`cmd/orchestrator/main.go:747-756`）。⇒ **标准 Operation 的 `deadline` 为空，永远不会被系统判 timeout**，只能等 operator 重连或人工 `CancelOperation`。这是「发布卡住」与「真故障」的第一分水岭。
 - 恢复扫描：启动时跑一次，**TASK-098 起按 `operation.recovery_interval`（默认 1m）周期跑**（`cmd/orchestrator/main.go:743-760`、`:785`）；标准 Operation 现在带 `operation.deadline`（默认 30m，`internal/orchestrator/service.go:394`、`internal/orchestrator/rollback.go:164`），超期由扫描转 `timeout`。其行为（`internal/orchestrator/operation/recover.go:14-30,58-87`）：
   - `cancelling` 超过 `CancellingTimeout = 5m` ⇒ 转 `failed`，日志 `recovery: stale cancelling operation, transitioning to failed`；
   - `deadline + DeadlineGracePeriod(30s)` 已过 ⇒ 转 `timeout`；
@@ -431,7 +431,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **确认依据（现状）**
 
 - 入口：`ExecuteEmergencyChange`（`internal/orchestrator/emergency.go:77-110`）。**kill switch 是最高优先级门禁**：`enabled = false` ⇒ `failed_precondition` + `EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED`（`internal/orchestrator/emergency.go:96-110`）。
-- 开关没有 RPC：唯一的写入口是 orchestrator 启动时把配置 `emergency.*` upsert 进 `app_settings`（`cmd/orchestrator/main.go:300-312`、`seedEmergencyConfig` `cmd/orchestrator/main.go:643-668`）。配置缺失时保留既有值、新库默认 fail-closed（`internal/config/config.go:147-156`）。⇒ **改开关 = 改 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:41-44` 再 `make dev-up`**。
+- 开关没有 RPC：唯一的写入口是 orchestrator 启动时把配置 `emergency.*` upsert 进 `app_settings`（`cmd/orchestrator/main.go:328`、`seedEmergencyConfig` `cmd/orchestrator/main.go:737`）。配置缺失时保留既有值、新库默认 fail-closed（`internal/config/config.go:147-156`）。⇒ **改开关 = 改 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:41-44` 再 `make dev-up`**。
 - deadline = `emergency.operation_timeout`（dev `30s`）；过期后 `pending` ⇒ `effect = NOT_APPLIED`（可证明未投递，释放锁），`queued/running` ⇒ `effect = UNKNOWN`（保留锁观察，`internal/orchestrator/emergency.go:290-333`）。
 - 投递通道是**进程内**紧急流，agent 不在流上就直接失败（见 §3 的 `DispatchEmergency` 语义）。
 **处置动作**：调用 `ExecuteEmergencyChange`，随后按 §6/§7.3 跟踪收敛。
