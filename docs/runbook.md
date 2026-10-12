@@ -418,7 +418,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **先查什么**：当前 revision 与目标 revision；是否有非终态 Operation 占位；是否有 pending 收敛任务。
 **确认依据（现状）**
 
-- 入口：`POST /orchestrator.v1.OrchestratorService/RollbackRelease`（`api/proto/orchestrator/v1/orchestrator.proto:1018`）。请求字段：`release_definition_id`、`target_revision`（回到哪个 revision）、`expected_current_revision`（乐观锁）、`reason`（必填）、`values_revision_id`/`values_patch` 已废弃且**服务端拒绝**（`api/proto/orchestrator/v1/orchestrator.proto:153-163`）。
+- 入口：`POST /orchestrator.v1.OrchestratorService/RollbackRelease`（`api/proto/orchestrator/v1/orchestrator.proto:1115`）。请求字段：`release_definition_id`、`target_revision`（回到哪个 revision）、`expected_current_revision`（乐观锁）、`reason`（必填）、`values_revision_id`/`values_patch` 已废弃且**服务端拒绝**（`api/proto/orchestrator/v1/orchestrator.proto:282-283`）。
 - 必须带 `Idempotency-Key` header（缺失 → `invalid_argument: idempotency_key is required`，`internal/orchestrator/rollback.go:104-109`；同 key 不同请求体 → `already_exists: idempotency_conflict`，`internal/orchestrator/rollback.go:116-121`）。header 名在服务端统一从 `Idempotency-Key` 读取（`internal/orchestrator/values_revision.go:83,405` 有 1–64 字符约束）。
 - 门禁顺序与错误码（现状，全部在 `internal/orchestrator/rollback.go`）：认证（:35）→ values 参数被拒（:41）→ 参数校验（:46-58）→ definition 存在（:66）→ 紧急 effect 门禁（:81）→ 收敛门禁 `release_convergence_pending`（:95-102）→ 幂等键（:104-127）→ definition 可用（:130）→ customer 未禁用（:134）→ 无其他非终态 Operation（:138）→ ROLLBACK 需要 active inventory（:142）→ 授权快照版本（:166-169）；并发冲突映射：`release_busy`→`failed_precondition`、`idempotency_conflict`→`already_exists`、`authorization_snapshot_stale`→`unavailable`（:180-194）。
 - ⚠️ **破坏性等级：中**。它会在客户集群里执行真实的 Helm rollback（经 outbox 投递给 agent，至少一次 + 本地幂等重放，`docs/architecture.md:30-38`）。前置确认：① `expected_current_revision` 与实读 revision 一致；② `reason` 写清事故编号（会进审计 `change_summary`）；③ 目标 revision 的 bundle/镜像仍在 registry 里存在（GC 会按 `bundle_retention_days` 回收，`internal/orchestrator/cleanup.go:43-52`）；④ 当前无并发操作。
@@ -455,7 +455,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **确认依据（现状）**：只有配置键 `maintenance`（`internal/config/config.go:19,152`）与环境变量 `MAINTENANCE`（`internal/config/config.go:512`）两个入口，**没有 `--maintenance` flag**（`grep maintenance cmd/orchestrator/main.go` 命中的是只读白名单与拦截器挂载）⇒ 生效时非白名单 unary 写全部 `unavailable: maintenance`（`internal/app/maintenance.go:14-28`），白名单是只读 procedures（`orchestratorReadOnlyProcedures`，`cmd/orchestrator/main.go:774`）。副作用必须同时知道：
 
 1. 不创建审计 emitter ⇒ 窗口内无审计（`cmd/orchestrator/main.go:361-363`）；
-2. 不跑启动期恢复（`cmd/orchestrator/main.go:335-340`）、不跑 GC ticker、不跑紧急超时扫与 stuck 扫（`cmd/orchestrator/main.go:734-746`）；
+2. 不跑启动期恢复（`cmd/orchestrator/main.go:354-359`）、不跑 GC ticker、不跑紧急超时扫与 stuck 扫（`cmd/orchestrator/main.go:830-842,899`）；
 3. 流式 RPC 不受门禁（unary-only，`internal/app/maintenance.go:14`）。
 
 **处置动作**：`kubectl set env deployment/orchestrator MAINTENANCE=true`（进）/ `MAINTENANCE-`（出），随后 `kubectl rollout status`。
