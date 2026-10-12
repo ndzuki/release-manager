@@ -303,7 +303,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 | --- | --- | --- |
 | `unauthenticated: missing authentication credentials` | 既无 `Authorization` bearer 也无 `rm_access` cookie | `internal/auth/interceptor.go:55-63` |
 | `unauthenticated: invalid token: ...`（含过期） | `ValidateAccessToken` 失败：签名不符、过期、claims 缺字段 | `internal/auth/interceptor.go:61`、`internal/auth/jwt.go:105-119` |
-| `unauthenticated: session revoked` | 用户非 active，或 `auth_sessions` 无有效会话 | `internal/auth/interceptor.go:113-124` |
+| `unauthenticated: session revoked` | 用户非 active，或 `auth_sessions` 无有效会话 | `internal/auth/interceptor.go:107-118` |
 | `internal: session validation failed` | 会话有效性查询本身失败（含 Redis 不可用） | `internal/auth/interceptor.go:114` |
 | `permission_denied: csrf token mismatch` | cookie 认证下的写操作缺/错 `X-CSRF-Token` | `internal/auth/interceptor.go:80` |
 | `resource_exhausted: too many login attempts` | 按用户名限流命中 | `internal/auth/service.go:66`、`internal/auth/browser_session.go:21` |
@@ -324,7 +324,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
   ① 指标 `auth_snapshot_stale_cause_total{cause}`（`internal/authorization/metrics.go:41-44`；写入点 `internal/authorization/module.go:425`）；`cause` 是**有界枚举**：`warmup`（正常首次拉取必 stale，随后自愈）、`gap`（checkpoint 跳跃超过 1 版）、`regression`（快照比本地 checkpoint 旧）、`not-fresh`、`snapshot-rpc-timeout`（快照 RPC 超过 200ms `snapshotDeadline`）、`snapshot-rpc-error`（其余快照 RPC 失败）、`snapshot-scope-mismatch`、`checkpoint-read-error`、`checkpoint-write-error`、`unknown`（`internal/authorization/stale_cause.go`）。
   ② 日志：失败路径的 **WARN** 记录带 `stale_cause=<枚举>` 与 `reason=AUTHORIZATION_SNAPSHOT_STALE`（`internal/authorization/module.go:173-188` 的「authorization snapshot pull failed during authorize」、`internal/authorization/module.go:199-210` 的「…not fresh during authorize」）。**WARN 里刻意不含原始 pull 错误文本**（它可能带凭据片段，项目硬约束禁止机密入日志）⇒ 定位靠 `stale_cause` + 该 cause 的指标；release-auth 侧会记录它自己的错误。正常 warm-up 只到 WARN、不会升级到 ERROR，所以 **WARN 里出现 `stale_cause` 才是要看的那条**。
   判读：单次 `warmup` 是健康路径，**连续**非 `warmup` 才是故障（RPC 超时/错误 ⇒ 查 auth 的 Load 与网络；`checkpoint-*-error` ⇒ 查 orchestrator 侧权威库；`gap`/`regression` ⇒ 查是否有多写者或回滚的快照源）。
-- 维护模式（`maintenance: true` 或 `MAINTENANCE=true`，`internal/config/config.go:19,281`）返回 `unavailable: maintenance`，且**只包 unary RPC**（`internal/app/maintenance.go:14-28` 用的是 `connect.UnaryInterceptorFunc`）⇒ 流式（`WatchOperation`、`CommandStream`）不受门禁。
+- 维护模式（`maintenance: true` 或 `MAINTENANCE=true`，`internal/config/config.go:19,512`）返回 `unavailable: maintenance`，且**只包 unary RPC**（`internal/app/maintenance.go:14-28` 用的是 `connect.UnaryInterceptorFunc`）⇒ 流式（`WatchOperation`、`CommandStream`）不受门禁。
 
 **处置动作**
 
@@ -377,11 +377,11 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
   - `deadline + DeadlineGracePeriod(30s)` 已过 ⇒ 转 `timeout`；
   - 其余 ⇒ **有意保留**，日志 `recovery: non-terminal operation left running for operator reconnect`。看到这条日志 = 系统认为「不算故障」。
   - preflight 的恢复同理：`ResumePreflights` 只在启动时（`cmd/orchestrator/main.go:450`，日志 `preflight operations resumed on restart`）。⇒ **没有周期性收敛**：不重启就不会推进。
-- 投递停滞的真实原因分层：`max_inflight = 1` 会阻塞后续命令下发（`internal/operator/service.go:1396-1406`）；agent 执行超时默认 5 分钟（`internal/operator/agent/agent.go:31` `defaultInstallTimeout`，可被命令 `TimeoutSeconds` 覆盖，`internal/operator/agent/agent.go:1272-1273`；进程 flag `--install-timeout`，`cmd/operator/main.go:359-366`）；`RolloutProgress`（`internal/operator/service.go:776-779`）缺失意味着 agent 侧 observer 未上报。
+- 投递停滞的真实原因分层：`max_inflight = 1` 会阻塞后续命令下发（`internal/operator/service.go:1396-1406`）；agent 执行超时默认 5 分钟（`internal/operator/agent/agent.go:35` `defaultInstallTimeout`，可被命令 `TimeoutSeconds` 覆盖，`internal/operator/agent/agent.go:1272-1273`；进程 flag `--install-timeout`，`cmd/operator/main.go:437`）；`RolloutProgress`（`internal/operator/service.go:776-779`）缺失意味着 agent 侧 observer 未上报。
 - 「设计内的等待态」清单（现状）：`preflight`（等 preflight 通过/重启恢复）、`queued`/`running` 且 operator 处于重连退避窗口、`cancelling` 且未超 5m、`convergence_tasks.status = pending_promotion`（`internal/orchestrator/rollback.go:95-102` 会因此拒绝新回滚并报 `release_convergence_pending`）、values revision 处于 `pending_approval`（`internal/store/store.go:207`）。
 - 「真故障」清单（现状）：outbox 长期 `pending`/`delivered` 且会话 `offline`；EMERGENCY 越过 deadline 后 `effect_status = UNKNOWN` 且超过 `effect_observe_timeout`（dev 24h，`configs/orchestrator.dev.yaml:56-57`）⇒ stuck lock，日志 `emergency target lock is stuck`（`internal/orchestrator/emergency_stuck.go:290-299`，60s 一轮，`cmd/orchestrator/main.go:812-824`，**只告警+审计，绝不自动解锁**）；`cleanup_gc` 不健康拖垮 readiness（§1）。
 - 枚举能力的现状缺口：**`ListOperations` 已实现**（`internal/orchestrator/operations_query.go:34`；该函数注释明写「TASK-095 replaced the handler that always answered CodeUnimplemented」），**Web 也已在用**（`web/src/pages/OperationListPage.vue:60` 调用 `@/connect/operation-api` 的 `listOperations`）。但它**按单个 release definition 取历史**（keyset-paginated on `(created_at, id)`）⇒ 值班仍**没有「跨 definition 列出所有非终态 Operation」的全局枚举 API**，只能按已知 `operation_id` 查或跑只读 SQL（§2、§9）。**早前本节写「服务端未实现 / Web 未调用」，与代码相反，已更正。**
-- timeline 的读取路径只有 `WatchOperation`（服务端流，`api/proto/orchestrator/v1/orchestrator.proto:1138`）；`last_error` 与 timeline 里的错误摘要都经 `redact.Sanitize` + `redact.Truncate(..., 500)` 脱敏（`internal/store/store.go:2743-2757`）。⇒ 日志/时间线里看到 `****REDACTED****` 是预期，不是数据损坏。
+- timeline 的读取路径只有 `WatchOperation`（服务端流，`api/proto/orchestrator/v1/orchestrator.proto:1138`）；`last_error` 与 timeline 里的错误摘要都经 `redact.Sanitize` + `redact.Truncate(..., 500)` 脱敏（`internal/store/store.go:2802-2803`）。⇒ 日志/时间线里看到 `****REDACTED****` 是预期，不是数据损坏。
 
 **处置动作**
 
@@ -431,12 +431,12 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **确认依据（现状）**
 
 - 入口：`ExecuteEmergencyChange`（`internal/orchestrator/emergency.go:97`）。**kill switch 是最高优先级门禁**：`enabled = false` ⇒ `failed_precondition` + `EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED`（`internal/orchestrator/emergency.go:116-130`，reason code 在 `:125`）。
-- 开关没有 RPC：唯一的写入口是 orchestrator 启动时把配置 `emergency.*` upsert 进 `app_settings`（`cmd/orchestrator/main.go:328`、`seedEmergencyConfig` `cmd/orchestrator/main.go:737`）。配置缺失时保留既有值、新库默认 fail-closed（`internal/config/config.go:382-386`）。⇒ **改开关 = 改 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:41-44` 再 `make dev-up`**。
-- deadline = `emergency.operation_timeout`（dev `30s`）；过期后 `pending` ⇒ `effect = NOT_APPLIED`（可证明未投递，释放锁），`queued/running` ⇒ `effect = UNKNOWN`（保留锁观察，`internal/orchestrator/emergency.go:290-333`）。
+- 开关没有 RPC：唯一的写入口是 orchestrator 启动时把配置 `emergency.*` upsert 进 `app_settings`（`cmd/orchestrator/main.go:328`、`seedEmergencyConfig` `cmd/orchestrator/main.go:737`）。配置缺失时保留既有值、新库默认 fail-closed（`internal/config/config.go:382-386`）。⇒ **改开关 = 改 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:51-54` 再 `make dev-up`**。
+- deadline = `emergency.operation_timeout`（dev `30s`）；过期后 `pending` ⇒ `effect = NOT_APPLIED`（可证明未投递，释放锁），`queued/running` ⇒ `effect = UNKNOWN`（保留锁观察，`internal/orchestrator/emergency.go:350-354`）。
 - 投递通道是**进程内**紧急流，agent 不在流上就直接失败（见 §3 的 `DispatchEmergency` 语义）。
 **处置动作**：调用 `ExecuteEmergencyChange`，随后按 §6/§7.3 跟踪收敛。
 
-- ⚠️ **破坏性等级：高**（直接改工作负载/镜像）。前置确认：① 目标 workload 身份（kind/name/namespace/uid）已由 REQ-085 校验（缺失即 `invalid_workload_ref`，`internal/orchestrator/emergency.go:598-615`，调用点 `:161`）；② 收敛策略已确定（是否需要后续正式 promotion，`internal/orchestrator/emergency.go:220-227`）；③ 已知 `operation_timeout` 的值并计划在窗口内观察；④ 有 `Idempotency-Key`。
+- ⚠️ **破坏性等级：高**（直接改工作负载/镜像）。前置确认：① 目标 workload 身份（kind/name/namespace/uid）已由 REQ-085 校验（缺失即 `invalid_workload_ref`，`internal/orchestrator/emergency.go:598-615`，调用点 `:161`）；② 收敛策略已确定（是否需要后续正式 promotion，`internal/orchestrator/emergency.go:210,230`）；③ 已知 `operation_timeout` 的值并计划在窗口内观察；④ 有 `Idempotency-Key`。
 
 **处置后验证**：`GetOperation` 的 `effect_status`；`ListEmergencyTargets` / `CheckEmergencyConflict`；若 `effect` 长期 `UNKNOWN`，等过 `effect_observe_timeout` 后按 §7.3 处置。
 
@@ -454,7 +454,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 **确认依据（现状）**：只有配置键 `maintenance`（`internal/config/config.go:19,152`）与环境变量 `MAINTENANCE`（`internal/config/config.go:512`）两个入口，**没有 `--maintenance` flag**（`grep maintenance cmd/orchestrator/main.go` 命中的是只读白名单与拦截器挂载）⇒ 生效时非白名单 unary 写全部 `unavailable: maintenance`（`internal/app/maintenance.go:14-28`），白名单是只读 procedures（`orchestratorReadOnlyProcedures`，`cmd/orchestrator/main.go:774`）。副作用必须同时知道：
 
-1. 不创建审计 emitter ⇒ 窗口内无审计（`cmd/orchestrator/main.go:342-344`）；
+1. 不创建审计 emitter ⇒ 窗口内无审计（`cmd/orchestrator/main.go:361-363`）；
 2. 不跑启动期恢复（`cmd/orchestrator/main.go:335-340`）、不跑 GC ticker、不跑紧急超时扫与 stuck 扫（`cmd/orchestrator/main.go:734-746`）；
 3. 流式 RPC 不受门禁（unary-only，`internal/app/maintenance.go:14`）。
 
@@ -594,7 +594,7 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 
 以下是读码过程中发现的「文档/配置与代码不一致」，值班时以**代码**为准：
 
-1. **审计失败是否阻塞业务提交**：`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md` 主张审计写入失败会阻塞对应业务提交；实现是异步 best-effort（`internal/orchestrator/service.go:1537-1549`，失败仅 Warn）。影响：合规叙述比实现更强。
+1. **审计失败是否阻塞业务提交**：`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md` 主张审计写入失败会阻塞对应业务提交；实现是异步 best-effort（`internal/orchestrator/service.go:1769-1781`，失败仅 Warn）。影响：合规叙述比实现更强。
 2. ~~**`retention:` 死配置**~~ **TASK-094 已闭环**（§7-3）：dev overlay 已改为规范 `gc:` 块（`deploy/kustomize/dev/configs/orchestrator.dev.yaml:23-31`），集群 GC 真实按文件值跑（当前与默认同值：6h、90/30/90/7，`internal/orchestrator/cleanup.go:43-52`）；写回 `retention:` 会被 `make check-config-keys` 拒绝。
 3. ~~**`log_level` 有键无实现**~~ **TASK-094 已闭环**：级别经 `applyLogLevel` 生效（`internal/app/app.go:133`），空/非法回落 debug；现网可用配置收敛日志量（详见 observability 文档 §1）。
 4. ~~**`release-api` 的归档 worker 与关停刷盘不会被触发**~~ **TASK-094 已闭环**（签名匹配 + 编译期断言，`cmd/api/main.go:93,103`）；**部署形态仍无执行者**：集群里没有 `release-api` Deployment（`deploy/kustomize/services/kustomization.yaml:3-9`）。影响：审计 retention 与导出在集群环境仍无人跑——这是产品决策缺口，不是签名缺陷。
@@ -605,6 +605,6 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 9. **审计导出没有消费者**：`ExportAuditEvents` 只写入一条 `pending` 导出记录（`internal/audit/audit_service_handler.go:155-220`），`AuditExportStore` 接口只有 `CreateWithEvent`（`internal/store/store.go`），全仓无读取/推进该状态的代码 ⇒ 「导出」当前是占位能力。
 10. ~~**Web 侧审计调用无路由**~~（**已修复，TASK-174**）：`web/nginx.conf:91` 现已有 `location ^~ /audit.v1.` → `api:8088`，`release-api` 由 `deploy/kustomize/services/api.yaml` 部署；浏览器侧 `auditClient`（`web/src/connect/client.ts:57-61`）因此可达。仍成立的是同段的字段/导出缺口（第 8、9 条）。
 11. **未接线组件**（现状 = 代码存在但生产不启用，排查时不要以它们为依据）：`cmd/operator/main.go:323-356` 的 `runSessionExpiry`（agent 模式下 `s.st == nil` 直接 continue）、`internal/operator/session_client.go`（带心跳的会话客户端，无 `cmd/` 引用）。注意 `internal/operator/session_registry.go` **已不在本清单**：TASK-098 起由网关 operator service 构造并 `Run`。
-12. **需核实（无法从代码判定）**：① 「全局 outbox 序列导致跨 operator 误判 gap」是否为有意设计（`internal/operator/service.go:1156`）；② `agent.mode` 何时切到 `gateway`（`cmd/operator/main.go:39-42` 注释称 TASK-065 将移除该路径）；③ 生产形态（本仓只有 `deploy/kustomize/dev` 一套 overlay）下的 retention/告警责任方。
+12. **需核实（无法从代码判定）**：① 「全局 outbox 序列导致跨 operator 误判 gap」是否为有意设计（`internal/operator/service.go:1182-1222`）；② `agent.mode` 何时切到 `gateway`（`cmd/operator/main.go:39-42` 注释称 TASK-065 将移除该路径）；③ 生产形态（本仓只有 `deploy/kustomize/dev` 一套 overlay）下的 retention/告警责任方。
 
 > 事实源：`internal/handler/health.go`、`internal/handler/ready.go`、`internal/app/app.go`、`internal/app/maintenance.go`、`internal/config/config.go`、`internal/postgres/db.go`、`internal/postgres/config.go`、`internal/postgres/migrate.go`、`internal/migration/migrate.go`、`internal/store/sqlite/db.go`、`internal/store/sqlite/operators.go`、`internal/store/postgres/operators.go`、`internal/store/postgres/audit.go`、`internal/store/store.go`、`internal/orchestrator/service.go`、`internal/orchestrator/rollback.go`、`internal/orchestrator/emergency.go`、`internal/orchestrator/emergency_stuck.go`、`internal/orchestrator/emergency_queries.go`、`internal/orchestrator/cleanup.go`、`internal/orchestrator/gc_health.go`、`internal/orchestrator/operation/state.go`、`internal/orchestrator/operation/recover.go`、`internal/orchestrator/audit.go`、`internal/operator/service.go`、`internal/operator/errors.go`、`internal/operator/session_registry.go`、`internal/operator/session_client.go`、`internal/operator/identity_metrics.go`、`internal/operator/agent/agent.go`、`internal/audit/emitter.go`、`internal/audit/spool.go`、`internal/audit/event.go`、`internal/audit/normalize.go`、`internal/audit/sanitize.go`、`internal/audit/archive_config.go`、`internal/audit/archive_worker.go`、`internal/audit/archiver.go`、`internal/audit/audit_service_handler.go`、`internal/audit/metrics.go`、`internal/redact/sanitize.go`、`internal/auth/interceptor.go`、`internal/auth/service.go`、`internal/auth/jwt.go`、`internal/auth/browser_session.go`、`internal/auth/service_token.go`、`internal/authorization/metrics.go`、`internal/authorization/module.go`、`internal/authorization/tracing.go`、`internal/notifier/consumer.go`、`internal/notifier/retry.go`、`internal/store/redis/adapter.go`、`cmd/api/main.go`、`cmd/auth/main.go`、`cmd/orchestrator/main.go`、`cmd/operator/main.go`、`cmd/notifier/main.go`、`cmd/webhook/main.go`、`cmd/notification-sink/main.go`、`cmd/store-migrate/main.go`、`cmd/devseed/main.go`、`migrations/embed.go`、`api/proto/audit/v1/audit.proto`、`api/proto/operator/v1/operator.proto`、`api/proto/orchestrator/v1/orchestrator.proto`、`api/gen/orchestrator/v1/orchestratorv1connect/orchestrator.connect.go`、`deploy/dev/dev.sh`、`deploy/dev/lib/host.sh`、`deploy/dev/lib/errors.sh`、`deploy/dev/lib/lock.sh`、`deploy/kustomize/base/pvc.yaml`、`deploy/kustomize/base/secret.yaml`、`deploy/kustomize/dev/kustomization.yaml`、`deploy/kustomize/dev/configs/orchestrator.dev.yaml`、`deploy/kustomize/dev/configs/notifier.dev.yaml`、`deploy/kustomize/services/kustomization.yaml`、`deploy/kustomize/services/orchestrator.yaml`、`deploy/kustomize/services/auth.yaml`、`deploy/kustomize/services/webhook.yaml`、`deploy/kustomize/services/notifier.yaml`、`deploy/kustomize/services/web.yaml`、`deploy/kustomize/services/notification-sink.yaml`、`deploy/kustomize/postgres/deployment.yaml`、`deploy/kustomize/postgres/init.sql`、`deploy/kustomize/redis/deployment.yaml`、`deploy/kustomize/customer-agent/base/deployment.yaml`、`deploy/kustomize/customer-agent/base/kustomization.yaml`、`deploy/kustomize/customer-agent/c1-direct/configs/operator.dev.yaml`、`deploy/docker/Dockerfile.operator`、`deploy/docker/Dockerfile.orchestrator`、`configs/orchestrator.dev.yaml`、`configs/auth.dev.yaml`、`configs/notifier.dev.yaml`、`configs/api.dev.yaml`、`web/nginx.conf`、`web/src/connect/client.ts`、`Makefile`、`docs/architecture.md`、`docs/dev-environment.md`、`docs/testing.md`、`docs/glossary.md`、`docs/cli.md`、`docs/dependencies.md`、`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md`、`docs/decisions/ADR-016-prometheus-otel.md`
