@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted, ref, shallowRef } from 'vue';
+import { computed, nextTick, onMounted, ref, shallowRef, useTemplateRef } from 'vue';
 import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -35,6 +35,12 @@ const activeBindings = computed(() => store.bindings.filter((binding) => binding
 
 /** Set by the row button; the revoke RPC waits for the dialog's confirmation. */
 const pendingRevoke = shallowRef<BindingView | null>(null);
+/*
+ * TASK-297: the row button is gone once the revocation lands, so the browser
+ * would drop focus on <body>; the success notice is where the confirm left the
+ * user, and `tabindex="-1"` is what lets us move focus there programmatically.
+ */
+const noticeRef = useTemplateRef<HTMLParagraphElement>('notice');
 const revokeDescription = computed(() =>
   pendingRevoke.value
     ? `确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。`
@@ -74,13 +80,22 @@ async function submitGrant(): Promise<void> {
 /*
  * TASK-295: the row button used to call the store directly, so one misclick
  * revoked the binding and its capability grant with no confirmation. The
- * destructive RPC now runs only here, from the dialog's confirm action, and the
- * dialog stays open on failure so the reason is readable.
+ * destructive RPC now runs only here, from the dialog's confirm action.
+ *
+ * TASK-297: on failure the dialog stays open AND the reason is rendered inside
+ * its body (`revoke-failure`). The page-level <ErrorState> sits behind the
+ * fixed backdrop, so "stays open" alone showed the user an empty confirmation
+ * they had to cancel out of before they could read why the revoke failed.
+ * On success focus moves to the notice: the row button disappears with the
+ * revocation, and focus must not fall back to <body>.
  */
 async function confirmRevoke(): Promise<void> {
   const binding = pendingRevoke.value;
   if (!binding) return;
-  if (await store.revoke(binding)) pendingRevoke.value = null;
+  if (!(await store.revoke(binding))) return;
+  pendingRevoke.value = null;
+  await nextTick();
+  noticeRef.value?.focus();
 }
 
 function formatTimestamp(value: string | null): string {
@@ -108,7 +123,14 @@ function statusLabel(binding: BindingView): string {
       </button>
     </header>
 
-    <p v-if="store.notice" class="governance__notice" role="status" data-testid="governance-notice">
+    <p
+      v-if="store.notice"
+      ref="notice"
+      class="governance__notice"
+      role="status"
+      tabindex="-1"
+      data-testid="governance-notice"
+    >
       {{ store.notice }}
     </p>
 
@@ -174,6 +196,17 @@ function statusLabel(binding: BindingView): string {
       :close-on-escape="!store.saving"
       @close="pendingRevoke = null"
     >
+      <!-- Inside the panel, not only in the page-level <ErrorState> behind the
+           fixed backdrop: the whole point of keeping the dialog open on failure
+           is that the reason is readable where the user already is (TASK-297). -->
+      <p
+        v-if="store.failure"
+        class="governance__error"
+        role="alert"
+        data-testid="revoke-failure"
+      >
+        {{ store.failure.message }}
+      </p>
       <template #footer>
         <button type="button" :disabled="store.saving" @click="pendingRevoke = null">取消</button>
         <button
