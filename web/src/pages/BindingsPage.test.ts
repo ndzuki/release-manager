@@ -311,6 +311,10 @@ describe('BindingsPage', () => {
     await wrapper.get('[data-testid="binding-row-customer-a"] button').trigger('click');
     await flushPromises();
 
+    // TASK-303 review: the negative assertions below must be backed by the dialog actually being
+    // open, otherwise a no-op arm (the dialog never opens) would satisfy them.
+    expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+
     expect(mockedRevoke).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="revoke-failure"]')).toBeNull();
   });
