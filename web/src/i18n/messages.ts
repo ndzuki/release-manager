@@ -604,6 +604,7 @@ const zhCN = {
   'trust.rotate.entry': '轮换',
   'trust.create.title': '新建信任根',
   'trust.rotate.title': '轮换信任根 {keyId}',
+  'trust.confirm.title': '确认吊销信任根 {keyId}？',
   'trust.editor.keyId': '密钥 ID',
   'trust.editor.issuer': '签发者',
   'trust.editor.subjectPattern': '主体前缀',

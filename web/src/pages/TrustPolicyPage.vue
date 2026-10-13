@@ -3,6 +3,7 @@ import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import { useAuthStore } from '@/stores/auth';
 import { computed, onMounted, ref } from 'vue';
+import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -77,6 +78,11 @@ async function confirm(): Promise<void> {
   await store.apply(pending.root, pending.action);
   pendingAction.value = null;
 }
+
+/** Revocation is irreversible; AppDialog renders this as the alertdialog heading. */
+const confirmTitle = computed(() =>
+  pendingAction.value ? t('trust.confirm.title', { keyId: pendingAction.value.root.keyId }) : '',
+);
 
 function formatTimestamp(value: string | null): string {
   return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
@@ -198,19 +204,36 @@ function formatTimestamp(value: string | null): string {
       </tbody>
     </table>
 
-    <div v-if="pendingAction" class="trust__confirm" role="alertdialog" aria-labelledby="trust-confirm-title">
-      <h2 id="trust-confirm-title">确认吊销信任根 {{ pendingAction.root.keyId }}？</h2>
+    <!-- Revocation cannot be undone, so it goes through the shared primitive with
+         `danger` (role=alertdialog) instead of a hand-rolled block: that adds
+         aria-modal, the Tab trap, Escape and focus return. The dialog never closes
+         itself; the owner clears `pendingAction`. -->
+    <AppDialog
+      v-if="pendingAction"
+      :open="true"
+      :title="confirmTitle"
+      danger
+      :close-on-backdrop="false"
+      :close-on-escape="!store.saving"
+      @close="pendingAction = null"
+    >
       <p>
         吊销会立即停止该密钥的签名校验，并<strong>提升吊销 epoch</strong>（缓存持有者据此失效）；记录会保留。
         已用该密钥验证过的制品不会因此失去既有地位。
       </p>
-      <div class="trust__confirm-actions">
+      <template #footer>
         <button type="button" :disabled="store.saving" @click="pendingAction = null">取消</button>
-        <button type="button" class="danger" :disabled="store.saving" data-testid="trust-confirm-revoke" @click="confirm">
+        <button
+          type="button"
+          class="trust__confirm-danger"
+          :disabled="store.saving"
+          data-testid="trust-confirm-revoke"
+          @click="confirm"
+        >
           {{ store.saving ? '提交中…' : '确认吊销' }}
         </button>
-      </div>
-    </div>
+      </template>
+    </AppDialog>
   </section>
 </template>
 
@@ -319,8 +342,7 @@ function formatTimestamp(value: string | null): string {
 }
 
 .trust__actions button,
-.trust__header-actions button,
-.trust__confirm-actions button {
+.trust__header-actions button {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -328,8 +350,14 @@ function formatTimestamp(value: string | null): string {
   cursor: pointer;
 }
 
-.trust__actions button.danger,
-.trust__confirm-actions button.danger {
+.trust__actions button.danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
+}
+
+/* The confirm button is slotted into AppDialog's footer, which only supplies a
+   baseline; the danger tone is the caller's rule (same split as BindingsPage). */
+.trust__confirm-danger {
   border-color: var(--color-danger-border);
   color: var(--color-error);
 }
@@ -338,26 +366,5 @@ function formatTimestamp(value: string | null): string {
 .trust__header-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-.trust__confirm {
-  display: grid;
-  gap: var(--space-2);
-  max-width: 40rem;
-  padding: var(--space-4);
-  border: 1px solid var(--color-danger-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-danger-surface);
-}
-
-.trust__confirm h2 {
-  margin: 0;
-  font-size: var(--font-size-lg);
-}
-
-.trust__confirm-actions {
-  display: flex;
-  gap: var(--space-3);
-  justify-content: flex-end;
 }
 </style>

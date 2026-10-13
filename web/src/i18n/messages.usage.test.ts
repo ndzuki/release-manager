@@ -352,7 +352,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/TrustPolicyPage.vue',
-    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '确认吊销信任根 ？', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。'],
+    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
