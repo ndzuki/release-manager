@@ -310,8 +310,9 @@ const zhCN = {
   'audit.table.duration': '耗时',
   'audit.table.results': '审计结果',
   'audit.table.pagination': '审计分页',
-  'audit.table.previous': '上一页',
-  'audit.table.next': '下一页',
+  // The pager's own wording (上一页 / 下一页) now lives in `pagination.*`: the table
+  // renders the shared Pagination primitive, which owns the controls and their copy
+  // (TASK-300).
   'audit.table.unknownActor': '未知',
   'audit.actor.user': '用户',
   'audit.actor.service': '服务',
