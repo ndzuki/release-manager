@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue';
 import { t } from '@/i18n/messages';
+import AppDialog from '@/components/common/AppDialog.vue';
 import FormField from '@/components/common/FormField.vue';
 import { inspectPublicKeyPem, type TrustRootView } from '@/connect/trust-api';
 import { useTrustPolicyStore } from '@/stores/trustPolicy';
@@ -29,6 +30,12 @@ const form = reactive({
 });
 const errors = reactive<{ keyId?: string; issuer?: string; publicKeyPem?: string; graceHours?: string }>({});
 const submitting = computed(() => store.saving);
+
+// The shared dialog primitive renders the labelled heading, so the panel title moves
+// out of the form (create and rotate share one panel and one form).
+const title = computed(() =>
+  props.mode === 'create' ? t('trust.create.title') : t('trust.rotate.title', { keyId: props.root?.keyId ?? '' }),
+);
 
 function close(): void {
   emit('close');
@@ -69,126 +76,127 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <form class="trust-editor" @submit.prevent="submit">
-    <h2>
-      {{ mode === 'create' ? t('trust.create.title') : t('trust.rotate.title', { keyId: root?.keyId ?? '' }) }}
-    </h2>
+  <!-- ADR-029 clause 3 / TASK-294: the panel is the shared dialog primitive, which owns
+       role=dialog + aria-modal + the labelled heading, the Tab trap, Escape and focus
+       return. The form stays in the default slot so its submit button is a real form
+       control. The backdrop does not dismiss it: a stray click should not discard
+       half-entered key material. -->
+  <AppDialog
+    :open="true"
+    :title="title"
+    :close-on-backdrop="false"
+    :close-on-escape="!submitting"
+    @close="close"
+  >
+    <form class="trust-editor" @submit.prevent="submit">
+      <FormField :label="t('trust.editor.keyId')" :error="errors.keyId" required>
+        <template #default="{ id, describedBy, invalid, required, disabled }">
+          <input
+            :id="id"
+            v-model="form.keyId"
+            type="text"
+            :aria-describedby="describedBy"
+            :aria-invalid="invalid"
+            :required="required"
+            :disabled="disabled || submitting"
+            data-testid="trust-editor-key-id"
+          />
+        </template>
+      </FormField>
 
-    <FormField :label="t('trust.editor.keyId')" :error="errors.keyId" required>
-      <template #default="{ id, describedBy, invalid, required, disabled }">
-        <input
-          :id="id"
-          v-model="form.keyId"
-          type="text"
-          :aria-describedby="describedBy"
-          :aria-invalid="invalid"
-          :required="required"
-          :disabled="disabled || submitting"
-          data-testid="trust-editor-key-id"
-        />
-      </template>
-    </FormField>
+      <FormField :label="t('trust.editor.issuer')" :error="errors.issuer" required>
+        <template #default="{ id, describedBy, invalid, required, disabled }">
+          <input
+            :id="id"
+            v-model="form.issuer"
+            type="text"
+            :aria-describedby="describedBy"
+            :aria-invalid="invalid"
+            :required="required"
+            :disabled="disabled || submitting"
+            data-testid="trust-editor-issuer"
+          />
+        </template>
+      </FormField>
 
-    <FormField :label="t('trust.editor.issuer')" :error="errors.issuer" required>
-      <template #default="{ id, describedBy, invalid, required, disabled }">
-        <input
-          :id="id"
-          v-model="form.issuer"
-          type="text"
-          :aria-describedby="describedBy"
-          :aria-invalid="invalid"
-          :required="required"
-          :disabled="disabled || submitting"
-          data-testid="trust-editor-issuer"
-        />
-      </template>
-    </FormField>
+      <FormField
+        :label="t('trust.editor.subjectPattern')"
+        :help="t('trust.editor.subjectPatternHint')"
+      >
+        <template #default="{ id, describedBy, disabled }">
+          <input
+            :id="id"
+            v-model="form.subjectPattern"
+            type="text"
+            :aria-describedby="describedBy"
+            :disabled="disabled || submitting"
+            data-testid="trust-editor-subject-pattern"
+          />
+        </template>
+      </FormField>
 
-    <FormField
-      :label="t('trust.editor.subjectPattern')"
-      :help="t('trust.editor.subjectPatternHint')"
-    >
-      <template #default="{ id, describedBy, disabled }">
-        <input
-          :id="id"
-          v-model="form.subjectPattern"
-          type="text"
-          :aria-describedby="describedBy"
-          :disabled="disabled || submitting"
-          data-testid="trust-editor-subject-pattern"
-        />
-      </template>
-    </FormField>
+      <FormField
+        :label="t('trust.editor.publicKey')"
+        :help="t('trust.editor.publicKeyHelp')"
+        :error="errors.publicKeyPem"
+        required
+      >
+        <template #default="{ id, describedBy, invalid, required, disabled }">
+          <textarea
+            :id="id"
+            v-model="form.publicKeyPem"
+            rows="5"
+            :aria-describedby="describedBy"
+            :aria-invalid="invalid"
+            :required="required"
+            :disabled="disabled || submitting"
+            data-testid="trust-editor-public-key"
+          ></textarea>
+        </template>
+      </FormField>
 
-    <FormField
-      :label="t('trust.editor.publicKey')"
-      :help="t('trust.editor.publicKeyHelp')"
-      :error="errors.publicKeyPem"
-      required
-    >
-      <template #default="{ id, describedBy, invalid, required, disabled }">
-        <textarea
-          :id="id"
-          v-model="form.publicKeyPem"
-          rows="5"
-          :aria-describedby="describedBy"
-          :aria-invalid="invalid"
-          :required="required"
-          :disabled="disabled || submitting"
-          data-testid="trust-editor-public-key"
-        ></textarea>
-      </template>
-    </FormField>
+      <FormField
+        v-if="mode === 'rotate'"
+        :label="t('trust.editor.graceHours')"
+        :help="t('trust.editor.graceHoursHint')"
+        :error="errors.graceHours"
+        required
+      >
+        <template #default="{ id, describedBy, invalid, required, disabled }">
+          <input
+            :id="id"
+            v-model.number="form.graceHours"
+            type="number"
+            min="0"
+            :aria-describedby="describedBy"
+            :aria-invalid="invalid"
+            :required="required"
+            :disabled="disabled || submitting"
+            data-testid="trust-editor-grace-hours"
+          />
+        </template>
+      </FormField>
 
-    <FormField
-      v-if="mode === 'rotate'"
-      :label="t('trust.editor.graceHours')"
-      :help="t('trust.editor.graceHoursHint')"
-      :error="errors.graceHours"
-      required
-    >
-      <template #default="{ id, describedBy, invalid, required, disabled }">
-        <input
-          :id="id"
-          v-model.number="form.graceHours"
-          type="number"
-          min="0"
-          :aria-describedby="describedBy"
-          :aria-invalid="invalid"
-          :required="required"
-          :disabled="disabled || submitting"
-          data-testid="trust-editor-grace-hours"
-        />
-      </template>
-    </FormField>
+      <p class="trust-editor__hint">{{ t('trust.editor.overlapHint') }}</p>
 
-    <p class="trust-editor__hint">{{ t('trust.editor.overlapHint') }}</p>
-
-    <div class="trust-editor__actions">
-      <button type="button" :disabled="submitting" data-testid="trust-editor-cancel" @click="close">
-        {{ t('trust.editor.cancel') }}
-      </button>
-      <button type="submit" :disabled="submitting" data-testid="trust-editor-submit">
-        {{ submitting ? t('trust.editor.saving') : mode === 'create' ? t('trust.editor.submitCreate') : t('trust.editor.submitRotate') }}
-      </button>
-    </div>
-  </form>
+      <div class="trust-editor__actions">
+        <button type="button" :disabled="submitting" data-testid="trust-editor-cancel" @click="close">
+          {{ t('trust.editor.cancel') }}
+        </button>
+        <button type="submit" :disabled="submitting" data-testid="trust-editor-submit">
+          {{ submitting ? t('trust.editor.saving') : mode === 'create' ? t('trust.editor.submitCreate') : t('trust.editor.submitRotate') }}
+        </button>
+      </div>
+    </form>
+  </AppDialog>
 </template>
 
 <style scoped>
+/* AppDialog's panel already supplies the surface, padding and radius; keeping the old
+   box here would render a box inside the box. It remains the form/layout hook. */
 .trust-editor {
   display: grid;
   gap: var(--space-3);
-  max-width: 44rem;
-  padding: var(--space-4);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-}
-
-.trust-editor h2 {
-  margin: 0;
-  font-size: var(--font-size-lg);
 }
 
 .trust-editor input,

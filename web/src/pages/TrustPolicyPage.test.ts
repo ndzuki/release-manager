@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import TrustPolicyPage from './TrustPolicyPage.vue';
 import { useAuthStore } from '@/stores/auth';
@@ -43,6 +43,56 @@ function root(keyId: string, state: api.TrustRootStateName): api.TrustRootView {
   };
 }
 
+const mounted: Array<{ unmount: () => void }> = [];
+
+afterEach(() => {
+  // Unmount before wiping the DOM: the focus trap keeps a module-level stack of open
+  // overlays, and a component that is never unmounted leaves a stale entry behind.
+  for (const wrapper of mounted.splice(0)) wrapper.unmount();
+  document.body.innerHTML = '';
+});
+
+/*
+ * TASK-294. The trust editor and the revoke confirmation are AppDialog panels, which
+ * teleport to <body> (ADR-029), so a wrapper's scoped queries cannot see them; only
+ * page-level nodes stay on the wrapper. Dialog content is read from the document — the
+ * pattern the other page tests use (DefinitionsPage.test.ts, BindingsPage.test.ts).
+ * @testing-library is not a dependency here, so getDialog mirrors getByRole's contract:
+ * the unique element carrying role dialog|alertdialog, and a throw when there is none.
+ */
+function getDialog(): HTMLElement {
+  const matches = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'));
+  if (matches.length !== 1) throw new Error(`expected exactly one dialog role, found ${matches.length}`);
+  return matches[0]!;
+}
+
+/** The accessible name AppDialog gives its panel: aria-labelledby -> the heading. */
+function accessibleName(element: HTMLElement): string {
+  const id = element.getAttribute('aria-labelledby');
+  const labelled = id ? document.getElementById(id) : null;
+  return (labelled?.textContent ?? element.getAttribute('aria-label') ?? '').trim();
+}
+
+function byTestId<T extends HTMLElement = HTMLElement>(id: string): T {
+  const element = document.querySelector<T>(`[data-testid="${id}"]`);
+  if (!element) throw new Error(`missing data-testid=${id}`);
+  return element;
+}
+
+/** Drives a teleported v-model input through the real DOM (setValue only sees the wrapper). */
+function setField(id: string, value: string): void {
+  const input = byTestId<HTMLInputElement>(id);
+  input.value = value;
+  input.dispatchEvent(new Event('input'));
+}
+
+async function submitEditor(): Promise<void> {
+  const form = document.querySelector<HTMLFormElement>('form.trust-editor');
+  if (!form) throw new Error('trust editor form not rendered');
+  form.dispatchEvent(new Event('submit'));
+  await flushPromises();
+}
+
 async function mountPage() {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -50,7 +100,10 @@ async function mountPage() {
   });
   await router.push('/settings/trust');
   await router.isReady();
-  const wrapper = mount(TrustPolicyPage, { global: { plugins: [router] } });
+  // attachTo body (not the default detached div): the dialog contract includes returning
+  // focus to the trigger, and document.activeElement only resolves for attached elements.
+  const wrapper = mount(TrustPolicyPage, { attachTo: document.body, global: { plugins: [router] } });
+  mounted.push(wrapper);
   await flushPromises();
   return wrapper;
 }
@@ -109,9 +162,13 @@ describe('TrustPolicyPage', () => {
 
     await wrapper.get('[data-testid="trust-revoke-key-new"]').trigger('click');
     expect(mockedRevoke).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain('确认吊销信任根 key-new');
 
-    await wrapper.get('[data-testid="trust-confirm-revoke"]').trigger('click');
+    const dialog = getDialog();
+    expect(dialog.getAttribute('role')).toBe('alertdialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(accessibleName(dialog)).toBe('确认吊销信任根 key-new？');
+
+    byTestId('trust-confirm-revoke').click();
     await flushPromises();
 
     expect(mockedRevoke).toHaveBeenCalledWith('staging', 'root-key-new', 'dev-admin');
@@ -121,11 +178,13 @@ describe('TrustPolicyPage', () => {
     const wrapper = await mountPage();
 
     await wrapper.get('[data-testid="trust-revoke-key-new"]').trigger('click');
-    await wrapper.findAll('button').filter((b) => b.text() === '取消')[0]!.trigger('click');
+    const cancel = Array.from(getDialog().querySelectorAll('button')).find((b) => b.textContent?.trim() === '取消');
+    if (!cancel) throw new Error('cancel button not found in the confirmation dialog');
+    cancel.click();
     await flushPromises();
 
     expect(mockedRevoke).not.toHaveBeenCalled();
-    expect(wrapper.text()).not.toContain('确认吊销信任根');
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
   });
 
   // Refusing to remove the last live root is a documented server rule; the row must
@@ -188,19 +247,20 @@ describe('trust-root write gating', () => {
  * public PEM and refuses anything marked PRIVATE before the RPC is reached.
  */
 describe('trust-root create and rotate', () => {
-  async function fillAndSubmit(wrapper: Awaited<ReturnType<typeof mountPage>>, keyId = 'key-3', issuer = 'CN=next'): Promise<void> {
-    await wrapper.get('[data-testid="trust-editor-key-id"]').setValue(keyId);
-    await wrapper.get('[data-testid="trust-editor-issuer"]').setValue(issuer);
-    await wrapper.get('[data-testid="trust-editor-public-key"]').setValue(PUBLIC_PEM);
-    await wrapper.get('form.trust-editor').trigger('submit');
-    await flushPromises();
+  // The editor is teleported by AppDialog, so its fields are driven through the real DOM
+  // (the DefinitionsPage.test.ts pattern) rather than through the wrapper.
+  async function fillAndSubmit(keyId = 'key-3', issuer = 'CN=next'): Promise<void> {
+    setField('trust-editor-key-id', keyId);
+    setField('trust-editor-issuer', issuer);
+    setField('trust-editor-public-key', PUBLIC_PEM);
+    await submitEditor();
   }
 
   it('creates a root with the environment and operator from the session', async () => {
     const wrapper = await mountPage();
 
     await wrapper.get('[data-testid="trust-create-entry"]').trigger('click');
-    await fillAndSubmit(wrapper);
+    await fillAndSubmit();
 
     expect(mockedCreate).toHaveBeenCalledWith({
       environment: 'staging',
@@ -211,7 +271,7 @@ describe('trust-root create and rotate', () => {
       publicKeyPem: PUBLIC_PEM,
     });
     // Success closes the panel; the page reports it through the notice line.
-    expect(wrapper.find('[data-testid="trust-editor-submit"]').exists()).toBe(false);
+    expect(document.querySelector('[data-testid="trust-editor-submit"]')).toBeNull();
     expect(wrapper.get('[data-testid="trust-notice"]').text()).toContain('key-3');
   });
 
@@ -219,8 +279,8 @@ describe('trust-root create and rotate', () => {
     const wrapper = await mountPage();
 
     await wrapper.get('[data-testid="trust-rotate-key-new"]').trigger('click');
-    expect(wrapper.text()).toContain('轮换信任根 key-new');
-    await fillAndSubmit(wrapper);
+    expect(accessibleName(getDialog())).toBe('轮换信任根 key-new');
+    await fillAndSubmit();
 
     const sent = mockedRotate.mock.calls[0]![0];
     expect(sent.oldRootId).toBe('root-key-new');
@@ -235,14 +295,15 @@ describe('trust-root create and rotate', () => {
     const wrapper = await mountPage();
 
     await wrapper.get('[data-testid="trust-create-entry"]').trigger('click');
-    await wrapper.get('[data-testid="trust-editor-key-id"]').setValue('key-3');
-    await wrapper.get('[data-testid="trust-editor-issuer"]').setValue('CN=next');
-    await wrapper.get('[data-testid="trust-editor-public-key"]').setValue('-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----');
-    await wrapper.get('form.trust-editor').trigger('submit');
-    await flushPromises();
+    setField('trust-editor-key-id', 'key-3');
+    setField('trust-editor-issuer', 'CN=next');
+    setField('trust-editor-public-key', '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----');
+    await submitEditor();
 
     expect(mockedCreate).not.toHaveBeenCalled();
-    expect(wrapper.get('.form-field__error').text()).toContain('私钥');
+    const error = document.querySelector('.form-field__error');
+    if (!error) throw new Error('expected the private-key field error to render');
+    expect(error.textContent).toContain('私钥');
   });
 
   it('reports a permission refusal to the operator', async () => {
@@ -250,8 +311,74 @@ describe('trust-root create and rotate', () => {
     const wrapper = await mountPage();
 
     await wrapper.get('[data-testid="trust-create-entry"]').trigger('click');
-    await fillAndSubmit(wrapper);
+    await fillAndSubmit();
 
     expect(wrapper.text()).toContain('无权修改信任根');
+  });
+});
+
+/*
+ * TASK-294. These were the page's two hand-rolled panels: the create/rotate editor (no
+ * role, no aria-modal, no accessible name, no Tab trap, Escape inert) and the revoke
+ * confirmation (a role and a name, but still no aria-modal, trap, Escape or focus
+ * return). Both are AppDialog panels now, so the assertions below are the dialog
+ * contract, plus the zero-side-effect check on Escape.
+ */
+describe('trust panel dialog semantics', () => {
+  it('opens the create editor as a labelled modal dialog', async () => {
+    const wrapper = await mountPage();
+
+    await wrapper.get('[data-testid="trust-create-entry"]').trigger('click');
+    await flushPromises();
+
+    const dialog = getDialog();
+    // create is reversible, so it must NOT claim the urgent alertdialog role
+    expect(dialog.getAttribute('role')).toBe('dialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(accessibleName(dialog)).toBe('新建信任根');
+    expect(dialog.querySelector('form.trust-editor')).not.toBeNull();
+    // It really left the page tree; a bare inline panel would still be in the wrapper.
+    expect(wrapper.find('form.trust-editor').exists()).toBe(false);
+  });
+
+  it('closes the create editor on Escape and returns focus to its trigger', async () => {
+    const wrapper = await mountPage();
+    const trigger = wrapper.get<HTMLButtonElement>('[data-testid="trust-create-entry"]');
+    trigger.element.focus();
+    await trigger.trigger('click');
+    await flushPromises();
+    expect(getDialog()).toBeTruthy();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+    expect(document.querySelector('[data-testid="trust-editor-submit"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger.element);
+  });
+
+  it('Escape cancels the revoke confirmation without calling the RPC', async () => {
+    const wrapper = await mountPage();
+
+    await wrapper.get('[data-testid="trust-revoke-key-new"]').trigger('click');
+    await flushPromises();
+    const dialog = getDialog();
+    expect(dialog.getAttribute('role')).toBe('alertdialog'); // irreversible: urgent role
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(accessibleName(dialog)).toBe('确认吊销信任根 key-new？');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+
+    expect(mockedRevoke).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+
+    // Positive control: the same entry point + explicit confirm DOES revoke, so the
+    // assertion above cannot pass by the confirmation being broken outright.
+    await wrapper.get('[data-testid="trust-revoke-key-new"]').trigger('click');
+    await flushPromises();
+    byTestId('trust-confirm-revoke').click();
+    await flushPromises();
+    expect(mockedRevoke).toHaveBeenCalledWith('staging', 'root-key-new', 'dev-admin');
   });
 });
