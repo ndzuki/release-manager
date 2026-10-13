@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -25,6 +26,15 @@ const evidence = ref('');
 const mode = ref<'' | 'NOT_APPLIED_PROVEN' | 'AUDITED_OVERRIDE'>('');
 const acknowledged = ref(false);
 const validationError = ref('');
+
+/** AppDialog renders this as the alertdialog heading, i.e. the accessible name. */
+const dialogTitle = computed(() => (target.value ? t('stuck.dialog.title', { path: target.value.lockPathSummary }) : ''));
+/*
+ * The irreversibility warning rides on AppDialog's `description` rather than a
+ * hand-written <p>: that is what associates it with the dialog via
+ * `aria-describedby` (the hand-rolled block rendered it unassociated).
+ */
+const dialogDescription = computed(() => (target.value ? t('stuck.dialog.warning') : ''));
 
 onMounted(() => {
   void store.load('');
@@ -154,12 +164,23 @@ function formatTimestamp(value: string | null): string {
       </tbody>
     </table>
 
-    <div v-if="target" class="stuck__dialog" role="alertdialog" aria-labelledby="stuck-dialog-title">
-      <h2 id="stuck-dialog-title">释放锁 {{ target.lockPathSummary }}</h2>
-      <p class="stuck__warning">
-        <strong>没有撤销</strong>：释放错误会让一个集群状态仍未知的定义重新接受任务。第二次释放不可重放（会报未找到或状态冲突）。
-      </p>
-      <form @submit.prevent="submit">
+    <!-- Releasing a lock is irreversible and not replayable, so the confirmation
+         goes through the shared primitive with `danger` (role=alertdialog) instead
+         of a hand-rolled block: that adds aria-modal, the Tab trap, Escape and
+         focus return. The warning is the dialog's `description`, so it is also the
+         element `aria-describedby` points at. The dialog never closes itself; the
+         owner clears `target`. -->
+    <AppDialog
+      v-if="target"
+      :open="true"
+      :title="dialogTitle"
+      :description="dialogDescription"
+      danger
+      :close-on-backdrop="false"
+      :close-on-escape="!store.releasing"
+      @close="target = null"
+    >
+      <form class="stuck__form" @submit.prevent="submit">
         <fieldset>
           <legend>释放模式</legend>
           <label>
@@ -194,7 +215,7 @@ function formatTimestamp(value: string | null): string {
           </button>
         </div>
       </form>
-    </div>
+    </AppDialog>
   </section>
 </template>
 
@@ -299,45 +320,28 @@ function formatTimestamp(value: string | null): string {
   color: var(--color-error);
 }
 
-.stuck__dialog {
-  display: grid;
-  gap: var(--space-3);
-  max-width: 46rem;
-  padding: var(--space-4);
-  border: 1px solid var(--color-danger-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-danger-surface);
-}
-
-.stuck__dialog h2 {
-  margin: 0;
-  font-size: var(--font-size-lg);
-}
-
-.stuck__warning {
-  margin: 0;
-  font-size: var(--font-size-sm);
-}
-
-.stuck__dialog form {
+/* The confirmation body lives inside AppDialog, which owns the panel shell, the
+   heading/description typography and the danger tone; only the form's own layout
+   stays here (TASK-296). */
+.stuck__form {
   display: grid;
   gap: var(--space-3);
 }
 
-.stuck__dialog fieldset {
+.stuck__form fieldset {
   display: grid;
   gap: var(--space-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
 }
 
-.stuck__dialog label {
+.stuck__form label {
   display: grid;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
 }
 
-.stuck__dialog textarea {
+.stuck__form textarea {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);

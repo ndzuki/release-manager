@@ -594,6 +594,11 @@ const zhCN = {
   'definitions.releaseDefinitionIdRequired': 'Release Definition ID（必填）',
   'definitions.chartNameOptional': 'Chart 名称（可空）',
   'stuck.eyebrow': '紧急',
+  // Stuck-lock confirmation (TASK-296). The warning is a catalog entry so the
+  // hand-rolled dialog could drop its inline copy: AppDialog renders it as
+  // `description` and therefore also wires aria-describedby to the dialog.
+  'stuck.dialog.title': '释放锁 {path}',
+  'stuck.dialog.warning': '没有撤销：释放错误会让一个集群状态仍未知的定义重新接受任务。第二次释放不可重放（会报未找到或状态冲突）。',
   'trust.eyebrow': '治理',
   'trust.keyId': '密钥 ID',
   'trust.issuerSubject': '签发者 / 主体',
