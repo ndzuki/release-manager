@@ -21,6 +21,7 @@ vi.mock('@/connect/binding-api', async (importOriginal) => {
 const mockedList = vi.mocked(api.listBindings);
 const mockedCreate = vi.mocked(api.createBinding);
 const mockedGrant = vi.mocked(api.setCapabilityGrant);
+const mockedRevoke = vi.mocked(api.revokeBinding);
 
 function signIn(): void {
   useAuthStore().$patch({
@@ -43,6 +44,25 @@ async function mountPage() {
   return wrapper;
 }
 
+/*
+ * AppDialog teleports to <body> (ADR-029), so a test wrapper's scoped queries
+ * cannot see it; the repo's dialog tests query the document instead
+ * (OperatorPages.test.ts, AppDialog.test.ts). @testing-library is not a
+ * dependency here, so this mirrors getByRole's contract — the unique element
+ * carrying that role, and a throw when there is none (or more than one).
+ */
+function getByRole(role: string): HTMLElement {
+  const matches = Array.from(document.querySelectorAll<HTMLElement>(`[role="${role}"]`));
+  if (matches.length !== 1) throw new Error(`expected exactly one role="${role}", found ${matches.length}`);
+  return matches[0]!;
+}
+
+function clickButton(root: HTMLElement, label: string): void {
+  const button = Array.from(root.querySelectorAll('button')).find((element) => element.textContent?.trim() === label);
+  if (!button) throw new Error(`dialog button not found: ${label}`);
+  button.click();
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   mockedList.mockReset().mockResolvedValue([
@@ -51,6 +71,7 @@ beforeEach(() => {
   ]);
   mockedCreate.mockReset().mockResolvedValue(undefined);
   mockedGrant.mockReset().mockResolvedValue({ sourceVersion: 1n, policyVersion: 2n });
+  mockedRevoke.mockReset().mockResolvedValue(undefined);
   signIn();
 });
 
@@ -141,5 +162,69 @@ describe('BindingsPage', () => {
     await flushPromises();
 
     expect(wrapper.get('.error-state').text()).toContain('组织管理员');
+  });
+
+  /*
+   * TASK-295: the row button used to call store.revoke directly, so one misclick
+   * withdrew the binding and its capability grant (TASK-293 measured it: the row
+   * flipped to 已撤销 with no dialog). The three cases below pin the confirm step:
+   * arm -> confirm -> cancel/Escape, with revokeBinding as the observable RPC.
+   *
+   * Trigger caveat: VTU v2.4.11's trigger('click') silently skips disabled
+   * elements, so "revokeBinding was not called" proves nothing on its own. The
+   * enabled assertion plus the getByRole('alertdialog') match (which can only
+   * appear if the click handler actually ran) are what make the negative valid.
+   */
+  it('does not revoke on the row click — it arms the confirmation instead', async () => {
+    const wrapper = await mountPage();
+
+    const revokeButton = wrapper.get('[data-testid="binding-row-customer-a"] button');
+    expect((revokeButton.element as HTMLButtonElement).disabled).toBe(false);
+    await revokeButton.trigger('click');
+
+    expect(mockedRevoke).not.toHaveBeenCalled();
+    expect(getByRole('alertdialog')).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  it('revokes once, with the binding id and version, only after confirming', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="binding-row-customer-a"] button').trigger('click');
+
+    const dialog = getByRole('alertdialog');
+    expect(dialog.textContent).toContain('能力');
+
+    clickButton(dialog, '确认撤销');
+    await flushPromises();
+
+    expect(mockedRevoke).toHaveBeenCalledTimes(1);
+    expect(mockedRevoke).toHaveBeenCalledWith('b1', 2n);
+    // Success closes it; the store refreshed the list (notice is the store's).
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(wrapper.get('[data-testid="governance-notice"]').text()).toContain('customer-a');
+    wrapper.unmount();
+  });
+
+  it('cancel and Escape dismiss the confirmation with no revoke', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="binding-row-customer-a"] button').trigger('click');
+
+    clickButton(getByRole('alertdialog'), '取消');
+    await flushPromises();
+
+    expect(mockedRevoke).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+
+    // Escape is the other zero-side-effect exit; AppDialog handles it at the
+    // document level, so the trap entry needs the render tick first.
+    await wrapper.get('[data-testid="binding-row-customer-a"] button').trigger('click');
+    await flushPromises();
+    expect(getByRole('alertdialog')).toBeTruthy();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+
+    expect(mockedRevoke).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    wrapper.unmount();
   });
 });
