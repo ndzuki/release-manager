@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
+import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -32,6 +33,14 @@ const activeOrgId = computed(() => auth.activeOrganization?.id ?? '');
 const activeOrgName = computed(() => auth.activeOrganization?.name ?? '');
 const activeBindings = computed(() => store.bindings.filter((binding) => binding.status === 'active'));
 
+/** Set by the row button; the revoke RPC waits for the dialog's confirmation. */
+const pendingRevoke = shallowRef<BindingView | null>(null);
+const revokeDescription = computed(() =>
+  pendingRevoke.value
+    ? `确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。`
+    : '',
+);
+
 onMounted(() => {
   if (activeOrgId.value) void store.loadBindings(activeOrgId.value);
 });
@@ -60,6 +69,18 @@ async function submitGrant(): Promise<void> {
     return;
   }
   if (await store.setCapability(target, action.value, desiredState.value === 'revoke')) subject.value = '';
+}
+
+/*
+ * TASK-295: the row button used to call the store directly, so one misclick
+ * revoked the binding and its capability grant with no confirmation. The
+ * destructive RPC now runs only here, from the dialog's confirm action, and the
+ * dialog stays open on failure so the reason is readable.
+ */
+async function confirmRevoke(): Promise<void> {
+  const binding = pendingRevoke.value;
+  if (!binding) return;
+  if (await store.revoke(binding)) pendingRevoke.value = null;
 }
 
 function formatTimestamp(value: string | null): string {
@@ -131,7 +152,7 @@ function statusLabel(binding: BindingView): string {
               type="button"
               class="danger"
               :disabled="store.saving"
-              @click="store.revoke(binding)"
+              @click="pendingRevoke = binding"
             >
               撤销
             </button>
@@ -140,6 +161,31 @@ function statusLabel(binding: BindingView): string {
         </tr>
       </tbody>
     </table>
+
+    <!-- Rendered only while armed (the reference RevokeOperatorDialog pattern):
+         `open` is always true and the owner decides when the dialog exists. -->
+    <AppDialog
+      v-if="pendingRevoke"
+      :open="true"
+      title="撤销绑定"
+      :description="revokeDescription"
+      danger
+      :close-on-backdrop="false"
+      :close-on-escape="!store.saving"
+      @close="pendingRevoke = null"
+    >
+      <template #footer>
+        <button type="button" :disabled="store.saving" @click="pendingRevoke = null">取消</button>
+        <button
+          type="button"
+          class="governance__confirm-danger"
+          :disabled="store.saving"
+          @click="confirmRevoke"
+        >
+          {{ store.saving ? '撤销中…' : '确认撤销' }}
+        </button>
+      </template>
+    </AppDialog>
 
     <div class="governance__panels">
       <form class="governance__panel" @submit.prevent="submitBinding">
@@ -267,6 +313,14 @@ function statusLabel(binding: BindingView): string {
   background: var(--color-surface);
   color: var(--color-error);
   cursor: pointer;
+}
+
+/* The confirm button is slotted into AppDialog's footer, which only supplies a
+   baseline; the danger tone is the caller's rule (same split as
+   RevokeOperatorDialog). */
+.governance__confirm-danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
 }
 
 .governance__panels {

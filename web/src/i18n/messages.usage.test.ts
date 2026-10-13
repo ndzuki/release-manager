@@ -392,7 +392,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/BindingsPage.vue',
-    allowed: ['授权绑定', '客户', '状态', '版本', '建立时间', '操作', '撤销', '新增绑定', '客户 ID', '能力授予', '契约没有「列出既有授权」的 RPC，因此这里只能施加一次授予/撤销并回报服务端返回的版本号。', '主体（用户 ID）', '能力', '动作', '授予', '撤销', '操作未成功', '正在加载绑定…', '暂无绑定', '该组织还没有与任何客户建立授权绑定。', '客户 ID', '用户 ID', '请填写客户 ID', '请填写主体（用户 ID）'],
+    allowed: ['授权绑定', '客户', '状态', '版本', '建立时间', '操作', '撤销', '新增绑定', '客户 ID', '能力授予', '契约没有「列出既有授权」的 RPC，因此这里只能施加一次授予/撤销并回报服务端返回的版本号。', '主体（用户 ID）', '能力', '动作', '授予', '撤销', '操作未成功', '正在加载绑定…', '暂无绑定', '该组织还没有与任何客户建立授权绑定。', '客户 ID', '用户 ID', '请填写客户 ID', '请填写主体（用户 ID）', '撤销绑定', '取消', '确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
