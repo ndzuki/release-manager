@@ -279,12 +279,40 @@ describe('BindingsPage', () => {
 
     // TASK-295's intent: a failed revoke leaves the confirmation armed.
     expect(document.querySelector('[role="alertdialog"]')).toBe(dialog);
-    const failure = dialog.querySelector<HTMLElement>('[data-testid="revoke-failure"]');
-    expect(failure).not.toBeNull();
-    expect(dialog.contains(failure)).toBe(true);
-    expect(failure?.textContent?.trim()).toBe('操作失败，请稍后重试');
+    // TASK-303: `const failure = dialog.querySelector(...)` + `dialog.contains(failure)`
+    // could never fail — `contains` of a node taken FROM the dialog is always true,
+    // and `failure === null` was already covered by the line above. Pin the count
+    // instead: exactly one copy of the reason, and it lives inside the panel.
+    const insideDialog = dialog.querySelectorAll<HTMLElement>('[data-testid="revoke-failure"]');
+    expect(insideDialog).toHaveLength(1);
+    expect(insideDialog[0]?.textContent?.trim()).toBe('操作失败，请稍后重试');
+    expect(document.querySelectorAll('[data-testid="revoke-failure"]')).toHaveLength(1);
     // The arm survived the failure: the row still offers its confirm.
     expect(wrapper.find('[data-testid="binding-row-customer-a"] button').exists()).toBe(true);
+  });
+
+  /*
+   * TASK-303 ①: the panel used to render the page-level `store.failure`, which
+   * every operation writes. A user who merely ARMED the confirmation therefore saw
+   * — and `role="alert"` announced — the previous operation's error (here the grant
+   * refusal), even though no revoke had been attempted.
+   */
+  it("does not show another operation's failure inside the revoke dialog", async () => {
+    mockedGrant.mockRejectedValue(new ConnectError('permission denied', Code.PermissionDenied));
+    const wrapper = await mountPage();
+
+    // An unrelated operation fails first and lands in the page-level store.
+    await wrapper.get('input[name="subject"]').setValue('user-9');
+    await wrapper.get('form.governance__panel:last-of-type').trigger('submit');
+    await flushPromises();
+    expect(wrapper.get('.error-state').text()).toContain('组织管理员');
+
+    // Arming the confirmation must not inherit that copy.
+    await wrapper.get('[data-testid="binding-row-customer-a"] button').trigger('click');
+    await flushPromises();
+
+    expect(mockedRevoke).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="revoke-failure"]')).toBeNull();
   });
 
   // TASK-297 ④: cancel and Escape shared one `it`, so a broken first branch hid a
@@ -307,7 +335,12 @@ describe('BindingsPage', () => {
     // AppDialog handles Escape at the document level, so the trap entry needs the
     // render tick first.
     await flushPromises();
-    expect(getByRole('alertdialog')).toBeTruthy();
+    // TASK-303: `expect(getByRole('alertdialog')).toBeTruthy()` could never fail —
+    // the helper throws when the element is missing, so the assertion never saw a
+    // false value. Pin the properties that make it the modal being dismissed.
+    const dialog = getByRole('alertdialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby') ?? '')?.textContent).toBe('撤销绑定');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await flushPromises();
 

@@ -36,6 +36,15 @@ const activeBindings = computed(() => store.bindings.filter((binding) => binding
 /** Set by the row button; the revoke RPC waits for the dialog's confirmation. */
 const pendingRevoke = shallowRef<BindingView | null>(null);
 /*
+ * TASK-303: the panel renders the revoke's OWN failure, not the page-level
+ * `store.failure` that every operation writes. Opening the confirmation used to
+ * show — and `role="alert"` used to announce — whatever the previous operation had
+ * failed with (a grant refusal, say), so the user read an error about something
+ * they had not asked for. The page-level <ErrorState> below still reads
+ * `store.failure`; that copy is unchanged.
+ */
+const revokeFailure = shallowRef<string | null>(null);
+/*
  * TASK-297: the row button is gone once the revocation lands, so the browser
  * would drop focus on <body>; the success notice is where the confirm left the
  * user, and `tabindex="-1"` is what lets us move focus there programmatically.
@@ -78,6 +87,20 @@ async function submitGrant(): Promise<void> {
 }
 
 /*
+ * TASK-303: arming and closing the confirmation drop the previous attempt's
+ * reason, so the panel can only ever render the revoke it belongs to.
+ */
+function armRevoke(binding: BindingView): void {
+  revokeFailure.value = null;
+  pendingRevoke.value = binding;
+}
+
+function closeRevoke(): void {
+  revokeFailure.value = null;
+  pendingRevoke.value = null;
+}
+
+/*
  * TASK-295: the row button used to call the store directly, so one misclick
  * revoked the binding and its capability grant with no confirmation. The
  * destructive RPC now runs only here, from the dialog's confirm action.
@@ -92,7 +115,13 @@ async function submitGrant(): Promise<void> {
 async function confirmRevoke(): Promise<void> {
   const binding = pendingRevoke.value;
   if (!binding) return;
-  if (!(await store.revoke(binding))) return;
+  revokeFailure.value = null;
+  if (!(await store.revoke(binding))) {
+    // The store has just recorded the reason for THIS attempt; copy it into the
+    // revoke's own slot instead of reading the shared ref from the template.
+    revokeFailure.value = store.failure?.message ?? null;
+    return;
+  }
   pendingRevoke.value = null;
   await nextTick();
   noticeRef.value?.focus();
@@ -174,7 +203,7 @@ function statusLabel(binding: BindingView): string {
               type="button"
               class="danger"
               :disabled="store.saving"
-              @click="pendingRevoke = binding"
+              @click="armRevoke(binding)"
             >
               撤销
             </button>
@@ -194,21 +223,23 @@ function statusLabel(binding: BindingView): string {
       danger
       :close-on-backdrop="false"
       :close-on-escape="!store.saving"
-      @close="pendingRevoke = null"
+      @close="closeRevoke"
     >
       <!-- Inside the panel, not only in the page-level <ErrorState> behind the
            fixed backdrop: the whole point of keeping the dialog open on failure
-           is that the reason is readable where the user already is (TASK-297). -->
+           is that the reason is readable where the user already is (TASK-297).
+           TASK-303: the copy comes from the revoke's own slot, so arming the
+           confirmation can never surface another operation's failure. -->
       <p
-        v-if="store.failure"
+        v-if="revokeFailure"
         class="governance__error"
         role="alert"
         data-testid="revoke-failure"
       >
-        {{ store.failure.message }}
+        {{ revokeFailure }}
       </p>
       <template #footer>
-        <button type="button" :disabled="store.saving" @click="pendingRevoke = null">取消</button>
+        <button type="button" :disabled="store.saving" @click="closeRevoke">取消</button>
         <button
           type="button"
           class="governance__confirm-danger"
