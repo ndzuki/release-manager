@@ -347,7 +347,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/StuckLocksPage.vue',
-    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放锁', '没有撤销', '：释放错误会让一个集群状态仍未知的定义重新接受任务。第二次释放不可重放（会报未找到或状态冲突）。', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符'],
+    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
