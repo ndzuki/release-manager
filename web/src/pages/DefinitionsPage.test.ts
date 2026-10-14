@@ -6,6 +6,7 @@ import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import DefinitionsPage from './DefinitionsPage.vue';
 import * as api from '@/connect/definition-api';
+import { useDefinitionsStore } from '@/stores/definitions';
 
 vi.mock('@/connect/definition-api', async (importOriginal) => {
   const original = await importOriginal<typeof api>();
@@ -224,6 +225,20 @@ describe('DefinitionsPage', () => {
     });
     expect(document.querySelector('.definitions__editor')).toBeNull();
     expect(wrapper.get('[data-testid="definitions-notice"]').text()).toContain('版本 4');
+  });
+
+  // TASK-299: the notice is the shared Toast primitive now. Its testid and copy are
+  // what the page's consumers rely on, and a successful update must stay polite
+  // (`status`), not become an assertive alert.
+  it('renders the notice through the Toast primitive without changing its testid or copy', async () => {
+    const wrapper = await mountPage();
+    useDefinitionsStore().notice = '已更新定义 e2e-release-target（版本 4）';
+    await nextTick();
+
+    const notice = wrapper.get('[data-testid="definitions-notice"]');
+    expect(notice.text()).toContain('已更新定义 e2e-release-target（版本 4）');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.find('button[aria-label]').exists()).toBe(true);
   });
 
   // TASK-214: clearing IS expressible now — the strings carry presence and the mappings

@@ -7,6 +7,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import type { DefinitionView, PromotionMappingView } from '@/connect/definition-api';
 import { useDefinitionsStore } from '@/stores/definitions';
 
@@ -167,7 +168,15 @@ function formatTimestamp(value: string | null): string {
       <button type="submit" :disabled="store.loading">查询</button>
     </form>
 
-    <p v-if="store.notice" class="definitions__notice" role="status" data-testid="definitions-notice">{{ store.notice }}</p>
+    <!--
+      TASK-299: the primitive, used without `auto-dismiss` — the store's notice is
+      persistent today and stays persistent here. `tone="success"` keeps the assertive/
+      polite mapping right for a successful update; the page's own class still owns the
+      colours, so the box is unchanged.
+    -->
+    <Toast v-if="store.notice" class="definitions__notice" tone="success" data-testid="definitions-notice">
+      {{ store.notice }}
+    </Toast>
 
     <ErrorState
       v-if="store.failure"

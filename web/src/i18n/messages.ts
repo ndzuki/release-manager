@@ -176,6 +176,12 @@ const zhCN = {
    */
   'common.labelledRowField': '{field}（第 {index} 行）',
   /*
+   * TASK-299: accessible name for the notification primitive's dismiss control. It
+   * names the action (close this notification), not the notification's own text, so it
+   * stays generic instead of interpolating the message body into it.
+   */
+  'common.dismissNotice': '关闭通知',
+  /*
    * Shared pagination primitive (TASK-283). The wording of a pager is the same on
    * every list, so it lives here once instead of once per page; `pagination.label`
    * is the primitive's fallback landmark name, and a page with a domain name for

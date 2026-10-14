@@ -105,6 +105,12 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
     reason: 'the default title comes from the catalog',
   },
   {
+    file: 'src/components/common/Toast.vue',
+    allowed: ['(prefers-reduced-motion: reduce)'],
+    reason:
+      'the media-query string is a CSS identifier, not copy; the dismiss label comes from the catalog (common.dismissNotice)',
+  },
+  {
     file: 'src/pages/ForbiddenPage.vue',
     allowed: [],
     reason: 'the action label comes from the catalog',
