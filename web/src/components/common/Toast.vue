@@ -144,7 +144,7 @@ function dismiss(): void {
 <style scoped>
 /*
  * Layout and motion stay on `.toast` (no caller sets these properties), while every
- * visual default sits in `:where()` so it scores (0,1,0) once scoped and a caller's own
+ * visual default sits in `:where()` so it scores (0,0,0) once scoped and a caller's own
  * class — `.definitions__notice`, for instance — always wins on the properties it sets.
  * A plain `.toast { background: … }` would tie with a scoped page class at (0,2,0) and
  * the winner would depend on stylesheet order.

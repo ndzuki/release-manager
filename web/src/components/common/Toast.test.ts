@@ -319,8 +319,9 @@ describe('Toast', () => {
   /*
    * BOUNDARY OF THIS ASSERTION (TASK-304): it reads the SFC text, because happy-dom
    * does not evaluate scoped CSS. All it checks is that the reduced-motion override is
-   * not written with a zero-specificity `:where(...)` selector — the one way the rule
-   * goes dead while the compiled `animation` on `.toast` keeps running. It does NOT
+   * not written with a zero-specificity `:where(...)` selector, which a class-presence test cannot see. Text presence is not proof of a live
+   * rule: a same-named literal inside an HTML comment or a JS string still satisfies this
+   * assertion, and a rule can be dead for reasons this text match cannot observe. It does NOT
    * prove the computed style, the compiled specificity, what the build pipeline
    * rewrites, or that a real browser applies the rule; that would need a browser-level
    * check. Comments are stripped first (see `stripComments`): a selector merely
