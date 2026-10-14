@@ -84,6 +84,34 @@ describe('Toast', () => {
     expect(wrapper.emitted('dismiss')).toHaveLength(1);
   });
 
+  it('restarts the full interval when the pointer leaves after the countdown started', async () => {
+    vi.useFakeTimers();
+    const wrapper = mountToast({ autoDismissMs: 1000, testid: 'late-hover' });
+
+    expect(wrapper.find('[data-testid="late-hover"]').exists()).toBe(true);
+
+    // Let most of the interval elapse BEFORE the pointer arrives: a resume implementation would
+    // then have only ~100ms left, while restart owes the reader the whole interval again.
+    vi.advanceTimersByTime(900);
+    await nextTick();
+    expect(wrapper.find('[data-testid="late-hover"]').exists()).toBe(true);
+
+    await wrapper.trigger('mouseenter');
+    vi.advanceTimersByTime(5000);
+    await nextTick();
+    expect(wrapper.find('[data-testid="late-hover"]').exists()).toBe(true);
+
+    await wrapper.trigger('mouseleave');
+    await nextTick();
+    vi.advanceTimersByTime(999);
+    await nextTick();
+    expect(wrapper.find('[data-testid="late-hover"]').exists()).toBe(true);
+
+    vi.advanceTimersByTime(1);
+    await nextTick();
+    expect(wrapper.find('[data-testid="late-hover"]').exists()).toBe(false);
+  });
+
   it('pauses the countdown while the pointer is over it', async () => {
     vi.useFakeTimers();
     const wrapper = mountToast({ autoDismissMs: 1000, testid: 'hovered' });
