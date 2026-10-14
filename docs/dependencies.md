@@ -73,7 +73,7 @@
 | `github.com/go-viper/mapstructure/v2` | v2.4.0 | MIT |  |
 | `github.com/gobwas/glob` | v0.2.3 | MIT |  |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | MIT |  |
-| `github.com/golang-migrate/migrate/v4` | v4.19.1 | MIT |  |
+| `github.com/golang-migrate/migrate/v4` | v4.20.1 | MIT |  |
 | `github.com/google/btree` | v1.1.3 | Apache-2.0 |  |
 | `github.com/google/gnostic-models` | v0.7.0 | Apache-2.0 |  |
 | `github.com/google/uuid` | v1.6.0 | BSD-3-Clause |  |
@@ -102,7 +102,7 @@
 | `github.com/lib/pq` | v1.12.3 | MIT |  |
 | `github.com/liggitt/tabwriter` | v0.0.0-20181228230101-89fcab3d43de | BSD-3-Clause |  |
 | `github.com/mattn/go-colorable` | v0.1.14 | MIT |  |
-| `github.com/mattn/go-isatty` | v0.0.20 | MIT |  |
+| `github.com/mattn/go-isatty` | v0.0.24 | MIT |  |
 | `github.com/mattn/go-runewidth` | v0.0.9 | MIT |  |
 | `github.com/mitchellh/copystructure` | v1.2.0 | MIT |  |
 | `github.com/mitchellh/go-wordwrap` | v1.0.1 | MIT |  |
@@ -152,7 +152,7 @@
 | `golang.org/x/crypto` | v0.57.0 | BSD-3-Clause |  |
 | `golang.org/x/mod` | v0.41.0 | BSD-3-Clause |  |
 | `golang.org/x/net` | v0.60.0 | BSD-3-Clause |  |
-| `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause |  |
+| `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause |  |
 | `golang.org/x/sync` | v0.23.0 | BSD-3-Clause |  |
 | `golang.org/x/sys` | v0.48.0 | BSD-3-Clause |  |
 | `golang.org/x/term` | v0.46.0 | BSD-3-Clause |  |
@@ -177,10 +177,10 @@
 | `k8s.io/kube-openapi` | v0.0.0-20260721132016-d427ff9ee9ad | Apache-2.0 |  |
 | `k8s.io/kubectl` | v0.37.0 | Apache-2.0 |  |
 | `k8s.io/utils` | v0.0.0-20260626114624-be93311217bd | Apache-2.0 |  |
-| `modernc.org/libc` | v1.73.4 | BSD-3-Clause|MIT |  |
+| `modernc.org/libc` | v1.77.1 | BSD-3-Clause|MIT |  |
 | `modernc.org/mathutil` | v1.7.1 | BSD-3-Clause |  |
-| `modernc.org/memory` | v1.11.0 | BSD-3-Clause |  |
-| `modernc.org/sqlite` | v1.53.0 | BSD-3-Clause |  |
+| `modernc.org/memory` | v1.12.1 | BSD-3-Clause |  |
+| `modernc.org/sqlite` | v1.60.1 | Apache-2.0|BSD-3-Clause|MIT |  |
 | `oras.land/oras-go/v2` | v2.6.2 | Apache-2.0 |  |
 | `sigs.k8s.io/json` | v0.0.0-20250730193827-2d320260d730 | Apache-2.0 |  |
 | `sigs.k8s.io/kustomize/api` | v0.21.1 | Apache-2.0 |  |
