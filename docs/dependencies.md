@@ -152,7 +152,7 @@
 | `golang.org/x/crypto` | v0.57.0 | BSD-3-Clause |  |
 | `golang.org/x/mod` | v0.41.0 | BSD-3-Clause |  |
 | `golang.org/x/net` | v0.60.0 | BSD-3-Clause |  |
-| `golang.org/x/oauth2` | v0.36.0 | BSD-3-Clause |  |
+| `golang.org/x/oauth2` | v0.37.0 | BSD-3-Clause |  |
 | `golang.org/x/sync` | v0.23.0 | BSD-3-Clause |  |
 | `golang.org/x/sys` | v0.48.0 | BSD-3-Clause |  |
 | `golang.org/x/term` | v0.46.0 | BSD-3-Clause |  |
