@@ -65,8 +65,8 @@ function clearTimer(): void {
 /*
  * Restart rather than resume when the pause ends: the reader gets the whole interval
  * back instead of the remainder of a countdown they may never have seen running. The
- * tests pin this down (hover past the deadline, then leave: it only goes once the full
- * interval has elapsed again).
+ * case that pins this down lets the interval partly elapse before the pointer arrives,
+ * then leaves and checks the notice survives the remainder and goes after a full one.
  */
 function armTimer(): void {
   clearTimer();
