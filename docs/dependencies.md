@@ -73,7 +73,7 @@
 | `github.com/go-viper/mapstructure/v2` | v2.4.0 | MIT |  |
 | `github.com/gobwas/glob` | v0.2.3 | MIT |  |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | MIT |  |
-| `github.com/golang-migrate/migrate/v4` | v4.19.1 | MIT |  |
+| `github.com/golang-migrate/migrate/v4` | v4.20.1 | MIT |  |
 | `github.com/google/btree` | v1.1.3 | Apache-2.0 |  |
 | `github.com/google/gnostic-models` | v0.7.0 | Apache-2.0 |  |
 | `github.com/google/uuid` | v1.6.0 | BSD-3-Clause |  |
