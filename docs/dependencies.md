@@ -166,12 +166,12 @@
 | `gorm.io/driver/postgres` | v1.6.0 | MIT |  |
 | `gorm.io/gorm` | v1.31.2 | MIT |  |
 | `helm.sh/helm/v3` | v3.22.0 | Apache-2.0 |  |
-| `k8s.io/api` | v0.37.0 | Apache-2.0 |  |
+| `k8s.io/api` | v0.37.1 | Apache-2.0 |  |
 | `k8s.io/apiextensions-apiserver` | v0.37.0 | Apache-2.0 |  |
-| `k8s.io/apimachinery` | v0.37.0 | Apache-2.0 |  |
+| `k8s.io/apimachinery` | v0.37.1 | Apache-2.0 |  |
 | `k8s.io/apiserver` | v0.37.0 | Apache-2.0 |  |
-| `k8s.io/cli-runtime` | v0.37.0 | Apache-2.0 |  |
-| `k8s.io/client-go` | v0.37.0 | Apache-2.0 |  |
+| `k8s.io/cli-runtime` | v0.37.1 | Apache-2.0 |  |
+| `k8s.io/client-go` | v0.37.1 | Apache-2.0 |  |
 | `k8s.io/component-base` | v0.37.0 | Apache-2.0 |  |
 | `k8s.io/klog/v2` | v2.140.0 | Apache-2.0 |  |
 | `k8s.io/kube-openapi` | v0.0.0-20260721132016-d427ff9ee9ad | Apache-2.0 |  |
