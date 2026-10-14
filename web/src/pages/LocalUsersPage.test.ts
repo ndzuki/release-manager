@@ -95,6 +95,25 @@ describe('LocalUsersPage', () => {
     expect(wrapper.get('[data-testid="local-users-notice"]').text()).toContain('已就绪');
   });
 
+  // TASK-299: the notice is the shared Toast primitive now; its testid, its copy and
+  // the polite `status` role are what the page's consumers rely on.
+  it('renders the notice through the Toast primitive without changing its testid or copy', async () => {
+    signIn(['platform_admin']);
+    mockedList.mockResolvedValue({ users: [], nextCursor: '' });
+    mockedCreate.mockResolvedValue({ id: 'u3', username: 'carol', roles: ['viewer'], orgId: 'org-1', status: 'active' });
+
+    const wrapper = await mountPage();
+    await wrapper.get('input[name="username"]').setValue('carol');
+    await wrapper.get('input[name="password"]').setValue('s3cret-value');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    const notice = wrapper.get('[data-testid="local-users-notice"]');
+    expect(notice.text()).toContain('carol');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.find('button[aria-label]').exists()).toBe(true);
+  });
+
   it('refuses to render the surface for a non-admin', async () => {
     signIn(['release_admin']);
 

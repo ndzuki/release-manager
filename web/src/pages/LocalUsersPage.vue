@@ -5,6 +5,7 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import { LOCAL_USER_ROLES, type LocalUserRole } from '@/connect/local-user-api';
 import { PASSWORD_MAX_BYTES, passwordTooLong } from '@/connect/auth-api';
 import { useAuthStore } from '@/stores/auth';
@@ -82,9 +83,15 @@ onMounted(() => {
         <button type="button" @click="store.load()">{{ t('action.refresh') }}</button>
       </header>
 
-      <p v-if="store.notice" class="notice" role="status" data-testid="local-users-notice">
+      <!--
+        TASK-299: the primitive, used without `auto-dismiss`. The store puts both the
+        "account ready" confirmation and the stale-cursor recovery note through this
+        one field, so the default `info` tone (polite `status`) is the honest mapping
+        for the pair; the copy and the testid are unchanged.
+      -->
+      <Toast v-if="store.notice" class="notice" data-testid="local-users-notice">
         {{ store.notice }}
-      </p>
+      </Toast>
 
       <ErrorState
         v-if="store.failure && !store.hasUsers"
