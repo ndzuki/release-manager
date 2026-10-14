@@ -230,6 +230,10 @@ describe('DefinitionsPage', () => {
   // TASK-299: the notice is the shared Toast primitive now. Its testid and copy are
   // what the page's consumers rely on, and a successful update must stay polite
   // (`status`), not become an assertive alert.
+  // TASK-304: pin the tone the page asks for — `role` alone cannot see it, because
+  // dropping `tone="success"` silently falls back to `info` and still renders `status`.
+  // The dismiss control is pinned by its label and by its effect, not by "some button
+  // with an aria-label exists".
   it('renders the notice through the Toast primitive without changing its testid or copy', async () => {
     const wrapper = await mountPage();
     useDefinitionsStore().notice = '已更新定义 e2e-release-target（版本 4）';
@@ -238,7 +242,14 @@ describe('DefinitionsPage', () => {
     const notice = wrapper.get('[data-testid="definitions-notice"]');
     expect(notice.text()).toContain('已更新定义 e2e-release-target（版本 4）');
     expect(notice.attributes('role')).toBe('status');
-    expect(notice.find('button[aria-label]').exists()).toBe(true);
+    expect(notice.classes()).toContain('toast--success');
+    expect(notice.classes()).not.toContain('toast--info');
+
+    const dismiss = notice.get('.toast__dismiss');
+    expect(dismiss.attributes('aria-label')).toBe('关闭通知');
+    await dismiss.trigger('click');
+    await nextTick();
+    expect(wrapper.find('[data-testid="definitions-notice"]').exists()).toBe(false);
   });
 
   // TASK-214: clearing IS expressible now — the strings carry presence and the mappings

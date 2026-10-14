@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import LocalUsersPage from './LocalUsersPage.vue';
 import * as api from '@/connect/local-user-api';
@@ -97,6 +98,9 @@ describe('LocalUsersPage', () => {
 
   // TASK-299: the notice is the shared Toast primitive now; its testid, its copy and
   // the polite `status` role are what the page's consumers rely on.
+  // TASK-304: this page deliberately takes the default tone, so pin `info` (a stray
+  // `tone="success"` would otherwise pass unnoticed), and pin the dismiss control by
+  // its label and its effect rather than by the presence of any `aria-label` button.
   it('renders the notice through the Toast primitive without changing its testid or copy', async () => {
     signIn(['platform_admin']);
     mockedList.mockResolvedValue({ users: [], nextCursor: '' });
@@ -111,7 +115,15 @@ describe('LocalUsersPage', () => {
     const notice = wrapper.get('[data-testid="local-users-notice"]');
     expect(notice.text()).toContain('carol');
     expect(notice.attributes('role')).toBe('status');
-    expect(notice.find('button[aria-label]').exists()).toBe(true);
+    expect(notice.classes()).toContain('toast--info');
+    expect(notice.classes()).not.toContain('toast--success');
+    expect(notice.classes()).not.toContain('toast--error');
+
+    const dismiss = notice.get('.toast__dismiss');
+    expect(dismiss.attributes('aria-label')).toBe('关闭通知');
+    await dismiss.trigger('click');
+    await nextTick();
+    expect(wrapper.find('[data-testid="local-users-notice"]').exists()).toBe(false);
   });
 
   it('refuses to render the surface for a non-admin', async () => {

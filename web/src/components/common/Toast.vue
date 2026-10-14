@@ -4,7 +4,7 @@ import { t } from '@/i18n/messages';
 
 /*
  * TASK-299: the notification primitive the ad-hoc `role="status"` / `role="alert"`
- * paragraphs across the console migrate to. Two contract points are load-bearing and
+ * paragraphs across the console migrate to. Three contract points are load-bearing and
  * non-obvious, so they are stated here rather than left to the call sites:
  *
  * 1. PERSISTENT BY DEFAULT. `autoDismissMs` is optional and its absence means "stay on
@@ -23,6 +23,17 @@ import { t } from '@/i18n/messages';
  * keep their order and stay distinguishable, which is the stacking the contract asks
  * for without a fixed-position overlay that would need a container of its own. The
  * caller controls the lifetime with `v-if` and keeps its own `data-testid`.
+ *
+ * 3. `v-if` AND `autoDismissMs` ARE MUTUALLY EXCLUSIVE IN PRACTICE (TASK-304). "The
+ *    caller controls the lifetime" only holds while `autoDismissMs` is left out. When
+ *    both are used, `visible` starts true and is never set back: the timer hides the
+ *    toast once, and every later notice handed to the SAME instance (the caller's
+ *    `v-if` never went false) renders nothing — one instance shows at most one notice.
+ *    Both call sites today omit `autoDismissMs` (DefinitionsPage.vue's success toast
+ *    and LocalUsersPage.vue's info toast), so the hole is unreachable here; a caller
+ *    that does want the timer must remount the instance on each notice
+ *    (`:key="notice"`) or clear its own notice from `@dismiss`. The limitation and both
+ *    remedies are pinned in Toast.test.ts.
  */
 type ToastTone = 'info' | 'success' | 'error';
 
