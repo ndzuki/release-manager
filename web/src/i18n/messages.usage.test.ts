@@ -594,10 +594,6 @@ const NOT_YET_MIGRATED: Array<{ file: string; reason: string }> = [
     reason: 'not migrated yet: Chinese or wire-value copy that the convergence waves have not reached; listed so the gap cannot grow silently',
   },
   {
-    file: 'src/stores/definitions.ts',
-    reason: 'not migrated yet: Chinese or wire-value copy that the convergence waves have not reached; listed so the gap cannot grow silently',
-  },
-  {
     file: 'src/stores/governance.ts',
     reason: 'not migrated yet: Chinese or wire-value copy that the convergence waves have not reached; listed so the gap cannot grow silently',
   },

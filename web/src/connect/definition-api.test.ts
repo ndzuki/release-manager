@@ -2,6 +2,10 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { describe, expect, it, vi } from 'vitest';
 import { decodeApprovedAnnotationKeys, decodePromotionMappings, mapDefinitionError } from './definition-api';
 import type { UpdateReleaseDefinitionRequest } from '@/gen/orchestrator/v1/orchestrator_pb';
+import type {
+  CreateReleaseDefinitionRequest,
+  DisableReleaseDefinitionRequest,
+} from '@/gen/orchestrator/v1/orchestrator_pb';
 
 function failed(message: string, code: Code) {
   return new ConnectError(message, code);
@@ -121,6 +125,170 @@ describe('getDefinition', () => {
     ]);
     expect(view.approvedAnnotationKeysViolation).toBeNull();
     spy.mockRestore();
+  });
+});
+
+/*
+ * TASK-301: the console could show and edit a definition but could not CREATE one
+ * nor disable it, although both RPCs exist (orchestrator/v1:1257/:1283). These cases
+ * pin the request the server receives and the failure classification the page shows.
+ *
+ * The transport is BINARY (`useBinaryFormat: true` in client.ts), so the request is
+ * round-tripped through the same codec the transport uses instead of being trusted
+ * as an in-memory object.
+ */
+describe('createDefinition', () => {
+  it('sends the typed create contract and maps the returned definition', async () => {
+    const { create } = await import('@bufbuild/protobuf');
+    const { CreateReleaseDefinitionRequestSchema } = await import('@/gen/orchestrator/v1/orchestrator_pb');
+    const { ReleaseDefinitionSchema } = await import('@/gen/common/v1/domain_pb');
+    const client = await import('./client');
+    const spy = vi.spyOn(client.orchestratorClient, 'createReleaseDefinition').mockResolvedValue({
+      definition: create(ReleaseDefinitionSchema, {
+        id: 'def-9',
+        name: 'release-a',
+        customerId: 'cust-1',
+        clusterId: 'cluster-1',
+        status: 'active',
+        version: 1n,
+      }),
+    } as never);
+
+    const { createDefinition } = await import('./definition-api');
+    const created = await createDefinition({
+      customerId: 'cust-1',
+      clusterId: 'cluster-1',
+      namespace: 'ns',
+      releaseName: 'release-a',
+      chartName: 'chart',
+      enabled: true,
+      promotionMappings: [
+        { workloadKind: 'Deployment', workloadName: 'api', container: 'app', field: 'image', valuesPath: 'image.tag' },
+      ],
+    });
+
+    const request = spy.mock.calls[0]?.[0] as unknown as CreateReleaseDefinitionRequest;
+    expect(request.$typeName).toBe(CreateReleaseDefinitionRequestSchema.typeName);
+    expect(request.customerId).toBe('cust-1');
+    expect(request.clusterId).toBe('cluster-1');
+    expect(request.namespace).toBe('ns');
+    expect(request.releaseName).toBe('release-a');
+    expect(request.chartName).toBe('chart');
+    expect(request.enabled).toBe(true);
+    expect(request.promotionMappings).toHaveLength(1);
+
+    const { fromBinary, toBinary } = await import('@bufbuild/protobuf');
+    const decoded = fromBinary(
+      CreateReleaseDefinitionRequestSchema,
+      toBinary(CreateReleaseDefinitionRequestSchema, request),
+    );
+    expect(decoded.customerId).toBe('cust-1');
+    expect(decoded.enabled).toBe(true);
+    expect(decoded.promotionMappings[0]?.workloadName).toBe('api');
+
+    expect(created.id).toBe('def-9');
+    expect(created.status).toBe('active');
+    expect(created.version).toBe(1n);
+  });
+
+  /*
+   * `enabled: false` creates a DRAFT (`definition.go: `if !msg.GetEnabled()`) and
+   * proto3 bools have no presence, so the flag is conveyed by the field being ABSENT:
+   * tag for field 6 (varint) is 0x30. A wrapper that dropped the flag would send the
+   * same bytes as `true` for a caller asking for a draft, so both directions are pinned.
+   */
+  it('conveys enabled: false by omitting field 6, which the server reads as draft', async () => {
+    const { create, toBinary } = await import('@bufbuild/protobuf');
+    const { CreateReleaseDefinitionRequestSchema } = await import('@/gen/orchestrator/v1/orchestrator_pb');
+    const { ReleaseDefinitionSchema } = await import('@/gen/common/v1/domain_pb');
+    const client = await import('./client');
+    const spy = vi.spyOn(client.orchestratorClient, 'createReleaseDefinition').mockResolvedValue({
+      definition: create(ReleaseDefinitionSchema, { id: 'def-9', status: 'draft', version: 1n }),
+    } as never);
+
+    const { createDefinition } = await import('./definition-api');
+    const input = { customerId: 'c', clusterId: 'k', releaseName: 'r' };
+    await createDefinition({ ...input, enabled: false });
+    await createDefinition({ ...input, enabled: true });
+
+    const hex = (index: number) =>
+      Array.from(
+        toBinary(
+          CreateReleaseDefinitionRequestSchema,
+          spy.mock.calls[index]?.[0] as unknown as CreateReleaseDefinitionRequest,
+        ),
+      )
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join('');
+
+    /*
+     * The negative ("no field 6") is only meaningful next to the positive: the two
+     * requests are byte-identical EXCEPT that the enabled one ends with the field-6
+     * varint (tag 0x30, value 0x01). An "absent" assertion alone would also pass for a
+     * wrapper that dropped the flag in both directions.
+     */
+    expect(hex(0)).not.toContain('30');
+    expect(hex(1)).toBe(`${hex(0)}3001`);
+  });
+
+  it('propagates a duplicate refusal and classifies it as a retryable-free duplicate', async () => {
+    const failure = new ConnectError('definition already exists for customer=c cluster=k', Code.AlreadyExists);
+    const client = await import('./client');
+    vi.spyOn(client.orchestratorClient, 'createReleaseDefinition').mockRejectedValue(failure);
+
+    const { createDefinition } = await import('./definition-api');
+    await expect(
+      createDefinition({ customerId: 'c', clusterId: 'k', releaseName: 'r', enabled: true }),
+    ).rejects.toBe(failure);
+    const mapped = mapDefinitionError(failure);
+    expect(mapped.code).toBe('duplicate');
+    expect(mapped.retryable).toBe(false);
+  });
+});
+
+describe('disableDefinition', () => {
+  it('sends the definition id with the version it read and returns the disabled view', async () => {
+    const { create } = await import('@bufbuild/protobuf');
+    const { DisableReleaseDefinitionRequestSchema } = await import('@/gen/orchestrator/v1/orchestrator_pb');
+    const { ReleaseDefinitionSchema } = await import('@/gen/common/v1/domain_pb');
+    const client = await import('./client');
+    const spy = vi.spyOn(client.orchestratorClient, 'disableReleaseDefinition').mockResolvedValue({
+      definition: create(ReleaseDefinitionSchema, { id: 'def-1', name: 'release-a', status: 'disabled', version: 4n }),
+    } as never);
+
+    const { disableDefinition } = await import('./definition-api');
+    const disabled = await disableDefinition('def-1', 3n);
+
+    const request = spy.mock.calls[0]?.[0] as unknown as DisableReleaseDefinitionRequest;
+    expect(request.$typeName).toBe(DisableReleaseDefinitionRequestSchema.typeName);
+    expect(request.definitionId).toBe('def-1');
+    expect(request.expectedVersion).toBe(3n);
+
+    const { fromBinary, toBinary } = await import('@bufbuild/protobuf');
+    const decoded = fromBinary(
+      DisableReleaseDefinitionRequestSchema,
+      toBinary(DisableReleaseDefinitionRequestSchema, request),
+    );
+    expect(decoded.definitionId).toBe('def-1');
+    expect(decoded.expectedVersion).toBe(3n);
+
+    expect(disabled.status).toBe('disabled');
+    expect(disabled.name).toBe('release-a');
+  });
+
+  // DisableReleaseDefinition writes its lost race with FAILED_PRECONDITION + the
+  // `optimistic_lock_conflict` token, so the token branch is what keeps the retry
+  // hint (and the reload) alive.
+  it('maps a lost race to a retryable conflict and an unknown definition to not_found', async () => {
+    const conflict = new ConnectError('optimistic_lock_conflict: definition version changed', Code.FailedPrecondition);
+    const client = await import('./client');
+    vi.spyOn(client.orchestratorClient, 'disableReleaseDefinition').mockRejectedValue(conflict);
+
+    const { disableDefinition } = await import('./definition-api');
+    await expect(disableDefinition('def-1', 3n)).rejects.toBe(conflict);
+    expect(mapDefinitionError(conflict)).toMatchObject({ code: 'conflict', retryable: true });
+
+    expect(mapDefinitionError(new ConnectError('definition "x" not found', Code.NotFound)).code).toBe('not_found');
   });
 });
 
