@@ -492,6 +492,21 @@ jobs:
           path: e2e-results/
           if-no-files-found: ignore
 
+      # TASK-307: the console lane's own Playwright artifacts. The JSON report the
+      # case guard reads travels in the artifact above; this upload adds the
+      # browsable HTML report plus the per-failure screenshot and trace, so a red
+      # browser case is diagnosable without re-running the stack. `if: always()`
+      # because these artifacts exist precisely when the smoke step failed.
+      - name: Upload Playwright HTML report, screenshots and traces
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-console-playwright-artifacts
+          path: |
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+
   # TASK-066 formal E2E gate. Pull requests intentionally do not run this
   # privileged integration job; it runs on push main (REQ-066 决策 ⑧) and on
   # demand.

@@ -93,12 +93,15 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
   缺 `/auth.v1.AuthorizationService` ⇒ `GetAuthorizationSnapshot` **未被代理（POST 得 404，不是落 SPA）**
   ⇒ `writeBlocked` 为真、回滚入口不渲染。
 - **URL 别写错**：Vite 默认 `host=localhost` 在 Node 26 下只监听 `[::1]:5173`，`http://127.0.0.1:5173`
-  会被拒连；本仓库已在 `vite.config.ts` 显式 `host: '127.0.0.1'` 固定为 IPv4（`playwright.config.ts:17`
+  会被拒连；本仓库已在 `vite.config.ts` 显式 `host: '127.0.0.1'` 固定为 IPv4（`playwright.config.ts:25`
   的默认 baseURL 恰是该地址）。
 - **本 spec 现在由 `e2e-prerequisite` / CI 运行（TASK-250）**：`make e2e-prerequisite`（本地）与
   `make e2e-prerequisite-ci`（CI 的 `e2e-prerequisite` job；push main 或手动触发）在 `smoke.sh` **之后**
-  调用 `test/e2e/prerequisite/console.sh`，对**容器内控制台** `http://127.0.0.1:8087` 跑本 spec；
-  失败时的 trace 落在被忽略的 `e2e-results/console/`，随既有 artifact 一并上传。
+  调用 `test/e2e/prerequisite/console.sh`，对**容器内控制台** `http://127.0.0.1:8087` 跑本 spec。
+  机器可读的 JSON 报告固定在（被忽略的）`e2e-results/console/results.json`，随
+  `e2e-prerequisite-diagnostics` 上传；失败截图/保留的 trace 与 HTML 报告分别落在
+  `web/test-results/` 与 `web/playwright-report/`，随 `e2e-console-playwright-artifacts` 上传（TASK-307；<!-- check-docs:ignore web/test-results/ web/playwright-report/ Playwright 运行时产物目录，gitignore 掉，干净检出中本就不存在（本行在说明它们随 artifact 上传） -->
+  两个目录均被根 `.gitignore` 覆盖）。
 - **前置：目标 release 的 revision 必须 > 1**（否则发布清单不渲染回滚入口）。`smoke.sh` 以 UPGRADE + ROLLBACK
   结束，正好满足；单独对 fresh `dev-seed` 跑本 spec 会以「`max revision=1`」**硬失败**——那是前置不满足，
   不是控制台故障。
@@ -456,6 +459,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   gh run list --repo ndzuki/release-manager --workflow test.yml --limit 5 # 取 run id
   gh run view <run-id> --repo ndzuki/release-manager --log                # 读 console-e2e / smoke 结果
   gh run download <run-id> -n e2e-prerequisite-diagnostics                # 失败 trace 与 smoke-result.json
+  gh run download <run-id> -n e2e-console-playwright-artifacts            # HTML 报告 + 失败截图/trace（TASK-307）
   ```
 
   本地等价入口 `make e2e-prerequisite`（`dev-up dev-seed dev-status` + `smoke.sh` + `console.sh`；
@@ -501,24 +505,37 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   `web/vite.config.ts`、`web/nginx.conf`、`web/tsconfig*.json`、`web/env.d.ts` 纳入哈希。
 - **skip 不等于通过**：`E2E_BACKEND` 未设时三个 spec 整体以显式原因 skip；声明栈已起后，`rollback`
   的入口/凭据缺失是**硬失败**，`emergency-smoke` 的两个前置（绑定 ReleaseDefinition 的 release、
-  `pending_promotion` 任务）各自 **skip 并写明原因**。
-- **车道级「目标用例必须真跑」守卫（TASK-270，PR #343 复核阻断项③）**：Playwright 对 **skip 的退出码
-  是 0**（实测 run `37970098364`：`4 passed` + `1 skipped` ⇒ exit 0），所以只转发 Playwright 退出码的
-  车道可能**全绿却零执行**。`console.sh` 因此额外产出机器可读报告（`--reporter=list,json` +
-  `PLAYWRIGHT_JSON_OUTPUT_NAME`，落在 `e2e-results/console/results.json` 并随 artifact 上传），由
-  `test/e2e/prerequisite/console-target-guard.sh` 断言跨角色用例
-  `Convergence: Prepare → ValuesEditor draft → Submit → cross-actor Approve` 的**最终结果状态是
-  `passed`**：`skipped` / `failed` / **未被收集**（改名或换了 spec）都**打印原因并 exit 非零**。报告本身
-  先过**结构门禁**（必须是带 `suites` 数组的 JSON 对象）：**0 字节 / 纯空白 / `{}` / `null` / 非 JSON**
-  都失败，绝不因空输入而落到成功分支（`jq` 对空输入**无输出且 rc=0**，早期版本曾据此 fail-open 打印
-  "target case passed"）。判据是
-  **具名用例的状态**，不是 `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。
-  **武装判据是两步、都在代码里**：`console.sh` 对本次 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开出的每个 spec
-  路径做**后缀 glob**（`case "$spec_path" in *"emergency-smoke.spec.ts"`，`console.sh:152-156`）——路径**以**该
-  文件名结尾即武装；`console-target-guard.sh` 随后按**basename** 判定：取报告的 `spec.file` 最后一个 `/` 段
-  （`basename` / `split("/") | last`，`console-target-guard.sh:55-60`）与武装 spec 的 basename 比对，因此
-  `not-emergency-smoke.spec.ts` 既不能武装、也不能满足守卫。spec 内其它两个
-  用例的诚实地雷（kill-switch 专用栈、绑定 release 前置）**保持不变**，不被误判为失败。
+  `pending_promotion` 任务）各自 **skip 并写明原因**。注意这只描述 spec 自身的层级；在 CI 车道里清单把
+  这两个用例声明为**必须 `passed`**（`smoke.sh` 已备好上述前置），所以前置缺失而真的 skip 时守卫会**红**，
+  不会静默通过。
+- **车道级「用例清单必须逐条真跑」守卫（TASK-270 立、TASK-307 扩面 —— PR #343 复核阻断项③）**：
+  Playwright 对 **skip 的退出码是 0**（实测 run `37970098364`：`4 passed` + `1 skipped` ⇒ exit 0），
+  所以只转发 Playwright 退出码的车道可能**全绿却零执行**。`console.sh` 因此额外产出机器可读报告
+  （`--reporter=list,json,html` + `PLAYWRIGHT_JSON_OUTPUT_NAME`，落在 `e2e-results/console/results.json`
+  并随 artifact 上传），由 `test/e2e/prerequisite/console-target-guard.sh` 按**期望用例清单**
+  `test/e2e/prerequisite/console-expected-cases.json` **逐条**判定。清单来源＝该车道实跑的 spec
+  （`console.sh` 的 `SPECS`，即 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开，见 `console.sh:62-63`）内
+  **实际收集到的用例**，当前 = `rollback.spec.ts` 两例 + `emergency-smoke.spec.ts` 三例。声明
+  `expect: passed` 的用例必须**最终结果状态恰为 `passed`**（取最后一次 result，即重试后的终态）；
+  kill-switch 一例声明为**带原因的期望 skip**（`skipReasonContains: E2E_EMERGENCY_DISABLED`——该门只在
+  `emergencyChangeEnabled=false` 的栈上存在，本车道不建这种栈），**理由写在清单里**，因此它是有据的
+  声明而非静默 skip；声明为 skip 的用例若 `failed`/`timedOut`/interrupted 或按**未声明的原因** skip，
+  同样红。**fail-closed**：任一用例 `skip`（未声明原因）/ `failed` / `timedOut` / **未被收集**（改名或
+  换 spec）/ 同名被收集多次 / 收集到但无 result，以及**报告缺失**、**报告为空/纯空白/非 JSON**、报告
+  结构不达标（须是带 `suites` 数组的 JSON 对象；`jq` 对空输入**无输出且 rc=0**，早期版本曾据此
+  fail-open 打印 "target case passed"）⇒ **一律打印原因并 exit 非零**。判据是**具名用例的状态**，不是
+  `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。
+  **双向校验（TASK-307 新增）**：① **报告收集到清单未声明的用例**（车道悄悄长出新用例）⇒ 红——否则
+  它的 skip 与 pass 无法区分；② **`console.sh` 被要求跑的 spec 在清单里没有任何条目** ⇒ **启动前即拒绝**
+  （`console.sh:170-173` 的 pre-flight 循环），而不是跑完 16 分钟才红。守卫与清单比较 spec 时都取
+  **basename**（`console-target-guard.sh:77` 取调用方 spec；`:115` 取报告里 `spec.file` 最后一个 `/` 段），
+  所以传 `e2e/rollback.spec.ts` 还是 `rollback.spec.ts` 不影响判定，`not-rollback.spec.ts` 也不会误匹配。
+- **失败诊断产物（TASK-307）**：`playwright.config.ts` 加 `html` reporter（`outputFolder:
+  'playwright-report'`）与 `screenshot: 'only-on-failure'`（trace 保持 `retain-on-failure`）；`console.sh`
+  以 `--reporter=list,json,html` + `--output=<repo>/web/test-results` 落地；`e2e-prerequisite` job 用
+  `if: always()` 把 `web/playwright-report/` 与 `web/test-results/`（失败截图与保留的 trace）上传为<!-- check-docs:ignore web/playwright-report/ web/test-results/ Playwright 运行时产物目录，gitignore 掉，干净检出中本就不存在（本行在说明它们被 CI 上传） -->
+  artifact **`e2e-console-playwright-artifacts`**（`test.yml:500-508`）。
+  机器可读的 `e2e-results/console/results.json` 仍随 `e2e-prerequisite-diagnostics` 上传（`test.yml:487-493`）。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
 > `.github/workflows/test.yml`（18 个 job 与触发条件）、
