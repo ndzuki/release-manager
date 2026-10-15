@@ -687,18 +687,53 @@ func repositoryMirrorPath(t *testing.T) string {
 	return filepath.Join(repoRoot(t), "deploy", "k3d", "registries.yaml")
 }
 
+// k3dArgvHeader delimits the per-invocation argv records the fake k3d shim
+// writes to k3d-create-argv.log.
+const k3dArgvHeader = "#argv"
+
+// k3dCreateArgvs returns the exact argv of every `k3d cluster create`
+// invocation. The shim records one argument per line — arguments may legally
+// contain spaces (a checkout path can) — with a k3dArgvHeader line delimiting
+// invocations, so argument boundaries survive verbatim.
+func k3dCreateArgvs(stateDir string) [][]string {
+	data, err := os.ReadFile(filepath.Join(stateDir, "k3d-create-argv.log"))
+	if err != nil {
+		return nil
+	}
+	trimmed := strings.TrimSuffix(string(data), "\n")
+	if trimmed == "" {
+		return nil
+	}
+	var argvs [][]string
+	for _, line := range strings.Split(trimmed, "\n") {
+		if line == k3dArgvHeader {
+			argvs = append(argvs, nil)
+			continue
+		}
+		if len(argvs) == 0 {
+			continue
+		}
+		argvs[len(argvs)-1] = append(argvs[len(argvs)-1], line)
+	}
+	return argvs
+}
+
 // registryConfigArg extracts the value dev.sh handed to k3d's
-// --registry-config from the recorded cluster creates. The shim records the
-// space-joined argv, so the value is the field following the flag.
-func registryConfigArg(t *testing.T, creates string) string {
+// --registry-config from the recorded cluster creates. The argv record keeps
+// one argument per line, so a value containing spaces (a checkout path may)
+// survives verbatim; the value is the argument following the flag.
+func registryConfigArg(t *testing.T, stateDir string) string {
 	t.Helper()
-	fields := strings.Fields(creates)
-	for i, field := range fields {
-		if field == "--registry-config" && i+1 < len(fields) {
-			return fields[i+1]
+	argvs := k3dCreateArgvs(stateDir)
+	for _, argv := range argvs {
+		for i, arg := range argv {
+			if arg == "--registry-config" && i+1 < len(argv) {
+				return argv[i+1]
+			}
 		}
 	}
-	t.Fatalf("no --registry-config argument in the k3d cluster creates:\n%s", creates)
+	t.Fatalf("no --registry-config argument in the k3d cluster creates recorded at %s:\n%v",
+		filepath.Join(stateDir, "k3d-create-argv.log"), argvs)
 	return ""
 }
 
@@ -866,6 +901,42 @@ YAML
 `)
 }
 
+// TestRegistryConfigArgKeepsSpacedArguments is the regression guard for the
+// space-joined argv record: with `argv="$*"` the shim's record was split on
+// spaces, so a --registry-config value under a checkout path containing a
+// space (e.g. `/run/user/1000/rm 305 space/...`) was truncated to its first
+// fragment and the path assertion compared garbage (TASK-305 follow-up). The
+// shim now records the argv one argument per line.
+func TestRegistryConfigArgKeepsSpacedArguments(t *testing.T) {
+	stateDir := t.TempDir()
+	const want = "/run/user/1000/rm 305 space/deploy/k3d/registries.yaml"
+	record := strings.Join([]string{
+		k3dArgvHeader,
+		"release-manager-control",
+		"--registry-use",
+		"release-manager-registry",
+		"--registry-config",
+		want,
+		"--wait",
+		k3dArgvHeader,
+		"dev-customer-a-direct",
+		"--registry-config",
+		"/tmp/other mirror/registries.yaml",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(stateDir, "k3d-create-argv.log"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	argvs := k3dCreateArgvs(stateDir)
+	if len(argvs) != 2 {
+		t.Fatalf("expected two recorded create invocations, got %d: %v", len(argvs), argvs)
+	}
+	if got := registryConfigArg(t, stateDir); got != want {
+		t.Fatalf("the spaced --registry-config argument must survive verbatim, got %q want %q", got, want)
+	}
+}
+
 // TestRegistryPortOverrideDerivesEveryReference covers the concurrency defect
 // this seam fixes: REGISTRY_PORT and the k3d control-plane API port were
 // hardcoded, so a second dev environment on the same host could not start at
@@ -893,7 +964,7 @@ func TestRegistryPortOverrideDerivesEveryReference(t *testing.T) {
 	if strings.Contains(creates, "--api-port 127.0.0.1:6443") {
 		t.Fatalf("the hardcoded API port must be gone:\n%s", creates)
 	}
-	mirrorConfig := registryConfigArg(t, creates)
+	mirrorConfig := registryConfigArg(t, stateDir)
 	if filepath.Clean(mirrorConfig) == repositoryMirrorPath(t) {
 		t.Fatalf("an overridden registry port must materialize its own mirror config, not reuse the repository one:\n%s", creates)
 	}
@@ -954,7 +1025,7 @@ func TestDefaultRegistryPortUsesTheRepositoryMirror(t *testing.T) {
 	// The default path must carry the repository mirror file itself (not a
 	// materialized copy): the assertion names the exact file, derived from the
 	// checkout root, so a wrong directory suffix cannot pass (TASK-305).
-	if mirrorConfig := registryConfigArg(t, creates); filepath.Clean(mirrorConfig) != repositoryMirrorPath(t) {
+	if mirrorConfig := registryConfigArg(t, stateDir); filepath.Clean(mirrorConfig) != repositoryMirrorPath(t) {
 		t.Fatalf("the default path must use the repository mirror config %s, got %s:\n%s",
 			repositoryMirrorPath(t), mirrorConfig, creates)
 	}
