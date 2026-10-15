@@ -1,0 +1,58 @@
+{
+  "_doc": [
+    "Expected Playwright case outcomes for the console (browser) lane — the input of",
+    "test/e2e/prerequisite/console-target-guard.sh (TASK-307).",
+    "",
+    "SOURCE OF TRUTH for the case titles: the specs console.sh's SPECS names",
+    "(E2E_CONSOLE_SPECS, default 'e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts';",
+    "see test/e2e/prerequisite/console.sh). Each title below is copied verbatim from",
+    "the spec; console.sh refuses to start when a spec it was asked to run has no",
+    "entry here, and the guard refuses to pass when the report collected a case no",
+    "entry declares — so neither a renamed case nor a newly added spec can slip",
+    "through unguarded.",
+    "",
+    "expect: 'passed'  -> every recorded final result status must be exactly 'passed'.",
+    "expect: 'skipped' -> the case may pass, or skip ONLY for a reason listed in",
+    "                     skipReasonContains; failed/timedOut/interrupted still fail",
+    "                     the lane. A declared skip is explicit, not silent.",
+    "",
+    "AC-307-01: this manifest is the whole list of cases the lane is allowed to run.",
+    "AC-307-03: nothing here downgrades a case to a warning; every entry is enforced."
+  ],
+  "cases": [
+    {
+      "spec": "rollback.spec.ts",
+      "title": "Rollback from the release inventory creates a ROLLBACK operation and lands on its detail (AC-240-02)",
+      "expect": "passed",
+      "covers": "AC-240-02 — REQ-056 AC-056-08 browser rollback path (TASK-240)"
+    },
+    {
+      "spec": "rollback.spec.ts",
+      "title": "an illegal target revision is refused by the SERVER, not only by the form guard (AC-240-03)",
+      "expect": "passed",
+      "covers": "AC-240-03 — server-side refusal of an illegal rollback target"
+    },
+    {
+      "spec": "emergency-smoke.spec.ts",
+      "title": "Inventory → Emergency → Execute → Operation Detail (REQUIRE_PROMOTION)",
+      "expect": "passed",
+      "covers": "REQ-058 single-actor emergency walkthrough; the CI lane leaves a bound release and a fresh operator observation behind, so its BOUND_RELEASE_PRECONDITION does not apply here"
+    },
+    {
+      "spec": "emergency-smoke.spec.ts",
+      "title": "Convergence: Prepare → ValuesEditor draft → Submit → cross-actor Approve",
+      "expect": "passed",
+      "covers": "AC-058-41 — the cross-actor approval flow (TASK-270's original single guarded case)"
+    },
+    {
+      "spec": "emergency-smoke.spec.ts",
+      "title": "Kill switch: new entry 404 while existing paths stay reachable (AC-058-05)",
+      "expect": "skipped",
+      "skipReasonContains": [
+        "E2E_EMERGENCY_DISABLED"
+      ],
+      "covers": "AC-058-05",
+      "why": "The gate under test only exists on a stack started with emergencyChangeEnabled=false (web/e2e/emergency-smoke.spec.ts:206-209), and this lane builds the default stack with the feature enabled; the case therefore cannot execute here. Declaring that skip is the opposite of the silent skip this guard exists to stop: if it skips for another reason, fails, or times out, the lane goes red."
+    }
+  ]
+}

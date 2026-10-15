@@ -120,57 +120,77 @@ CLUSTER_ID="$(jq -r --arg k "$CLUSTER_KEY" '.clusters[$k].id // empty' "$FIXTURE
 DEFINITION_ID="${E2E_DEFINITION_ID:-$(jq -r '.definitions["e2e-release-target"].id // empty' "$FIXTURE_FILE")}"
 [ -n "$DEFINITION_ID" ] || fail "no e2e-release-target definition in $FIXTURE_FILE (set E2E_DEFINITION_ID to override)"
 
-# Playwright's own output (trace on failure) lands under the ignored
-# e2e-results/, so the CI artifact upload collects it with the smoke result.
-PLAYWRIGHT_OUTPUT="$OUTPUT_DIR/console"
-mkdir -p "$PLAYWRIGHT_OUTPUT"
 # Machine-readable sibling of the list reporter. The guard below judges THIS file
-# (the list reporter's "N passed" is not evidence that a given case ran), so it is
-# written next to the traces and travels with the uploaded artifacts.
-PLAYWRIGHT_REPORT="$PLAYWRIGHT_OUTPUT/results.json"
+# (the list reporter's "N passed" is not evidence that a given case ran), so it
+# travels with the rest of the smoke diagnostics under the ignored e2e-results/.
+PLAYWRIGHT_REPORT_DIR="$OUTPUT_DIR/console"
+mkdir -p "$PLAYWRIGHT_REPORT_DIR"
+PLAYWRIGHT_REPORT="$PLAYWRIGHT_REPORT_DIR/results.json"
 # A report left by an earlier run must never satisfy the guard: a run that dies
 # before writing one has to fail as "no report", not pass on stale evidence.
 rm -f "$PLAYWRIGHT_REPORT"
+# TASK-307: Playwright's own artifacts -- the HTML report and the per-failure
+# screenshot/trace -- stay in Playwright's conventional web/ locations (both
+# gitignored), and the `e2e-prerequisite` job uploads those two directories as
+# their own artifact so a failed browser case is diagnosable without a re-run.
+PLAYWRIGHT_TEST_RESULTS="$WEB_DIR/test-results"
+# Deliberately NOT named PLAYWRIGHT_HTML_REPORT: Playwright reads that env var to
+# relocate the HTML report, so a same-named shell variable would be a trap for the
+# next editor who exports it.
+PLAYWRIGHT_HTML_DIR="$WEB_DIR/playwright-report"
 
 # Bash array from the space-separated list; an empty entry would silently run
 # Playwright's whole testDir, so an empty list is a configuration failure.
 read -r -a SPEC_PATHS <<<"$SPECS"
 [ "${#SPEC_PATHS[@]}" -gt 0 ] || fail "E2E_CONSOLE_SPECS/E2E_CONSOLE_SPEC expanded to an empty spec list"
 
-# TASK-270 (PR #343 review, blocker ③): the case this lane exists for. Playwright
-# exits 0 when a case is SKIPPED (measured on CI run 37970098364: `4 passed` +
-# `1 skipped` => exit 0), so relaying its exit code alone lets the lane report
-# success with zero execution of the cross-actor approval flow (AC-058-41).
-# console-target-guard.sh reads the JSON report and requires this case's final
-# status to be `passed` — skipped, failed, or not-collected all fail the lane.
-# The guard is armed ONLY when the spec carrying the case is part of this run:
-# narrowing the lane with E2E_CONSOLE_SPEC=<another spec> must not demand a case
-# that was never asked to run.
-# The spec's other two cases keep their honest gates untouched (the suite-level
-# E2E_BACKEND gate, the kill-switch stack gate, the bound-release and
-# pending-convergence preconditions); only this case is required to have run.
-GUARD_SPEC="emergency-smoke.spec.ts"
-GUARD_TITLE="Convergence: Prepare → ValuesEditor draft → Submit → cross-actor Approve"
-GUARD=""
+# TASK-270/TASK-307 (PR #343 review, blocker ③): Playwright exits 0 when a case
+# is SKIPPED (measured on CI run 37970098364: `4 passed` + `1 skipped` => exit 0),
+# so relaying its exit code alone lets the lane report success with zero
+# execution. TASK-307 replaced the single guarded case (the cross-actor approval,
+# AC-058-41) with the expected-case manifest
+# test/e2e/prerequisite/console-expected-cases.json: the two rollback cases and
+# the REQUIRE_PROMOTION case had no guard at all, so a silent skip of any of them
+# was still green. The guard requires every declared case of a spec THAT RAN to
+# reach its declared outcome, and fails on any collected case the manifest does
+# not declare — a case cannot enter this lane unguarded.
+# The kill-switch case is declared as an expected skip WITH its reason (its gate
+# exists only on a stack built with emergencyChangeEnabled=false); a skip for any
+# other reason fails the lane, so the case is explicit rather than silent.
+# The guard judges only the specs THIS run asked for: narrowing the lane with
+# E2E_CONSOLE_SPEC=<one spec> leaves the other spec's cases unjudged, because they
+# were never asked to run.
+GUARD="$REPO_ROOT/test/e2e/prerequisite/console-target-guard.sh"
+EXPECTED_CASES="$REPO_ROOT/test/e2e/prerequisite/console-expected-cases.json"
+[ -r "$GUARD" ] || fail "missing guard script $GUARD"
+[ -r "$EXPECTED_CASES" ] || fail "missing expected-case manifest $EXPECTED_CASES"
+# Fail BEFORE Playwright (not after a 16-minute lane) when a spec the lane was
+# pointed at has no manifest entry: the guard judges specs by basename, so an
+# undeclared spec would otherwise enter the lane with nothing said about it.
 for spec_path in "${SPEC_PATHS[@]}"; do
-  case "$spec_path" in *"$GUARD_SPEC") GUARD="$REPO_ROOT/test/e2e/prerequisite/console-target-guard.sh" ;; esac
+  jq -e --arg s "$(basename -- "$spec_path")" 'any(.cases[]; .spec == $s)' "$EXPECTED_CASES" >/dev/null \
+    || fail "spec '$spec_path' has no expected-case entry in $EXPECTED_CASES — declare every case the lane runs (TASK-307)"
 done
 
 printf 'console-e2e: %s on %s (channel=%s, output=%s)\n' \
-  "$SPECS" "$BASE_URL" "${CHANNEL:-bundled-chromium}" "$PLAYWRIGHT_OUTPUT"
-if [ -n "$GUARD" ]; then
-  printf 'console-e2e: target-case guard armed for %s (report=%s)\n' "$GUARD_TITLE" "$PLAYWRIGHT_REPORT"
-else
-  printf 'console-e2e: target-case guard NOT armed (%s is not in this run: %s)\n' "$GUARD_SPEC" "$SPECS"
-fi
+  "$SPECS" "$BASE_URL" "${CHANNEL:-bundled-chromium}" "$PLAYWRIGHT_TEST_RESULTS"
+printf 'console-e2e: case guard armed against %s (report=%s)\n' "$EXPECTED_CASES" "$PLAYWRIGHT_REPORT"
+printf 'console-e2e: playwright artifacts: traces=%s html=%s\n' "$PLAYWRIGHT_TEST_RESULTS" "$PLAYWRIGHT_HTML_DIR"
 
 cd "$WEB_DIR"
 # --workers=1: the two specs drive one shared dev stack and mutate shared
 # fixture state (release inventory, emergency changes, convergence task); the
 # default worker count parallelizes across FILES and would race them.
-# --reporter=list,json: the list reporter stays the human-facing log, the json
+# --reporter=list,json,html: the list reporter stays the human-facing log, the json
 # reporter is the guard's input (PLAYWRIGHT_JSON_OUTPUT_NAME puts it in a file
-# instead of stdout).
+# instead of stdout), and the html reporter is the browsable failure report
+# (TASK-307). The CLI `html` does not inherit the config's `open: 'never'`, so
+# PLAYWRIGHT_HTML_OPEN pins it: without it the reporter would try to serve the
+# report at the end of the run.
+# --output: the failure screenshot (only-on-failure) and the retained trace land in
+# Playwright's conventional, gitignored web/test-results/ and are uploaded as their
+# own CI artifact; the JSON report stays under e2e-results/console/ with the smoke
+# results so the guard's evidence sits next to the rest of the diagnostics.
 playwright_rc=0
 E2E_BACKEND=true \
 E2E_BASE_URL="$BASE_URL" \
@@ -183,21 +203,24 @@ E2E_CUSTOMER_ID="$CUSTOMER_ID" \
 E2E_CLUSTER_ID="$CLUSTER_ID" \
 E2E_DEFINITION_ID="$DEFINITION_ID" \
 PLAYWRIGHT_JSON_OUTPUT_NAME="$PLAYWRIGHT_REPORT" \
-  npx playwright test --workers=1 --reporter=list,json --output="$PLAYWRIGHT_OUTPUT" "${SPEC_PATHS[@]}" \
+PLAYWRIGHT_HTML_OPEN=never \
+  npx playwright test --workers=1 --reporter=list,json,html \
+  --output="$PLAYWRIGHT_TEST_RESULTS" "${SPEC_PATHS[@]}" \
   || playwright_rc=$?
 
 if [ "$playwright_rc" -ne 0 ]; then
   printf 'FAIL console-e2e: Playwright exited %s\n' "$playwright_rc" >&2
   # Diagnosis only: Playwright's own failure stays the primary one, so its exit
-  # code is what the lane returns. Reporting the target case here says whether the
-  # failure also left the guarded case unexecuted.
-  if [ -n "$GUARD" ]; then
-    bash "$GUARD" "$PLAYWRIGHT_REPORT" "$GUARD_SPEC" "$GUARD_TITLE" >&2 || true
+  # code is what the lane returns. The guard's verdict here says whether the
+  # failure ALSO left a declared case unexecuted. Its status is captured (never
+  # swallowed) and reported, so a guard that fails to run is visible too.
+  if bash "$GUARD" "$PLAYWRIGHT_REPORT" "$EXPECTED_CASES" "${SPEC_PATHS[@]}" >&2; then
+    printf 'console-e2e: the guard still finds every declared case where it must be\n' >&2
+  else
+    printf 'console-e2e: the guard also reports an unmet declared case (above); Playwright exit code %s stays the lane result\n' "$playwright_rc" >&2
   fi
   exit "$playwright_rc"
 fi
 
-if [ -n "$GUARD" ]; then
-  bash "$GUARD" "$PLAYWRIGHT_REPORT" "$GUARD_SPEC" "$GUARD_TITLE"
-  printf 'console-e2e: PASS (%s)\n' "$SPECS"
-fi
+bash "$GUARD" "$PLAYWRIGHT_REPORT" "$EXPECTED_CASES" "${SPEC_PATHS[@]}"
+printf 'console-e2e: PASS (%s)\n' "$SPECS"
