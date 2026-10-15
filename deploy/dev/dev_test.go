@@ -679,6 +679,29 @@ func clusterCreates(records []string) []string {
 	return clusters
 }
 
+// repositoryMirrorPath is the repository's containerd mirror config, derived
+// from the detected checkout root rather than any absolute prefix, so the
+// assertion holds wherever the worktree lives (TASK-305).
+func repositoryMirrorPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repoRoot(t), "deploy", "k3d", "registries.yaml")
+}
+
+// registryConfigArg extracts the value dev.sh handed to k3d's
+// --registry-config from the recorded cluster creates. The shim records the
+// space-joined argv, so the value is the field following the flag.
+func registryConfigArg(t *testing.T, creates string) string {
+	t.Helper()
+	fields := strings.Fields(creates)
+	for i, field := range fields {
+		if field == "--registry-config" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	t.Fatalf("no --registry-config argument in the k3d cluster creates:\n%s", creates)
+	return ""
+}
+
 func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
@@ -870,8 +893,9 @@ func TestRegistryPortOverrideDerivesEveryReference(t *testing.T) {
 	if strings.Contains(creates, "--api-port 127.0.0.1:6443") {
 		t.Fatalf("the hardcoded API port must be gone:\n%s", creates)
 	}
-	if strings.Contains(creates, "k3d/registries.yaml") || !strings.Contains(creates, "--registry-config /tmp/") {
-		t.Fatalf("an overridden registry port must use a materialized mirror config:\n%s", creates)
+	mirrorConfig := registryConfigArg(t, creates)
+	if filepath.Clean(mirrorConfig) == repositoryMirrorPath(t) {
+		t.Fatalf("an overridden registry port must materialize its own mirror config, not reuse the repository one:\n%s", creates)
 	}
 	mirror, err := os.ReadFile(filepath.Join(stateDir, "registry-config.yaml"))
 	if err != nil {
@@ -927,8 +951,12 @@ func TestDefaultRegistryPortUsesTheRepositoryMirror(t *testing.T) {
 	if !strings.Contains(creates, "--api-port 127.0.0.1:6443") {
 		t.Fatalf("the default API port must stay 6443:\n%s", creates)
 	}
-	if !strings.Contains(creates, "k3d/registries.yaml") || strings.Contains(creates, "--registry-config /tmp/") {
-		t.Fatalf("the default path must use the repository mirror config:\n%s", creates)
+	// The default path must carry the repository mirror file itself (not a
+	// materialized copy): the assertion names the exact file, derived from the
+	// checkout root, so a wrong directory suffix cannot pass (TASK-305).
+	if mirrorConfig := registryConfigArg(t, creates); filepath.Clean(mirrorConfig) != repositoryMirrorPath(t) {
+		t.Fatalf("the default path must use the repository mirror config %s, got %s:\n%s",
+			repositoryMirrorPath(t), mirrorConfig, creates)
 	}
 	mirror, err := os.ReadFile(filepath.Join(stateDir, "registry-config.yaml"))
 	if err != nil {
