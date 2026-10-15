@@ -3,7 +3,10 @@
 #
 # `cluster list` reflects clusters recorded in $STATE/clusters.txt;
 # `cluster create` appends the cluster and logs one line per invocation
-# (`<name>|<argv>`) to $STATE/k3d-creates.log; `cluster delete` removes;
+# (`<name>|<argv>`) to $STATE/k3d-creates.log, plus the raw argv one argument
+# per line (with an `#argv` header per invocation) to
+# $STATE/k3d-create-argv.log — a space inside an argument (a checkout path may
+# contain one) survives verbatim only in the latter; `cluster delete` removes;
 # `registry list/create` report/manage the registry; `kubeconfig get/merge`
 # write minimal outputs. Tests run dev.sh up/down end-to-end without Docker
 # or k3d on the host.
@@ -34,8 +37,15 @@ case "$1" in
         ;;
       create)
         shift 2
-        # One line per create invocation: name followed by the full argv.
+        # One line per create invocation: name followed by the full argv. This
+        # line stays space-joined for the callers that only match flags or whole
+        # values; it is NOT an argv transport, because a space-joined record
+        # cannot be split back into argv when an argument contains a space.
         argv="$*"
+        # The same argv, one argument per line with an `#argv` header per
+        # invocation, so argument boundaries survive any path (a checkout path
+        # may contain a space).
+        { printf '#argv\n'; printf '%s\n' "$@"; } >> "$STATE/k3d-create-argv.log"
         name=""
         reg_config=""
         while [ "$#" -gt 0 ]; do
