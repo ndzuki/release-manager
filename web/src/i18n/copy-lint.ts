@@ -8,6 +8,11 @@
  * Scope, stated explicitly because a gate's blind spots are part of its contract:
  *  - template TEXT nodes (comments stripped)
  *  - template ATTRIBUTE values that render to the user (aria-label/placeholder/title/alt/label)
+ *  - template EXPRESSION literals: quoted strings inside `{{ … }}` and inside bound
+ *    directives — English by shape (capitalised word or sentence punctuation) and Chinese
+ *    by the same Han run the script layer uses; backtick template literals there are
+ *    scanned by the Han rule only, because a machine value such as
+ *    `operation-row-${row.operationId}` satisfies the shape rule;
  *  - `<script>` string literals that look like a SENTENCE (contain whitespace and at
  *    least two letter runs) — this is what catches rendered messages like
  *    'Unable to switch organization.' while ignoring identifiers, CSS classes,
@@ -16,7 +21,9 @@
  *    whitespace — the sentence rule above cannot see Chinese copy, so a label like
  *    '已创建定义' used to pass the gate (regex literals and machine strings excluded,
  *    see blankRegexLiterals / isMachineLiteral).
- * Out of scope: anything assembled at runtime (template literals, concatenation).
+ * Out of scope: copy assembled by concatenation (`'向 ' + name + ' 发放'`), which has no
+ * single literal to report; an interpolated template literal is reported as one literal,
+ * not per fragment.
  */
 
 const RENDERED_ATTRIBUTES = ['aria-label', 'placeholder', 'title', 'alt', 'label', 'message', 'description'];
@@ -253,10 +260,18 @@ function blankRegexLiterals(script: string): string {
     'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'case', 'do', 'else',
     'yield', 'await',
   ]);
+  // `if (flag) /re/.test(v)` really is a regex after a `)`, while `f(x) / 2` divides. The
+  // two are told apart by the `(` the `)` closes: only a condition paren — the word before
+  // it is a control keyword — may be followed by a regex literal. Without this the paren
+  // case stayed unblanked and the review probe `if (flag) /'过报探针'/u.test(v)` was
+  // reported as copy.
+  const CONTROL_KEYWORDS = new Set(['if', 'while', 'for', 'switch', 'catch']);
   let blanked = '';
   let index = 0;
   let previous = '';
   let word = '';
+  const parens: boolean[] = [];
+  let regexAfterCondition = false;
   while (index < script.length) {
     const char = script[index]!;
     if (char === "'" || char === '"') {
@@ -276,18 +291,48 @@ function blankRegexLiterals(script: string): string {
       blanked += script.slice(index, cursor);
       previous = char;
       word = '';
+      regexAfterCondition = false;
       index = cursor;
       continue;
     }
-    if (char === '/' && (previous === '' || EXPRESSION_BEFORE.has(previous) || KEYWORDS_BEFORE.has(word))) {
+    if (char === '(') {
+      parens.push(CONTROL_KEYWORDS.has(word));
+      blanked += char;
+      previous = char;
+      word = '';
+      regexAfterCondition = false;
+      index += 1;
+      continue;
+    }
+    if (char === ')') {
+      regexAfterCondition = parens.pop() ?? false;
+      blanked += char;
+      previous = char;
+      word = '';
+      index += 1;
+      continue;
+    }
+    if (
+      char === '/' &&
+      (previous === '' || EXPRESSION_BEFORE.has(previous) || KEYWORDS_BEFORE.has(word) || regexAfterCondition)
+    ) {
       let cursor = index + 1;
       let closed = false;
+      // A `/` inside a character class does not end the literal: `/[/]'中文'/u` is a single
+      // regex, and stopping at the class slash left its tail readable as a string literal
+      // (the second over-report the review found).
+      let inClass = false;
       while (cursor < script.length && script[cursor] !== '\n') {
-        if (script[cursor] === '\\') {
+        const peek = script[cursor]!;
+        if (peek === '\\') {
           cursor += 2;
           continue;
         }
-        if (script[cursor] === '/') {
+        if (peek === '[') {
+          inClass = true;
+        } else if (peek === ']') {
+          inClass = false;
+        } else if (peek === '/' && !inClass) {
           closed = true;
           break;
         }
@@ -299,19 +344,23 @@ function blankRegexLiterals(script: string): string {
         blanked += ' '.repeat(end - index);
         previous = '/';
         word = '';
+        regexAfterCondition = false;
         index = end;
         continue;
       }
     }
     blanked += char;
     if (/\s/.test(char)) {
-      // Whitespace ends neither an expression nor a keyword run.
+      // Whitespace ends neither an expression nor a keyword run, and it may sit between
+      // the `)` of a condition and the regex literal that follows it.
     } else if (/[\w$]/.test(char)) {
       previous = char;
       word += char;
+      regexAfterCondition = false;
     } else {
       previous = char;
       word = '';
+      regexAfterCondition = false;
     }
     index += 1;
   }
@@ -319,9 +368,44 @@ function blankRegexLiterals(script: string): string {
 }
 
 /**
- * Quoted string literals inside the template — `{{ cond ? 'A' : 'B' }}` and
- * `:title="'A'"`. These render like any other copy but are invisible to a text-node
- * scan, which is how `Tenant boundary for release management.` slipped through.
+ * The expression regions of a template: `{{ … }}` interpolations and the bound directives
+ * (`:prop="…"`, `@event="…"`, `v-if="…"`) whose values Vue evaluates as JavaScript.
+ *
+ * The Han scan below runs on these regions rather than on the raw template because the
+ * template also contains markup: a tag close (`</span>`) puts a `/` where the expression
+ * lexer expects an operand, so blanking regex literals over the raw template would read
+ * `span>…</` as a regex body and swallow the copy between two tags.
+ *
+ * `data-*` values are machine identifiers (`:data-testid="…"`), not copy — the same
+ * exclusion attributeLiterals applies to the plain attribute of that name.
+ */
+function templateExpressions(template: string): string[] {
+  const expressions: string[] = [];
+  for (const match of template.matchAll(/\{\{([\s\S]*?)\}\}/g)) expressions.push(match[1]!);
+  for (const match of template.matchAll(/\s((?::|@|v-)[\w:.-]+)\s*=\s*"([^"]*)"/g)) {
+    const name = match[1]!;
+    if (name.replace(/^(?::|@|v-[\w-]+:)/, '').startsWith('data-')) continue;
+    expressions.push(match[2]!);
+  }
+  return expressions;
+}
+
+/**
+ * A quoted template expression that reads as English copy: a capitalised word or sentence
+ * punctuation, at least two letters, and not an identifier. A class list
+ * (`status status--active`) is not copy, while a capitalised single word ("Active") is.
+ */
+function isTemplateExpressionCopy(literal: string): boolean {
+  return (
+    (/\p{Lu}/u.test(literal) || /[.!?。！？]$/u.test(literal)) && /\p{L}{2,}/u.test(literal) && !isIdentifier(literal)
+  );
+}
+
+/**
+ * String literals inside the template — `{{ cond ? 'A' : 'B' }}` and `:title="'A'"`.
+ * These render like any other copy but are invisible to a text-node scan, which is how
+ * `Tenant boundary for release management.` slipped through. English is judged by shape,
+ * Chinese by the Han run (see below).
  */
 export function templateExpressionLiterals(text: string): string[] {
   // Identifiers live in the same expression syntax as copy, so strip them first:
@@ -330,12 +414,32 @@ export function templateExpressionLiterals(text: string): string[] {
   const literals: string[] = [];
   for (const match of template.matchAll(/'([^'\n]+)'/g)) {
     const literal = match[1]!.trim();
-    // A class list (`status status--active`) is not copy: require a capitalised word or
-    // sentence punctuation before treating a quoted expression as user-facing text.
-    const looksLikeCopy = /\p{Lu}/u.test(literal) || /[.!?。！？]$/u.test(literal);
-    // A capitalised single word is still copy ("Active", "Disabled"); a CSS class list
-    // or an identifier is not, which is why those tests come first.
-    if (looksLikeCopy && /\p{L}{2,}/u.test(literal) && !isIdentifier(literal)) literals.push(literal);
+    if (isTemplateExpressionCopy(literal)) literals.push(literal);
+  }
+  // Chinese copy has neither a capital letter nor a space, so the shape rule above cannot
+  // see `{{ preparing ? '准备中…' : '完成' }}`: it rendered Chinese while the gate stayed
+  // green. TASK-310 gave the script layer a Han rule for exactly this reason; this is its
+  // template-expression counterpart, and it reuses that rule's predicates
+  // (HAN_COPY / isMachineLiteral) and its regex blanking instead of growing a second
+  // detector. Literals the shape rule already reported are skipped, so no literal is
+  // reported twice.
+  for (const expression of templateExpressions(template)) {
+    const withoutRegex = blankRegexLiterals(expression);
+    for (const match of withoutRegex.matchAll(/'([^'\n]+)'|"([^"\n]+)"/g)) {
+      const literal = (match[1] ?? match[2]!).trim();
+      if (isTemplateExpressionCopy(literal)) continue;
+      if (isHanCopyLiteral(literal)) literals.push(literal);
+    }
+    // Backtick template literals are scanned by the Han rule only. The shape rule cannot
+    // judge them here: a class list or a test id that interpolates camelCase
+    // (`operation-row-${row.operationId}`) carries a capital and reads exactly like
+    // `Rollback ${releaseName}`, so it would report 29 machine values to catch 6 labels.
+    // A run of Han characters does not occur in those machine values at all, which is the
+    // same reason the script layer's Han pass can scan backticks unambiguously.
+    for (const match of withoutRegex.matchAll(/`([^`]+)`/g)) {
+      const literal = match[1]!.trim();
+      if (isHanCopyLiteral(literal)) literals.push(literal);
+    }
   }
   return literals;
 }
