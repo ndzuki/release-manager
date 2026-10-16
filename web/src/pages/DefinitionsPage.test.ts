@@ -10,7 +10,13 @@ import { useDefinitionsStore } from '@/stores/definitions';
 
 vi.mock('@/connect/definition-api', async (importOriginal) => {
   const original = await importOriginal<typeof api>();
-  return { ...original, listDefinitions: vi.fn(), updateDefinition: vi.fn() };
+  return {
+    ...original,
+    listDefinitions: vi.fn(),
+    updateDefinition: vi.fn(),
+    createDefinition: vi.fn(),
+    disableDefinition: vi.fn(),
+  };
 });
 
 const mounted: Array<{ unmount: () => void }> = [];
@@ -59,8 +65,46 @@ async function submitEditor(): Promise<void> {
   await flushPromises();
 }
 
+/* The create dialog and the confirmation are teleported, so their controls are
+ * queried in the document (the same pattern as the editor above). */
+function createRoot(): HTMLElement {
+  const root = document.querySelector<HTMLElement>('.definitions__create');
+  if (!root) throw new Error('definitions create dialog not rendered');
+  return root;
+}
+
+function setCreateInput(name: string, value: string): void {
+  const input = document.querySelector<HTMLInputElement>(`.definitions__create input[name="${name}"]`);
+  if (!input) throw new Error(`missing create input ${name}`);
+  input.value = value;
+  input.dispatchEvent(new Event('input'));
+}
+
+async function submitCreate(): Promise<void> {
+  const form = createRoot().querySelector('form');
+  if (!form) throw new Error('create form not rendered');
+  form.dispatchEvent(new Event('submit'));
+  await flushPromises();
+}
+
+function alertDialog(): HTMLElement {
+  const matches = Array.from(document.querySelectorAll<HTMLElement>('[role="alertdialog"]'));
+  if (matches.length !== 1) throw new Error(`expected exactly one alertdialog, found ${matches.length}`);
+  return matches[0]!;
+}
+
+function clickButton(root: HTMLElement, label: string): void {
+  const button = Array.from(root.querySelectorAll('button')).find(
+    (element) => element.textContent?.trim() === label,
+  );
+  if (!button) throw new Error(`dialog button not found: ${label}`);
+  button.click();
+}
+
 const mockedList = vi.mocked(api.listDefinitions);
 const mockedUpdate = vi.mocked(api.updateDefinition);
+const mockedCreate = vi.mocked(api.createDefinition);
+const mockedDisable = vi.mocked(api.disableDefinition);
 
 function definition(overrides: Partial<api.DefinitionView> = {}): api.DefinitionView {
   return {
@@ -102,6 +146,8 @@ beforeEach(() => {
   setActivePinia(createPinia());
   mockedList.mockReset().mockResolvedValue([definition()]);
   mockedUpdate.mockReset().mockResolvedValue(definition({ version: 4n }));
+  mockedCreate.mockReset().mockResolvedValue(definition({ id: 'def-2', name: 'new-def', version: 1n }));
+  mockedDisable.mockReset().mockResolvedValue(definition({ status: 'disabled', version: 4n }));
 });
 
 describe('DefinitionsPage', () => {
@@ -353,5 +399,190 @@ describe('DefinitionsPage', () => {
       .toBe('Workload 类型（第 2 行）');
     expect(root.querySelector('.definitions__mappings label[for$="-1-values-path"]')?.textContent?.trim())
       .toBe('Values 路径（第 2 行）');
+  });
+});
+
+/*
+ * TASK-301: the console could list and edit a definition but not create one, and it
+ * could not disable one at all. These cases pin each new entry point, and every
+ * negative ("the RPC did not run", "the error is not shown") carries a positive
+ * assertion first, so a dialog that never opened cannot make them pass.
+ */
+describe('DefinitionsPage create (TASK-301)', () => {
+  it('creates a definition from the dialog and shows the new row', async () => {
+    const wrapper = await mountPage();
+    const created = definition({ id: 'def-2', name: 'new-def', version: 1n });
+    mockedCreate.mockResolvedValue(created);
+    // The list the next fetch returns: the created row has to be in it.
+    mockedList.mockResolvedValue([definition(), created]);
+
+    await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
+    expect(createRoot()).toBeTruthy();
+    setCreateInput('create-customerId', 'cust-1');
+    setCreateInput('create-clusterId', 'cluster-1');
+    setCreateInput('create-releaseName', 'new-def');
+    await nextTick();
+    await submitCreate();
+
+    expect(mockedCreate).toHaveBeenCalledWith({
+      customerId: 'cust-1',
+      clusterId: 'cluster-1',
+      namespace: '',
+      releaseName: 'new-def',
+      chartName: '',
+      enabled: true,
+    });
+    // The scenario really changed: the new row is rendered and the dialog is gone.
+    expect(wrapper.find('[data-testid="definition-row-def-2"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="definitions-notice"]').text()).toContain('new-def');
+    expect(document.querySelector('[data-testid="definitions-create-submit"]')).toBeNull();
+  });
+
+  // An empty required field must be refused locally, not sent: the server derives the
+  // definition's NAME from release_name, so the request would create a nameless row.
+  it('refuses an empty required field before sending', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
+
+    await submitCreate();
+
+    expect(document.querySelector('[data-testid="definitions-create-validation"]')).not.toBeNull();
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(createRoot()).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  it('keeps the create dialog open and shows the reason inside it', async () => {
+    const wrapper = await mountPage();
+    mockedCreate.mockRejectedValue(new ConnectError('definition already exists', Code.AlreadyExists));
+
+    await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
+    setCreateInput('create-customerId', 'cust-1');
+    setCreateInput('create-clusterId', 'cluster-1');
+    setCreateInput('create-releaseName', 'new-def');
+    await nextTick();
+    await submitCreate();
+
+    const failure = document.querySelectorAll<HTMLElement>('[data-testid="definitions-create-error"]');
+    expect(failure).toHaveLength(1);
+    expect(failure[0]?.textContent?.trim()).toBe('相同来源与目标的定义已存在');
+    // The copy is announced, not just painted: a screen reader only receives it
+    // through the alert role.
+    expect(failure[0]?.getAttribute('role')).toBe('alert');
+    // Still open, and the submitted values survived the refusal.
+    expect(createRoot()).toBeTruthy();
+    expect(document.querySelector<HTMLInputElement>('input[name="create-releaseName"]')?.value).toBe('new-def');
+  });
+
+  it('associates every create field with its own label', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
+
+    const root = createRoot();
+    const inputs = Array.from(root.querySelectorAll<HTMLInputElement>('.definitions__field input'));
+    expect(inputs).toHaveLength(5);
+    for (const input of inputs) {
+      const id = input.getAttribute('id');
+      expect(id, 'a create input without an id cannot be pointed at by a label').toBeTruthy();
+      const label = root.querySelector(`.definitions__field label[for="${id}"]`);
+      expect(label, `no label resolves to the create input ${id}`).not.toBeNull();
+      expect(label?.textContent?.trim()).not.toBe('');
+    }
+    expect(new Set(inputs.map((input) => input.getAttribute('id'))).size).toBe(5);
+  });
+});
+
+describe('DefinitionsPage disable (TASK-301)', () => {
+  it('arms the confirmation instead of disabling, and names the definition in it', async () => {
+    const wrapper = await mountPage();
+
+    const button = wrapper.get<HTMLButtonElement>('[data-testid="definition-disable-def-1"]');
+    // VTU skips disabled elements silently, so the enabled state is asserted first.
+    expect(button.element.disabled).toBe(false);
+    await button.trigger('click');
+
+    expect(mockedDisable).not.toHaveBeenCalled();
+    const dialog = alertDialog();
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    const titleId = dialog.getAttribute('aria-labelledby');
+    expect(document.getElementById(titleId ?? '')?.textContent).toBe('禁用发布定义');
+    expect(dialog.querySelector('.app-dialog__description')?.textContent).toContain('e2e-release-target');
+    // The destructive RPC has not run, so the row still offers its disable action.
+    expect(wrapper.find('[data-testid="definition-disable-def-1"]').exists()).toBe(true);
+  });
+
+  it('cancelling the confirmation executes nothing', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-testid="definition-disable-def-1"]').trigger('click');
+    const dialog = alertDialog();
+
+    clickButton(dialog, '取消');
+    await flushPromises();
+
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(mockedDisable).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-testid="definition-row-def-1"]').text()).toContain('生效中');
+  });
+
+  it('disables once, with the version it read, only after confirming', async () => {
+    const wrapper = await mountPage();
+    mockedDisable.mockResolvedValue(definition({ status: 'disabled', version: 4n }));
+    // The list after the disable: the row reports the new status.
+    mockedList.mockResolvedValue([definition({ status: 'disabled', version: 4n })]);
+
+    await wrapper.get('[data-testid="definition-disable-def-1"]').trigger('click');
+    const dialog = alertDialog();
+    clickButton(dialog, '确认禁用');
+    await flushPromises();
+
+    expect(mockedDisable).toHaveBeenCalledTimes(1);
+    expect(mockedDisable).toHaveBeenCalledWith('def-1', 3n);
+    expect(mockedList).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(wrapper.get('[data-testid="definition-row-def-1"]').text()).toContain('已停用');
+    // A disabled definition is terminal: its disable action is no longer offered.
+    expect(wrapper.find('[data-testid="definition-disable-def-1"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="definitions-notice"]').text()).toContain('e2e-release-target');
+  });
+
+  /*
+   * The page-level <ErrorState> renders behind AppDialog's fixed backdrop, so a failed
+   * disable has to put the reason inside the still-open confirmation.
+   */
+  it('keeps the failure reason inside the still-open dialog and adopts the refreshed version', async () => {
+    const wrapper = await mountPage();
+    mockedDisable.mockRejectedValueOnce(
+      new ConnectError('optimistic_lock_conflict: definition version changed', Code.FailedPrecondition),
+    );
+    // The row the server now holds: the reload after the conflict returns version 4.
+    mockedList.mockResolvedValue([definition({ version: 4n })]);
+
+    await wrapper.get('[data-testid="definition-disable-def-1"]').trigger('click');
+    const dialog = alertDialog();
+    clickButton(dialog, '确认禁用');
+    await flushPromises();
+
+    // The confirmation survived the refusal…
+    expect(document.querySelector('[role="alertdialog"]')).toBe(dialog);
+    // …and the reason is a descendant of the panel, exactly once.
+    const inside = dialog.querySelectorAll<HTMLElement>('[data-testid="definitions-disable-error"]');
+    expect(inside).toHaveLength(1);
+    expect(inside[0]?.textContent?.trim()).toContain('版本冲突');
+    expect(inside[0]?.getAttribute('role')).toBe('alert');
+    expect(document.querySelectorAll('[data-testid="definitions-disable-error"]')).toHaveLength(1);
+    // A conflict reloaded the list and the row is still active, so a retry is meaningful.
+    expect(mockedList).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('[data-testid="definition-row-def-1"]').text()).toContain('生效中');
+
+    /*
+     * The retry must carry the version the server now holds (4), not the stale 3 the
+     * first attempt used: otherwise the hinted retry fails forever.
+     */
+    mockedDisable.mockResolvedValueOnce(definition({ status: 'disabled', version: 5n }));
+    clickButton(alertDialog(), '确认禁用');
+    await flushPromises();
+
+    expect(mockedDisable).toHaveBeenCalledTimes(2);
+    expect(mockedDisable).toHaveBeenLastCalledWith('def-1', 4n);
   });
 });
