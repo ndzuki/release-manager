@@ -106,26 +106,41 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// fakeOperatorGatewayPort is the loopback port fakeEnv points the operator
-// mTLS gateway TCP readiness probe at (dev.sh DEV_OPERATOR_GATEWAY_PORT
-// seam). It lives outside the DEV_PORTS_OVERRIDE band so the preflight port
-// gate (require_ports_free) never sees it occupied.
-const fakeOperatorGatewayPort = "19984"
-
 var (
 	fakeGatewayOnce sync.Once
 	fakeGatewayLn   net.Listener
 	fakeGatewayErr  error
 )
 
+// listenerPort reports the TCP port a listener is actually bound to, so the
+// tested path is handed the real port instead of the one that was requested
+// (the fakes below ask the kernel for any free port with ":0").
+func listenerPort(t *testing.T, ln net.Listener) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("cannot read bound port from %q: %v", ln.Addr(), err)
+	}
+	return port
+}
+
 // fakeOperatorGateway binds one shared loopback listener for the whole test
 // package (fakeEnv is called multiple times per test; a per-call listener
-// would collide with itself). The connection is accepted and immediately
-// closed — the readiness probe only needs a TCP open to succeed.
-func fakeOperatorGateway(t *testing.T) {
+// would collide with itself) and returns the port it got, which fakeEnv
+// exports to dev.sh as DEV_OPERATOR_GATEWAY_PORT (the operator mTLS gateway
+// TCP readiness seam). The connection is accepted and immediately closed —
+// the readiness probe only needs a TCP open to succeed.
+//
+// It binds ":0" instead of a fixed port so two copies of this package can run
+// concurrently (parallel CI jobs, concurrent local sessions): with the old
+// literal 19984 every such pair died with "cannot bind fake operator gateway
+// listener: ... address already in use". The kernel-assigned port lives in the
+// ephemeral range, far outside the DEV_PORTS_OVERRIDE band, so the preflight
+// port gate (require_ports_free) never sees it occupied.
+func fakeOperatorGateway(t *testing.T) string {
 	t.Helper()
 	fakeGatewayOnce.Do(func() {
-		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeOperatorGatewayPort)
+		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if fakeGatewayErr != nil {
 			return
 		}
@@ -142,12 +157,8 @@ func fakeOperatorGateway(t *testing.T) {
 	if fakeGatewayErr != nil {
 		t.Fatalf("cannot bind fake operator gateway listener: %v", fakeGatewayErr)
 	}
+	return listenerPort(t, fakeGatewayLn)
 }
-
-// fakeResetPgPort is the loopback port the reset-data port-forward wait
-// probes (dev.sh DEV_RESET_PG_PORT seam, real default 5432). A dedicated
-// port keeps the fake test deterministic without touching a host PostgreSQL.
-const fakeResetPgPort = "15432"
 
 var (
 	fakeResetPgOnce sync.Once
@@ -157,11 +168,14 @@ var (
 
 // fakeResetPostgres binds one shared loopback listener for the whole test
 // package so every reset-data test's TCP probe succeeds (accepted and closed
-// immediately, exactly like fakeOperatorGateway).
-func fakeResetPostgres(t *testing.T) {
+// immediately, exactly like fakeOperatorGateway) and returns the port it got,
+// which fakeEnv exports to dev.sh as DEV_RESET_PG_PORT (the real default is
+// 5432). It also binds ":0": a fixed port would collide both with a host
+// PostgreSQL and with a concurrent run of this package.
+func fakeResetPostgres(t *testing.T) string {
 	t.Helper()
 	fakeResetPgOnce.Do(func() {
-		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeResetPgPort)
+		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if fakeResetPgErr != nil {
 			return
 		}
@@ -178,6 +192,7 @@ func fakeResetPostgres(t *testing.T) {
 	if fakeResetPgErr != nil {
 		t.Fatalf("cannot bind fake reset postgres listener: %v", fakeResetPgErr)
 	}
+	return listenerPort(t, fakeResetPgLn)
 }
 
 // fakeEnv builds an environment that points the lifecycle module at fake
@@ -188,6 +203,11 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Bind the fake loopback listeners before building env: both take a
+	// kernel-assigned port, and dev.sh's probes must be pointed at the port
+	// the listener actually got, not at a hard-coded one.
+	operatorGatewayPort := fakeOperatorGateway(t)
+	resetPgPort := fakeResetPostgres(t)
 	env = append(os.Environ(),
 		"DEV_DATA_DIR="+stateDir,
 		// Pin FIXTURE_VERSION so dev.sh skips its `go run ./cmd/devseed/
@@ -204,15 +224,13 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087 19088",
 		// The operator gateway readiness is a TCP probe without an HTTP
 		// endpoint to shim; point dev.sh's probe at the shared loopback
-		// listener above.
-		"DEV_OPERATOR_GATEWAY_PORT="+fakeOperatorGatewayPort,
+		// listener above (kernel-assigned port).
+		"DEV_OPERATOR_GATEWAY_PORT="+operatorGatewayPort,
 		// The reset-data port-forward wait probes a loopback TCP port; point
 		// it at the shared fake listener (real default 5432).
-		"DEV_RESET_PG_PORT="+fakeResetPgPort,
+		"DEV_RESET_PG_PORT="+resetPgPort,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
-	fakeOperatorGateway(t)
-	fakeResetPostgres(t)
 	return env, binDir
 }
 
