@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -107,26 +108,169 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// fakeOperatorGatewayPort is the loopback port fakeEnv points the operator
-// mTLS gateway TCP readiness probe at (dev.sh DEV_OPERATOR_GATEWAY_PORT
-// seam). It lives outside the DEV_PORTS_OVERRIDE band so the preflight port
-// gate (require_ports_free) never sees it occupied.
-const fakeOperatorGatewayPort = "19984"
-
 var (
 	fakeGatewayOnce sync.Once
 	fakeGatewayLn   net.Listener
 	fakeGatewayErr  error
 )
 
+// listenerPort reports the TCP port a listener is actually bound to, so the
+// tested path is handed the real port instead of the one that was requested
+// (the fakes below ask the kernel for any free port with ":0").
+func listenerPort(t *testing.T, ln net.Listener) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("cannot read bound port from %q: %v", ln.Addr(), err)
+	}
+	return port
+}
+
+// devTestBandSlots is the width of the host-port band handed to dev.sh: the
+// seven entries of DEV_PORTS in lib/host.sh (8082-8088).
+const devTestBandSlots = 7
+
+var (
+	devTestBandOnce  sync.Once
+	devTestBandPorts [devTestBandSlots]int
+	devTestBandErr   error
+)
+
+// devTestBand returns the per-process band of idle loopback ports that
+// DEV_PORTS_OVERRIDE points dev.sh at (slot 0 = webhook/8082 ... slot 6 =
+// api/8088). It is probed once per test binary from the kernel's ephemeral
+// range, so two copies of this package can run at the same time, and the host's
+// real dev environment keeps its own fixed 8082-8088 ports (the ephemeral range
+// does not contain them). A literal band made every overlapping pair fail with
+// port_conflict, because the one test that really occupies a port handed the
+// conflict to every other test in the other copy.
+func devTestBand(t *testing.T) [devTestBandSlots]int {
+	t.Helper()
+	devTestBandOnce.Do(func() {
+		devTestBandPorts, devTestBandErr = probeIdlePortBand(t)
+	})
+	if devTestBandErr != nil {
+		t.Fatalf("cannot probe an idle dev port band: %v", devTestBandErr)
+	}
+	return devTestBandPorts
+}
+
+// devTestBandPort returns one slot of the probed band so assertions follow the
+// ports dev.sh was actually given.
+func devTestBandPort(t *testing.T, slot int) int {
+	t.Helper()
+	if slot < 0 || slot >= devTestBandSlots {
+		t.Fatalf("dev test band slot %d out of range [0,%d)", slot, devTestBandSlots)
+	}
+	return devTestBand(t)[slot]
+}
+
+// formatDevTestBand renders the band in the space-separated form lib/host.sh
+// parses from DEV_PORTS_OVERRIDE.
+func formatDevTestBand(t *testing.T) string {
+	t.Helper()
+	band := devTestBand(t)
+	parts := make([]string, len(band))
+	for i, port := range band {
+		parts[i] = strconv.Itoa(port)
+	}
+	return strings.Join(parts, " ")
+}
+
+// probeIdlePortBand finds devTestBandSlots consecutive idle loopback ports. The
+// base is sampled with ":0", so the kernel only hands out ephemeral ports
+// (32768-60999 on this host): the band misses the fixed 8082-8088 host ports
+// and the fixed 19984 / 15432 ports the fakes used to pin (they bind their own
+// ":0" now). The whole run is then bound at once to prove every offset is free,
+// and released again because dev.sh's preflight port gate must observe the band
+// as free (AC-065-07).
+//
+// Trade-off: the probe runs once per test binary (devTestBand's sync.Once) and
+// releases its sockets immediately, so the band is reused for the whole package
+// run — 83-86s from the probe to the last test's preflight across the runs
+// measured for this change, not just the sub-millisecond window in which the
+// probe itself holds the sockets. During that window a competing binder (a
+// concurrent copy of this package, the ":0" fakes above, or any other process)
+// can take a probed port, so a collision with a concurrent copy is a residual
+// probabilistic TOCTOU rather than an impossibility: a fresh ":0" sample lands
+// inside the other copy's devTestBandSlots-port band with probability ≈2.5e-4
+// (7 slots over the 28232 ephemeral ports 32768-60999 measured here, i.e. 7 in
+// 28000 in round numbers), down from the certainty of the old literal band. No
+// false port_conflict was observed in the verification for this change: 7
+// full-package runs (2 rounds of two concurrent copies plus 3 runs with an
+// external occupier). The band cannot stay bound for the process lifetime (the
+// gate would report the test's own ports as a conflict), and the t.Skipf in the
+// conflict fixture only covers the slot 0 port it occupies, so a residual
+// collision on any other slot would surface as a port_conflict failure in the
+// tests that need the band free.
+func probeIdlePortBand(t *testing.T) ([devTestBandSlots]int, error) {
+	t.Helper()
+	var band [devTestBandSlots]int
+	for attempt := 0; attempt < 64; attempt++ {
+		sampled, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			return band, fmt.Errorf("sample ephemeral port: %w", err)
+		}
+		base, err := strconv.Atoi(listenerPort(t, sampled))
+		if err != nil {
+			_ = sampled.Close()
+			return band, fmt.Errorf("parse sampled port %q: %w", sampled.Addr(), err)
+		}
+		// Keep the sampled base bound while probing the remaining offsets, so
+		// the whole run is verified as free simultaneously.
+		extra := make([]net.Listener, 0, devTestBandSlots-1)
+		complete := true
+		for offset := 1; offset < devTestBandSlots && complete; offset++ {
+			port := base + offset
+			if port > 65535 {
+				complete = false
+				break
+			}
+			ln, listenErr := new(net.ListenConfig).Listen(
+				context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+			if listenErr != nil {
+				complete = false
+				break
+			}
+			extra = append(extra, ln)
+		}
+		for _, ln := range extra {
+			_ = ln.Close()
+		}
+		closeErr := sampled.Close()
+		if !complete {
+			continue
+		}
+		if closeErr != nil {
+			return band, fmt.Errorf("release sampled port %d: %w", base, closeErr)
+		}
+		for i := range band {
+			band[i] = base + i
+		}
+		return band, nil
+	}
+	return band, fmt.Errorf("no idle %d-port band found in 64 attempts", devTestBandSlots)
+}
+
 // fakeOperatorGateway binds one shared loopback listener for the whole test
 // package (fakeEnv is called multiple times per test; a per-call listener
-// would collide with itself). The connection is accepted and immediately
-// closed — the readiness probe only needs a TCP open to succeed.
-func fakeOperatorGateway(t *testing.T) {
+// would collide with itself) and returns the port it got, which fakeEnv
+// exports to dev.sh as DEV_OPERATOR_GATEWAY_PORT (the operator mTLS gateway
+// TCP readiness seam). The connection is accepted and immediately closed —
+// the readiness probe only needs a TCP open to succeed.
+//
+// It binds ":0" instead of a fixed port so two copies of this package can run
+// concurrently (parallel CI jobs, concurrent local sessions): with the old
+// literal 19984 every such pair died with "cannot bind fake operator gateway
+// listener: ... address already in use". The kernel-assigned port is drawn from
+// the ephemeral range, as is the DEV_PORTS_OVERRIDE band this package now probes,
+// so a coincidence with one of the band ports is possible in principle and the
+// preflight port gate (require_ports_free) would then see that band port as
+// occupied.
+func fakeOperatorGateway(t *testing.T) string {
 	t.Helper()
 	fakeGatewayOnce.Do(func() {
-		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeOperatorGatewayPort)
+		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if fakeGatewayErr != nil {
 			return
 		}
@@ -143,12 +287,8 @@ func fakeOperatorGateway(t *testing.T) {
 	if fakeGatewayErr != nil {
 		t.Fatalf("cannot bind fake operator gateway listener: %v", fakeGatewayErr)
 	}
+	return listenerPort(t, fakeGatewayLn)
 }
-
-// fakeResetPgPort is the loopback port the reset-data port-forward wait
-// probes (dev.sh DEV_RESET_PG_PORT seam, real default 5432). A dedicated
-// port keeps the fake test deterministic without touching a host PostgreSQL.
-const fakeResetPgPort = "15432"
 
 var (
 	fakeResetPgOnce sync.Once
@@ -158,11 +298,14 @@ var (
 
 // fakeResetPostgres binds one shared loopback listener for the whole test
 // package so every reset-data test's TCP probe succeeds (accepted and closed
-// immediately, exactly like fakeOperatorGateway).
-func fakeResetPostgres(t *testing.T) {
+// immediately, exactly like fakeOperatorGateway) and returns the port it got,
+// which fakeEnv exports to dev.sh as DEV_RESET_PG_PORT (the real default is
+// 5432). It also binds ":0": a fixed port would collide both with a host
+// PostgreSQL and with a concurrent run of this package.
+func fakeResetPostgres(t *testing.T) string {
 	t.Helper()
 	fakeResetPgOnce.Do(func() {
-		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeResetPgPort)
+		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if fakeResetPgErr != nil {
 			return
 		}
@@ -179,6 +322,7 @@ func fakeResetPostgres(t *testing.T) {
 	if fakeResetPgErr != nil {
 		t.Fatalf("cannot bind fake reset postgres listener: %v", fakeResetPgErr)
 	}
+	return listenerPort(t, fakeResetPgLn)
 }
 
 // fakeEnv builds an environment that points the lifecycle module at fake
@@ -189,6 +333,11 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Bind the fake loopback listeners before building env: both take a
+	// kernel-assigned port, and dev.sh's probes must be pointed at the port
+	// the listener actually got, not at a hard-coded one.
+	operatorGatewayPort := fakeOperatorGateway(t)
+	resetPgPort := fakeResetPostgres(t)
 	env = append(os.Environ(),
 		"DEV_DATA_DIR="+stateDir,
 		// Pin FIXTURE_VERSION so dev.sh skips its `go run ./cmd/devseed/
@@ -201,19 +350,21 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		// behavior-identical and makes every fake-CLI test deterministic.
 		"FIXTURE_VERSION=v2",
 		// Probe idle test ports, not the real 8082-8088: the actual dev
-		// environment may be running on the host during tests.
-		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087 19088",
+		// environment may be running on the host during tests. The band is
+		// probed per process from the kernel's ephemeral range, so two copies
+		// of this package running at once normally get disjoint bands instead
+		// of the old literal 19082-19088 band's guaranteed clash (a residual
+		// overlap is still possible; see probeIdlePortBand).
+		"DEV_PORTS_OVERRIDE="+formatDevTestBand(t),
 		// The operator gateway readiness is a TCP probe without an HTTP
 		// endpoint to shim; point dev.sh's probe at the shared loopback
-		// listener above.
-		"DEV_OPERATOR_GATEWAY_PORT="+fakeOperatorGatewayPort,
+		// listener above (kernel-assigned port).
+		"DEV_OPERATOR_GATEWAY_PORT="+operatorGatewayPort,
 		// The reset-data port-forward wait probes a loopback TCP port; point
 		// it at the shared fake listener (real default 5432).
-		"DEV_RESET_PG_PORT="+fakeResetPgPort,
+		"DEV_RESET_PG_PORT="+resetPgPort,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
-	fakeOperatorGateway(t)
-	fakeResetPostgres(t)
 	return env, binDir
 }
 
@@ -868,9 +1019,11 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 19088 is the DEV_PORTS_OVERRIDE entry for the api band slot (8088).
-	if !strings.Contains(string(curlLog), "19088/readyz") {
-		t.Fatalf("dev-up must probe the api /readyz on the 8088 band slot:\n%s", curlLog)
+	// Slot 6 of the probed band is the override entry for the api band slot
+	// (8088).
+	apiPort := devTestBandPort(t, 6)
+	if !strings.Contains(string(curlLog), fmt.Sprintf("%d/readyz", apiPort)) {
+		t.Fatalf("dev-up must probe the api /readyz on the 8088 band slot (%d):\n%s", apiPort, curlLog)
 	}
 }
 
@@ -3967,11 +4120,16 @@ func TestDevUpFailsWhenADevPortIsOccupied(t *testing.T) {
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 
-	// fakeEnv overrides the dev ports to 19082-19087 so a real dev environment
-	// can run alongside the test.
-	listener, listenErr := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:19082")
+	// Occupy the first slot of the band fakeEnv pointed dev.sh at (the 8082 /
+	// webhook remap). The band belongs to this test binary, so unlike the old
+	// literal 19082 it does not hand a conflict to every test in a concurrent
+	// copy — a concurrent copy only overlaps it with the residual probability
+	// described on probeIdlePortBand, and its t.Skipf only protected this test.
+	occupiedPort := devTestBandPort(t, 0)
+	listener, listenErr := (&net.ListenConfig{}).Listen(
+		context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", occupiedPort))
 	if listenErr != nil {
-		t.Skipf("port 19082 is not free on this host, cannot build the fixture: %v", listenErr)
+		t.Skipf("band port %d is not free on this host, cannot build the fixture: %v", occupiedPort, listenErr)
 	}
 	defer func() { _ = listener.Close() }()
 
