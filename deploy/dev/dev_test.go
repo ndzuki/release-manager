@@ -2622,7 +2622,9 @@ exit 0
 func runJwtHelper(t *testing.T, expr string) string {
 	t.Helper()
 	lib := filepath.Join(repoRoot(t), "deploy", "dev", "lib", "jwt.sh")
-	script := "set -euo pipefail\nsource " + lib + "\n" + expr + "\n"
+	// %q-quote the library path: an unquoted path containing a space makes
+	// bash split the source argument and the source fails (TASK-306).
+	script := fmt.Sprintf("set -euo pipefail\nsource %q\n%s\n", lib, expr)
 	out, err := exec.CommandContext(context.Background(), "bash", "-c", script).Output()
 	if err != nil {
 		t.Fatalf("jwt helper %q failed: %v", expr, err)
