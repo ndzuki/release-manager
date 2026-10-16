@@ -63,7 +63,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 
 ### 2.3 可运行的 curl 示例
 
-以下写法直接取自仓库内已跑通的冒烟脚本 `test/e2e/prerequisite/smoke.sh`（`:163`、`:174`、`:187`、`:234`、`:249`、`:287`）与 dev fixture（`internal/devfixture/bundle.go:259`），端口为 dev 默认。
+以下写法直接取自仓库内已跑通的冒烟脚本 `test/e2e/prerequisite/smoke.sh`（`:163`、`:174`、`:187`、`:234`、`:249`、`:287`）与 dev fixture（`internal/devfixture/bundle.go:277`），端口为 dev 默认。
 
 ```bash
 # 1) 登录取 access token（release-auth :8085）

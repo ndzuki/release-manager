@@ -36,21 +36,13 @@ func TestChartArchiveDigestDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("package chart: %v", err)
 	}
-	d1, err := archiveDigest(first)
-	_ = os.Remove(first)
-	if err != nil {
-		t.Fatalf("digest first: %v", err)
-	}
+	d1 := archiveDigest(first)
 	for i := 0; i < 3; i++ {
-		path, err := packageChartArchive(chartDir)
+		raw, err := packageChartArchive(chartDir)
 		if err != nil {
 			t.Fatalf("package chart run %d: %v", i, err)
 		}
-		d, err := archiveDigest(path)
-		_ = os.Remove(path)
-		if err != nil {
-			t.Fatalf("digest run %d: %v", i, err)
-		}
+		d := archiveDigest(raw)
 		if d != d1 {
 			t.Fatalf("chart archive digest not deterministic: run %d = %s, first = %s", i, d, d1)
 		}
