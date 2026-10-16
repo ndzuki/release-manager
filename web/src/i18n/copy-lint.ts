@@ -11,7 +11,11 @@
  *  - `<script>` string literals that look like a SENTENCE (contain whitespace and at
  *    least two letter runs) — this is what catches rendered messages like
  *    'Unable to switch organization.' while ignoring identifiers, CSS classes,
- *    route names and import paths.
+ *    route names and import paths;
+ *  - `<script>` string literals carrying a run of Han characters, with or without
+ *    whitespace — the sentence rule above cannot see Chinese copy, so a label like
+ *    '已创建定义' used to pass the gate (regex literals and machine strings excluded,
+ *    see blankRegexLiterals / isMachineLiteral).
  * Out of scope: anything assembled at runtime (template literals, concatenation).
  */
 
@@ -163,14 +167,155 @@ export function scriptSentences(text: string): string[] {
   for (const match of script.matchAll(/'([^'\\\n]*)'|"([^"\\\n]*)"/g)) {
     const literal = (match[1] ?? match[2] ?? '').trim();
     if (isIdentifier(literal)) continue;
-    if (literal.includes(' ') && (literal.match(/[\p{L}]{2,}/gu)?.length ?? 0) >= 2) sentences.push(literal);
+    if (isSentenceLiteral(literal)) sentences.push(literal);
   }
   // Template literals are just as renderable; single words are too noisy to flag.
   for (const match of script.matchAll(/`([^`\\]*)`/g)) {
     const literal = match[1]!.trim();
-    if (literal.includes(' ') && (literal.match(/[\p{L}]{2,}/gu)?.length ?? 0) >= 2) sentences.push(literal);
+    if (isSentenceLiteral(literal)) sentences.push(literal);
+  }
+  // Chinese copy carries no whitespace, so the sentence rule cannot see it, and a label
+  // like '已创建定义' sat in a store while the gate stayed green. On this project's single
+  // locale a Han run IS copy, so the same literals are scanned again with the Han rule;
+  // the sentence rule's hits are skipped so nothing is reported twice, and regex literals
+  // are blanked so a pattern like /'中文'/ cannot look like a string.
+  const withoutRegex = blankRegexLiterals(script);
+  for (const match of withoutRegex.matchAll(/'([^'\\\n]*)'|"([^"\\\n]*)"/g)) {
+    const literal = (match[1] ?? match[2] ?? '').trim();
+    if (isIdentifier(literal) || isSentenceLiteral(literal)) continue;
+    if (isHanCopyLiteral(literal)) sentences.push(literal);
+  }
+  for (const match of withoutRegex.matchAll(/`([^`\\]*)`/g)) {
+    const literal = match[1]!.trim();
+    if (isSentenceLiteral(literal)) continue;
+    if (isHanCopyLiteral(literal)) sentences.push(literal);
   }
   return sentences;
+}
+
+/**
+ * A quoted script literal that reads as an English sentence: whitespace plus at least two
+ * letter runs. Kept as a predicate of its own so the Chinese rule below can defer to it
+ * instead of reporting the same literal twice.
+ */
+function isSentenceLiteral(literal: string): boolean {
+  return literal.includes(' ') && (literal.match(/[\p{L}]{2,}/gu)?.length ?? 0) >= 2;
+}
+
+/**
+ * Two or more consecutive Han characters. The console's locale is Chinese, so a run this
+ * long inside a string literal is copy or a rendered label; identifiers, route names, CSS
+ * classes, wire enums, reason codes and log/error codes are ASCII by construction, so the
+ * rule cannot reach them. One Han character is deliberately not enough: separator
+ * fragments such as '：' are structural, not copy (the same reason the English rule flags
+ * sentences rather than single letters).
+ */
+const HAN_COPY = /\p{Script=Han}{2,}/u;
+
+/**
+ * Han-carrying literals that are not copy. Every class is matched as a SHAPE, so a real
+ * label cannot hide behind one: a URL has a scheme, a test id appears as an
+ * attribute-match expression, and a module specifier starts with a path prefix. The
+ * remaining classes the audit named are ASCII by construction (CSS class lists,
+ * `data-*` names, wire reason codes, log/error codes), which is why the Han run itself
+ * is the rule that excludes them.
+ */
+function isMachineLiteral(literal: string): boolean {
+  return (
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(literal) ||
+    /data-(?:testid|test|qa)\s*=/.test(literal) ||
+    /^(?:\.{0,2}\/|@\/)/.test(literal)
+  );
+}
+
+function isHanCopyLiteral(literal: string): boolean {
+  return HAN_COPY.test(literal) && !isMachineLiteral(literal);
+}
+
+/**
+ * Blanks regex literals so their bodies cannot be read as string literals.
+ *
+ * A regex shares the quote syntax with copy (`/'中文'/`), which is why a regex literal is
+ * one of the exclusion classes. Quoted strings are copied through verbatim — their
+ * contents, including the `//` inside `'https://…'`, never reach the `/` heuristic — and
+ * `/` only opens a regex where the preceding token expects an expression, the same
+ * disambiguation a lexer performs, so a division (`total / count`) is left untouched.
+ *
+ * Template literals are deliberately NOT consumed here: their quotes are handled by the
+ * template scan of scriptSentences, and a raw backtick in this module would pair with the
+ * backticks of that scan and make the detector read a block of its own code as copy.
+ */
+function blankRegexLiterals(script: string): string {
+  const EXPRESSION_BEFORE = new Set([
+    '(', '[', '{', ',', ';', ':', '=', '!', '&', '|', '?', '+', '-', '*', '%', '^', '~', '<', '>',
+  ]);
+  const KEYWORDS_BEFORE = new Set([
+    'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'case', 'do', 'else',
+    'yield', 'await',
+  ]);
+  let blanked = '';
+  let index = 0;
+  let previous = '';
+  let word = '';
+  while (index < script.length) {
+    const char = script[index]!;
+    if (char === "'" || char === '"') {
+      let cursor = index + 1;
+      while (cursor < script.length) {
+        if (script[cursor] === '\n') break;
+        if (script[cursor] === '\\') {
+          cursor += 2;
+          continue;
+        }
+        if (script[cursor] === char) {
+          cursor += 1;
+          break;
+        }
+        cursor += 1;
+      }
+      blanked += script.slice(index, cursor);
+      previous = char;
+      word = '';
+      index = cursor;
+      continue;
+    }
+    if (char === '/' && (previous === '' || EXPRESSION_BEFORE.has(previous) || KEYWORDS_BEFORE.has(word))) {
+      let cursor = index + 1;
+      let closed = false;
+      while (cursor < script.length && script[cursor] !== '\n') {
+        if (script[cursor] === '\\') {
+          cursor += 2;
+          continue;
+        }
+        if (script[cursor] === '/') {
+          closed = true;
+          break;
+        }
+        cursor += 1;
+      }
+      if (closed) {
+        let end = cursor + 1;
+        while (end < script.length && /[a-z]/i.test(script[end]!)) end += 1;
+        blanked += ' '.repeat(end - index);
+        previous = '/';
+        word = '';
+        index = end;
+        continue;
+      }
+    }
+    blanked += char;
+    if (/\s/.test(char)) {
+      // Whitespace ends neither an expression nor a keyword run.
+    } else if (/[\w$]/.test(char)) {
+      previous = char;
+      word += char;
+    } else {
+      previous = char;
+      word = '';
+    }
+    index += 1;
+  }
+  return blanked;
 }
 
 /**

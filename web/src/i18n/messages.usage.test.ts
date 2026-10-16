@@ -71,6 +71,12 @@ describe('message catalog usage', () => {
  *   - Chinese copy that is ALREADY in the target locale but still inline. Centralising
  *     that is a separate pass over the Chinese wave, and this manifest keeps the gate
  *     useful in the meantime: it still fails when English README-style copy is added.
+ *
+ * Since TASK-310 the detector also sees Chinese in `<script>` literals without whitespace
+ * (the blind spot an independent review proved), so the Chinese-wave entries below now
+ * include script-level labels and messages that the older detector could not see. They are
+ * registered, not exempted: the same literals would still fail in a file that is not listed
+ * here, and the stale-entry rule retires each one as the Chinese wave moves it to the catalog.
  */
 const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   {
@@ -133,14 +139,14 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/PreflightResultPanel.vue',
-    allowed: [],
+    allowed: ['失败', '已取消', '通过'],
     reason: 'preflight panel converged to Chinese (wave 8)',
   },
   {
     file: 'src/components/operations/TimelineEntryItem.vue',
-    allowed: ['： / 就绪'],
+    allowed: ['： / 就绪', '状态转换', '已确认', '发布进度', '错误', '未知事件'],
     reason:
-      'the fragments around the workload/ready interpolations (colon, slash and the 就绪 unit); the sentence itself is Chinese',
+      'the fragments around the workload/ready interpolations (colon, slash and the 就绪 unit) plus the timeline event-kind labels; the sentence itself is Chinese',
   },
   {
     file: 'src/components/emergency/EmergencyConvergenceCard.vue',
@@ -170,6 +176,10 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
       'image ${values.container} → ${values.imageReference}',
       'replicas → ${values.replicas}',
       'annotations ${values.annotations.map((entry) =>',
+      '尚未开始影响集群',
+      '集群效果未知，继续观察并保留目标锁',
+      '目标字段已写入集群',
+      '未生效，不创建收敛任务',
     ],
     reason:
       'Chinese labels plus evidence strings assembled at runtime from the diff payload (no static scan can follow those)',
@@ -226,6 +236,10 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
       '缺少已批准父 Revision 的基线，无法校验锁定路径；请刷新后重试',
       '已批准，收敛任务已标记 converged',
       'Draft 已丢弃，任务已解绑',
+      '当前内容未通过校验，请修正后再提交',
+      '已提交审批',
+      '已拒绝，任务已解绑',
+      "锁定路径不可修改：${changed.join('、')}",
     ],
     reason:
       'Chinese copy already in the target locale; the toast strings reach the page through editor.toast, which no scan can follow',
@@ -338,12 +352,12 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/router/index.ts',
-    allowed: ['Forbidden', 'Init', 'Login'],
-    reason: 'vue-router route names, not copy',
+    allowed: ['Forbidden', 'Init', 'Login', '需要写权限才能创建或修改集群；你的角色只有只读权限。'],
+    reason: 'vue-router route names, plus the guard message a read-only role sees when it opens a write route (inline, owned by the Chinese wave)',
   },
   {
     file: 'src/pages/ArtifactLifecyclePage.vue',
-    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；两者都只对 platform_admin 开放（cleanup/write），维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 调用', '同步', '执行（服务端预算可达约 1 小时），因此客户端对本过程使用更长的死线。', '同一幂等键在保留窗口内（默认 24 小时，可配置）会被拒绝（', 'cleanup_already_requested', '）而不重跑； 「重试」复用同一个键，点「执行 GC」才是新的清理请求。注意：单节点部署可能没有幂等键表，此时只有进程内互斥生效。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有「从', 'validated', '归档」的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 该操作是收敛的：重复调用再次成功且不改数据，因此要按', '存储的原始状态', '理解', 'previous_status', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC'],
+    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；两者都只对 platform_admin 开放（cleanup/write），维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 调用', '同步', '执行（服务端预算可达约 1 小时），因此客户端对本过程使用更长的死线。', '同一幂等键在保留窗口内（默认 24 小时，可配置）会被拒绝（', 'cleanup_already_requested', '）而不重跑； 「重试」复用同一个键，点「执行 GC」才是新的清理请求。注意：单节点部署可能没有幂等键表，此时只有进程内互斥生效。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有「从', 'validated', '归档」的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 该操作是收敛的：重复调用再次成功且不改数据，因此要按', '存储的原始状态', '理解', 'previous_status', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC', '请先确认已了解清理不可撤销'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
@@ -353,12 +367,12 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/StuckLocksPage.vue',
-    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符'],
+    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符', '必须填写释放原因', '必须选择释放模式', '请先确认已核实集群效果'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/pages/TrustPolicyPage.vue',
-    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。'],
+    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。', '结束宽限', '退休', '吊销', '该环境只剩一个可用信任根，不能移除'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
@@ -368,7 +382,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationListPage.vue',
-    allowed: ['操作历史', '返回发布清单', '创建操作', '状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '面包屑', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。'],
+    allowed: ['操作历史', '返回发布清单', '创建操作', '状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '面包屑', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。', '全部状态', '进行中', '已成功', '已失败', '已取消'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
@@ -378,12 +392,12 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/HomePage.vue',
-    allowed: ['Release Manager', '进入客户 → 集群 → 发布的层级', 'Promotion Mapping 与定义设置', '发布 Bundle', '保留期 GC 与归档恢复'],
+    allowed: ['Release Manager', '进入客户 → 集群 → 发布的层级', 'Promotion Mapping 与定义设置', '发布 Bundle', '保留期 GC 与归档恢复', '客户', '审计', '按组织检索已脱敏的审计事件', '发布定义', '内容摘要、镜像绑定与证据引用', '紧急锁', '效果未知且已过观察窗口的紧急操作', '制品生命周期', '信任根', '签名信任策略与轮换', '授权绑定', '组织与客户的绑定及能力授予', '组织成员', '成员与角色', '修改密码', '修改后会吊销全部会话'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/components/releases/ReleaseInventoryTable.vue',
-    allowed: ['Release', '状态', 'Chart', 'Revision', '最近同步', '紧急变更', '操作', '操作历史', '未绑定 Definition', '紧急变更', '紧急变更', '收敛', '创建操作', '未绑定 Definition', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更'],
+    allowed: ['Release', '状态', 'Chart', 'Revision', '最近同步', '紧急变更', '操作', '操作历史', '未绑定 Definition', '紧急变更', '紧急变更', '收敛', '创建操作', '未绑定 Definition', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更', '尚未同步'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
@@ -393,22 +407,22 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ChangePasswordPage.vue',
-    allowed: ['修改密码', '修改成功后所有会话都会被撤销，需要重新登录。', '密码已修改，正在跳转到登录页…', '当前密码', '新密码', '确认新密码', '密码只做非空与一致性校验；上限 字节（bcrypt 限制），不设复杂度要求。', '返回', '修改密码失败', '新密码过长（上限 ${PASSWORD_MAX_BYTES} 字节）'],
+    allowed: ['修改密码', '修改成功后所有会话都会被撤销，需要重新登录。', '密码已修改，正在跳转到登录页…', '当前密码', '新密码', '确认新密码', '密码只做非空与一致性校验；上限 字节（bcrypt 限制），不设复杂度要求。', '返回', '修改密码失败', '新密码过长（上限 ${PASSWORD_MAX_BYTES} 字节）', '请填写全部三项', '两次输入的新密码不一致', '新密码不能与当前密码相同'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/pages/BindingsPage.vue',
-    allowed: ['授权绑定', '客户', '状态', '版本', '建立时间', '操作', '撤销', '新增绑定', '客户 ID', '能力授予', '契约没有「列出既有授权」的 RPC，因此这里只能施加一次授予/撤销并回报服务端返回的版本号。', '主体（用户 ID）', '能力', '动作', '授予', '撤销', '操作未成功', '正在加载绑定…', '暂无绑定', '该组织还没有与任何客户建立授权绑定。', '客户 ID', '用户 ID', '请填写客户 ID', '请填写主体（用户 ID）', '撤销绑定', '取消', '确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。'],
+    allowed: ['授权绑定', '客户', '状态', '版本', '建立时间', '操作', '撤销', '新增绑定', '客户 ID', '能力授予', '契约没有「列出既有授权」的 RPC，因此这里只能施加一次授予/撤销并回报服务端返回的版本号。', '主体（用户 ID）', '能力', '动作', '授予', '撤销', '操作未成功', '正在加载绑定…', '暂无绑定', '该组织还没有与任何客户建立授权绑定。', '客户 ID', '用户 ID', '请填写客户 ID', '请填写主体（用户 ID）', '撤销绑定', '取消', '确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。', '该客户已绑定（正在生效）', '生效中', '已撤销'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/pages/OrganizationPage.vue',
-    allowed: ['组织成员', '用户', '角色', '版本', '加入时间', '操作', '修改 的角色', '移除', '只读', '添加成员', '用户 ID', '角色', '成员操作未成功', '正在加载成员…', '暂无成员', '该组织还没有成员记录。', '用户 ID', '请填写用户 ID'],
+    allowed: ['组织成员', '用户', '角色', '版本', '加入时间', '操作', '修改 的角色', '移除', '只读', '添加成员', '用户 ID', '角色', '成员操作未成功', '正在加载成员…', '暂无成员', '该组织还没有成员记录。', '用户 ID', '请填写用户 ID', '该用户已是组织成员；请直接修改其角色'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/components/releases/ReleaseStatusBadge.vue',
-    allowed: ['Release 已从集群中消失', 'Release 与最近一次同步结果一致'],
+    allowed: ['Release 已从集群中消失', 'Release 与最近一次同步结果一致', '配置与期望不一致'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
@@ -636,6 +650,10 @@ const NOT_YET_MIGRATED: Array<{ file: string; reason: string }> = [
   {
     file: 'src/connect/auth-api.ts',
     reason: 'not migrated yet: Chinese or wire-value copy that the convergence waves have not reached; listed so the gap cannot grow silently',
+  },
+  {
+    file: 'src/connect/binding-api.ts',
+    reason: 'not migrated yet: the reason-code to Chinese copy table (MESSAGES) that the convergence waves have not reached; listed so the gap cannot grow silently',
   },
   {
     file: 'src/connect/bundle-api.ts',

@@ -185,6 +185,93 @@ describe('plain .ts modules', () => {
   });
 });
 
+describe('scriptSentences: Chinese copy without whitespace (TASK-310)', () => {
+  // The blind spot the review proved: the sentence rule needs a space, so a label like
+  // '已创建定义' rendered by a store never reached the gate and the suite stayed green.
+  it('sees a Han label that carries no whitespace', () => {
+    const text = `<script setup lang="ts">\nconst msg = '已创建定义';\n</script>`;
+
+    expect(scriptSentences(text)).toEqual(['已创建定义']);
+  });
+
+  it('sees a Han template literal', () => {
+    const text = '<script setup lang="ts">\nconst msg = `操作已切换`;\n</script>';
+
+    expect(scriptSentences(text)).toEqual(['操作已切换']);
+  });
+
+  // Both rules can match the same literal; it must still be reported exactly once.
+  it('does not report a Han literal twice when it also reads as a sentence', () => {
+    expect(scriptSentences("<script setup lang=\"ts\">\nconst msg = '未登记 的中文文案';\n</script>")).toEqual([
+      '未登记 的中文文案',
+    ]);
+  });
+
+  it('keeps ignoring ASCII identifiers, routes and codes', () => {
+    const text = `<script setup lang="ts">
+const role = 'release_admin';
+const code = 'invalid_argument';
+const route = '/customers/:customerId/clusters';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual([]);
+  });
+});
+
+describe('scriptSentences: non-copy classes are excluded by shape (TASK-310)', () => {
+  it('does not read Han inside a regex literal as copy', () => {
+    // The quote is the load-bearing part: without blankRegexLiterals the string scan
+    // reads this regex body as a literal.
+    expect(scriptSentences("<script setup lang=\"ts\">\nconst re = /'已创建定义'/;\n</script>")).toEqual([]);
+    expect(scriptSentences("<script setup lang=\"ts\">\nconst re = /^[\\u4e00-\\u9fff]+$/;\n</script>")).toEqual([]);
+  });
+
+  it('does not read a regex that opens the script as copy', () => {
+    expect(scriptSentences("/'已创建定义'/.test(value);\nconst msg = '操作已切换';")).toEqual(['操作已切换']);
+  });
+
+  it('still sees copy after a regex literal and after a division', () => {
+    const text = `<script setup lang="ts">
+const re = /'其他'/;
+const half = total / count;
+const msg = '已创建定义';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual(['已创建定义']);
+  });
+
+  it('does not read Han inside a comment as copy', () => {
+    expect(scriptSentences("<script setup lang=\"ts\">\n// '已创建定义' is not implemented yet\nconst x = 1;\n</script>")).toEqual(
+      [],
+    );
+  });
+
+  it('does not read Han inside a URL, a test id or a module path as copy', () => {
+    const text = `<script setup lang="ts">
+const docs = 'https://example.test/已创建定义';
+const selector = '[data-testid="已创建定义"]';
+const module = '@/已创建定义/messages';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual([]);
+  });
+
+  // CSS class names, wire reason codes, log/error codes and data-* names are ASCII by
+  // construction in this repo (the repo-wide scan is recorded with TASK-310), so the Han
+  // rule cannot reach them. This pins that the second pass adds the Han label only and
+  // does not sweep the ASCII identifiers that share the file.
+  it('reports the Han label without sweeping the ASCII identifiers around it', () => {
+    const text = `<script setup lang="ts">
+const cls = 'card';
+const errorCode = 'invalid_argument';
+const reason = 'duplicate';
+const label = '已创建定义';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual(['已创建定义']);
+  });
+});
+
 describe('referencedKeys', () => {
   // The regression the independent review proved: a comment used to count as a
   // consumer, so a dead catalog entry stayed green.
