@@ -656,7 +656,7 @@ check-docs: ## Check that documented make targets and repository paths still exi
 # cites it: `make check-citations`.
 .PHONY: check-citations
 check-citations: ## Check that test.yml line citations still match the content they claim (TASK-309)
-	bash scripts/check-citations.sh
+	bash scripts/check-citations.sh --check
 
 .PHONY: check-config-keys
 check-config-keys: ## Gate config-key truthfulness: every service config leaf decodes to a real reader (REQ-094)

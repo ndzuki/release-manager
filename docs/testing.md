@@ -355,6 +355,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `upgrade-sdk` | `make test-upgrade-sdk` | 全部触发 |
 | `operator-image-sdk-only` | `make test-operator-image-sdk-only` | 全部触发 |
 | `test` | 全仓（排除 sqlite/sdkcheck 两包）`go test -race` + coverage + 变更行 lint | 全部触发 |
+| `test-postgres-integration` | 起 `postgres:16-alpine`（端口 55432）后跑 `go test -tags integration -count=1`，覆盖 `./internal/store/postgres/...`、`./internal/postgres/...`、`./internal/migration/...`、`./internal/orchestrator/...`（25 分钟超时；`if: always()` 收尾 `docker rm -f ci-postgres`） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
 | `test-sqlite` | `go test -race ./internal/store/sqlite/...` | 全部触发 |
 | `test-sdkcheck` | `go test -race ./internal/quality/sdkcheck/...` | 全部触发 |
 | `rollout-watch` | `make test-rollout-watch` | 全部触发 |
@@ -362,6 +363,12 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `e2e` | `make dev-up` → `make dev-seed` → `make e2e-all` → `if: always()` 上传 `e2e-results/` → `make dev-purge CONFIRM=1` | **push main + 手动触发；PR 不跑** |
 | `docs-check` | `make check-docs`（5 分钟超时；文档写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须为真） | 全部触发（只需 bash/grep/git，不需要 Go 与任何 secret） |
 | `proto-check` | `make lint-proto` + `make proto` 后要求 `api/gen`、`web/src/gen` 与提交内容一致（10 分钟超时） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
+| `web` | `npm ci` → `npm run lint` → `npm test` → `npm run build`（`vue-tsc -b` 类型门禁 + `vite build`；15 分钟超时；`working-directory: web`） | 全部触发 |
+| `store-surface` | `make check-store-surface`（5 分钟超时） | 全部触发 |
+| `dead-methods` | `make check-dead-methods`（5 分钟超时；**不在 required 清单**，见「死代码盲区」节） | 全部触发 |
+
+表里 18 行与 `test.yml` 的 job 名集合一致、`if:` 触发口径逐条对齐，这两条由 `make check-citations`
+的集合/触发判据强制（TASK-315）：**没有 job 级 `if:` 的 job 写「全部触发」，带 `if:` 的必须写「PR 不跑」**。
 
 `proto-check` 存在的原因不是「多跑一次生成」，而是补齐一个真实的检查缺口：`test` 与
 `test-sqlite` 都会在测试前执行 `make proto`，于是**忘提交生成物**时它们测的是新生成的代码，

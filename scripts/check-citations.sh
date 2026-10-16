@@ -19,7 +19,7 @@
 # is not in a code span (`（test.yml:324）`) or a bare `:658` table cell, and its
 # heuristic has no notion of "what the sentence claims". This script does.
 #
-# Two layers:
+# Three layers:
 #
 #   1. STRUCTURAL — every citation to .github/workflows/test.yml in every
 #      markdown file, in any spelling (`test.yml:420`, `.github/workflows/test.yml:420`,
@@ -44,6 +44,17 @@
 #      Bare `:NNN` citations (e.g. the `行号` column of the `.github/SECRETS.md`
 #      permissions table) cannot be attributed to a file automatically; they are
 #      covered only where an explicit rule declares them.
+#
+#   3. LEDGER — the workflow's re-derivable numbers and its job-name set, against
+#      the curated tables at the end of this file. Layers 1-2 only see claims
+#      that carry a citation; a claim without one is invisible to both, and a
+#      markdown table can lose a ROW without any citation moving. `docs/testing.md`
+#      asserted "18 个 job" while its CI table listed 14 and every gate stayed
+#      green (TASK-315), because a missing row cites nothing. This layer measures
+#      $TARGET itself: a documented "N 个 job" must equal the measured job count,
+#      a documented job-name list must EQUAL the measured job set (a job added or
+#      removed without a doc update fails), and each row of a documented trigger
+#      table must state the trigger class its job's `if:` actually has.
 #
 # Rules are stored one per line as   doc;line_re;spec;start_re;end_re;must_re
 # with `;` as the separator, so a pattern must NOT contain `;` (a literal `|`,
@@ -216,6 +227,170 @@ while IFS=';' read -r doc line_re spec start_re end_re must_re; do
 done < <(sed -n '/^#RULES-BEGIN$/,/^#RULES-END$/p' "${BASH_SOURCE[0]}" | sed '1d;$d' | sed 's/^#//' | grep -v '^[[:space:]]*$')
 
 # ---------------------------------------------------------------------------
+# Layer 3: ledger — re-derive the facts the documents assert about $TARGET.
+# See the LEDGER TABLES at the end of this file for the tables.
+# ---------------------------------------------------------------------------
+job_keys=$(awk '
+  /^jobs:[[:space:]]*$/ { injobs = 1; next }
+  injobs && /^[^[:space:]]/ { injobs = 0 }
+  injobs && /^  [a-z][a-z0-9_-]*:$/ { sub(/:$/, ""); sub(/^  /, ""); print }
+' "$TARGET" | sort)
+n_jobs=$(printf '%s\n' "$job_keys" | grep -cE '^[a-z]' || true)
+if [ "$n_jobs" -lt 1 ]; then
+  fail "  [FAIL] layer 3: no jobs parsed out of $TARGET — the job extractor no longer matches the file, so every job-set claim below would pass vacuously" ""
+fi
+
+metric_value() {
+  case "$1" in
+    jobs) printf '%s\n' "$n_jobs" ;;
+    lines) printf '%s\n' "$flen" ;;
+    # Distinct secret names the workflow needs configured by hand: everything
+    # except the platform-provided GITHUB_TOKEN.
+    secrets) grep -oE 'secrets\.[A-Za-z_][A-Za-z0-9_]*' "$TARGET" | sort -u | grep -vc '^secrets\.GITHUB_TOKEN$' || true ;;
+    uses:*) grep -cE "uses: ${1#uses:}@" "$TARGET" || true ;;
+    occ:*) grep -cF -- "${1#occ:}" "$TARGET" || true ;;
+    *) return 1 ;;
+  esac
+}
+
+# The job-level `if:` of a job, empty when the job has none. A step-level `if:`
+# is indented 8 spaces, so `^    if: ` matches the job-level form only.
+job_if() {
+  local line next
+  # `|| true` on the assignments: with `pipefail` a miss (a name the document
+  # lists but the workflow does not define) must read as "no job-level if:",
+  # not as a script abort.
+  line=$(grep -nE "^  $1:\$" "$TARGET" | head -1 | cut -d: -f1) || true
+  [ -n "$line" ] || return 0
+  next=$(awk -v l="$line" 'NR > l && /^  [a-z][a-z0-9_-]*:$/ { print NR; exit }' "$TARGET")
+  [ -n "$next" ] || next=$((flen + 1))
+  sed -n "${line},$((next - 1))p" "$TARGET" | grep -E '^    if: ' | head -1 || true
+}
+
+# The line of `doc` matching $2, printed only when it matches exactly one line.
+anchor_line() {
+  local hits n
+  hits=$(norm <"$1" | grep -nE -e "$2" | cut -d: -f1 || true)
+  n=$(printf '%s\n' "$hits" | grep -cE '^[0-9]+$' || true)
+  [ "$n" = 1 ] || return 1
+  printf '%s\n' "$hits"
+}
+
+# The rows of the markdown table whose header is the unique `doc` line matching
+# $2, as `lineno<TAB>text`. A markdown table cannot contain a blank line, so the
+# first blank line after the header ends the range.
+table_rows() {
+  local a b
+  a=$(anchor_line "$1" "$2") || return 1
+  b=$(awk -v s="$a" 'NR > s && /^[[:space:]]*$/ { print NR; exit }' "$1")
+  [ -n "$b" ] || b=$(( $(wc -l <"$1") + 1 ))
+  awk -v a="$a" -v b="$b" 'NR >= a && NR < b && /^\|/ { printf "%d\t%s\n", NR, $0 }' "$1"
+}
+
+# The job ids written in the FIRST cell of a table row: backticked tokens of
+# job-id shape. A cell that names no job (a workflow-level row, `test.yml` → …)
+# contributes nothing; a row that should name a job and does not leaves that name
+# missing from the set, which is a failure rather than a silent skip.
+row_job_name() {
+  printf '%s\n' "$1" | awk -F'|' '
+    {
+      cell = $2
+      while (match(cell, /`[a-z][a-z0-9_-]*`/)) {
+        print substr(cell, RSTART + 1, RLENGTH - 2)
+        cell = substr(cell, RSTART + RLENGTH)
+      }
+    }
+  ' | grep -E '^[a-z][a-z0-9_-]*$'
+}
+
+n_counts=0
+while IFS=';' read -r doc line_re sed_re metric; do
+  n_counts=$((n_counts + 1))
+  if [ ! -f "$doc" ]; then
+    fail "  [FAIL] count rule for $doc is stale — file does not exist (/$(printf '%s' "$line_re" | cut -c1-60)/)" ""
+    continue
+  fi
+  norm <"$doc" >"$tmpd/norm"
+  hits=$(grep -nE -e "$line_re" "$tmpd/norm" | cut -d: -f1 || true)
+  nhits=$(printf '%s\n' "$hits" | grep -cE '^[0-9]+$' || true)
+  if [ "$nhits" != 1 ]; then
+    fail "  [FAIL] count rule anchor matches $nhits lines in $doc (must be exactly 1): /$(printf '%s' "$line_re" | cut -c1-60)/" ""
+    continue
+  fi
+  dline=$hits
+  line_text=$(sed -n "${dline}p" "$tmpd/norm")
+  declared=$(printf '%s\n' "$line_text" | sed -nE -e "$sed_re") || true
+  ndeclared=$(printf '%s\n' "$declared" | grep -cE '^[0-9]+$' || true)
+  if [ "$ndeclared" != 1 ]; then
+    fail "  [FAIL] $doc:$dline — /$sed_re/ extracted $ndeclared numbers (must be 1) from: $(printf '%s' "$line_text" | cut -c1-110)" ""
+    continue
+  fi
+  if ! expected=$(metric_value "$metric"); then
+    fail "  [FAIL] $doc:$dline names unknown metric '$metric'" ""
+    continue
+  fi
+  if [ "$declared" != "$expected" ]; then
+    fail "  [FAIL] $doc:$dline declares $declared for metric '$metric', but $TARGET measures $expected" ""
+  fi
+done < <(sed -n '/^#COUNTS-BEGIN$/,/^#COUNTS-END$/p' "${BASH_SOURCE[0]}" | sed '1d;$d' | sed 's/^#//' | grep -v '^[[:space:]]*$')
+
+check_doc_set() { # $1 doc, $2 header_re, $3 set|trigger (trigger implies set)
+  local doc=$1 header_re=$2 mode=$3 rows names name missing extra
+  if [ ! -f "$doc" ]; then
+    fail "  [FAIL] job-set rule for $doc is stale — file does not exist (/$(printf '%s' "$header_re" | cut -c1-60)/)" ""
+    return 0
+  fi
+  if ! rows=$(table_rows "$doc" "$header_re"); then
+    fail "  [FAIL] job-set rule header /$header_re/ does not match exactly one line in $doc" ""
+    return 0
+  fi
+  names=$(printf '%s\n' "$rows" | while IFS=$'\t' read -r lno text; do
+    [ -n "${text:-}" ] || continue
+    # `|| true`: a row that names no job is normal, and its status must not leak
+    # into the pipeline (this script runs with `pipefail`).
+    row_job_name "$text" || true
+  done | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$job_keys") <(printf '%s\n' "$names"))
+  extra=$(comm -13 <(printf '%s\n' "$job_keys") <(printf '%s\n' "$names"))
+  if [ -n "$missing" ]; then
+    fail "  [FAIL] $doc: the job table under /$(printf '%s' "$header_re" | cut -c1-46)/ does not list every job in $TARGET — missing: $(printf '%s' "$missing" | tr '\n' ' ')" ""
+  fi
+  if [ -n "$extra" ]; then
+    fail "  [FAIL] $doc: the job table under /$(printf '%s' "$header_re" | cut -c1-46)/ lists rows that are not jobs in $TARGET: $(printf '%s' "$extra" | tr '\n' ' ')" ""
+  fi
+  [ "$mode" = trigger ] || return 0
+  while IFS=$'\t' read -r lno text; do
+    [ -n "${text:-}" ] || continue
+    name=$(row_job_name "$text" | head -1) || true
+    [ -n "$name" ] || continue
+    if [ -n "$(job_if "$name")" ]; then
+      if ! printf '%s' "$text" | grep -qF 'PR 不跑'; then
+        fail "  [FAIL] $doc:$lno — job '$name' has a job-level \`if:\` in $TARGET (it does not run on pull requests), so its row must state «PR 不跑» — row: $(printf '%s' "$text" | cut -c1-110)" ""
+      fi
+    else
+      if ! printf '%s' "$text" | grep -qF '全部触发'; then
+        fail "  [FAIL] $doc:$lno — job '$name' has no job-level \`if:\` in $TARGET (it runs on every trigger), so its row must state «全部触发» — row: $(printf '%s' "$text" | cut -c1-110)" ""
+      fi
+      if printf '%s' "$text" | grep -qF 'PR 不跑'; then
+        fail "  [FAIL] $doc:$lno — job '$name' runs on pull requests, but its row states «PR 不跑»" ""
+      fi
+    fi
+  done <<<"$rows"
+}
+
+n_sets=0
+while IFS=';' read -r doc header_re; do
+  n_sets=$((n_sets + 1))
+  check_doc_set "$doc" "$header_re" set
+done < <(sed -n '/^#SETS-BEGIN$/,/^#SETS-END$/p' "${BASH_SOURCE[0]}" | sed '1d;$d' | sed 's/^#//' | grep -v '^[[:space:]]*$')
+
+n_triggers=0
+while IFS=';' read -r doc header_re; do
+  n_triggers=$((n_triggers + 1))
+  check_doc_set "$doc" "$header_re" trigger
+done < <(sed -n '/^#TRIGGERS-BEGIN$/,/^#TRIGGERS-END$/p' "${BASH_SOURCE[0]}" | sed '1d;$d' | sed 's/^#//' | grep -v '^[[:space:]]*$')
+
+# ---------------------------------------------------------------------------
 # Report: one inventory line per citation (dry run), then the findings.
 # ---------------------------------------------------------------------------
 inventory=$(cat "$tmpd/cites" "$tmpd/rules" | sort -u -t'|' -k1,1 -k2,2n -k3,3)
@@ -239,6 +414,7 @@ if [ "$mode" = dry ]; then
 fi
 
 echo "check-citations: ${#md[@]} markdown files; $n_cites citations to $TARGET ($n_inv doc/spec pairs); $n_rules semantic rules over $n_rule_parts cited ranges; $n_verified ranges semantically verified; $((n_inv - n_verified)) without a passing rule"
+echo "check-citations: ledger: $TARGET has $n_jobs jobs; $n_counts count claim(s), $n_sets job-name set(s) and $n_triggers trigger table(s) checked against it"
 if [ -s "$tmpd/fails" ]; then
   sort -u "$tmpd/fails"
   echo "check-citations: FAIL ($n_fail cited range(s) contradict their rule; anchor/file failures are listed above)"
@@ -412,3 +588,65 @@ echo "check-citations: PASS"
 #.github/SECRETS.md;^4\. \*\*下列 10 个 job;421,520;^    if: github\.event_name;^    if: github\.event_name;github\.event_name
 #test/e2e/README.md;^\| `e2e`\(test\.yml;9-13;^      run-e2e:$;^        type: boolean$;default: true
 #RULES-END
+
+# ---------------------------------------------------------------------------
+# LEDGER TABLES. `$TARGET` is the single source of truth; these tables declare
+# what the documents assert about it, and every value is measured on the tree
+# this script runs in.
+#
+# COUNTS: doc;line_re;sed_extract;metric
+#   `line_re` must match exactly one line of `doc`; `sed_extract` must print
+#   exactly one number out of that line (no number or several = FAIL, so a
+#   reworded claim can never silently stop being checked). Keep the number being
+#   checked OUT of `line_re` — otherwise a changed claim reads as a rotted anchor
+#   instead of as a count mismatch. Metrics:
+#     jobs        job keys under `jobs:`
+#     lines       lines in $TARGET
+#     secrets     distinct `secrets.*` names other than the automatic GITHUB_TOKEN
+#     uses:<x>    occurrences of `uses: <x>@`
+#     occ:<text>  lines containing the fixed literal <text>
+#   Review records that describe an older tree (`docs/ux-review.md`,
+#   `docs/ux-revamp-plan.md`, and the historical figures inside `docs/testing.md`
+#   such as the D-034 run summary) are deliberately absent: they state what was
+#   true when they were written, not what is true now (TASK-315 non-goal).
+#
+# SETS: doc;header_re
+#   `header_re` must match exactly one line: the header of a markdown table whose
+#   rows name jobs in their first cell. The names must EQUAL the job set of
+#   `$TARGET` — adding or removing a job without updating the document fails.
+#
+# TRIGGERS: doc;header_re
+#   As SETS, plus every row must carry the trigger class of its job: a row whose
+#   job has a job-level `if:` must state «PR 不跑», a row whose job has none must
+#   state «全部触发». The words are the document's own vocabulary for
+#   `if: github.event_name == …`; a job that starts or stops running on pull
+#   requests therefore cannot leave the table claiming the opposite.
+# ---------------------------------------------------------------------------
+#COUNTS-BEGIN
+#docs/testing.md;^> `\.github/workflows/test\.yml`\([0-9]+ 个 job;s#.*test\.yml`\(([0-9]+) 个 job.*#\1#p;jobs
+#.github/SECRETS.md;^- 事实范围:;s#.*test\.yml`\([0-9]+ 行,([0-9]+) 个 job.*#\1#p;jobs
+#.github/SECRETS.md;^- 事实范围:;s#.*test\.yml`\(([0-9]+) 行,[0-9]+ 个 job.*#\1#p;lines
+#.github/SECRETS.md;^\| `GITCODE_TOKEN` \| `gitcode-sync`;s#.*test\.yml` 的 ([0-9]+) 个 job.*#\1#p;jobs
+#.github/SECRETS.md;^\| `RUNS_ON` \| `test\.yml`;s#.*\*\*([0-9]+) 个 job 的.*#\1#p;jobs
+#.github/SECRETS.md;^\| `RUNS_ON` \| `test\.yml`;s#.*\*\*([0-9]+) 个 `actions/setup-go`.*#\1#p;uses:actions/setup-go
+#.github/SECRETS.md;^\| `RUNS_ON` \| `test\.yml`;s#.*\*\*([0-9]+) 行命中\*\*.*#\1#p;occ:vars.RUNS_ON
+#.github/SECRETS.md;^4\. \*\*下列 [0-9]+ 个 job;s#.*test\.yml` 共 \*\*([0-9]+) 个 job.*#\1#p;jobs
+#.github/SECRETS.md;^`test\.yml` 共 [0-9]+ 个 job;s#^`test\.yml` 共 ([0-9]+) 个 job.*#\1#p;jobs
+#.github/SECRETS.md;^合计:\*\*[0-9]+ 处;s#.*`test\.yml` ([0-9]+) 处/[0-9]+ 名.*#\1#p;occ:secrets.
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`bufbuild/buf-setup-action` ×([0-9]+).*#\1#p;uses:bufbuild/buf-setup-action
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`golangci/golangci-lint-action` ×([0-9]+).*#\1#p;uses:golangci/golangci-lint-action
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`checkout@v7` ×([0-9]+).*#\1#p;uses:actions/checkout
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`setup-go@v7` ×([0-9]+).*#\1#p;uses:actions/setup-go
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`upload-artifact@v7` ×([0-9]+).*#\1#p;uses:actions/upload-artifact
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`cache/restore@v6` ×([0-9]+).*#\1#p;uses:actions/cache/restore
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`cache@v6` ×([0-9]+).*#\1#p;uses:actions/cache
+#.github/SECRETS.md;^4\. \*\*第三方 action 的 SHA pin;s#.*`setup-node@v7` ×([0-9]+).*#\1#p;uses:actions/setup-node
+#docs/testing.md;与 [0-9]+ 个 repository secret;s#.*与 ([0-9]+) 个 repository secret.*#\1#p;secrets
+#test/e2e/README.md;^`e2e` job 需要 [0-9]+ 个 repository secret;s#.*需要 ([0-9]+) 个 repository secret.*#\1#p;secrets
+#COUNTS-END
+#SETS-BEGIN
+#.github/SECRETS.md;^\| workflow \| 作用域 \| 声明 \| 行号 \| 评价 \|$
+#SETS-END
+#TRIGGERS-BEGIN
+#docs/testing.md;^\| job \| 跑什么 \| 触发范围 \|$
+#TRIGGERS-END
