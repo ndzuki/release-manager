@@ -280,9 +280,9 @@ cleanup 只经正式 Connect API 回收（`main.go:471-473` 注释）。
 - dev 环境（`make dev-up dev-seed dev-status`）必须已就绪。
 
 门禁角色：`make e2e-prerequisite` / `e2e-prerequisite-ci` 是 AC-066-17 前置冒烟（`Makefile:186-198`，
-跑 `test/e2e/prerequisite/smoke.sh`，落 `data/smoke-result.json`）；CI 以 `e2e-prerequisite` job 全触发
-（`.github/workflows/test.yml:324,357`），全量 E2E 由 `e2e` job 在 push main/手动触发时跑 `make e2e-all`
-（`test.yml:376,433`）。
+跑 `test/e2e/prerequisite/smoke.sh`，落 `data/smoke-result.json`）；CI 以 `e2e-prerequisite` job 在
+push main 与手动 `workflow_dispatch` 上跑（**PR 不跑**，`.github/workflows/test.yml:421` 的 `if:`；
+命令 `:485`），全量 E2E 由 `e2e` job 在 push main/手动触发时跑 `make e2e-all`（`test.yml:519`、`:590`）。
 
 ## cmd/store-migrate
 
@@ -326,7 +326,7 @@ cleanup 只经正式 Connect API 回收（`main.go:471-473` 注释）。
   **检出违例（diagnostics）`3`**（同版本 `go/analysis/internal/checker/checker.go:259-263`）。门禁只判非零。
 - 门禁角色：`make sdk-check`（`Makefile:414-416`，命令 `go run ./cmd/sdkcheck/ -exceptions
   sdkcheck.exceptions.yaml ./...`）；`make quality` 的组成部分（`Makefile:522`）；CI `sdk-check` job
-  跑同一命令（`.github/workflows/test.yml:37`），另有 `test-sdkcheck` job 单测分析器本体（`test.yml:245`）。
+  跑同一命令（`.github/workflows/test.yml:37`），另有 `test-sdkcheck` job 单测分析器本体（`test.yml:332`）。
   `make test-rollout-watch` 还对 integration tag 的包跑一遍（`Makefile:387`：`-build-tags integration
   ./internal/operator/observer ./test/integration`）。
 
