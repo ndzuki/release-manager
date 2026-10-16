@@ -30,6 +30,7 @@ import (
 
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/jwtauth"
+	"github.com/ndzuki/release-manager/internal/shellquote"
 	"gopkg.in/yaml.v3"
 )
 
@@ -320,9 +321,14 @@ func TestLockConflictReportsHolder(t *testing.T) {
 	releasePath := filepath.Join(stateDir, "release-lock")
 	holdCtx, holdCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer holdCancel()
+	// shellQuote, never %q: %q escapes for a Go literal, so under bash a lock
+	// or release path holding $ dies with "unbound variable" and one holding a
+	// backtick runs the command substitution (TASK-312). Single quotes make
+	// both paths literal, spaces included (TASK-306).
 	hold := exec.CommandContext(holdCtx, "bash", "-c", fmt.Sprintf(
-		"source %q; acquire_lock down; while [ ! -f %q ]; do sleep 0.1; done",
-		filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh"), releasePath))
+		"source %s; acquire_lock down; while [ ! -f %s ]; do sleep 0.1; done",
+		shellquote.Quote(filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh")),
+		shellquote.Quote(releasePath)))
 	hold.Env = env
 	if err := hold.Start(); err != nil {
 		t.Fatal(err)
@@ -532,7 +538,10 @@ func fakeK3d(t *testing.T, binDir, stateDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := "#!/usr/bin/env bash\nFAKE_K3D_STATE=\"" + stateDir + "\"\n" + string(data)
+	// shellQuote, not "%s": the state dir sits in a double-quoted assignment,
+	// so an unescaped $ or backtick in it would be expanded by the shim's
+	// shell before the shim ever runs (TASK-312).
+	body := "#!/usr/bin/env bash\nFAKE_K3D_STATE=" + shellquote.Quote(stateDir) + "\n" + string(data)
 	writeShim(t, binDir, "k3d", body)
 }
 
@@ -616,7 +625,9 @@ exit 0
 	// shim delegates -ensure-jwt-keys to the real toolchain instead of emulating
 	// it — dev.sh's wiring is then proven end to end against the helper that
 	// cmd/devseed unit-tests. The path is resolved before the fake binDir is
-	// prepended to the child PATH.
+	// prepended to the child PATH, and reaches the generated script through
+	// shellQuote: the toolchain path may contain spaces and must stay one word
+	// for exec (TASK-312).
 	realGo, lookErr := exec.LookPath("go")
 	if lookErr != nil {
 		t.Fatalf("resolve real go for the devseed shim: %v", lookErr)
@@ -643,7 +654,7 @@ for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated de
   printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
 done
 exit 0
-`, realGo))
+`, shellquote.Quote(realGo)))
 	// awk: consume stdin fully (real awk reads all input before exiting —
 	// an early exit SIGPIPEs the pipe writer), then answer the memory probe
 	// in MiB (24 GiB) or the df pipeline in KiB (500 GiB).
@@ -1129,7 +1140,7 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	// network-IP probes still answer: agents_up resolves the customer-agent
 	// hostAliases from them.
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> "+shellquote.Quote(filepath.Join(stateDir, "docker-calls.log"))+"\nexit 0\n")
 	// GOPROXY is explicitly cleared so dev.sh takes the `go env GOPROXY`
 	// fallback path and the shim's fixed output is asserted — otherwise an
 	// inherited host GOPROXY (e.g. goproxy.cn) makes the assertion
@@ -1221,7 +1232,7 @@ func TestClusterCreateInjectsReachableProxyEnv(t *testing.T) {
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> "+shellquote.Quote(filepath.Join(stateDir, "docker-calls.log"))+"\nexit 0\n")
 	env = append(env, "HTTP_PROXY=http://proxy.corp.internal:3128", "HTTPS_PROXY=http://proxy.corp.internal:3128",
 		"GOPROXY=", "DEV_DOCKER_MIRROR=docker.1ms.run/library/")
 
@@ -2571,7 +2582,7 @@ func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 	// The split-seed agents_up stage needs the enrollment tokens (written by
 	// the fake devseed below), the docker IP probes and kubectl/kustomize
 	// pass-throughs.
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/go-calls.log\"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; exit 0; fi\nmkdir -p \"$DEV_DATA_DIR/dev-enrollment-tokens\"\nfor c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do printf 'fake-token\\n' > \"$DEV_DATA_DIR/dev-enrollment-tokens/$c.token\"; done\nexit 0\n")
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> "+shellquote.Quote(filepath.Join(stateDir, "go-calls.log"))+"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; exit 0; fi\nmkdir -p \"$DEV_DATA_DIR/dev-enrollment-tokens\"\nfor c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do printf 'fake-token\\n' > \"$DEV_DATA_DIR/dev-enrollment-tokens/$c.token\"; done\nexit 0\n")
 	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
 if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
   if [ "$3" = "--format" ]; then
@@ -2622,14 +2633,132 @@ exit 0
 func runJwtHelper(t *testing.T, expr string) string {
 	t.Helper()
 	lib := filepath.Join(repoRoot(t), "deploy", "dev", "lib", "jwt.sh")
-	// %q-quote the library path: an unquoted path containing a space makes
-	// bash split the source argument and the source fails (TASK-306).
-	script := fmt.Sprintf("set -euo pipefail\nsource %q\n%s\n", lib, expr)
+	// shellQuote the library path, never %q: %q keeps spaces intact under bash
+	// (TASK-306) but hands $ and backticks to the shell, which expands the
+	// first and executes the second (TASK-312). expr stays a raw shell
+	// fragment on purpose — it is the expression under test, not a value, and
+	// every caller quotes its own arguments through shellQuote.
+	script := fmt.Sprintf("set -euo pipefail\nsource %s\n%s\n", shellquote.Quote(lib), expr)
 	out, err := exec.CommandContext(context.Background(), "bash", "-c", script).Output()
 	if err != nil {
 		t.Fatalf("jwt helper %q failed: %v", expr, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// bashWordCase is one value fed to a real bash through both quotings. qFails
+// and qEvidence record what Go's %q is measured to do to it; the shellQuote
+// half must be byte-exact for every case.
+type bashWordCase struct {
+	name  string
+	value string
+	// qFails marks a value %q provably loses: bash expands it, executes it, or
+	// keeps Go's C-style escape literally.
+	qFails bool
+	// qEvidence is a substring the %q run must show on stdout+stderr.
+	qEvidence string
+	// qSideEffect marks a value whose %q run must leave the injection marker
+	// on disk — proof the command substitution really executed.
+	qSideEffect bool
+}
+
+// TestShellQuoteIsLiteralUnderRealBash is the falsifiable core of TASK-312: it
+// feeds the same value to bash — the interpreter the dev lifecycle runs under —
+// through Go's %q and through shellquote.Quote, and requires the latter to come
+// back byte-for-byte. %q is a Go literal escape, not a shell escape: a value
+// holding $ aborts with "unbound variable", one holding a backtick runs the
+// command substitution (the marker assertion below proves execution), and one
+// holding a newline or tab keeps the two-character C escape, so the path stops
+// naming the file. Reverting an interpolation site to %q fails here.
+//
+// The subtests share the marker file, so they deliberately do not run in
+// parallel.
+func TestShellQuoteIsLiteralUnderRealBash(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not installed: the quoting contract cannot be measured")
+	}
+	work := t.TempDir()
+	// The injected command is relative on purpose: cmd.Dir is work, so the
+	// payload must not depend on the temp path being free of spaces.
+	marker := filepath.Join(work, "injected-marker")
+	// gocritic reads a literal backslash/newline/tab as a path separator and
+	// rejects it inside filepath.Join; keeping them in variables leaves the
+	// host separator out of the picture while the byte string the shell sees
+	// stays exactly what the case names.
+	backslash := `a\b`
+	newline := "a\nb"
+	tab := "a\tb"
+	cases := []bashWordCase{
+		{name: "plain", value: filepath.Join(work, "plain.sh")},
+		{name: "spaces", value: filepath.Join(work, "a b", "c.sh")},
+		{name: "dollar", value: filepath.Join(work, "a$b", "c.sh"), qFails: true, qEvidence: "unbound variable"},
+		{name: "backtick", value: filepath.Join(work, "a`touch injected-marker`b", "c.sh"), qFails: true, qSideEffect: true},
+		{name: "backslash", value: filepath.Join(work, backslash, "c.sh")},
+		{name: "single quote", value: filepath.Join(work, "it's", "c.sh")},
+		{name: "newline", value: filepath.Join(work, newline, "c.sh"), qFails: true, qEvidence: `a\nb`},
+		{name: "tab", value: filepath.Join(work, tab, "c.sh"), qFails: true, qEvidence: `a\tb`},
+		{name: "glob", value: filepath.Join(work, "a*", "c.sh")},
+		{name: "tilde", value: "~/dev.sh"},
+		{name: "unicode", value: filepath.Join(work, "路径", "脚本.sh")},
+		{name: "empty", value: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// printf receives the word as one argument, so the comparison is
+			// byte-exact; set -u is the same hard failure mode dev.sh runs
+			// under, which is what turns a stray $ into an abort.
+			const sink = "set -euo pipefail; printf '%s' "
+
+			qOut, qErr, qRunErr := runBashWord(t, work, sink+fmt.Sprintf("%q", tc.value))
+			_, statErr := os.Stat(marker)
+			markerWritten := statErr == nil
+			if markerWritten {
+				if err := os.Remove(marker); err != nil {
+					t.Fatalf("remove the injection marker: %v", err)
+				}
+			}
+			if tc.qSideEffect != markerWritten {
+				t.Fatalf("the %%q command substitution marker on disk = %v, want %v (stdout=%q stderr=%q)",
+					markerWritten, tc.qSideEffect, qOut, qErr)
+			}
+			if tc.qFails {
+				if qRunErr == nil && qOut == tc.value {
+					t.Fatalf("%%q round-tripped %q: re-measure the TASK-312 premise", tc.value)
+				}
+				if tc.qEvidence != "" && !strings.Contains(qOut+qErr, tc.qEvidence) {
+					t.Fatalf("expected %%q evidence %q, got stdout=%q stderr=%q", tc.qEvidence, qOut, qErr)
+				}
+			} else if qRunErr != nil || qOut != tc.value {
+				t.Fatalf("this value was measured to survive %%q, got stdout=%q stderr=%q err=%v",
+					qOut, qErr, qRunErr)
+			}
+
+			sOut, sErr, sRunErr := runBashWord(t, work, sink+shellquote.Quote(tc.value))
+			if sRunErr != nil || sOut != tc.value {
+				t.Fatalf("shellquote.Quote lost the value: stdout=%q err=%v stderr=%q", sOut, sRunErr, sErr)
+			}
+			if _, statErr := os.Stat(marker); statErr == nil {
+				if err := os.Remove(marker); err != nil {
+					t.Fatalf("remove the injection marker: %v", err)
+				}
+				t.Fatalf("shellquote.Quote let the command substitution run for %q", tc.value)
+			}
+		})
+	}
+}
+
+// runBashWord runs script under bash with dir as the working directory and
+// returns its stdout, stderr and run error. A command substitution inside the
+// script therefore writes its side effect where the test can see it.
+func runBashWord(t *testing.T, dir, script string) (stdout, stderr string, err error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", script)
+	cmd.Dir = dir
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return outBuf.String(), errBuf.String(), err
 }
 
 // TestJwtAlgHelperDetectsTheSigningAlgorithm is the falsifiable core of the
@@ -2657,7 +2786,7 @@ func TestJwtAlgHelperDetectsTheSigningAlgorithm(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := runJwtHelper(t, "jwt_alg '"+tt.token+"'")
+			got := runJwtHelper(t, "jwt_alg "+shellquote.Quote(tt.token))
 			if got != tt.want {
 				t.Fatalf("jwt_alg(%q) = %q, want %q", tt.token, got, tt.want)
 			}
@@ -2675,13 +2804,13 @@ func TestJwtHs256ProbeTokenIsAWellFormedHs256Jwt(t *testing.T) {
 		t.Skip("openssl not installed: the HMAC probe cannot be built")
 	}
 	const secret = "change-me-in-production"
-	token := runJwtHelper(t, "jwt_hs256_token "+secret)
+	token := runJwtHelper(t, "jwt_hs256_token "+shellquote.Quote(secret))
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		t.Fatalf("expected a three-segment JWT, got %d segments: %q", len(parts), token)
 	}
-	if alg := runJwtHelper(t, "jwt_alg '"+token+"'"); alg != "HS256" {
+	if alg := runJwtHelper(t, "jwt_alg "+shellquote.Quote(token)); alg != "HS256" {
 		t.Fatalf("probe header alg = %q, want HS256", alg)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -2716,7 +2845,7 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 
 	lengthOf := func(pad int) (int, string) {
 		claims := fmt.Sprintf(`{"sub":"downgrade-probe","pad":%q}`, strings.Repeat("x", pad))
-		token := runJwtHelper(t, fmt.Sprintf("jwt_hs256_token change-me-in-production '%s'", claims))
+		token := runJwtHelper(t, "jwt_hs256_token "+shellquote.Quote("change-me-in-production")+" "+shellquote.Quote(claims))
 		return len(token), token
 	}
 
@@ -2734,7 +2863,7 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 		t.Skip("could not produce HS256 tokens straddling the EdDSA length")
 	}
 	for _, token := range []string{below, above} {
-		if alg := runJwtHelper(t, "jwt_alg '"+token+"'"); alg != "HS256" {
+		if alg := runJwtHelper(t, "jwt_alg "+shellquote.Quote(token)); alg != "HS256" {
 			t.Fatalf("the padded token must still be HS256, got %q", alg)
 		}
 	}
@@ -2748,12 +2877,12 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 	// The two candidate assertion forms, evaluated on the same HS256 token.
 	// The weakened form (length only) records a pass — it is exactly the
 	// mutation the smoke must be immune to; the real form fails it.
-	weakOut := runJwtHelper(t, "TOKEN='"+above+"'\n"+
+	weakOut := runJwtHelper(t, "TOKEN="+shellquote.Quote(above)+"\n"+
 		`if [ ${#TOKEN} -ge 400 ]; then printf pass; else printf fail; fi`)
 	if weakOut != "pass" {
 		t.Fatalf("the weakened (length-only) assertion must accept an HS256 token, got %q", weakOut)
 	}
-	realOut := runJwtHelper(t, "TOKEN='"+above+"'\n"+
+	realOut := runJwtHelper(t, "TOKEN="+shellquote.Quote(above)+"\n"+
 		`if [ "$(jwt_alg "$TOKEN")" = "EdDSA" ]; then printf pass; else printf fail; fi`)
 	if realOut != "fail" {
 		t.Fatalf("the real (alg) assertion must reject an HS256 token, got %q", realOut)
