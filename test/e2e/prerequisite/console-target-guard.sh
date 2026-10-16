@@ -34,6 +34,14 @@
 #   collected with an empty `tests`   -> fail (nothing proves the case ran)
 # Completeness gate: every case the report COLLECTED must be declared by the manifest.
 #
+# When a declared case does not reach its outcome, the guard prints that case's
+# failure body from the result's `errors[]` — the JSON reporter's complete per-result
+# error list. The raw first error also travels as `error` (measured with the pinned
+# @playwright/test 1.62.1: `error` is present exactly when `errors[]` is non-empty,
+# and absent for a skipped result), so reading `errors[]` keeps EVERY message of a
+# multi-error result visible without depending on that raw field. The verdict below
+# reads neither field; it judges only the recorded status and skip annotations.
+#
 # It deliberately does NOT compare a count of passes: that number drifts with
 # every added or removed case and with the runner, while "this case's status is
 # passed" is exactly the contract the lane claims. The report is Playwright's own
@@ -117,12 +125,15 @@ def finalStatus: ((.results // []) | last | (.status // "no-result"));
       tests: [ .tests[]?
                | { final: finalStatus,
                    skipReasons: [ .annotations[]? | select(.type == "skip") | (.description // "") ],
-                   message: ((.results // []) | last | (.error.message // "")) } ] } ]
+                   messages: [ (.results // []) | last | (.errors // [])[] | (.message // "")
+                               | select(. != "") ] } ] } ]
 as $collected
 | [ ($man[0].cases // [])[]
     | . as $c
     | select(.spec as $s | $run | index($s))
     | ($collected | map(select(.file == $c.spec and .title == $c.title))) as $m
+    | ([ $m[] | .tests[]? | select(.final != "passed") | .messages[]? ]
+       | reduce .[] as $msg ([]; if index($msg) then . else . + [$msg] end)) as $msgs
     | { spec: $c.spec,
         title: $c.title,
         expect: ($c.expect // "passed"),
@@ -130,12 +141,12 @@ as $collected
         matches: ($m | length),
         finals: [ $m[] | .tests[]? | .final ],
         skipReasons: ([ $m[] | .tests[]? | .skipReasons[]? ] | unique),
-        message: ([ $m[] | .tests[]? | select(.final != "passed") | (.message // "") ]
-                  | map(select(. != "")) | .[0] // "") } ]
+        errcount: ($msgs | length),
+        messages: ($msgs | map(gsub("\n"; "\u001e")) | join("\u001d")) } ]
 | .[]
 | [ .spec, .title, .expect, (.matches | tostring),
     (.finals | join(",")), (.skipReasons | join(" | ")),
-    (.reasonContains | join(",")), .message ]
+    (.reasonContains | join(",")), (.errcount | tostring), .messages ]
 # @tsv first (it escapes tabs/newlines/backslashes INSIDE a field, so a multi-line
 # error message cannot split the record), then swap its tab separators for US.
 | @tsv | gsub("\t"; "\u001f")
@@ -165,7 +176,7 @@ judge_failure() { # judge_failure <spec> <title> <reason> <finals> <matches> <sk
 # c='E2E' instead of c='' — the guard then reported a no-reason skip as
 # "skipped for a reason the manifest does not declare: E2E_EMERGENCY_DISABLED".
 # US is not IFS whitespace, so empty fields survive.
-while IFS=$'\x1f' read -r spec title expect matches finals reasons declared_reasons message; do
+while IFS=$'\x1f' read -r spec title expect matches finals reasons declared_reasons errcount message; do
   [ -n "$spec" ] || continue
   checked=$((checked + 1))
   bad=""
@@ -212,12 +223,34 @@ while IFS=$'\x1f' read -r spec title expect matches finals reasons declared_reas
   if [ -n "$bad" ]; then
     judge_failure "$spec" "$title" "$bad" "$finals" "$matches" "$reasons"
     if [ -n "$message" ]; then
-      note "the case failed with:"
-      # Playwright colourises error messages; strip the escapes so the reason reads
-      # the same in a CI log and in a terminal.
-      while IFS= read -r m; do
-        [ -n "$m" ] && printf '    %s\n' "$m" >&2
-      done <<<"$(printf '%s' "$message" | sed -E $'s/\033\\[[0-9;]*[A-Za-z]//g' | head -3)"
+      if [ "${errcount:-1}" -gt 1 ]; then
+        note "the case failed with ${errcount} error messages:"
+      else
+        note "the case failed with:"
+      fi
+      idx=0
+      # The messages field is a GS (0x1d) separated list of RS (0x1e) joined lines,
+      # both of which survive @tsv and differ from the US (0x1f) field delimiter. The
+      # trailing GS matters: `read -d` returns non-zero when EOF terminates the final
+      # field, so without it the LAST error message would be silently dropped.
+      while IFS= read -r -d $'\x1d' one; do
+        idx=$((idx + 1))
+        if [ "${errcount:-1}" -gt 1 ]; then
+          printf '    --- error %s/%s ---\n' "$idx" "${errcount}" >&2
+        fi
+        # Playwright colourises error messages; strip the escapes so the reason reads
+        # the same in a CI log and in a terminal. RS stands in for the newlines @tsv
+        # would have escaped, so restore them and cap the body at three lines — saying
+        # how many were left out instead of dropping them silently.
+        body=$(printf '%s' "$one" | tr '\036' '\n' | sed -E $'s/\033\\[[0-9;]*[A-Za-z]//g')
+        total=$(printf '%s\n' "$body" | wc -l | tr -d ' ')
+        printf '%s\n' "$body" | head -3 | while IFS= read -r m; do
+          if [ -n "$m" ]; then printf '      %s\n' "$m" >&2; fi
+        done
+        if [ "$total" -gt 3 ]; then
+          printf '      ... (%s more line(s) omitted; full text in the HTML report)\n' "$((total - 3))" >&2
+        fi
+      done < <(printf '%s\x1d' "$message")
     fi
     if [ "$matches" -eq 0 ]; then
       collected=$(jq -r --arg spec "$spec" \
