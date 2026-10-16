@@ -272,6 +272,129 @@ const label = '已创建定义';
   });
 });
 
+describe('templateExpressionLiterals: Chinese without whitespace (TASK-313)', () => {
+  // The same blind spot TASK-310 closed for <script>, one surface over: the template rule
+  // wanted a capital or sentence punctuation, so `{{ saving ? '提交中…' : '保存' }}` rendered
+  // Chinese and the gate stayed green.
+  it('sees Han copy inside an interpolation', () => {
+    expect(
+      templateExpressionLiterals("<template><span>{{ preparing ? '准备中…' : '完成' }}</span></template>"),
+    ).toEqual(['准备中…', '完成']);
+  });
+
+  it('sees Han copy inside a bound directive', () => {
+    const file = `<template><EmptyState :action-label="retryable ? '重试' : ''" /></template>`;
+
+    expect(templateExpressionLiterals(file)).toEqual(['重试']);
+  });
+
+  it('sees a double-quoted Han string inside an interpolation', () => {
+    expect(templateExpressionLiterals('<template><span>{{ label ?? "未知" }}</span></template>')).toEqual(['未知']);
+  });
+
+  // Both rules can match one literal; it must still be reported exactly once.
+  it('does not report a literal twice when it also reads as English copy', () => {
+    expect(
+      templateExpressionLiterals("<template><span>{{ a ? 'Release 已创建' : 'Disabled' }}</span></template>"),
+    ).toEqual(['Release 已创建', 'Disabled']);
+  });
+
+  it('keeps ignoring identifiers, route names, class lists and machine values', () => {
+    const file = `<template>
+  <RouterLink :to="{ name: 'CustomerList' }">{{ t('nav.customers') }}</RouterLink>
+  <span :class="active ? 'status status--active' : 'status status--disabled'"></span>
+  <b :data-testid="'已创建'"></b>
+  <i :title="'https://example.test/已创建'"></i>
+  <u :src="'@/已创建/messages'"></u>
+</template>`;
+
+    expect(templateExpressionLiterals(file)).toEqual([]);
+  });
+
+  // A repo-wide audit for TASK-313 found exactly one single-Han user-visible literal that
+  // stands alone as a word (`'无'` in OperationConfirmPanel.vue); it moved into the catalog
+  // instead of lowering the threshold. That is NOT a claim that no single-Han fragment is
+  // user-visible: neither rule accepts a run shorter than two (`templateLiterals` tests
+  // `\p{L}{2,}` per text node, `HAN_COPY` tests `\p{Script=Han}{2,}` per literal), so a lone
+  // single-Han fragment is never a candidate of its own. These pre-existing files, untouched
+  // by TASK-313, still carry one; TASK-318 tracks the gap, and the MIGRATED allowlist pins
+  // each status in both directions (a reported literal must be listed, and vice versa):
+  //   BundlesPage.vue:52            `共 {{ … }} 个`       unreported, node reads `共 个`
+  //   BundlesPage.vue:84            `… 与 …`              unreported, `与` is its own node
+  //   BundlesPage.vue:121           `{{ … }} 个`          unreported, node reads `个`
+  //   DefinitionsPage.vue:293       `有 {{ … }}`          reported as its whole sentence, listed
+  //   DefinitionsPage.vue:338       `{{ … }} 条`          unreported, node reads `条`
+  //   DefinitionsPage.vue:396       `（{{ … }} 条）`      unreported, node reads `（ 条）`
+  //   OperationConfirmPanel.vue:35  `${patch.length} 项`  unreported, one Han in the literal
+  //   ReleaseInventoryPage.vue:117  `共 {{ … }} 条。`     reported as its whole sentence, but the
+  //                                                      file is NOT_YET_MIGRATED (unasserted)
+  // They are quantifier/conjunction/unit fragments, structural like the `'：'` case in
+  // copy-lint.ts (`HAN_COPY` doc comment), so leaving the threshold alone is still correct.
+  it('does not treat a single Han character as copy', () => {
+    expect(templateExpressionLiterals("<template><dd>{{ patch.length > 0 ? 'x' : '无' }}</dd></template>")).toEqual(
+      [],
+    );
+  });
+
+  // Backticks are scanned by the Han rule only, and are reported whole: the evaluation of
+  // the interpolation is the renderer's job, not the detector's.
+  it('sees Han copy in a backtick template literal inside a bound directive', () => {
+    const file = '<template><button :aria-label="`复制 Operation ID ${entry.operationId}`">x</button></template>';
+
+    expect(templateExpressionLiterals(file)).toEqual(['复制 Operation ID ${entry.operationId}']);
+  });
+
+  // …while a machine value that interpolates camelCase is not Han copy and stays invisible
+  // (the shape rule would have reported every one of them).
+  it('does not report a backtick test id or class list', () => {
+    const file = `<template>
+  <b :data-testid="\`operation-row-\${row.operationId}\`"></b>
+  <i :class="\`timeline-entry--\${entry.kind.toLowerCase()}\`"></i>
+</template>`;
+
+    expect(templateExpressionLiterals(file)).toEqual([]);
+  });
+});
+
+describe('regex literals are excluded by shape (TASK-313)', () => {
+  // Two over-reports the TASK-310 review named. Left unfixed they are noise; the danger is
+  // the other direction, so each fix is pinned together with the case it must not swallow.
+  it('does not read a regex that follows a condition paren as copy', () => {
+    const text = `<script setup lang="ts">
+if (flag) /'过报探针'/u.test(value);
+const msg = '已创建定义';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual(['已创建定义']);
+  });
+
+  it('does not read a regex whose character class contains a slash as copy', () => {
+    const text = `<script setup lang="ts">
+const re = /[/]'已创建中文'/u;
+const msg = '操作已切换';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual(['操作已切换']);
+  });
+
+  // …while a real division after a call or a condition is still not a regex literal.
+  it('still divides after a call and after a condition', () => {
+    const text = `<script setup lang="ts">
+const half = f(x) / 2;
+if (flag) total / count;
+const msg = '操作已切换';
+</script>`;
+
+    expect(scriptSentences(text)).toEqual(['操作已切换']);
+  });
+
+  it('does not read a regex inside a template expression as copy', () => {
+    expect(
+      templateExpressionLiterals("<template><span>{{ /'过报探针'/u.test(value) ? '通过' : '失败' }}</span></template>"),
+    ).toEqual(['通过', '失败']);
+  });
+});
+
 describe('referencedKeys', () => {
   // The regression the independent review proved: a comment used to count as a
   // consumer, so a dead catalog entry stayed green.

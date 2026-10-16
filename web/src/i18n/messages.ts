@@ -563,6 +563,7 @@ const zhCN = {
   'operation.confirm.artifact': '制品',
   'operation.confirm.version': '配置版本',
   'operation.confirm.patch': 'Patch 覆盖',
+  'operation.confirm.noPatch': '无',
   'operation.confirm.currentRevision': '当前 Revision',
   'operation.form.type': '操作类型',
   'operation.form.bundle': '制品 Bundle',
