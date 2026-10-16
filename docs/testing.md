@@ -358,7 +358,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `test-sqlite` | `go test -race ./internal/store/sqlite/...` | 全部触发 |
 | `test-sdkcheck` | `go test -race ./internal/quality/sdkcheck/...` | 全部触发 |
 | `rollout-watch` | `make test-rollout-watch` | 全部触发 |
-| `e2e-prerequisite` | `make e2e-prerequisite-ci`（45 分钟超时，`if: always()` 上传 artifact） | 全部触发（不需要任何 secret） |
+| `e2e-prerequisite` | `make e2e-prerequisite-ci`（45 分钟超时，`if: always()` 上传 artifact） | **push main + 手动触发；PR 不跑**（不需要任何 secret） |
 | `e2e` | `make dev-up` → `make dev-seed` → `make e2e-all` → `if: always()` 上传 `e2e-results/` → `make dev-purge CONFIRM=1` | **push main + 手动触发；PR 不跑** |
 | `docs-check` | `make check-docs`（5 分钟超时；文档写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须为真） | 全部触发（只需 bash/grep/git，不需要 Go 与任何 secret） |
 | `proto-check` | `make lint-proto` + `make proto` 后要求 `api/gen`、`web/src/gen` 与提交内容一致（10 分钟超时） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |

@@ -648,6 +648,16 @@ check-licenses: ## Check every shipped dependency's license against the project 
 check-docs: ## Check that documented make targets and repository paths still exist
 	bash scripts/check-docs.sh
 
+# NOT part of `quality`: this is the semantic spot check for `test.yml:<line>`
+# citations (TASK-309). check-docs only proves the cited line exists; this target
+# also checks that the cited range still looks like what the sentence claims, so
+# it has to be revisited whenever test.yml gains or loses lines. Deliberately
+# opt-in for that reason -- run it when you touch test.yml or a document that
+# cites it: `make check-citations`.
+.PHONY: check-citations
+check-citations: ## Check that test.yml line citations still match the content they claim (TASK-309)
+	bash scripts/check-citations.sh
+
 .PHONY: check-config-keys
 check-config-keys: ## Gate config-key truthfulness: every service config leaf decodes to a real reader (REQ-094)
 	$(GO) test -race -count=1 -run 'TestConfigFilesKeysResolveToLoaderPaths|TestFakeKeyFailsTheGate|TestStructLeavesHaveReaders|TestTrustVerificationTimeoutReader|TestCustomerAgentOverlaysWirePlainHTTPRegistry' ./internal/config/
