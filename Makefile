@@ -528,7 +528,7 @@ TASKS_RESOLVE = if [ -n "$$TASKS_DIR" ]; then \
 # ALLOW_UNVERIFIED_TASKS=1 downgrades check-tasks' UNVERIFIED findings (a PR
 # whose merge cannot be proven because gh is unavailable and the local git
 # history does not name it) from fatal to advisory. It never downgrades a ledger
-# contradiction.
+# contradiction, including a pr_url that names a repository other than this one.
 ALLOW_UNVERIFIED_TASKS ?=
 
 .PHONY: check-reqs
@@ -609,7 +609,7 @@ check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL
 	$(GO) run ./cmd/schemaparity/ -migrations migrations -exceptions schema-parity.exceptions.yaml
 
 .PHONY: check-tasks
-check-tasks: ## Ledger↔git gate: every done/closed card must cite evidence that provably exists — merged PR(s), or a `direct:` commit covering the card's evidence_paths (D-η/η-1; pr_url may list several, TASK-227; direct channel TASK-321)
+check-tasks: ## Ledger↔git gate: every done/closed card must cite evidence that provably exists — merged PR(s) in THIS repository, or a `direct:` commit covering the card's evidence_paths (D-η/η-1; pr_url may list several, TASK-227; direct channel TASK-321)
 	@$(TASKS_RESOLVE); \
 	if [ -z "$$TASKS" ]; then \
 		if [ "$${ALLOW_NO_REQS:-}" = "1" ]; then \
@@ -622,12 +622,13 @@ check-tasks: ## Ledger↔git gate: every done/closed card must cite evidence tha
 		trap 'rm -f "$$gitlog" "$$ghprs" "$$refs" "$$direct"' EXIT INT TERM; \
 		git log --all --format='%H%x09%s' > "$$gitlog"; \
 		if command -v gh >/dev/null 2>&1; then \
-			gh pr list --state all --limit 1000 --json number,state,mergeCommit > "$$ghprs" 2>/dev/null || : > "$$ghprs"; \
+			gh pr list --state all --limit 1000 --json number,url,state,mergeCommit > "$$ghprs" 2>/dev/null || : > "$$ghprs"; \
 		fi; \
+		repo_url="$$(git remote get-url origin 2>/dev/null || true)"; \
 		$(REQS_RESOLVE); \
 		$(GO) run ./cmd/taskcheck/ -print-direct-refs $$TASKS > "$$refs" || { printf "$(RED)FAIL check-tasks: cannot extract the direct evidence refs (cmd/taskcheck -print-direct-refs)$(NC)\n"; exit 1; }; \
 		bash scripts/collect-direct-evidence.sh "$$refs" > "$$direct" || { printf "$(RED)FAIL check-tasks: direct evidence collection failed (scripts/collect-direct-evidence.sh)$(NC)\n"; exit 1; }; \
-		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" -direct-evidence "$$direct" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) -requirements "$$REQS" $$TASKS; \
+		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" -repo-url "$$repo_url" -direct-evidence "$$direct" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) -requirements "$$REQS" $$TASKS; \
 	fi
 
 .PHONY: pr-merge-check
