@@ -2,7 +2,7 @@
 
 本文面向**值班处置**：发生异常时按「症状 → 先查什么 → 确认依据 → 处置动作 → 处置后验证」走完一个闭环。
 
-与既有文档的分工：`docs/architecture.md` 讲边界与契约，`docs/dev-environment.md` 讲环境搭建与生命周期命令，`docs/testing.md` 讲测试分层与 E2E，`docs/cli.md` 讲每个 `cmd/*` 二进制怎么起。本文不重复这些内容，只回答「出事时先看哪里、能做什么、做完怎么确认」。
+与既有文档的分工：`docs/architecture.md` 讲边界与契约，`docs/dev-environment.md` 讲环境搭建与生命周期命令，`docs/testing.md` 讲测试分层与 E2E，`docs/cli.md` 讲每个 `cmd/*` 二进制怎么起，`docs/production-deploy.md` 讲单节点生产 overlay 的部署、升级与备份恢复。本文不重复这些内容，只回答「出事时先看哪里、能做什么、做完怎么确认」。
 
 标记约定：
 

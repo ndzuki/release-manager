@@ -90,6 +90,8 @@ go test ./deploy/dev/...
 
 ## 6. 生产部署
 
-仓库内**未找到**生产发布流水线：`.github/workflows/` 只有 `test.yml`（测试门禁）与 `sync-to-gitcode.yaml`（镜像同步），没有任何 deploy/publish job；`deploy/kustomize/` 也只有 dev 与 customer-agent 两套 overlay，无 production overlay。生产部署的实际发布流程以知识库（`myNote/Projects/001-release-manager/`）与其它文档为准，本 README 不做描述。
+仓库内**没有**镜像发布流水线：`.github/workflows/` 只有 `test.yml`（测试门禁）、`codeql.yml`（静态分析）与 `sync-to-gitcode.yaml`（git 仓库镜像），没有任何 build/push 镜像或 deploy job。镜像靠本机构建后导入集群（`make docker-build-all` + `make docker-import-all`）。
+
+`deploy/kustomize/production/` 是单节点 k3d 的生产 overlay（namespace 隔离、StatefulSet + PVC、default-deny NetworkPolicy、TLS edge）。对象清单与设计理由见 [kustomize/production/README.md](kustomize/production/README.md)；实测的部署顺序、必填 Secret、TLS、备份恢复、升级回滚与已知限制见 [docs/production-deploy.md](../docs/production-deploy.md)。
 
 > 事实源：`deploy/dev/dev.sh`、`deploy/dev/dev_test.go`、`deploy/dev/probes_gate_test.go`、`deploy/kustomize/**/kustomization.yaml`、`deploy/kustomize/base/{secret,pvc}.yaml`、`deploy/kustomize/services/*.yaml`、`deploy/kustomize/customer-agent/base/kustomization.yaml`、`deploy/docker/Dockerfile.*`、`deploy/fixtures/**`、`deploy/k3d/registries.yaml`、`Makefile`、`configs/*.dev.yaml`、`.github/workflows/test.yml`、`docs/dev-environment.md`、`docs/architecture.md`、`cmd/imagecheck/main.go`
