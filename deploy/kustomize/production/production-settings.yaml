@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: production-settings
+  labels:
+    app.kubernetes.io/part-of: release-manager
+data:
+  # Storage class used by every PVC this overlay creates (PostgreSQL 10Gi,
+  # Redis 5Gi, release-api 1Gi). `local-path` is the k3d/k3s default; change
+  # this one value for a cluster whose default provisioner has another name.
+  # The replacement at the bottom of kustomization.yaml writes it into the
+  # PostgreSQL/Redis volumeClaimTemplates and the release-api PVC, so no
+  # manifest has to be edited.
+  storageClassName: local-path

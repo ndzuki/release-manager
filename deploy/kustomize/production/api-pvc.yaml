@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: release-manager-api-data
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # Replaced from production-settings.storageClassName; kept literal here so
+  # the manifest is valid when rendered standalone.
+  storageClassName: local-path

@@ -1,0 +1,187 @@
+# NetworkPolicies for the production namespace.
+#
+# Model: deny all ingress by default, then allow only
+#   1. the ingress controller -> web/webhook,
+#   2. pods in this namespace -> the namespace's service ports,
+#   3. pods in this namespace -> PostgreSQL/Redis,
+#   4. customer-cluster agents -> the orchestrator mTLS gateway.
+#
+# Egress is deliberately NOT restricted in this batch. The services need DNS,
+# PostgreSQL, Redis, the OIDC/JWT endpoints and customer webhook receivers; a
+# deny-all egress policy without that inventory would break the Helm execution
+# path in ways that are hard to debug. Egress policy is a later batch. The
+# debug-friendly consequence: `kubectl exec` from a pod in this namespace can
+# still reach anything, which is intentional until the egress inventory exists.
+#
+# Verification note: kubelet probes and host-network ingress controllers can
+# bypass or be affected by these policies depending on the CNI. That part needs
+# a real cluster to verify (TASK-337 batch 3 wires the Ingress).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# The console/static SPA is the only public entry point in this batch. The
+# k3s Traefik ingress controller runs in kube-system; ingress-nginx is listed
+# for clusters that install it instead. The namespace labels below are the
+# automatic `kubernetes.io/metadata.name` labels Kubernetes puts on every
+# namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-web
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8087
+---
+# CI/Harbor callbacks use the webhook ingress. Until batch 3 puts it behind the
+# Ingress, the console's nginx proxy reaches webhook through the intra-namespace
+# rule below; this rule is for the direct external callback path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-webhook
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8082
+---
+# Service-to-service traffic inside the namespace. This is intentionally one
+# coarse policy rather than 6x6 pairwise rules: the management plane is one
+# trust domain today (all pods share the same ServiceAccount secrets and the
+# same PostgreSQL credentials), and per-edge rules would make debugging a real
+# incident much harder without adding a security boundary that does not exist.
+# A later hardening batch can split this once service identities differ.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-namespace-service-ports
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: release-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: release-manager
+      ports:
+        - protocol: TCP
+          port: 8082 # webhook
+        - protocol: TCP
+          port: 8083 # orchestrator management plane
+        - protocol: TCP
+          port: 8084 # orchestrator agent gateway
+        - protocol: TCP
+          port: 8085 # auth
+        - protocol: TCP
+          port: 8086 # notifier
+        - protocol: TCP
+          port: 8087 # web
+        - protocol: TCP
+          port: 8088 # api
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: release-manager
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: release-manager
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# Customer-cluster agents enroll and stream commands over mTLS on 8084. This
+# rule has no `from` clause, i.e. it admits every source: the agents live
+# outside this cluster and cannot be selected by namespace/pod labels. Batch 3
+# puts a load balancer/TLS terminator in front of this port; if the LB address
+# range is known, narrow this policy to that ipBlock then.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-gateway
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: orchestrator
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8084

@@ -592,6 +592,23 @@ check-error-codes: ## Check that every error code an AC asserts is emittable (TA
 check-migrations: ## Static gate: migration numbering is contiguous and every version has up+down (REQ-008 §8-19)
 	$(GO) test -race -count=1 -run TestMigrationVersionsAreContinuousAndPaired ./migrations/
 
+# ---------------------------------------------------------------------------
+# PostgreSQL migrations (TASK-337)
+# ---------------------------------------------------------------------------
+# migrations/ is the production schema authority (ADR-014). Services also run
+# migrations at startup, but operators need an explicit, reviewable step for
+# first boot, restore and upgrade runbooks. golang-migrate is already a module
+# dependency (internal/postgres), so the upstream CLI is built from the module
+# cache — no extra binary has to be installed. The `postgres` build tag is
+# required: the CLI registers database drivers only behind build tags.
+DATABASE_DSN ?=
+MIGRATE ?= $(GO) run -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate
+
+.PHONY: migrate
+migrate: ## Apply pending PostgreSQL migrations (DATABASE_DSN=postgres://user:pass@host:5432/db?sslmode=disable)
+	@test -n "$(DATABASE_DSN)" || { printf "$(RED)error: DATABASE_DSN is required, e.g. make migrate DATABASE_DSN=postgres://user:pass@host:5432/db?sslmode=disable$(NC)\n"; exit 1; }
+	$(MIGRATE) -path migrations -database "$(DATABASE_DSN)" up
+
 .PHONY: check-store-surface
 check-store-surface: ## Gate the store interface surface: every method needs a caller or a registered exception (TASK-224)
 	@mkdir -p bin

@@ -1,0 +1,419 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# TASK-337 batch 1 — production overlay for the management plane.
+#
+# `kubectl kustomize` is a pure manifest transform and contacts no cluster.
+# `kubectl apply --dry-run=client` performs read-only API discovery and writes
+# nothing; point KUBECONFIG at the target cluster (or any cluster that knows
+# the built-in API groups) before running it.
+#
+#   kubectl kustomize deploy/kustomize/production
+#   kubectl apply --dry-run=client -k deploy/kustomize/production
+#   # after the Secrets listed in README.md exist:
+#   kubectl apply -k deploy/kustomize/production
+#
+# Scope of this batch: production namespace, persistent PostgreSQL/Redis,
+# availability guards (PDB) and ingress isolation (NetworkPolicy). Image
+# publishing, Ingress/TLS and secret provisioning are later TASK-337 batches.
+
+namespace: release-manager
+
+resources:
+  # Reused from the existing tree. ../base contributes the orchestrator PVC and
+  # is the declared base of the overlay; its dev-only Namespace and plaintext
+  # credentials Secret are deleted by the patches below so they can never reach
+  # the production namespace. ../postgres and ../redis contribute only their
+  # Services and the PostgreSQL init ConfigMap: their bare Deployments are
+  # deleted and replaced by the StatefulSets in this directory. ../services
+  # contributes the seven management-plane Deployments/Services, which the
+  # patches below adapt to production configuration.
+  - ../base
+  - ../postgres
+  - ../redis
+  - ../services
+  - namespace.yaml
+  - production-settings.yaml
+  - postgres-statefulset.yaml
+  - redis-statefulset.yaml
+  - api-pvc.yaml
+  - pdb.yaml
+  - networkpolicies.yaml
+
+# Production configuration replaces the dev files mounted by ../services. The
+# generator key is the file basename and becomes the in-container path, so the
+# per-service patches below also rewrite --config and the volume subPath.
+configMapGenerator:
+  - name: webhook-config
+    files:
+      - configs/webhook.production.yaml
+  - name: orchestrator-config
+    files:
+      - configs/orchestrator.production.yaml
+  - name: auth-config
+    files:
+      - configs/auth.production.yaml
+  - name: notifier-config
+    files:
+      - configs/notifier.production.yaml
+  - name: api-config
+    files:
+      - configs/api.production.yaml
+
+# Image tags are parameterized at render time. Kustomize does not expand shell
+# variables, so the committed default is the equivalent of `${IMAGE_TAG:-dev}`:
+# it keeps this file self-contained for `kubectl kustomize`, and the release
+# render rewrites every tag to the immutable image tag. TASK-337 batch 2
+# publishes those images:
+#
+#   IMAGE_TAG=$(git rev-parse --short=12 HEAD)
+#   for svc in release-api release-auth release-orchestrator release-webhook \
+#              release-notifier release-web; do
+#     kustomize edit set image \
+#       localhost:5001/$svc=localhost:5001/$svc:$IMAGE_TAG
+#   done
+#
+# Never apply the `dev` default to production.
+images:
+  - name: localhost:5001/release-api
+    newTag: dev
+  - name: localhost:5001/release-auth
+    newTag: dev
+  - name: localhost:5001/release-orchestrator
+    newTag: dev
+  - name: localhost:5001/release-webhook
+    newTag: dev
+  - name: localhost:5001/release-notifier
+    newTag: dev
+  - name: localhost:5001/release-web
+    newTag: dev
+
+patches:
+  # base still carries the dev cluster's Namespace. Delete it instead of
+  # renaming it, so the built output has exactly one Namespace. The selector
+  # uses base's `managed-by=kustomize` label; namespace.yaml deliberately uses
+  # a different value so it does not match its own delete patch.
+  - target:
+      kind: Namespace
+      labelSelector: app.kubernetes.io/managed-by=kustomize
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: deleted
+      $patch: delete
+  # base also carries the shared plaintext dev credentials Secret. Production
+  # credentials are provisioned out of band (batch 4); deleting the dev Secret
+  # makes a missing production Secret fail closed instead of silently booting
+  # on shared dev credentials.
+  # The selector is kind-only: narrow it before adding Secret resources to this
+  # overlay.
+  - target:
+      kind: Secret
+    patch: |-
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: deleted
+      $patch: delete
+  # PostgreSQL and Redis: keep the dev Services and the PostgreSQL init
+  # ConfigMap, replace the bare Deployments with StatefulSets (this directory).
+  - target:
+      kind: Deployment
+      name: postgres
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: postgres
+      $patch: delete
+  - target:
+      kind: Deployment
+      name: redis
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: redis
+      $patch: delete
+  # notification-sink is a dev observability endpoint: it exists so the dev
+  # notifier has a local webhook receiver and has no production role. Its
+  # absence is why notifier.production.yaml ships an empty egress allowlist.
+  - target:
+      kind: Deployment
+      name: notification-sink
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: notification-sink
+      $patch: delete
+  - target:
+      kind: Service
+      name: notification-sink
+    patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: notification-sink
+      $patch: delete
+  # The web tier is stateless nginx; two replicas make minAvailable=1 in its
+  # PDB meaningful. The other services stay at one replica until their
+  # startup/background-worker semantics are verified to be multi-replica safe.
+  - target:
+      kind: Deployment
+      name: web
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        replicas: 2
+  # Point each service at its production config file. JSON6902 replaces the
+  # whole args/volumeMount entry, so no dev mount path survives.
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --config
+          - /configs/api.production.yaml
+          - --db
+          - /data/api.db
+      - op: replace
+        path: /spec/template/spec/containers/0/volumeMounts/0
+        value:
+          name: config
+          mountPath: /configs/api.production.yaml
+          subPath: api.production.yaml
+  - target:
+      kind: Deployment
+      name: auth
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --config
+          - /configs/auth.production.yaml
+      - op: replace
+        path: /spec/template/spec/containers/0/volumeMounts/0
+        value:
+          name: config
+          mountPath: /configs/auth.production.yaml
+          subPath: auth.production.yaml
+  - target:
+      kind: Deployment
+      name: orchestrator
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --config
+          - /configs/orchestrator.production.yaml
+      - op: replace
+        path: /spec/template/spec/containers/0/volumeMounts/0
+        value:
+          name: config
+          mountPath: /configs/orchestrator.production.yaml
+          subPath: orchestrator.production.yaml
+  - target:
+      kind: Deployment
+      name: notifier
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --config
+          - /configs/notifier.production.yaml
+      - op: replace
+        path: /spec/template/spec/containers/0/volumeMounts/0
+        value:
+          name: config
+          mountPath: /configs/notifier.production.yaml
+          subPath: notifier.production.yaml
+  - target:
+      kind: Deployment
+      name: webhook
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --config
+          - /configs/webhook.production.yaml
+          - --orchestrator-url
+          - http://orchestrator:8083
+      - op: replace
+        path: /spec/template/spec/containers/0/volumeMounts/0
+        value:
+          name: config
+          mountPath: /configs/webhook.production.yaml
+          subPath: webhook.production.yaml
+  # release-api is the only service whose store is still SQLite (cmd/api opens
+  # sqlitestore). Keep that data on a PVC instead of the dev emptyDir; the
+  # PostgreSQL read parity for the audit surface is tracked as a known gap in
+  # README.md, not hidden here.
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/volumes/1
+        value:
+          name: data
+          persistentVolumeClaim:
+            claimName: release-manager-api-data
+  # Database DSNs come from the credentials Secret (never from a config file).
+  # The services read DATABASE_DSN via internal/config; the notifier owns a
+  # separate database and therefore a separate key.
+  - target:
+      kind: Deployment
+      name: auth
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: auth
+      spec:
+        template:
+          spec:
+            containers:
+              - name: auth
+                env:
+                  - name: DATABASE_DSN
+                    valueFrom:
+                      secretKeyRef:
+                        name: release-manager-credentials
+                        key: DATABASE_DSN
+  - target:
+      kind: Deployment
+      name: orchestrator
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: orchestrator
+      spec:
+        template:
+          spec:
+            containers:
+              - name: orchestrator
+                env:
+                  - name: DATABASE_DSN
+                    valueFrom:
+                      secretKeyRef:
+                        name: release-manager-credentials
+                        key: DATABASE_DSN
+  - target:
+      kind: Deployment
+      name: notifier
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: notifier
+      spec:
+        template:
+          spec:
+            containers:
+              - name: notifier
+                env:
+                  # The process reads DATABASE_DSN (the only key
+                  # internal/config binds); the notifier's separate database is
+                  # selected by the Secret key it is sourced from.
+                  - name: DATABASE_DSN
+                    valueFrom:
+                      secretKeyRef:
+                        name: release-manager-credentials
+                        key: NOTIFIER_DATABASE_DSN
+  # NodePorts are a dev-only entry mechanism: they bypass the Ingress/TLS
+  # boundary batch 3 introduces. In production every Service is ClusterIP and
+  # only the Ingress controller may enter the namespace.
+  - target:
+      kind: Service
+      name: web
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  - target:
+      kind: Service
+      name: webhook
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  - target:
+      kind: Service
+      name: orchestrator
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  - target:
+      kind: Service
+      name: operator
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  - target:
+      kind: Service
+      name: auth
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  - target:
+      kind: Service
+      name: notifier
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  - target:
+      kind: Service
+      name: api
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+
+# One knob for every PVC's storage class.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: production-settings
+      fieldPath: data.storageClassName
+    targets:
+      - select:
+          kind: StatefulSet
+          name: postgres
+        fieldPaths:
+          - spec.volumeClaimTemplates.0.spec.storageClassName
+      - select:
+          kind: StatefulSet
+          name: redis
+        fieldPaths:
+          - spec.volumeClaimTemplates.0.spec.storageClassName
+      - select:
+          kind: PersistentVolumeClaim
+          name: release-manager-api-data
+        fieldPaths:
+          - spec.storageClassName
