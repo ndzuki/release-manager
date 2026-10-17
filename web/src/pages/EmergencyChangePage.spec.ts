@@ -4,11 +4,12 @@ import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import EmergencyChangePage from './EmergencyChangePage.vue';
 import EmergencyAnnotationEditor from '@/components/emergency/EmergencyAnnotationEditor.vue';
+import EmergencyArtifactSelector from '@/components/emergency/EmergencyArtifactSelector.vue';
 import EmergencyReplicasInput from '@/components/emergency/EmergencyReplicasInput.vue';
 import { t } from '@/i18n/messages';
 import { useEmergencyChangeStore } from '@/stores/emergencyChange';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
-import type { EmergencyTargetDisplay } from '@/features/emergency/model';
+import type { CandidateArtifactDisplay, EmergencyTargetDisplay } from '@/features/emergency/model';
 import type { EmergencyAuthorizationProjection } from '@/connect/emergency-api';
 
 // The page reads its scope from the route. Empty params make its scope watch
@@ -34,12 +35,14 @@ function snapshot(): EmergencyAuthorizationProjection {
   };
 }
 
-// The target API currently returns sentinels -- no containers -- because
-// release_inventory carries no workload field values (TASK-168). The page used
-// to render the container/artifact picker regardless, producing a dead dropdown
-// that looked usable while the target card beside it already reported the image
-// capability as unavailable. It now says so instead. Rendering the picker
-// unconditionally again makes this test fail.
+// A target with no containers: the read model keeps the D7=A sentinels while no
+// FRESH operator observation backs the release. A missing column is NOT the
+// reason — ListEmergencyTargets projects the observed containers/image refs off
+// the release_inventory row, and only the public release-inventory RPCs omit
+// these fields. The page used to render the container/artifact picker
+// regardless, producing a dead dropdown that looked usable while the target card
+// beside it already reported the image capability as unavailable. It now says so
+// instead; the observed target below covers the branch that must render.
 function unobservedTarget(): EmergencyTargetDisplay {
   return {
     workloadRef: { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' },
@@ -78,6 +81,117 @@ describe('EmergencyChangePage container picker', () => {
 
     expect(wrapper.text()).toContain('镜像变更暂不可用');
     expect(wrapper.findComponent({ name: 'EmergencyArtifactSelector' }).exists()).toBe(false);
+  });
+
+  /*
+   * TASK-331: once a fresh operator observation backs the release, the read
+   * model DOES carry the containers and each container's image ref, and the
+   * target advertises the image action. This is the shape
+   * ListEmergencyTargets really returns then (containers, per-container
+   * current_image_refs, the image_digest promotion mappings).
+   */
+  function observedImageTarget(): EmergencyTargetDisplay {
+    const promotion = (container: string) => ({
+      workloadKind: 'DEPLOYMENT',
+      workloadName: 'api',
+      container,
+      field: 'image_digest',
+      valuesPath: `image.${container}`,
+    });
+    return {
+      workloadRef: { kind: 'DEPLOYMENT', namespace: 'ns1', name: 'api', uid: 'u1' },
+      containers: ['app', 'sidecar'],
+      supportedOperations: ['SET_CONTAINER_IMAGE'],
+      promotions: [promotion('app'), promotion('sidecar')],
+      imageActions: [
+        {
+          container: 'app',
+          currentImageRef: 'registry.example.com/api@sha256:1111',
+          availability: { available: true },
+          promotions: [promotion('app')],
+        },
+        {
+          container: 'sidecar',
+          currentImageRef: 'registry.example.com/sidecar@sha256:2222',
+          availability: { available: true },
+          promotions: [promotion('sidecar')],
+        },
+      ],
+      replicasAction: {
+        currentReplicas: -1,
+        maxEmergencyReplicas: 0,
+        hpaManaged: false,
+        availability: { available: false, reasonCode: 'unsupported_operation' },
+        promotions: [],
+      },
+      annotationActions: [],
+      annotationAvailability: { available: false, reasonCode: 'not_observed' },
+    };
+  }
+
+  function imageArtifact(): CandidateArtifactDisplay {
+    return {
+      id: 'a1',
+      repository: 'registry.example.com/api',
+      digest: 'sha256:aaaa',
+      ref: 'registry.example.com/api@sha256:aaaa',
+      validatedAt: '2026-10-01T09:00:00.000Z',
+      sourceId: 's1',
+    };
+  }
+
+  /*
+   * TASK-331 (AC-331-01/02). The picker's non-empty branch had NO page-level
+   * coverage: the only container case drives containers=[]. This mounts the real
+   * page over an observed target and drives the real selector — pick a container
+   * and the store loads THAT container's candidates while the selector shows the
+   * OBSERVED current image; pick another and the artifact selection resets.
+   * Emptying this fixture's containers (the unobservedTarget shape) makes the
+   * picker assertion and the select below fail, so the case is not vacuous.
+   */
+  it('renders the picker for an observed target, cascading container → artifact and showing the current image', async () => {
+    await loadAuthorized();
+    const store = useEmergencyChangeStore();
+    const loaded: string[] = [];
+    store.configure({
+      loadArtifacts: async (input) => {
+        loaded.push(input.container);
+        return input.container === 'app' ? [imageArtifact()] : [];
+      },
+    });
+    const target = observedImageTarget();
+    store.targets = [target];
+    store.selectTarget(target.workloadRef);
+    expect(store.actionKind).toBe('image');
+
+    const wrapper = mountPage();
+    const picker = wrapper.findComponent(EmergencyArtifactSelector);
+    expect(picker.exists()).toBe(true);
+    expect(picker.props('containers')).toEqual(['app', 'sidecar']);
+    // Nothing picked yet: no current image to state, and no candidate claim.
+    expect(wrapper.text()).not.toContain('当前镜像');
+    expect(wrapper.text()).toContain('请先选择容器');
+
+    await picker.find('select').setValue('app');
+    await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
+    await nextTick();
+
+    expect(loaded).toEqual(['app']);
+    expect(store.selectedContainer).toBe('app');
+    expect(wrapper.text()).toContain('当前镜像：registry.example.com/api@sha256:1111');
+    expect(wrapper.text()).toContain('sha256:aaaa');
+
+    await picker.find('input[type="radio"]').setValue();
+    expect(store.selectedArtifact?.id).toBe('a1');
+
+    // AC-058-10 cascade: a different container clears the chosen artifact, asks
+    // the server for that container's candidates, and the current image follows.
+    await picker.find('select').setValue('sidecar');
+    await vi.waitFor(() => expect(loaded).toEqual(['app', 'sidecar']));
+    await nextTick();
+    expect(store.selectedArtifact).toBeNull();
+    expect(wrapper.text()).toContain('当前镜像：registry.example.com/sidecar@sha256:2222');
+    expect(wrapper.text()).not.toContain('registry.example.com/api@sha256:1111');
   });
 
   /*

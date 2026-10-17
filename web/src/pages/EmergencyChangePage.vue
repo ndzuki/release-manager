@@ -197,19 +197,23 @@ async function onConfirm(): Promise<void> {
 
         <template v-if="store.actionKind === 'image'">
           <!--
-            The container/artifact picker is only meaningful when the read model
-            actually carries container data, and it does not yet: the target API
-            fills CurrentReplicas with a sentinel and leaves Containers empty
-            because release_inventory has no workload field values (TASK-168).
-            Rendering the picker anyway produced a dead dropdown that looked
-            usable while the target card beside it already reported the image
-            capability as unavailable. State that plainly until observation lands.
+            The picker renders only when the read model carries container data.
+            ListEmergencyTargets projects Containers from the operator's
+            observation on the release_inventory row, so an empty list means no
+            FRESH observation (never reported, a report without containers, or an
+            observation older than the 15-minute staleness window) — not a missing
+            column. Rendering the picker anyway produced a dead dropdown that
+            looked usable while the target card beside it already reported the
+            image capability as unavailable. The public release-inventory RPCs
+            expose no workload field values at all; that restriction lives in
+            ReleaseInventoryRow, not in this page's target read.
           -->
           <template v-if="selectedTarget.containers.length > 0">
             <h2>选择容器与制品</h2>
             <EmergencyArtifactSelector
               :containers="selectedTarget.containers"
               :selected-container="store.selectedContainer"
+              :current-image-ref="store.selectedImageAction?.currentImageRef ?? ''"
               :artifacts="store.artifacts"
               :selected-artifact-id="store.selectedArtifact?.id ?? null"
               :loading="store.loadingArtifacts"

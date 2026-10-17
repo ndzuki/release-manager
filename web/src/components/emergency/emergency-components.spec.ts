@@ -108,6 +108,35 @@ describe('emergency components (Step 4)', () => {
     expect(empty.text()).toContain('没有可用的 VERIFIED 候选制品');
   });
 
+  // TASK-331: the read model carries each container's observed image
+  // (imageActions[].currentImageRef) and the picker now renders it. The empty ref
+  // is the fail-closed branch: the operator's scan pairs every container with its
+  // image, so a page-level fixture with a healthy observation does not produce
+  // this shape, while the mapping (`currentImageRefs[container] ?? ''`) can still
+  // leave it empty. Pinned here: an empty ref reads "未观测", never a made-up one.
+  it('ArtifactSelector states the observed current image, or that it is not observed (TASK-331)', () => {
+    const base = {
+      containers: ['app'],
+      selectedContainer: 'app',
+      artifacts: [],
+      selectedArtifactId: null,
+      loading: false,
+      error: null,
+    };
+    const observed = mount(EmergencyArtifactSelector, {
+      props: { ...base, currentImageRef: 'repo/app@sha256:abc' },
+    });
+    expect(observed.text()).toContain('当前镜像：repo/app@sha256:abc');
+
+    const unobserved = mount(EmergencyArtifactSelector, { props: base });
+    expect(unobserved.text()).toContain('当前镜像：未观测');
+    expect(unobserved.text()).not.toContain('当前镜像：repo');
+
+    // No container chosen yet: there is no per-container image to state.
+    const none = mount(EmergencyArtifactSelector, { props: { ...base, selectedContainer: '' } });
+    expect(none.text()).not.toContain('当前镜像');
+  });
+
   it('ChangeForm gates REQUIRE_PROMOTION on mapping completeness (AC-058-14)', async () => {
     const wrapper = mount(EmergencyChangeForm, {
       props: {

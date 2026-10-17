@@ -498,6 +498,11 @@ const zhCN = {
   'emergency.replicas.label': '目标副本数',
   'emergency.replicas.help': '范围 {min}–{max}；0 表示未请求副本变更，因此最小为 {min}。',
   'emergency.replicas.current': '当前副本数 {current}，紧急变更上限 {max}。',
+  // The observed image of the selected container (imageActions[].currentImageRef).
+  // `currentUnknown` is the fail-closed branch: an empty ref means the operator
+  // has not reported that container, so the UI says so instead of inventing one.
+  'emergency.image.current': '当前镜像：{ref}',
+  'emergency.image.currentUnknown': '当前镜像：未观测',
   'emergency.replicas.unavailable': '当前目标不可变更副本数。',
   'emergency.replicas.unavailable.hpa': '副本数由 HPA 管理，不可修改。',
   'annotation.hint': '只可填写该 Release Definition 白名单内的注解 key，且必须为同一作用域；服务端会再次校验。',
