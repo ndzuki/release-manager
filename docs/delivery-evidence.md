@@ -156,7 +156,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-004 | blocker | ✅ | 统一 `AppDialog`：`web/src/components/common/AppDialog.vue:67`（Teleport）+ `useFocusTrap`；全仓 **17 个文件**引用 |
 | UX-005 | major | ✅ | 已无原生 `window.confirm`（仅注释：`web/src/pages/ClusterDetailPage.vue:35`、`web/src/pages/OperatorEnrollPage.vue:54`） |
 | UX-006 | major | ⏳ | `web/src/pages/ReleaseInventoryPage.vue:80` 仍是 `onActivated`，全仓无 `KeepAlive` ⇒ 该分支仍是死代码（挂载由 `:71` 的 watch immediate 覆盖） |
-| UX-007 | major | ⚠️ | 已有退避 + 预算：`web/src/composables/useOperatorPolling.ts:55`（`operatorPollingRetryDelayMs`，上限 `:50`）、`:86`（预算用尽才停）、`:109`（成功清零，并派生 `stopped`）、`:114`（`resume()`，TASK-325）。**已做**「把自动刷新状态暴露给 UI」：`web/src/components/operators/OperatorPollingNotice.vue` 在列表页与详情页各呈现一处（`role="status"` + 恢复按钮）；**仍缺**「最后更新时间」 |
+| UX-007 | major | ⚠️ | 已有退避 + 预算：`web/src/composables/useOperatorPolling.ts:55`（`operatorPollingRetryDelayMs`，上限 `:52`）、`:86`（预算用尽才停）、`:105`（成功清零）、`:109`（由失败计数派生 `stopped`）、`:114`（`resume()`，TASK-325）。**已做**「把自动刷新状态暴露给 UI」：`web/src/components/operators/OperatorPollingNotice.vue` 在列表页与详情页各呈现一处（`role="status"` + 恢复按钮）；**仍缺**「最后更新时间」 |
 | UX-008 | major | ⏳ | key 仍只有 `values_draft:<releaseDefinitionId>`：`web/src/stores/valuesEditor.ts:27`、`:45-47`；无时间戳/TTL/scope。`setItem` 已进 try（`:189`、`:213`） |
 | UX-009 | major | ⏳ | `web/src/components/operators/EnrollmentTokenModal.vue:52-53` `copy()` 仍无 try/catch、无失败反馈 |
 | UX-010 | major | ✅ | `web/src/pages/AuditPage.vue:103-127` 收进单条 `v-if/v-else-if` 链，有数据时降级为页内 warning（`:126`） |
@@ -344,7 +344,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | Wave-2 S · `window.confirm` | ✅ **已清零** | 全仓仅注释（`web/src/pages/ClusterDetailPage.vue:35`、`web/src/pages/OperatorEnrollPage.vue:54`） |
 | Wave-2 S · `DefinitionsPage` 手写对话框 | ✅ **已收编到 `AppDialog`**（3 处） | `web/src/pages/DefinitionsPage.vue:369`、`:480`、`:542` |
 | Wave-2 S · `OperationDetailPage` 静默失败 | ✅ **已修**：preflight 读失败单独态 + ErrorState + 重试 + 关联行 | `web/src/pages/OperationDetailPage.vue:133`（`preflightFailure`）、`:357-361` |
-| Wave-2 S · `useOperatorPolling` 永久停 | ✅ **已修且提示已补**：失败改为指数退避重排，预算用尽才停，成功清零、focus/visibility 可再触发；预算耗尽时页面显示「自动刷新已停止」（`role="status"`）并给出恢复按钮（TASK-325） | `web/src/composables/useOperatorPolling.ts:50`、`:86`、`:109`、`:114`；`web/src/components/operators/OperatorPollingNotice.vue` |
+| Wave-2 S · `useOperatorPolling` 永久停 | ✅ **已修且提示已补**：失败改为指数退避重排，预算用尽才停，成功清零、focus/visibility 可再触发；预算耗尽时页面显示「自动刷新已停止」（`role="status"`）并给出恢复按钮（TASK-325） | `web/src/composables/useOperatorPolling.ts:50`、`:86`、`:105`、`:109`、`:114`；`web/src/components/operators/OperatorPollingNotice.vue` |
 | Wave-2 S · `requestId` 上屏 | ✅ **已上屏**：错误映射带 `requestId`，`correlationLine` 输出 `code · requestId`，经 `ErrorState` 的 `details` 折叠展示；≥10 处调用 | `web/src/connect/error-copy.ts:50`、`:65-69`；`web/src/components/common/ErrorState.vue:28-31`；`web/src/pages/OperationDetailPage.vue:157` |
 
 ---
