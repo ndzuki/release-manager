@@ -1,0 +1,201 @@
+# Nightly logical backups of the two production databases (TASK-340).
+#
+# Scope: `release_manager` (required) and `release_notifier` (dumped only when
+# the database exists and holds at least one user table). The dumps are
+# PostgreSQL custom-format archives (`pg_dump -Fc`) written to a dedicated
+# ReadWriteOnce PVC, so they survive Pod and node restarts but stay on the same
+# node as this single-node cluster. Off-site copies are still an operator
+# responsibility (see docs/production-deploy.md §7).
+#
+# The backup runs inside the `postgres:16` image, i.e. with a client major
+# version that matches the server. That deliberately avoids the
+# `pg_dump` 18.6 -> PostgreSQL 16 `SET transaction_timeout` incompatibility
+# documented in docs/production-deploy.md §7.2: the host-side manual dump still
+# needs that workaround, these archives do not.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: release-manager-backups
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # Replaced from production-settings.storageClassName (same knob as the
+  # PostgreSQL/Redis claim templates and the other two standalone PVCs); kept
+  # literal here so the manifest is valid when rendered standalone.
+  storageClassName: local-path
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: release-manager-backup
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  # 02:00 UTC every day. The cluster runs with UTC; the filename timestamp is
+  # UTC as well (`date -u`), so a dump's name and its schedule agree.
+  schedule: "0 2 * * *"
+  # Never let two backups overlap (a second run could dump while the first is
+  # still writing the same filenames) and tolerate a short node outage.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # A backup that has not finished in 30 minutes is stuck (PostgreSQL
+      # unreachable or the PVC wedged); fail it visibly instead of pinning the
+      # PVC forever.
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup
+            # Required by the `allow-postgres` NetworkPolicy: it admits
+            # connections to postgres:5432 only from pods carrying this label.
+            # Without it the CronJob Pod cannot reach the database.
+            app.kubernetes.io/part-of: release-manager
+        spec:
+          restartPolicy: Never
+          securityContext:
+            # The postgres image's `postgres` user is uid/gid 999. The backup
+            # only needs to read the database and write /backups, so it runs
+            # non-root for its whole lifetime. fsGroup lets the kubelet give
+            # the local-path volume a group-writable root (the same mechanism
+            # postgres-statefulset.yaml relies on).
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: postgres:16
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  backup_dir=/backups
+                  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  mkdir -p "$backup_dir"
+
+                  # A freshly started Pod is not admitted to the namespace's
+                  # NetworkPolicy at the instant its container starts: on k3s
+                  # with kube-router the new Pod IP is programmed ~2s later and
+                  # a connection attempted before that is refused. Wait for the
+                  # server (bounded) instead of racing it; this also covers a
+                  # PostgreSQL restart at 02:00. pg_isready needs no password.
+                  attempts=0
+                  until pg_isready --host="$PGHOST" --port="$PGPORT" \
+                        --username="$POSTGRES_USER" --timeout=3 >/dev/null 2>&1; do
+                    attempts=$((attempts + 1))
+                    if [ "$attempts" -ge 60 ]; then
+                      printf 'postgres not ready after 60 attempts\n' >&2
+                      exit 1
+                    fi
+                    sleep 2
+                  done
+                  printf 'postgres is accepting connections\n'
+
+                  # release_manager is the authoritative management-plane
+                  # database: a failure here fails the Job.
+                  target="$backup_dir/release_manager-$stamp.dump"
+                  pg_dump --format=custom --no-owner --no-privileges \
+                    --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
+                    --file="$target"
+                  printf 'dumped release_manager -> %s (%s bytes)\n' \
+                    "$target" "$(wc -c < "$target")"
+
+                  # release_notifier is optional: skip it when the database is
+                  # absent or a freshly initialised database has no user tables
+                  # yet. Both checks are read-only.
+                  if psql --username="$POSTGRES_USER" --dbname=postgres \
+                       --tuples-only --no-align \
+                       --command="SELECT 1 FROM pg_database WHERE datname = 'release_notifier'" \
+                       | grep -qx 1; then
+                    tables="$(psql --username="$POSTGRES_USER" --dbname=release_notifier \
+                      --tuples-only --no-align \
+                      --command="SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")"
+                    if [ "$tables" -gt 0 ]; then
+                      target="$backup_dir/release_notifier-$stamp.dump"
+                      pg_dump --format=custom --no-owner --no-privileges \
+                        --username="$POSTGRES_USER" --dbname=release_notifier \
+                        --file="$target"
+                      printf 'dumped release_notifier -> %s (%s bytes)\n' \
+                        "$target" "$(wc -c < "$target")"
+                    else
+                      printf 'skip release_notifier: 0 base tables\n'
+                    fi
+                  else
+                    printf 'skip release_notifier: database does not exist\n'
+                  fi
+
+                  # Retention: keep the last 7 days, delete older *.dump files.
+                  # The postgres image is Debian-based and ships GNU find
+                  # (coreutils/findutils), so -mtime/-delete are available.
+                  # "Older than 7 days" means a file survives 7 full days plus
+                  # the rest of the day it was written; it is not a count of
+                  # seven files. A missed run therefore cannot delete the last
+                  # good dump. `-print` keeps the deleted names in the Job log.
+                  find "$backup_dir" -maxdepth 1 -type f -name '*.dump' \
+                    -mtime +7 -print -delete
+                  printf 'retention applied: files older than 7 days removed\n'
+
+                  ls -l "$backup_dir"
+              env:
+                - name: PGHOST
+                  value: postgres
+                - name: PGPORT
+                  value: "5432"
+                # Credentials come from the same Secret the PostgreSQL
+                # StatefulSet boots from; no password ever appears in this
+                # manifest, in the Job spec or in the logs.
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: release-manager-credentials
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: release-manager-credentials
+                      key: POSTGRES_PASSWORD
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: release-manager-credentials
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: release-manager-credentials
+                      key: POSTGRES_DB
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+                # Nothing in the script writes outside /backups; a read-only
+                # root filesystem makes that a guarantee instead of a promise.
+                readOnlyRootFilesystem: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: release-manager-backups
