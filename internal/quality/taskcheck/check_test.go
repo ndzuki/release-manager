@@ -284,3 +284,296 @@ func TestCheck_AcceptsDocumentedNonPRClosures(t *testing.T) {
 	plainResult := Check([]Card{plain}, NewEvidence())
 	require.NotEmpty(t, plainResult.Findings, "without a reason the merge evidence is still required")
 }
+
+// Direct (non-PR) delivery channel: a delivery that lands in another repository
+// whose automation commits and pushes straight to main (TASK-314/319/322), cited
+// as `pr_url: direct:<sha>@<repo>` with `merge_status: direct`.
+
+const (
+	directRepo   = "~/src/dotfiles"
+	directSHA    = "1111111111111111111111111111111111111111"
+	directOther  = "3333333333333333333333333333333333333333"
+	directPath   = "plugins/vault-tools/ensure-time-marker.mjs"
+	directTest   = "plugins/vault-tools/test/ensure-time-marker.test.mjs"
+	directAbsent = "2222222222222222222222222222222222222222"
+)
+
+// directEvidence has two reachable commits in directRepo: directSHA changes the
+// delivered path (plus its test, so a card can declare a subset), directOther
+// changes an unrelated file.
+func directEvidence() *Evidence {
+	ev := NewEvidence()
+	ev.AddDirectCommit(directRepo, directSHA)
+	ev.AddDirectFile(directRepo, directSHA, directPath)
+	ev.AddDirectFile(directRepo, directSHA, directTest)
+	ev.AddDirectCommit(directRepo, directOther)
+	ev.AddDirectFile(directRepo, directOther, "private_settings.yaml")
+	return ev
+}
+
+func directCard(prURL string, paths ...string) Card {
+	return Card{
+		Path:          "TASK-314-ensure-time-marker-EXDEV.md",
+		Status:        "done",
+		MergeStatus:   "direct",
+		PRURL:         prURL,
+		EvidencePaths: paths,
+	}
+}
+
+func TestParseDirectRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want DirectRef
+		ok   bool
+	}{
+		{"absolute repo path", "direct:" + directSHA + "@/srv/dotfiles", DirectRef{Repo: "/srv/dotfiles", SHA: directSHA}, true},
+		{"home repo path", "direct:" + directSHA + "@" + directRepo, DirectRef{Repo: directRepo, SHA: directSHA}, true},
+		{"surrounding spaces are tolerated", " direct:" + directSHA + "@" + directRepo + " ", DirectRef{Repo: directRepo, SHA: directSHA}, true},
+		{"uppercase sha is normalised to lower case", "direct:" + strings.ToUpper(directSHA) + "@" + directRepo, DirectRef{Repo: directRepo, SHA: directSHA}, true},
+		{"short sha", "direct:abc123@" + directRepo, DirectRef{}, false},
+		{"no repo", "direct:" + directSHA, DirectRef{}, false},
+		{"empty repo", "direct:" + directSHA + "@", DirectRef{}, false},
+		{"relative repo is not a resolvable identity", "direct:" + directSHA + "@dotfiles", DirectRef{}, false},
+		{"repo with whitespace", "direct:" + directSHA + "@~/src/dot files", DirectRef{}, false},
+		{"a plain PR URL is not a direct ref", "https://github.com/o/r/pull/1", DirectRef{}, false},
+		{"empty", "", DirectRef{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := ParseDirectRef(tt.raw)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestParseDirectEvidence(t *testing.T) {
+	t.Parallel()
+
+	ev := NewEvidence()
+	require.NoError(t, ev.ParseDirectEvidence(strings.NewReader(
+		"# comment\n"+
+			"\n"+
+			"commit\t"+directRepo+"\t"+directSHA+"\n"+
+			"file\t"+directRepo+"\t"+directSHA+"\t"+directPath+"\n"+
+			"file\t"+directRepo+"\t"+directSHA+"\t"+directTest+"\n")))
+
+	ref := DirectRef{Repo: directRepo, SHA: directSHA}
+	assert.True(t, ev.HasDirectCommit(ref))
+	assert.Equal(t, map[string]struct{}{directPath: {}, directTest: {}}, ev.DirectFiles(ref))
+	assert.False(t, ev.HasDirectCommit(DirectRef{Repo: directRepo, SHA: directAbsent}))
+
+	// A malformed line is an error: the file is our own collector's output, so a
+	// line it cannot parse means the collection step is broken. Dropping it would
+	// silently turn "broken collector" into "no evidence".
+	broken := NewEvidence()
+	require.Error(t, broken.ParseDirectEvidence(strings.NewReader("commit\t"+directRepo+"\n")))
+	require.Error(t, broken.ParseDirectEvidence(strings.NewReader("nonsense\t"+directRepo+"\t"+directSHA+"\n")))
+	require.Empty(t, broken.directCommits, "a malformed line must not half-populate the evidence")
+
+	empty := NewEvidence()
+	require.NoError(t, empty.ParseDirectEvidence(strings.NewReader("  \n")))
+	assert.Empty(t, empty.directCommits)
+}
+
+func TestDirectRefs(t *testing.T) {
+	t.Parallel()
+
+	cards := []Card{
+		directCard("direct:"+directSHA+"@"+directRepo, directPath),
+		directCard("direct:"+directSHA+"@"+directRepo, directPath), // duplicate collapses
+		directCard("direct:"+directOther+"@"+directRepo, directPath),
+		directCard("https://github.com/o/r/pull/1", directPath), // PR card, not a direct ref
+		directCard("direct:not-a-sha@"+directRepo, directPath),  // malformed: Check reports it
+	}
+	assert.Equal(t, []DirectRef{
+		{Repo: directRepo, SHA: directSHA},
+		{Repo: directRepo, SHA: directOther},
+	}, DirectRefs(cards))
+}
+
+func TestCheck_DirectChannel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		card         Card
+		wantKinds    []string
+		wantSeverity []Severity
+		wantVerified int
+	}{
+		{
+			// The watcher commits in batches ("sync N file(s)"), so the commit
+			// changes more than the card delivered: a subset declaration is
+			// honest evidence, and the batch must not make the card fail.
+			name:         "a reachable commit covering every declared path verifies the card",
+			card:         directCard("direct:"+directSHA+"@"+directRepo, directPath),
+			wantVerified: 1,
+		},
+		{
+			name:         "declaring every path the commit changed also verifies",
+			card:         directCard("direct:"+directSHA+"@"+directRepo, directPath, directTest),
+			wantVerified: 1,
+		},
+		{
+			name:         "a sha the repository does not have is unverified",
+			card:         directCard("direct:"+directAbsent+"@"+directRepo, directPath),
+			wantKinds:    []string{KindDirectEvidenceUnverified},
+			wantSeverity: []Severity{SeverityUnverified},
+		},
+		{
+			name:         "a repository this checkout has no evidence for is unverified",
+			card:         directCard("direct:"+directSHA+"@~/src/elsewhere", directPath),
+			wantKinds:    []string{KindDirectEvidenceUnverified},
+			wantSeverity: []Severity{SeverityUnverified},
+		},
+		{
+			// The mutation that matters: the sha is real and reachable, but the
+			// commit did not touch what the card claims to have delivered.
+			name:         "a reachable commit that changes other files is a violation",
+			card:         directCard("direct:"+directOther+"@"+directRepo, directPath),
+			wantKinds:    []string{KindDirectPathsMismatch},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "one missing path out of two is a violation",
+			card:         directCard("direct:"+directSHA+"@"+directRepo, directPath, "plugins/vault-tools/other.mjs"),
+			wantKinds:    []string{KindDirectPathsMismatch},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "no evidence_paths is a violation",
+			card:         directCard("direct:" + directSHA + "@" + directRepo),
+			wantKinds:    []string{KindDirectEvidenceInvalid},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "an absolute evidence path can never be matched, so it is a violation",
+			card:         directCard("direct:"+directSHA+"@"+directRepo, "/etc/passwd"),
+			wantKinds:    []string{KindDirectEvidenceInvalid},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "a parent-escape evidence path is a violation",
+			card:         directCard("direct:"+directSHA+"@"+directRepo, "../../etc/passwd"),
+			wantKinds:    []string{KindDirectEvidenceInvalid},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "a malformed sha is a violation, not an unverified card",
+			card:         directCard("direct:xyz@"+directRepo, directPath),
+			wantKinds:    []string{KindDirectEvidenceInvalid},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "a PR url under merge_status=direct is a violation",
+			card:         directCard("https://github.com/o/r/pull/12", directPath),
+			wantKinds:    []string{KindDirectEvidenceInvalid},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name:         "an empty pr_url is still the plain missing_pr_url violation",
+			card:         directCard("", directPath),
+			wantKinds:    []string{KindMissingPRURL},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+		{
+			name: "merge_status=merged citing a direct commit is a channel mismatch",
+			card: Card{
+				Path: "TASK-315.md", Status: "done", MergeStatus: "merged",
+				PRURL: "direct:" + directSHA + "@" + directRepo, EvidencePaths: []string{directPath},
+			},
+			wantKinds:    []string{KindEvidenceChannelMismatch},
+			wantSeverity: []Severity{SeverityViolation},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := Check([]Card{tt.card}, directEvidence())
+			require.Len(t, result.Findings, len(tt.wantKinds))
+			for i, want := range tt.wantKinds {
+				assert.Equal(t, want, result.Findings[i].Kind)
+				assert.Equal(t, tt.wantSeverity[i], result.Findings[i].Severity)
+			}
+			assert.Equal(t, tt.wantVerified, result.Verified)
+		})
+	}
+}
+
+// The direct channel must not become a quieter way to claim a delivery: an
+// explicit ALLOW_UNVERIFIED_TASKS=1 may only relax MISSING evidence, exactly as
+// it does on the PR path. Every contradiction stays fatal.
+func TestCheck_DirectChannelViolationsSurviveAllowUnverified(t *testing.T) {
+	t.Parallel()
+
+	violations := []struct {
+		name string
+		card Card
+	}{
+		{"paths mismatch", directCard("direct:"+directOther+"@"+directRepo, directPath)},
+		{"malformed sha", directCard("direct:xyz@"+directRepo, directPath)},
+		{"no evidence_paths", directCard("direct:" + directSHA + "@" + directRepo)},
+		{"wrong channel", directCard("https://github.com/o/r/pull/12", directPath)},
+	}
+	for _, tt := range violations {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := Check([]Card{tt.card}, directEvidence())
+			require.Len(t, result.Findings, 1)
+			assert.Equal(t, SeverityViolation, result.Findings[0].Severity)
+			assert.True(t, result.Failed(Options{}))
+			assert.True(t, result.Failed(Options{AllowUnverified: true}),
+				"%s must stay fatal under ALLOW_UNVERIFIED_TASKS=1", result.Findings[0].Kind)
+		})
+	}
+
+	// Only the card with no evidence anywhere is downgraded -- the same
+	// behaviour the PR path has always had.
+	missing := Check([]Card{directCard("direct:"+directAbsent+"@"+directRepo, directPath)}, directEvidence())
+	require.Len(t, missing.Findings, 1)
+	assert.Equal(t, SeverityUnverified, missing.Findings[0].Severity)
+	assert.True(t, missing.Failed(Options{}))
+	assert.False(t, missing.Failed(Options{AllowUnverified: true}))
+}
+
+// Negative control: without the changed-file-set comparison the gate would
+// accept any reachable sha, which is exactly the "borrowed evidence" failure
+// this channel exists to prevent. Removing the DirectFiles comparison in
+// verifyDirectPaths makes this test fail.
+func TestCheckNegativeControlDirectPathsMismatch(t *testing.T) {
+	t.Parallel()
+
+	card := directCard("direct:"+directOther+"@"+directRepo, directPath)
+	result := Check([]Card{card}, directEvidence())
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, KindDirectPathsMismatch, result.Findings[0].Kind)
+	assert.Equal(t, SeverityViolation, result.Findings[0].Severity)
+	assert.True(t, result.Failed(Options{}))
+	assert.True(t, result.Failed(Options{AllowUnverified: true}))
+}
+
+func TestParseCardEvidencePaths(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "TASK-903-direct.md")
+	require.NoError(t, os.WriteFile(path, []byte(`---
+status: done
+merge_status: direct
+pr_url: "direct:`+directSHA+`@`+directRepo+`"
+evidence_paths: "plugins/a.mjs, plugins/b.mjs ,, plugins/c.mjs"
+---
+`), 0o600))
+
+	card, err := ParseCard(path)
+	require.NoError(t, err)
+	assert.Equal(t, "direct", card.MergeStatus)
+	assert.Equal(t, []string{"plugins/a.mjs", "plugins/b.mjs", "plugins/c.mjs"}, card.EvidencePaths,
+		"empty segments are ignored, surrounding spaces are trimmed")
+}
