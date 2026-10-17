@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/jackc/pgx/v5"
@@ -22,9 +23,29 @@ type Database struct {
 	closeErr error
 }
 
-// Open validates configuration, opens the shared pgx stdlib pool, pings it,
-// and wraps the same pool with GORM. It never logs or returns the DSN.
+// Open validates configuration, opens the shared pgx stdlib pool, waits for the
+// server to answer, and wraps the same pool with GORM. It never logs or returns
+// the DSN.
+//
+// The wait is bounded and only retries transport-level failures (TASK-351): a
+// pod that starts before kube-router has admitted its address to the postgres
+// NetworkPolicy gets ECONNREFUSED for a few hundred milliseconds, and a single
+// ping would turn that window into exit 1 plus a CrashLoopBackOff restart. A
+// server that answers with an error is reported without retrying.
 func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
+	return open(ctx, cfg, defaultConnectPolicy, slog.Default(), sleepCtx, jitterDelay)
+}
+
+// open is Open with the startup-wait policy injected, so tests can pin the
+// retry decision without a database or real delays.
+func open(
+	ctx context.Context,
+	cfg config.DatabaseConfig,
+	policy connectPolicy,
+	logger *slog.Logger,
+	sleep sleepFunc,
+	jitter jitterFunc,
+) (*Database, error) {
 	if cfg.Driver == "" {
 		cfg.Driver = "postgres"
 	}
@@ -47,7 +68,7 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
-	if err := db.PingContext(ctx); err != nil {
+	if err := waitForServer(ctx, db.PingContext, policy, logger, sleep, jitter); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("connection_unavailable: ping PostgreSQL: %w", err)
 	}
