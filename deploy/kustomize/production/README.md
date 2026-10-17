@@ -22,8 +22,9 @@ cluster (or at any cluster that knows the built-in API groups) before running
 it.
 
 The render is 43 objects: 1 Namespace, 8 ConfigMaps, 7 Deployments, 2
-StatefulSets, 4 PodDisruptionBudgets, 10 Services, 4 PVCs (2 standalone + 2 from
-the StatefulSet claim templates) and 9 NetworkPolicies — the default-deny one
+StatefulSets, 4 PodDisruptionBudgets, 10 Services, 2 PVCs, 2 StatefulSet claim
+templates (part of the StatefulSet specs, not separate objects) and 9
+NetworkPolicies — the default-deny one
 plus 8 allow rules, including `allow-kubelet-probes` and `allow-edge-nodeport`.
 The TLS edge contributes one ConfigMap, one Deployment, one Service and one
 NetworkPolicy on top of batch 1's 39 objects.
@@ -254,5 +255,11 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   It is a stopgap for a cluster without a working Ingress controller, not a
   production TLS story: replace it with an Ingress controller and a CA-issued
   certificate before real traffic.
+- The host port mapping `8443:30443` binds `0.0.0.0`, so the edge is reachable
+  from every host interface, not just loopback. If the cluster runs on a
+  networked host, restrict the mapping with
+  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"` (edit
+  the existing mapping; the bind address is part of the port spec) or keep the
+  host behind a firewall.
 - No backup/restore CronJob and no Prometheus scrape configuration yet
   (TASK-337 batch 4).

@@ -771,7 +771,14 @@ docker-import-all: ## Import the 8 images into a k3d cluster (CLUSTER=rm-prod)
 		for svc in $(DOCKER_SERVICES); do \
 			images="$$images $(IMAGE_PREFIX)/release-$$svc:$(IMAGE_TAG)"; \
 		done; \
-		k3d image import --cluster "$(CLUSTER)" $$images
+		log="$$(mktemp)"; \
+		trap 'rm -f "$$log"' EXIT INT TERM; \
+		k3d image import --cluster "$(CLUSTER)" $$images 2>&1 | tee "$$log"; \
+		if grep -q ERRO "$$log"; then \
+			echo "k3d image import reported ERRO:" >&2; \
+			grep ERRO "$$log" >&2; \
+			exit 1; \
+		fi
 
 .PHONY: docker-build-operator
 docker-build-operator: ## Build and save operator image as Docker tarball
