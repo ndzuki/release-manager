@@ -757,6 +757,117 @@ spec:
 
 ⚠️ **NetworkPolicy**：`allow-namespace-service-ports` 只放行同 namespace 且带 `app.kubernetes.io/part-of=release-manager` 标签的 Pod 访问 8083/8085。Prometheus 若在别的 namespace，现有策略会拦截；需要单独加一条 ingress 规则（按 Prometheus namespace 或 Pod 选择），再验证 `curl -sS http://auth:8085/metrics | head`。这些注解/策略都**没有**写进 overlay——上面的片段是操作者接线时的起点。
 
+### 9.2 故障注入演练（实测）
+
+> 演练时间：2026-10-18 02:15–02:25 +08（UTC 2026-10-17 18:15–18:24），集群 `rm-prod`。目标是对照 DoD ④「停 Pod / 断 operator 验证自愈或告警」。
+
+⚠️ **本环境没有告警系统**：仓库没有部署 Prometheus / Grafana / Alertmanager，`deploy/` 下没有 `ServiceMonitor`、scrape 注解和告警规则（§10-9）。所以本节验证的是**自愈**；**「告警」没有被验证**，本次也没有产生或观察到任何 alert。
+
+**探针口径**（全节一致，避免把不同粒度混着读）：
+
+- 用户面探针从宿主经 `https://localhost:8443` 连打，每轮依次请求 `GET /`（edge→web 静态 SPA）、`GET /readyz`（edge→web→orchestrator 就绪）、`POST /audit.v1.AuditService/QueryAuditEvents`（无凭据；正常 401，api 不可达时 502）。单端点采样间隔约 **0.22 s**。
+- 服务面探针用 `kubectl port-forward svc/<svc>` + `GET /readyz`，6 个服务顺序采样，间隔约 **0.5 s**。
+- Pod 状态用 `kubectl get pod -o jsonpath=…` 轮询；有效粒度约 **0.4–0.5 s**（0.25 s 间隔 + 每次 kubectl 往返）。
+- 下文的 `000` 表示 curl 在 `--max-time 2` 内没拿到 HTTP 响应（多为 `/readyz` 卡在数据库连接上），**不是** TCP 拒绝；`502` 是 edge→web 的 nginx 找不到 api upstream。
+- 时刻均为 **UTC**（括号内为 +08）。
+
+#### 9.2.1 删单个 `api` Pod（Deployment，1 副本）
+
+```bash
+kubectl -n release-manager delete pod <api-pod>   # 默认 grace，非 SIGKILL
+kubectl -n release-manager get pod -l app.kubernetes.io/name=api -o wide
+```
+
+| 轮次 | 删除时刻 | 新 Pod 就绪 | 删除→Ready | 期间 `/audit` 失败 | `/`、`/readyz` 失败 |
+| --- | --- | --- | --- | --- | --- |
+| A | 18:15:56.018 | 18:16:01.714（`api-85869d7f74-px7fc`） | **5.696 s**（容器首启失败 1 次后重启） | 15/43 次 502：首次 18:15:56.202，最后 18:16:01.441，首个 401 18:16:01.674 | 0 |
+| B | 18:20:55.941 | 18:21:22.167（`api-85869d7f74-rlmxz`） | **26.226 s**（容器重启 2 次，事件 `BackOff x4`） | 60/84 次 502：首次 18:20:56.177，最后 18:21:20.889，首个 401 18:21:22.146 | 0 |
+
+- Pod 事件：旧 Pod 只有 `Killing`；新 Pod 同一秒内 `SuccessfulCreate` → `Scheduled` → `Pulled`（镜像已在节点）→ `Created` → `Started`。B 轮另有 `BackOff`（`spec.containers{api}`），见下条。
+- **自愈成立，但单副本有代价**：`/`（静态页）与经 edge 的 `/readyz` 全程 200（A 43/43、B 84/84 采样），用户感知是「审计页请求失败」，不是「控制台打不开」。`/audit` 没有副本接管，api 不在就 502；两次的不可用窗口（首坏→首好）约 **5.5 s / 26.0 s**。
+- ⚠️ **异常（未定位，必须记录）**：两次删除中，新 api 容器**首次启动**都以 `failed to register service … ping PostgreSQL: … connection refused` 退出（exit 1），被 kubelet 重启后才成功（A 1 次、B 2 次）。同一时刻用同 namespace、同 `app.kubernetes.io/part-of=release-manager` 标签启动的探针 Pod **可立即连上** PostgreSQL（18:22:05 UTC、18:23:04 UTC 两次实测，首次尝试即成功），所以**不是** PG 不可用；根因未在本任务定位（怀疑与网络策略/连接建立的时序有关，但未取证）。结论：**api 的 Pod 级 RTO 不能按「镜像已在节点上」估算**，实测有 5.7 s 与 26.2 s 两档；复验若看到 `BackOff`，先看 `kubectl logs <pod> --previous` 里是否有这条 ping 错误。
+
+#### 9.2.2 删 `web` 的一个 Pod（Deployment，2 副本）
+
+```bash
+kubectl -n release-manager get endpointslices -l kubernetes.io/service-name=web   # 删除前: 10.42.0.86, 10.42.0.87
+kubectl -n release-manager delete pod web-66cfd65774-57lvw
+```
+
+- 删除时刻 **18:16:36.945**；`web-66cfd65774-57lvw` 进入 `Killing`，幸存副本 `web-66cfd65774-zx666` 保持 Ready；替换 Pod `web-66cfd65774-7bwtt` 于 **18:16:40.808** Ready（**3.863 s**）。
+- 三路并发探针在 **10.04 s** 窗口内共采样 **399 次**（每端点 133 次，约 13.3 req/s/端点）：**0 失败**（`/`=200、`/readyz`=200、`/audit`=401 全为预期）。
+- 口径边界：探针都是新建连接；**没有**度量在途请求/长连接是否被切断（`web` 是 nginx，关闭时 graceful shutdown）。不要把「0 失败」外推成「任何时刻零影响」。
+
+#### 9.2.3 重启 PostgreSQL 主 Pod（StatefulSet，单副本）
+
+```bash
+kubectl -n release-manager delete pod postgres-0
+kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release_manager -Atc \
+  "select version,dirty from schema_migrations"
+```
+
+连续做了 3 次（时刻 UTC）：
+
+| 轮次 | 删除时刻 | PostgreSQL Ready | 删除→PG Ready | 6 个 `/readyz` 全 200 | 数据校验 |
+| --- | --- | --- | --- | --- | --- |
+| A | 18:17:23.747 | 18:17:30.864 | **7.117 s** | **+7.174 s** | version=34 / dirty=false；`audit_events=12`；`sessions=3`；`release_inventory=2` |
+| B | 18:18:22.462 | 18:18:28.995 | **6.533 s** | **+6.581 s** | 同上；且 4 张关键表（`schema_migrations`/`audit_events`/`release_inventory`/`sessions`）的内容哈希（逐行 `t::text` 排序后取 md5）前后完全一致 |
+| C | 18:19:01.664 | 18:19:08.163 | **6.499 s** | **+7.233 s** | 同上；`audit_events` 12 行未变 |
+
+**期间各服务 `/readyz` 的变化**（A 轮，B/C 同型）：
+
+| 服务 | 首个非 200 | 恢复 200 | 降级响应 |
+| --- | --- | --- | --- |
+| `auth` | +0.06 s | +7.68 s | 503，`checks.database` = `connection refused` |
+| `orchestrator` | +0.06 s | +7.68 s | 503，`checks.database` = `connection refused` |
+| `notifier` | +0.07 s | +7.15 s | 503，`checks.database` = `connection refused` |
+| `webhook` | +0.07 s | +7.15 s | 503（`orchestrator … 503`）；部分采样 000（>2 s 超时） |
+| `web` | +0.08 s | +7.15 s | 503/000：`web` 的 `/readyz` 代理的是 orchestrator 的健康度 |
+| **`api`** | **无变化** | — | **全程 200 `{"checks":{"noop":"ok"}}`：api 的 `/readyz` 不检查数据库**（`cmd/api/main.go` 未实现 `ReadinessChecks`） |
+
+- **RTO ≈ 6.5–7.2 s**：PG 容器 Pending→Running 约 **1.1 s**，Running→Ready 约 **5.0 s**（readinessProbe `initialDelaySeconds: 5`、`periodSeconds: 5`），其余是服务重连。单副本 PG 没有故障转移，这段时间是**真实不可用窗口**。
+- **RPO = 0（仅限本次口径）**：这是**优雅删除**（默认 30 s grace、SIGTERM），不是 `kill -9`/节点掉电；B 轮前后 4 张关键表的行数与内容哈希完全相同。没有 WAL 归档/异地副本，节点级故障的 RPO 仍按 §7.4/§10-9 的「≤24 h + 同盘」口径，**不要**用本节外推。
+- **用户可见影响**（连续探针）：
+  - A 轮：`GET /` 58/58 次 200（控制台静态页可打开）；edge `/readyz` 从 18:17:23.962 起出现 503/000（两路探针各 2 次 503 + 3 次 000），18:17:31.096 恢复 200。
+  - B 轮：数据库不可用期间，**登录返回 `401 invalid credentials`**（不是 503；`internal/auth/browser_session.go:23` 把存储错误折叠成凭据错误，用户会看到「密码错误」），已登录会话调用 `ListCustomers` 返回 `401 session revoked`，调用 `/audit` 返回 `500 internal error`。恢复后 `login=200`、`ListCustomers=200`、`/audit=200`。
+  - C 轮（0.5 s 粒度连续采样）：已登录 `/audit` 从 **+0.29 s** 起连续 500，最后一次 500 在 **+5.81 s**，**+6.52 s** 恢复 200；`GET /` 25/25 次 200、0 失败。
+  - ⚠️ B 轮里 `/audit` 在 **PG Ready 后约 2.8 s** 仍返回 500（同一时刻 auth 日志出现 `authorization policy unavailable`），紧接着的 `ListCustomers` 已 200。认证读路径的恢复受 auth 的 **5 s 策略刷新**相位影响，**RTO 不是「PG Ready 即结束」**。
+- 恢复后浏览器复验（真实 Chrome，TASK-350 会话）：登录用时 **666 ms**，`/audit` RPC **200**，页面显示 **12/12** 条事件。
+
+#### 9.2.4 无 operator 时的控制面表现（**不是**「断连」演练）
+
+现场已没有客户集群：`k3d cluster list` 只剩 `rm-prod`，`rm-cust` 的 k3d 集群与 kubeconfig context 都已删除。控制面的 `operator` Service 指向 orchestrator 的 8084（客户集群 agent 的 mTLS 接入点），本 namespace 没有 operator 工作负载。因此**无法在本环境模拟「operator 断连」**；这里只验证**控制面在没有 operator 时是否稳定、是否保留状态**：
+
+只读实测（18:20:16–18:20:28 UTC，真实 Chrome + 下列 RPC）：
+
+| 读取 | 结果 |
+| --- | --- |
+| `sessions` 表 | 3 行，**全部 `offline`**（`session_replaced` / `heartbeat_timeout`）；这是演示集群删除后的历史状态，不是运行时断连 |
+| `release_inventory` 表 | **2 行保留**（`rm-cust` 的 `e2e-plan` / `e2e-release`） |
+| `ListCustomers` | 200，2 个客户（`RM Cust Demo`、`Acme Weekday`） |
+| `ListClusters` | 200，`rm-cust` 仍为 `CLUSTER_STATUS_ACTIVE` |
+| `ListOperators` | 200，1 条：lifecycle `ACTIVE`、session `OFFLINE`、reason `heartbeat_timeout`、lastHeartbeat `2026-10-17T17:37:52Z` |
+| `ListReleaseInventory` | 200，2 行 |
+| 页面 | `/customers`、客户详情、`/customers/<id>/clusters`、集群详情、`.../operators`、`/audit` 全部渲染；无 4xx/5xx（登录前的 `ValidateToken`/`RefreshToken` 401 是 SPA 引导的预期行为） |
+
+结论：**没有 operator 时控制面不会报错或丢状态**，operator 页面会如实显示「离线 / 心跳超时」。但这只是「状态读取」；**没有**验证断连瞬间的在途 `CommandStream`、重连退避或 operator 侧自愈——这些要重新接入一个客户集群（§12）才能测，**本次没有做，也不要用本节数据声称「operator 断连已验证」**。
+
+#### 9.2.5 未做项
+
+- **中断进行中的备份 Job**：跳过。演练时 `CronJob/release-manager-backup` 的 `LAST SCHEDULE` 仍是 `<none>`（`0 2 * * *` 为 UTC，节点时间也是 UTC，部署后尚未到点），没有 Job 可中断；这一项对自愈的增量信息很小，且会额外制造一次不完整的备份。
+- **Redis 主 Pod**：未注入。Redis 单副本且无 AUTH（§10-10），删它会让依赖缓存/限流的服务短暂降级；不在本任务四项范围内。
+- **节点/磁盘故障、`kill -9`、多节点**：未做。本集群是单节点 k3d + `local-path`，节点丢失属于另一类演练。
+
+#### 9.2.6 诚实边界（不要外推）
+
+1. **「告警」未被验证**：本环境没有告警系统（§10-9），只有 Pod 重建、`/readyz` 降级和日志错误；本次没有产生也没有观察到任何 alert。
+2. **单副本 = 真实窗口**：api 删除时 `/audit` 中断约 5.5 s / 26.0 s；PG 重启时 DB 不可用 6.5–7.2 s，认证读路径还要叠加最多一个 5 s 的策略刷新相位。不要写「零中断」。
+3. **api 的 `/readyz` 不反映数据库**：PG 宕机时 api 仍 200。用它判断 DB 健康会误判；DB 健康看 auth/orchestrator/notifier 的 `/readyz` 或直连 `pg_isready`。
+4. **api 新 Pod 首启有 `connection refused` 风险**：2/2 次删除都出现，1–2 次容器重启，根因未定位（同刻探针 Pod 可连 PG，排除 PG 宕机）。这是当前最值得单独排查的自愈延迟来源。
+5. **operator 断连未真正测试**：没有客户集群，演示集群是之前被删除的；本节只验证控制面在「无 operator」时的读取稳定性。
+6. **探针口径**：`/`、`/readyz`、`/audit` 都是新连接、短请求；长连接/在途请求、浏览器渲染耗时、客户端重试未覆盖。`0 失败` 只在这组口径下成立。
+7. **只做了 Pod 级故障**：没有做节点 drain、镜像拉取失败、PVC 不可用、PG 崩溃恢复（crash recovery）等场景。
+
 ## 10. 已知限制
 
 逐条都是实测或读码确认，**不是猜测**。排障时不要假设这些能力存在。
@@ -769,9 +880,9 @@ spec:
 6. **无 Vault CA 供给**：ADR-017/ADR-020 的 Vault 路径未接线，CA 与令牌都是静态 Secret（notifier 的 `vault.enabled: false`）。轮换靠手工替换 Secret。
 7. **无 HA / 多副本**：只有 `web` 是 2 副本；api/auth/orchestrator/notifier/webhook 单副本且 PDB `minAvailable: 1` ⇒ `kubectl drain` 会在这些 Pod 上**永久阻塞**（这是刻意设计，别删 PDB 绕过）。也没有多节点/反亲和/跨可用区。
 8. **无镜像签名、无 CI 推送镜像**：`.github/workflows/` 里没有 build/push 这 6 个镜像的 job（`sync-to-gitcode.yaml` 只镜像 git 仓库），镜像靠本机构建 + `k3d image import`；`make docker-push-all` 只在你已运行的 registry 上手工执行。没有 cosign/attestation。
-9. **无 schema 降级通道、无 Prometheus/Grafana；自动备份已做但不异地**：自动逻辑备份见 §7.4（每日一次、保留 7 天），但没有 WAL 归档 ⇒ RPO ≤ 24 h，且备份与库同节点同盘 ⇒ 节点丢失会一起丢；异地拷贝仍需操作者补。Prometheus/Grafana 仍不存在，抓取示例见 §9.1（未部署）。schema 仍只能前滚（§8.1）。
+9. **无 schema 降级通道、无 Prometheus/Grafana；自动备份已做但不异地**：自动逻辑备份见 §7.4（每日一次、保留 7 天），但没有 WAL 归档 ⇒ RPO ≤ 24 h，且备份与库同节点同盘 ⇒ 节点丢失会一起丢；异地拷贝仍需操作者补。Prometheus/Grafana 仍不存在，抓取示例见 §9.1（未部署）；故障注入下的自愈实测见 §9.2（告警未验证）。schema 仍只能前滚（§8.1）。
 10. **Redis 无 AUTH**：只靠 NetworkPolicy 限制为同 namespace 可达（`allow-redis`）。Redis 一旦离开这个边界就必须补 AUTH。
-11. **交付的 `rm-prod` 里没有客户集群**：TASK-347 已把宿主 `8444 → Service operator NodePort 30844 → orchestrator:8084` 的 TCP 通路打通（TLS 握手与请求层 401 实测见 §4-⑦），但本环境没有 customer cluster/agent，所以 enroll、CommandStream、rollback / 已安装 Release / operator 在线状态这类旅程**默认没有数据可测**，`sessions` 表为空是预期，不是故障。接入一个客户集群的完整路径（网关可达性、SAN/`hostAliases` 约束、2 个 Secret、plan→apply 实测）见 §12；演示集群是一次性的，删除后控制面**保留**它的 customer/cluster/operator/inventory 行（没有删除 RPC），会话转 `offline`、inventory 停止更新。证书 SAN 约束见 §4-⑦ 与 §12.2。
+11. **交付的 `rm-prod` 里没有客户集群**：TASK-347 已把宿主 `8444 → Service operator NodePort 30844 → orchestrator:8084` 的 TCP 通路打通（TLS 握手与请求层 401 实测见 §4-⑦），但本环境没有 customer cluster/agent，所以 enroll、CommandStream、rollback / 已安装 Release / operator 在线状态这类旅程**默认没有数据可测**，`sessions` 表没有在线会话（本次实测 3 行均为 `offline` 历史行）是预期，不是故障。接入一个客户集群的完整路径（网关可达性、SAN/`hostAliases` 约束、2 个 Secret、plan→apply 实测）见 §12；演示集群是一次性的，删除后控制面**保留**它的 customer/cluster/operator/inventory 行（没有删除 RPC），会话转 `offline`、inventory 停止更新；无 operator 时的控制面只读实测见 §9.2.4。证书 SAN 约束见 §4-⑦ 与 §12.2。
 12. **NetworkPolicy 的强制执行在本集群上未证实**：`kubectl get ds -A` 只列出 `svclb-traefik-*`，**没有任何 CNI DaemonSet**（2026-10-18 01:16 +08 采样）。k3s 用内嵌 flannel，并把网络策略控制器编进 `k3s server` 进程（kube-router），所以没有独立 DaemonSet 可查；**从集群外部无法判断该控制器是否启用、策略是否真的被下到数据面**。结论：本 overlay 的 **9 条 NetworkPolicy 是声明，不是已证实的防护**，「`default-deny-ingress` 是否真的挡住东西」**没有验证过**。第 2 条记的「本集群 v1.31.5 探针放行无问题」同样有两种解释——进程内 kube-router + k3s issue #10030 已修复，或策略根本没被执行——现有证据不能区分。把它当安全边界之前：换到**明确强制执行 NP 的 CNI**（Calico/Cilium 等），并做一次**负向验证**（从一个本该被拒的源发起连接，确认被拒）；本集群上不要据此宣称「已隔离」。
 
 ## 11. 验收清单（本次实测结果）
