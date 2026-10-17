@@ -12,8 +12,14 @@ import {
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { orchestratorClient } from '@/connect/client';
 
-export type ReleaseStatus = 'active' | 'missing' | 'out_of_sync';
-export type StatusFilter = ReleaseStatus | undefined;
+export type ReleaseStatus = 'active' | 'missing' | 'out_of_sync' | 'unknown';
+/**
+ * The statuses the wire accepts as a filter. `unknown` is display-only: UNSPECIFIED
+ * means "no filter" to the server (api/proto/orchestrator/v1/orchestrator.proto),
+ * so sending it as a filter would return every row as if it had matched.
+ */
+export type FilterableReleaseStatus = Exclude<ReleaseStatus, 'unknown'>;
+export type StatusFilter = FilterableReleaseStatus | undefined;
 
 export interface ReleaseSummary {
   releaseDefinitionId: string;
@@ -49,7 +55,7 @@ export interface ReleaseInventoryState {
   clusterId: string | null;
 }
 
-const statusToProto: Record<ReleaseStatus, ReleaseInventoryStatus> = {
+const statusToProto: Record<FilterableReleaseStatus, ReleaseInventoryStatus> = {
   active: ReleaseInventoryStatus.ACTIVE,
   missing: ReleaseInventoryStatus.MISSING,
   out_of_sync: ReleaseInventoryStatus.OUT_OF_SYNC,
@@ -57,12 +63,17 @@ const statusToProto: Record<ReleaseStatus, ReleaseInventoryStatus> = {
 
 function statusFromProto(status: ReleaseInventoryStatus): ReleaseStatus {
   switch (status) {
+    case ReleaseInventoryStatus.ACTIVE:
+      return 'active';
     case ReleaseInventoryStatus.MISSING:
       return 'missing';
     case ReleaseInventoryStatus.OUT_OF_SYNC:
       return 'out_of_sync';
     default:
-      return 'active';
+      // UX-061: UNSPECIFIED — which proto3 also produces for a field the server left
+      // out — and any enum value a newer server added say nothing about the release.
+      // Reading them as Active was the false positive this mapping used to ship.
+      return 'unknown';
   }
 }
 
