@@ -14,6 +14,12 @@ import { t } from '@/i18n/messages';
  * announces the error itself with `role="alert"` — two assertive announcements would read
  * the same failure twice. The button relies on the console-wide `:focus-visible` policy
  * in styles/base.css; it sets no outline of its own.
+ *
+ * TASK-330 (AC-330-03): the copy is deliberately scoped to the chain, never to data
+ * freshness. `stopped` stays true after a successful out-of-band refresh — only
+ * `resume()` or a focus/visibility refresh re-arms the chain — while the page's stale
+ * paragraph (`role="alert"`) owns the freshness claim and does clear on that success.
+ * A "the data may be stale" sentence here would therefore outlive the fact behind it.
  */
 defineProps<{ stopped: boolean }>();
 

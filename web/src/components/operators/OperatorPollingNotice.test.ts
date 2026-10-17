@@ -39,4 +39,16 @@ describe('OperatorPollingNotice', () => {
     await wrapper.setProps({ stopped: false });
     expect(wrapper.find('[data-testid="operator-polling-stopped"]').exists()).toBe(false);
   });
+
+  /*
+   * TASK-330 (AC-330-03): the wording itself is the fix here, so it is pinned literally
+   * (a key-based assertion cannot see a copy change). The notice must speak about the
+   * automatic chain only: it deliberately does not claim the displayed data is out of
+   * date, because a successful manual refresh clears the page's `role="alert"` stale
+   * paragraph while leaving the chain stopped (`OperatorListPage.test.ts`) — a staleness
+   * sentence here would outlive the fact that justifies it.
+   */
+  it('states the stopped chain without a data-freshness claim', () => {
+    expect(t('operator.polling.stopped')).toBe('自动刷新已停止。');
+  });
 });

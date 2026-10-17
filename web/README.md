@@ -9,17 +9,17 @@
 
 | 类别 | 依赖 | 版本（package.json 行号） |
 | --- | --- | --- |
-| 框架 | `vue` | `^3.5.13`（package.json:27） |
+| 框架 | `vue` | `^3.5.43`（package.json:27） |
 | 状态管理 | `pinia` | `^2.3.1`（package.json:26） |
 | 路由 | `vue-router` | `^4.5.1`（package.json:28） |
 | 构建/开发服务器 | `vite` | `^6.3.5`（package.json:47）+ `@vitejs/plugin-vue` `^5.2.3`（package.json:38） |
 | 类型检查 | `typescript` `~5.8.3`（package.json:45）、`vue-tsc` `^2.2.10`（package.json:49） |
-| 单元测试 | `vitest` `^4.1.10`（package.json:48）+ `@vue/test-utils` `^2.4.11`（package.json:39）+ `happy-dom` `^20.10.6`（package.json:44） |
+| 单元测试 | `vitest` `^4.1.11`（package.json:48）+ `@vue/test-utils` `^2.4.11`（package.json:39）+ `happy-dom` `^20.10.6`（package.json:44） |
 | 浏览器 E2E | `@playwright/test` `^1.62.1`（package.json:34） |
 | Lint | `eslint` `^10.7.0`（package.json:40，flat config：eslint.config.js）+ `typescript-eslint` `^8.65.0`（package.json:46）+ `eslint-plugin-vue` `^10.9.2`（package.json:42） |
 | RPC | `@connectrpc/connect` / `@connectrpc/connect-web` `^2.1.1`（package.json:22-23） |
 | Protobuf (TS) | `@bufbuild/protobuf` `^2.2.5`（package.json:15），代码生成插件 `@bufbuild/protoc-gen-es` `^2.13.0`（package.json:32） |
-| 编辑器组件 | `@codemirror/*`（package.json:16-21）；辅助 `js-yaml` `^5.2.1`（package.json:25）、`deep-diff` `^1.0.2`（package.json:24） |
+| 编辑器组件 | `@codemirror/*`（package.json:16-21）；辅助 `js-yaml` `^5.4.1`（package.json:25）、`deep-diff` `^1.0.2`（package.json:24） |
 
 TypeScript 编译配置为 `strict: true`、`noEmit: true`、`@/* → src/*`（tsconfig.json:7、16、18-19；vite 侧同名 alias 在 vite.config.ts:8-12）。
 
@@ -31,7 +31,7 @@ TypeScript 编译配置为 `strict: true`、`noEmit: true`、`@/* → src/*`（t
 | --- | --- | --- | --- |
 | `npm run dev` | `vite` | 启动 dev server（端口固定 5173，vite.config.ts:24），并按 **proto 包前缀**代理 Connect 请求到本机 8082-8088 服务端口（vite.config.ts:46-90，见 §4）。前置：Node + `npm ci` 安装依赖；要用真实后端需先起对应服务（`make dev-up` 或本地进程）。 | 不参与（dev server 只在本地）。 |
 | `npm run build` | `vue-tsc -b && vite build` | 先以 project references 做全量类型检查（含 `tsconfig.node.json` 引用的 vite.config.ts），再产出 `dist/`。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。 |
-| `npm test` | `vitest run` | 跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`（当前 **105** 个文件、**1052** 个用例；口径=vitest 汇总行，采样 2026-10-10）；环境 `happy-dom`、`globals: true`、`restoreMocks: true`（vite.config.ts:13-16）；`e2e/**`、`playwright/**`、`node_modules/**` 被排除，避免 Playwright spec 被 vitest 误跑（vite.config.ts:17-21 注释与 exclude）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。**Makefile 有转发**：`web-check`（`Makefile:413-416`）依次跑 `npm run lint && npm test && npm run build`，`web-install`（`Makefile:408-410`）跑 `npm ci`；`npm test` 也可在 `web/` 内直接跑（`docs/testing.md:45-48` 明写「Makefile 转发其中三关」）。 |
+| `npm test` | `vitest run` | 跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`（文件数与用例数随测试增删变动，本 README 有意不写死该计数；口径 = `npm test` 汇总行）；环境 `happy-dom`、`globals: true`、`restoreMocks: true`（vite.config.ts:13-16）；`e2e/**`、`playwright/**`、`node_modules/**` 被排除，避免 Playwright spec 被 vitest 误跑（vite.config.ts:17-21 注释与 exclude）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）。**Makefile 有转发**：`web-check`（`Makefile:413-416`）依次跑 `npm run lint && npm test && npm run build`，`web-install`（`Makefile:408-410`）跑 `npm ci`；`npm test` 也可在 `web/` 内直接跑（`docs/testing.md:45-48` 明写「Makefile 转发其中三关」）。 |
 | `npm run test:e2e` | `playwright test` | 跑 `web/e2e/` 下的 Playwright spec（playwright.config.ts:9）。默认打 `http://127.0.0.1:5173`（playwright.config.ts:25），且**必须**设置 `E2E_BACKEND=true`，否则整个 suite 显式 skip（e2e/emergency-smoke.spec.ts:12-17）。需要真实后端栈（ADR-013：只走正式 API，不打 mock）。 | **部分参与**：`web` job 本身不跑 E2E；CI 的 `e2e-prerequisite` job（`.github/workflows/test.yml:420-508`，**push / workflow_dispatch 触发，PR 上不跑**）会 `npm ci` + `npx playwright install --with-deps chromium`（默认托管 runner 分支，`test.yml:477`） + `make e2e-prerequisite-ci`，该 target 经 `test/e2e/prerequisite/console.sh:67` 默认跑 **`rollback.spec.ts` + `emergency-smoke.spec.ts` + `delivery-criteria.spec.ts` + `stuck-locks.spec.ts`**（`--workers=1` 串行；`docs/testing.md` 的「控制台（浏览器）E2E：CI 车道与 spec 归属」同口径），并以 `if: always()` 上传 `e2e-prerequisite-diagnostics` 与浏览器失败诊断 `e2e-console-playwright-artifacts`（`test.yml`:487-493、`test.yml:500-508`）。`navigation.spec.ts` 仍不在 CI 车道。 |
 | `npm run preview` | `vite preview` | 本地预览 `dist/` 构建产物；未在本仓库配置 preview 端口/proxy（vite.config.ts 的 `server` 段只作用于 dev）。 | 不参与。 |
 | `npm run lint` | `eslint .` | flat config：js/ts/vue recommended + prettier 兼容层；忽略 `dist/**`、`src/gen/**`、`*.d.ts`、`*.tsbuildinfo`；规则含 `@typescript-eslint/no-explicit-any: error`（eslint.config.js:7-23）。 | 参与：CI 的 `web` job（`.github/workflows/test.yml`，Node 22 + `npm ci`）（与 test/build 同一步）。 |
@@ -58,7 +58,7 @@ web/
     ├── pages/                 路由级页面（31 项；本项目不叫 views/）
     ├── components/            按域分组：audit / clusters / common / customers / emergency /
     │                          operations / operators / releases / values
-    ├── stores/                Pinia setup-store（21 项，auth/cluster/operationTimeline/...）
+    ├── stores/                Pinia setup-store（22 项，auth/cluster/operationTimeline/...）
     ├── composables/           useOperatorPolling / useSessionExpiry / useEmergencyEffectObservation
     ├── features/emergency/    紧急变更域逻辑（errors/model/validation）
     ├── connect/               手写 API 客户端层：client.ts（transport + 服务 client）+
@@ -87,7 +87,7 @@ web/
 
 ## 5. 测试与类型检查现状
 
-- 单元/组件测试：`npm test`（vitest run，happy-dom）。现有 **105** 个 `*.test.ts`/`*.spec.ts`（**1052** 个用例；口径=vitest 汇总行，采样 2026-10-10） 分布在 `src/**`。
+- 单元/组件测试：`npm test`（vitest run，happy-dom）跑 `src/**` 下全部 `*.test.ts`/`*.spec.ts`；文件数与用例数随测试增删变动（口径 = `npm test` 汇总行），本 README 有意不写死该计数，避免与实测漂移。
 - 类型检查：无独立 script，`npm run build` 前半段 `vue-tsc -b` 即全量检查（package.json:8）。
 - 浏览器 E2E：`npm run test:e2e`（Playwright，chromium-only project，`fullyParallel: false`、`retries: 0`、trace retain-on-failure、`html` reporter + `screenshot: 'only-on-failure'`；playwright.config.ts:11-31）；需要真实后端 + `E2E_BACKEND=true`，否则显式 skip（emergency-smoke.spec.ts:12-17）。可覆盖 `E2E_BASE_URL` 指向 staging（playwright.config.ts:25 注释与代码）。CI 车道与各 spec 归属见 `docs/testing.md`「控制台（浏览器）E2E：CI 车道与 spec 归属」。
 - 覆盖率：**未配置**——vite.config.ts 的 `test` 段无 `coverage` 配置，CI 的 `web` job 会跑 `npm ci`/`lint`/`test`/`build`（但不采集覆盖率）（`make test-coverage` 只覆盖 Go，`Makefile:420-424`）。
