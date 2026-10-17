@@ -1033,6 +1033,13 @@ const (
 	AuditActorSystem    AuditActorKind = "system"
 )
 
+// SystemOrganizationID is the audit scope for platform-level events that belong
+// to no tenant (cleanup GC, operator bootstrap). It is a sentinel value stored in
+// audit_events.organization_id, not a row in the organizations table: the column
+// has no foreign key, and events under this scope are read by platform_admin
+// through an all-organizations query.
+const SystemOrganizationID = "system"
+
 // AuditEvent represents a single audit trail entry.
 type AuditEvent struct {
 	ID             string

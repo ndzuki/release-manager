@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file audit/v1/audit.proto.
  */
 export const file_audit_v1_audit: GenFile = /*@__PURE__*/
-  fileDesc("ChRhdWRpdC92MS9hdWRpdC5wcm90bxIIYXVkaXQudjEiYgoKQXVkaXRBY3RvchIhCgRraW5kGAEgASgOMhMuYXVkaXQudjEuQWN0b3JLaW5kEgoKAmlkGAIgASgJEhcKD29yZ2FuaXphdGlvbl9pZBgDIAEoCRIMCgRyb2xlGAQgASgJIs0CCgpBdWRpdEV2ZW50EgoKAmlkGAEgASgJEiMKBWFjdG9yGAIgASgLMhQuYXVkaXQudjEuQXVkaXRBY3RvchIVCg1yZXNvdXJjZV90eXBlGAMgASgJEhMKC3Jlc291cmNlX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSEwoLZHVyYXRpb25fbXMYByABKAMSFgoOY2hhbmdlX3N1bW1hcnkYCCABKAkSLgoKY3JlYXRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNAoIbWV0YWRhdGEYCiADKAsyIi5hdWRpdC52MS5BdWRpdEV2ZW50Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjgKEEVtaXRBdWRpdFJlcXVlc3QSJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudCJpChFFbWl0QXVkaXRSZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoBRIQCghyZWplY3RlZBgCIAEoBRIXCg9hdWRpdF9ldmVudF9pZHMYAyADKAkSFwoPcmVqZWN0aW9uX2NvZGVzGAQgAygJIrgBChBBdWRpdFF1ZXJ5RmlsdGVyEhcKD29yZ2FuaXphdGlvbl9pZBgBIAEoCRIVCg1yZXNvdXJjZV90eXBlGAIgASgJEhMKC3Jlc291cmNlX2lkGAMgASgJEhAKCGFjdG9yX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSLQoKdGltZV9yYW5nZRgHIAEoCzIZLmNvbW1vbi52MS5UaW1lc3RhbXBSYW5nZSJwChdRdWVyeUF1ZGl0RXZlbnRzUmVxdWVzdBIqCgZmaWx0ZXIYASABKAsyGi5hdWRpdC52MS5BdWRpdFF1ZXJ5RmlsdGVyEikKCnBhZ2luYXRpb24YAiABKAsyFS5jb21tb24udjEuUGFnaW5hdGlvbiJzChhRdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudBIxCgpwYWdpbmF0aW9uGAIgASgLMh0uY29tbW9uLnYxLlBhZ2luYXRpb25SZXNwb25zZSJGChhFeHBvcnRBdWRpdEV2ZW50c1JlcXVlc3QSKgoGZmlsdGVyGAEgASgLMhouYXVkaXQudjEuQXVkaXRRdWVyeUZpbHRlciI+ChlFeHBvcnRBdWRpdEV2ZW50c1Jlc3BvbnNlEhEKCWV4cG9ydF9pZBgBIAEoCRIOCgZzdGF0dXMYAiABKAkqnQEKCUFjdG9yS2luZBIaChZBQ1RPUl9LSU5EX1VOU1BFQ0lGSUVEEAASGAoUQUNUT1JfS0lORF9BTk9OWU1PVVMQARITCg9BQ1RPUl9LSU5EX1VTRVIQAhIWChJBQ1RPUl9LSU5EX1NFUlZJQ0UQAxIWChJBQ1RPUl9LSU5EX0FQSV9LRVkQBBIVChFBQ1RPUl9LSU5EX1NZU1RFTRAFMogCCgxBdWRpdFNlcnZpY2USPwoERW1pdBIaLmF1ZGl0LnYxLkVtaXRBdWRpdFJlcXVlc3QaGy5hdWRpdC52MS5FbWl0QXVkaXRSZXNwb25zZRJZChBRdWVyeUF1ZGl0RXZlbnRzEiEuYXVkaXQudjEuUXVlcnlBdWRpdEV2ZW50c1JlcXVlc3QaIi5hdWRpdC52MS5RdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USXAoRRXhwb3J0QXVkaXRFdmVudHMSIi5hdWRpdC52MS5FeHBvcnRBdWRpdEV2ZW50c1JlcXVlc3QaIy5hdWRpdC52MS5FeHBvcnRBdWRpdEV2ZW50c1Jlc3BvbnNlQjxaOmdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL2F1ZGl0L3YxO2F1ZGl0djFiBnByb3RvMw", [file_google_protobuf_timestamp, file_common_v1_types]);
+  fileDesc("ChRhdWRpdC92MS9hdWRpdC5wcm90bxIIYXVkaXQudjEiYgoKQXVkaXRBY3RvchIhCgRraW5kGAEgASgOMhMuYXVkaXQudjEuQWN0b3JLaW5kEgoKAmlkGAIgASgJEhcKD29yZ2FuaXphdGlvbl9pZBgDIAEoCRIMCgRyb2xlGAQgASgJIs0CCgpBdWRpdEV2ZW50EgoKAmlkGAEgASgJEiMKBWFjdG9yGAIgASgLMhQuYXVkaXQudjEuQXVkaXRBY3RvchIVCg1yZXNvdXJjZV90eXBlGAMgASgJEhMKC3Jlc291cmNlX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSEwoLZHVyYXRpb25fbXMYByABKAMSFgoOY2hhbmdlX3N1bW1hcnkYCCABKAkSLgoKY3JlYXRlZF9hdBgJIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASNAoIbWV0YWRhdGEYCiADKAsyIi5hdWRpdC52MS5BdWRpdEV2ZW50Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIjgKEEVtaXRBdWRpdFJlcXVlc3QSJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudCJpChFFbWl0QXVkaXRSZXNwb25zZRIQCghhY2NlcHRlZBgBIAEoBRIQCghyZWplY3RlZBgCIAEoBRIXCg9hdWRpdF9ldmVudF9pZHMYAyADKAkSFwoPcmVqZWN0aW9uX2NvZGVzGAQgAygJItMBChBBdWRpdFF1ZXJ5RmlsdGVyEhcKD29yZ2FuaXphdGlvbl9pZBgBIAEoCRIVCg1yZXNvdXJjZV90eXBlGAIgASgJEhMKC3Jlc291cmNlX2lkGAMgASgJEhAKCGFjdG9yX2lkGAQgASgJEg4KBmFjdGlvbhgFIAEoCRIOCgZzdGF0dXMYBiABKAkSLQoKdGltZV9yYW5nZRgHIAEoCzIZLmNvbW1vbi52MS5UaW1lc3RhbXBSYW5nZRIZChFhbGxfb3JnYW5pemF0aW9ucxgIIAEoCCJwChdRdWVyeUF1ZGl0RXZlbnRzUmVxdWVzdBIqCgZmaWx0ZXIYASABKAsyGi5hdWRpdC52MS5BdWRpdFF1ZXJ5RmlsdGVyEikKCnBhZ2luYXRpb24YAiABKAsyFS5jb21tb24udjEuUGFnaW5hdGlvbiJzChhRdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USJAoGZXZlbnRzGAEgAygLMhQuYXVkaXQudjEuQXVkaXRFdmVudBIxCgpwYWdpbmF0aW9uGAIgASgLMh0uY29tbW9uLnYxLlBhZ2luYXRpb25SZXNwb25zZSJGChhFeHBvcnRBdWRpdEV2ZW50c1JlcXVlc3QSKgoGZmlsdGVyGAEgASgLMhouYXVkaXQudjEuQXVkaXRRdWVyeUZpbHRlciI+ChlFeHBvcnRBdWRpdEV2ZW50c1Jlc3BvbnNlEhEKCWV4cG9ydF9pZBgBIAEoCRIOCgZzdGF0dXMYAiABKAkqnQEKCUFjdG9yS2luZBIaChZBQ1RPUl9LSU5EX1VOU1BFQ0lGSUVEEAASGAoUQUNUT1JfS0lORF9BTk9OWU1PVVMQARITCg9BQ1RPUl9LSU5EX1VTRVIQAhIWChJBQ1RPUl9LSU5EX1NFUlZJQ0UQAxIWChJBQ1RPUl9LSU5EX0FQSV9LRVkQBBIVChFBQ1RPUl9LSU5EX1NZU1RFTRAFMogCCgxBdWRpdFNlcnZpY2USPwoERW1pdBIaLmF1ZGl0LnYxLkVtaXRBdWRpdFJlcXVlc3QaGy5hdWRpdC52MS5FbWl0QXVkaXRSZXNwb25zZRJZChBRdWVyeUF1ZGl0RXZlbnRzEiEuYXVkaXQudjEuUXVlcnlBdWRpdEV2ZW50c1JlcXVlc3QaIi5hdWRpdC52MS5RdWVyeUF1ZGl0RXZlbnRzUmVzcG9uc2USXAoRRXhwb3J0QXVkaXRFdmVudHMSIi5hdWRpdC52MS5FeHBvcnRBdWRpdEV2ZW50c1JlcXVlc3QaIy5hdWRpdC52MS5FeHBvcnRBdWRpdEV2ZW50c1Jlc3BvbnNlQjxaOmdpdGh1Yi5jb20vbmR6dWtpL3JlbGVhc2UtbWFuYWdlci9hcGkvZ2VuL2F1ZGl0L3YxO2F1ZGl0djFiBnByb3RvMw", [file_google_protobuf_timestamp, file_common_v1_types]);
 
 /**
  * AuditActor identifies the principal that performed an audited action.
@@ -195,6 +195,9 @@ export const EmitAuditResponseSchema: GenMessage<EmitAuditResponse> = /*@__PURE_
  */
 export type AuditQueryFilter = Message<"audit.v1.AuditQueryFilter"> & {
   /**
+   * organization_id is the requested scope. An omitted value keeps its existing
+   * meaning: the caller's own organization, as resolved by release-auth.
+   *
    * @generated from field: string organization_id = 1;
    */
   organizationId: string;
@@ -228,6 +231,21 @@ export type AuditQueryFilter = Message<"audit.v1.AuditQueryFilter"> & {
    * @generated from field: common.v1.TimestampRange time_range = 7;
    */
   timeRange?: TimestampRange | undefined;
+
+  /**
+   * all_organizations reads every organization the caller is authorized to see,
+   * including platform-level events recorded under the "system" scope (cleanup,
+   * operator bootstrap). It is honored only for platform_admin: any other caller
+   * is refused with PERMISSION_DENIED and the reason code
+   * cross_organization_denied, before the store is touched. When set,
+   * organization_id is ignored rather than rejected. The
+   * empty organization_id semantics above are unchanged, so this field is the
+   * only way to ask for every organization. ExportAuditEvents does not support
+   * it and rejects it with INVALID_ARGUMENT.
+   *
+   * @generated from field: bool all_organizations = 8;
+   */
+  allOrganizations: boolean;
 };
 
 /**
@@ -386,7 +404,8 @@ export const ActorKindSchema: GenEnum<ActorKind> = /*@__PURE__*/
  * over release-api. Trust boundary: authenticated bearer token. The service
  * performs no role check of its own, but every request is scoped to the
  * principal's organization: the request cannot read, export, or emit into
- * another tenant (TASK-095).
+ * another tenant (TASK-095). The single exception is a platform_admin query
+ * that explicitly sets all_organizations (REQ-029 cross-organization scope).
  *
  * @generated from service audit.v1.AuditService
  */
@@ -422,7 +441,10 @@ export const AuditService: GenService<{
    * organization_id is resolved by release-auth (ADR-021): an omitted value means
    * the caller's own organization, another organization is allowed only for
    * platform_admin (otherwise PERMISSION_DENIED), and the response then reads the
-   * effective organization. The time range is capped by the policy-owned window
+   * effective organization. all_organizations=true widens the read to every
+   * organization, including the platform-level "system" scope; a caller without
+   * cross-organization scope is refused with PERMISSION_DENIED and the reason
+   * code cross_organization_denied. The time range is capped by the policy-owned window
    * the decision returns (31 days, or 366 for platform_admin); a wider range is
    * rejected with INVALID_ARGUMENT and the reason code range_too_large. Other
    * filter fields (resource, actor, action, status) are taken from the request.
@@ -446,9 +468,11 @@ export const AuditService: GenService<{
    * the export needs a write decision for the audit object and is scoped to the
    * effective organization release-auth returns (ADR-021), so a filter naming
    * another organization is rejected with PERMISSION_DENIED for every role but
-   * platform_admin. The policy window cap applies here too. No worker consumes the
-   * queue today, so status stays pending. Treat the identifier as a request
-   * receipt, not as a download handle.
+   * platform_admin. The policy window cap applies here too. all_organizations is
+   * not supported for exports (the export row carries one organization); it is
+   * rejected with INVALID_ARGUMENT instead of being silently ignored. No worker
+   * consumes the queue today, so status stays pending. Treat the identifier as a
+   * request receipt, not as a download handle.
    * Requires a valid access token (no role check).
    *
    * @generated from rpc audit.v1.AuditService.ExportAuditEvents

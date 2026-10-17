@@ -8,6 +8,10 @@ import type { AuditEvent } from '@/gen/audit/v1/audit_pb';
 
 export const defaultAuditPageSize = 20;
 export const maxAuditRangeDays = 30;
+// TASK-339: the platform-level audit scope (internal/store.SystemOrganizationID).
+// It is a sentinel stored in audit_events.organization_id, not an organization
+// row, so the scope selector offers it as a static entry.
+export const systemOrganizationId = 'system';
 
 // The wire contract (D-62) uses free-form strings for resource_type/action/status.
 // The option lists below populate the filter form's selects; any string still
@@ -59,6 +63,7 @@ export type AuditFailureReason =
   | 'range_too_large'
   | 'invalid_cursor'
   | 'invalid_argument'
+  | 'all_organizations_not_supported'
   | 'export_unavailable'
   | 'deadline_exceeded'
   | 'internal'
@@ -150,11 +155,16 @@ function validateRange(filters: AuditFilters): AuditFailure | null {
   return null;
 }
 
-function toProtoFilter(filters: AuditFilters, organizationId: string) {
+function toProtoFilter(filters: AuditFilters, organizationId: string, allOrganizations = false) {
   const from = asDate(filters.from);
   const to = asDate(filters.to);
   return {
-    organizationId,
+    // TASK-339: the all-organizations scope is a platform_admin-only widening.
+    // It is sent only when requested, so a non-platform_admin request body never
+    // carries the field at all, and it replaces organization_id (the server
+    // ignores organization_id when the flag is set).
+    ...(allOrganizations ? { allOrganizations: true } : {}),
+    organizationId: allOrganizations ? '' : organizationId,
     resourceType: filters.resourceType.trim(),
     resourceId: filters.resourceId.trim(),
     actorId: filters.actor.trim(),
@@ -183,6 +193,15 @@ function failureFrom(error: unknown): AuditFailure {
   }
   if (reason === 'invalid_cursor') {
     return { reason: 'invalid_cursor', message: t('audit.error.expired') };
+  }
+  // TASK-339 review: the server explicitly refuses an all-organizations export
+  // (an export row carries one organization). The reason code has its own copy;
+  // without this branch the raw English server message was shown to the user.
+  if (reason === 'all_organizations_not_supported') {
+    return {
+      reason: 'all_organizations_not_supported',
+      message: t('audit.error.allOrganizationsExport'),
+    };
   }
   if (reason === 'export_unavailable' || connectError.code === Code.Unavailable) {
     return { reason: 'export_unavailable', message: t('audit.error.exportUnavailable') };
@@ -231,7 +250,11 @@ export const useAuditStore = defineStore('audit', () => {
     totalSize.value = 0;
   }
 
-  async function query(organizationId: string, direction: 'first' | 'next' | 'previous' = 'first'): Promise<void> {
+  async function query(
+    organizationId: string,
+    direction: 'first' | 'next' | 'previous' = 'first',
+    allOrganizations = false,
+  ): Promise<void> {
     const rangeError = validateRange(filters.value);
     if (rangeError) {
       error.value = rangeError;
@@ -250,7 +273,7 @@ export const useAuditStore = defineStore('audit', () => {
     error.value = null;
     try {
       const response = await auditClient.queryAuditEvents({
-        filter: toProtoFilter(filters.value, organizationId),
+        filter: toProtoFilter(filters.value, organizationId, allOrganizations),
         pagination: { pageSize: defaultAuditPageSize, pageToken: requestCursor },
       });
       if (direction === 'first') {
@@ -285,7 +308,7 @@ export const useAuditStore = defineStore('audit', () => {
         clearResults();
       } else if (failure.reason === 'invalid_cursor') {
         clearResults();
-        await query(organizationId, 'first');
+        await query(organizationId, 'first', allOrganizations);
       } else {
         // AC-059-08: timeout/internal errors keep the loaded page intact.
         events.value = previousEvents;
@@ -299,7 +322,7 @@ export const useAuditStore = defineStore('audit', () => {
     }
   }
 
-  async function exportEvents(organizationId: string): Promise<void> {
+  async function exportEvents(organizationId: string, allOrganizations = false): Promise<void> {
     const rangeError = validateRange(filters.value);
     if (rangeError) {
       error.value = rangeError;
@@ -309,7 +332,7 @@ export const useAuditStore = defineStore('audit', () => {
     error.value = null;
     try {
       const response = await auditClient.exportAuditEvents({
-        filter: toProtoFilter(filters.value, organizationId),
+        filter: toProtoFilter(filters.value, organizationId, allOrganizations),
       });
       // The wire contract returns only a creation receipt (export_id + initial
       // status); there is no status-query RPC (D-62), so tasks never poll.

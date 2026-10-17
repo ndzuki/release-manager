@@ -75,6 +75,9 @@ func TestAuthorizeAccessDecisionMatrix(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, response.Msg.GetAllowed())
 		assert.Equal(t, decisionReasonCrossOrganizationDenied, response.Msg.GetReason())
+		// Pin the wire value too: release-api forwards this string verbatim as
+		// X-Reason-Code, so renaming the constant must not silently change it.
+		assert.Equal(t, "cross_organization_denied", response.Msg.GetReason())
 		assert.Equal(t, "org-2", response.Msg.GetOrganizationId())
 	})
 

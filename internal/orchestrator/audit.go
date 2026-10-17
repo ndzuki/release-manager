@@ -19,7 +19,7 @@ func (s *CleanupService) emitGCAudit(ctx context.Context, key string, resp *orch
 		status = "failed"
 	}
 	summary := fmt.Sprintf("deleted_bundles=%d deleted_candidates=%d deleted_preflights=%d skipped_bundles=%d errors=%d", resp.GetDeletedBundles(), resp.GetDeletedCandidates(), resp.GetDeletedPreflights(), resp.GetSkippedBundles(), len(errs))
-	actorKind, actorID, organizationID, role := store.AuditActorSystem, "cleanup", "system", "system"
+	actorKind, actorID, organizationID, role := store.AuditActorSystem, "cleanup", store.SystemOrganizationID, "system"
 	if actor, ok := authctx.ActorFromContext(ctx); ok {
 		actorKind, actorID, organizationID = store.AuditActorUser, actor.UserID, actor.OrganizationID
 		if len(actor.Roles) > 0 {
@@ -36,7 +36,7 @@ func (s *CleanupService) emitBundleAudit(ctx context.Context, bundleID, status, 
 	if s.audit == nil {
 		return
 	}
-	actorKind, actorID, organizationID, role := store.AuditActorSystem, "cleanup", "system", "system"
+	actorKind, actorID, organizationID, role := store.AuditActorSystem, "cleanup", store.SystemOrganizationID, "system"
 	if actor, ok := authctx.ActorFromContext(ctx); ok {
 		actorKind, actorID, organizationID = store.AuditActorUser, actor.UserID, actor.OrganizationID
 		if len(actor.Roles) > 0 {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted, reactive, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -15,6 +15,7 @@ import {
   emptyAuditFilters,
   filtersFromQuery,
   filtersToQuery,
+  systemOrganizationId,
   useAuditStore,
   type AuditFilters as AuditFilterState,
 } from '@/stores/audit';
@@ -27,7 +28,27 @@ let form = reactive<AuditFilterState>(emptyAuditFilters());
 let initialized = false;
 
 const organizationId = computed(() => auth.activeOrganization?.id ?? auth.user?.activeOrgId ?? '');
-const canQuery = computed(() => organizationId.value.length > 0 && !audit.loading);
+const isPlatformAdmin = computed(() => auth.isPlatformAdmin);
+// TASK-339: platform_admin may widen the read to every organization. An empty
+// scope means "all organizations" (the all_organizations flag); a value is a
+// concrete organization id, including the static "system" scope. Other roles are
+// always pinned to their active organization, so the widening is never offered
+// to them.
+const organizationScope = ref('');
+const queryOrganizationId = computed(() => (isPlatformAdmin.value ? organizationScope.value : organizationId.value));
+const queryAllOrganizations = computed(() => isPlatformAdmin.value && organizationScope.value === '');
+const scopeLabel = computed(() => {
+  if (!isPlatformAdmin.value) return auth.activeOrganization?.name ?? t('shell.organization.choose');
+  if (queryAllOrganizations.value) return t('audit.filters.allOrganizations');
+  if (organizationScope.value === systemOrganizationId) return t('audit.filters.systemScope');
+  return (
+    auth.organizations.find((organization) => organization.id === organizationScope.value)?.name ??
+    organizationScope.value
+  );
+});
+const canQuery = computed(
+  () => (queryAllOrganizations.value || queryOrganizationId.value.length > 0) && !audit.loading,
+);
 
 function replaceForm(filters: AuditFilterState): void {
   Object.assign(form, { ...filters });
@@ -40,7 +61,7 @@ async function syncQuery(): Promise<void> {
 async function submit(): Promise<void> {
   audit.setFilters(form);
   await syncQuery();
-  await audit.query(organizationId.value, 'first');
+  await audit.query(queryOrganizationId.value, 'first', queryAllOrganizations.value);
 }
 
 async function reset(): Promise<void> {
@@ -48,12 +69,24 @@ async function reset(): Promise<void> {
   audit.setFilters(form);
   audit.clearResults();
   await syncQuery();
-  await audit.query(organizationId.value, 'first');
+  await audit.query(queryOrganizationId.value, 'first', queryAllOrganizations.value);
 }
 
 async function createExport(): Promise<void> {
   audit.setFilters(form);
-  await audit.exportEvents(organizationId.value);
+  await audit.exportEvents(queryOrganizationId.value, queryAllOrganizations.value);
+}
+
+// TASK-339 review: paging is a new request, so it must reuse the scope the
+// current page was queried with. Calling query() without the third argument
+// pins the request to the active organization, which silently turns an
+// "all organizations" or "system" page into a single-organization read.
+async function pagePrevious(): Promise<void> {
+  await audit.query(queryOrganizationId.value, 'previous', queryAllOrganizations.value);
+}
+
+async function pageNext(): Promise<void> {
+  await audit.query(queryOrganizationId.value, 'next', queryAllOrganizations.value);
 }
 
 
@@ -62,7 +95,7 @@ onMounted(async () => {
   replaceForm(filters);
   audit.setFilters(filters);
   initialized = true;
-  await audit.query(organizationId.value, 'first');
+  await audit.query(queryOrganizationId.value, 'first', queryAllOrganizations.value);
 });
 
 watch(
@@ -75,7 +108,16 @@ watch(
   { deep: true },
 );
 
+watch(organizationScope, () => {
+  if (!initialized) return;
+  audit.clearResults();
+  void audit.query(queryOrganizationId.value, 'first', queryAllOrganizations.value);
+});
+
 watch(organizationId, (next, previous) => {
+  // A platform_admin looking at every organization is not scoped to the active
+  // one, so an organization switch is not a scope change for this page.
+  if (isPlatformAdmin.value) return;
   if (!initialized || !next || next === previous) return;
   audit.clearResults();
   void audit.query(next, 'first');
@@ -88,15 +130,35 @@ watch(organizationId, (next, previous) => {
       <div>
         <p class="audit-page__eyebrow">{{ t('audit.page.title') }}</p>
         <h1>{{ t('audit.page.subtitle') }}</h1>
-        <p>{{ t('audit.page.description') }} {{ auth.activeOrganization?.name ?? t('shell.organization.choose') }}.</p>
+        <p>{{ t('audit.page.description') }} {{ scopeLabel }}.</p>
       </div>
-      <button type="button" :disabled="!canQuery || audit.exporting" @click="createExport">
-        {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
-      </button>
+      <div class="audit-page__actions">
+        <button
+          type="button"
+          :disabled="!canQuery || audit.exporting || queryAllOrganizations"
+          :title="queryAllOrganizations ? t('audit.page.exportScopeHint') : undefined"
+          @click="createExport"
+        >
+          {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
+        </button>
+        <!-- TASK-339 review: an export row carries exactly one organization, so
+             the server rejects all_organizations with INVALID_ARGUMENT. Disable
+             the action and say why, instead of letting the click fail. -->
+        <small v-if="queryAllOrganizations" class="audit-page__export-hint">
+          {{ t('audit.page.exportScopeHint') }}
+        </small>
+      </div>
     </header>
 
 
-    <AuditFilters v-model="form" @submit="submit" @reset="reset" />
+    <AuditFilters
+      v-model="form"
+      v-model:scope="organizationScope"
+      :platform-admin="isPlatformAdmin"
+      :organizations="auth.organizations"
+      @submit="submit"
+      @reset="reset"
+    />
     <AuditExportPanel :tasks="audit.exportTasks" />
 
     <!-- One chain, so a failed request can never be rendered as an empty
@@ -134,8 +196,8 @@ watch(organizationId, (next, previous) => {
         :has-previous="audit.hasPrevious"
         :has-more="audit.hasMore"
         @select="audit.selectEvent"
-        @previous="audit.query(organizationId, 'previous')"
-        @next="audit.query(organizationId, 'next')"
+        @previous="pagePrevious"
+        @next="pageNext"
       />
     </template>
     <AuditEventDetail v-if="audit.selectedEvent" :event="audit.selectedEvent" @close="audit.selectEvent(null)" />
@@ -185,6 +247,19 @@ watch(organizationId, (next, previous) => {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.audit-page__actions {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: end;
+}
+
+.audit-page__export-hint {
+  max-width: 16rem;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  text-align: right;
 }
 
 .audit-page__heading button {

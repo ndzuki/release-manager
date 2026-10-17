@@ -1,9 +1,22 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
-import { actionOptions, resourceTypeOptions, statusOptions, type AuditFilters } from '@/stores/audit';
+import {
+  actionOptions,
+  resourceTypeOptions,
+  statusOptions,
+  systemOrganizationId,
+  type AuditFilters,
+} from '@/stores/audit';
 
 const model = defineModel<AuditFilters>({ required: true });
+// TASK-339: the organization scope selector is rendered for platform_admin only;
+// for every other role the scope stays the active organization.
+const scope = defineModel<string>('scope', { default: '' });
+defineProps<{
+  platformAdmin?: boolean;
+  organizations?: ReadonlyArray<{ id: string; name: string }>;
+}>();
 const emit = defineEmits<{
   submit: [];
   reset: [];
@@ -12,6 +25,17 @@ const emit = defineEmits<{
 
 <template>
   <form class="audit-filters" :aria-label="t('audit.filters.title')" @submit.prevent="emit('submit')">
+    <label v-if="platformAdmin" class="audit-filters__field">
+      <span>{{ t('audit.filters.organization') }}</span>
+      <select v-model="scope" name="organization">
+        <option value="">{{ t('audit.filters.allOrganizations') }}</option>
+        <option v-for="organization in organizations ?? []" :key="organization.id" :value="organization.id">
+          {{ organization.name }}
+        </option>
+        <option :value="systemOrganizationId">{{ t('audit.filters.systemScope') }}</option>
+      </select>
+      <small>{{ t('audit.filters.systemScopeHint') }}</small>
+    </label>
     <label class="audit-filters__field">
       <span>{{ t('audit.filters.actor') }}</span>
       <input v-model.trim="model.actor" name="actor" autocomplete="off" />

@@ -40,6 +40,10 @@ export const useAuthStore = defineStore('auth', () => {
   const canWrite = computed(() => !user.value?.roles.some((role) => role.toLowerCase() === 'viewer'));
   const roleNames = computed(() => user.value?.roles.map((role) => role.toLowerCase()) ?? []);
   const canReadOperators = computed(() => isAuthenticated.value);
+  // The only role release-auth lets cross organizations (ADR-021): the audit
+  // page uses it to offer the all-organizations scope. This is a UI affordance,
+  // not the authorization decision — the server re-checks it per request.
+  const isPlatformAdmin = computed(() => roleNames.value.includes('platform_admin'));
   // Bundles are read by platform_admin (via *) and release_admin only — see the
   // `bundle read` rule in internal/auth/casbin.go; deployer/viewer have no rule, so
   // showing them the catalogue only bounces them to the forbidden page.
@@ -210,6 +214,7 @@ export const useAuthStore = defineStore('auth', () => {
     forbiddenMessage,
     isAuthenticated,
     activeOrganization,
+    isPlatformAdmin,
     canWrite,
     canReadOperators,
     canReadBindings,

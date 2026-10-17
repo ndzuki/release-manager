@@ -406,16 +406,28 @@ func (x *EmitAuditResponse) GetRejectionCodes() []string {
 
 // AuditQueryFilter restricts audit events returned by a query or export.
 type AuditQueryFilter struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	ResourceType   string                 `protobuf:"bytes,2,opt,name=resource_type,json=resourceType,proto3" json:"resource_type,omitempty"`
-	ResourceId     string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
-	ActorId        string                 `protobuf:"bytes,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Action         string                 `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`
-	Status         string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
-	TimeRange      *v1.TimestampRange     `protobuf:"bytes,7,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// organization_id is the requested scope. An omitted value keeps its existing
+	// meaning: the caller's own organization, as resolved by release-auth.
+	OrganizationId string             `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
+	ResourceType   string             `protobuf:"bytes,2,opt,name=resource_type,json=resourceType,proto3" json:"resource_type,omitempty"`
+	ResourceId     string             `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	ActorId        string             `protobuf:"bytes,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	Action         string             `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`
+	Status         string             `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	TimeRange      *v1.TimestampRange `protobuf:"bytes,7,opt,name=time_range,json=timeRange,proto3" json:"time_range,omitempty"`
+	// all_organizations reads every organization the caller is authorized to see,
+	// including platform-level events recorded under the "system" scope (cleanup,
+	// operator bootstrap). It is honored only for platform_admin: any other caller
+	// is refused with PERMISSION_DENIED and the reason code
+	// cross_organization_denied, before the store is touched. When set,
+	// organization_id is ignored rather than rejected. The
+	// empty organization_id semantics above are unchanged, so this field is the
+	// only way to ask for every organization. ExportAuditEvents does not support
+	// it and rejects it with INVALID_ARGUMENT.
+	AllOrganizations bool `protobuf:"varint,8,opt,name=all_organizations,json=allOrganizations,proto3" json:"all_organizations,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AuditQueryFilter) Reset() {
@@ -495,6 +507,13 @@ func (x *AuditQueryFilter) GetTimeRange() *v1.TimestampRange {
 		return x.TimeRange
 	}
 	return nil
+}
+
+func (x *AuditQueryFilter) GetAllOrganizations() bool {
+	if x != nil {
+		return x.AllOrganizations
+	}
+	return false
 }
 
 // QueryAuditEventsRequest queries organization-scoped audit events.
@@ -737,7 +756,7 @@ const file_audit_v1_audit_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\x05R\baccepted\x12\x1a\n" +
 	"\brejected\x18\x02 \x01(\x05R\brejected\x12&\n" +
 	"\x0faudit_event_ids\x18\x03 \x03(\tR\rauditEventIds\x12'\n" +
-	"\x0frejection_codes\x18\x04 \x03(\tR\x0erejectionCodes\"\x86\x02\n" +
+	"\x0frejection_codes\x18\x04 \x03(\tR\x0erejectionCodes\"\xb3\x02\n" +
 	"\x10AuditQueryFilter\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12#\n" +
 	"\rresource_type\x18\x02 \x01(\tR\fresourceType\x12\x1f\n" +
@@ -747,7 +766,8 @@ const file_audit_v1_audit_proto_rawDesc = "" +
 	"\x06action\x18\x05 \x01(\tR\x06action\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x128\n" +
 	"\n" +
-	"time_range\x18\a \x01(\v2\x19.common.v1.TimestampRangeR\ttimeRange\"\x84\x01\n" +
+	"time_range\x18\a \x01(\v2\x19.common.v1.TimestampRangeR\ttimeRange\x12+\n" +
+	"\x11all_organizations\x18\b \x01(\bR\x10allOrganizations\"\x84\x01\n" +
 	"\x17QueryAuditEventsRequest\x122\n" +
 	"\x06filter\x18\x01 \x01(\v2\x1a.audit.v1.AuditQueryFilterR\x06filter\x125\n" +
 	"\n" +
