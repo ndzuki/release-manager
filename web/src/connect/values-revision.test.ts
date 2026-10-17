@@ -1,7 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it, vi } from 'vitest';
 import { ValuesRevisionSchema, ValuesStatus } from '@/gen/common/v1/domain_pb';
-import { createValuesRevision, listApprovedValuesRevisions } from './values-revision';
+import { createValuesRevision, listApprovedValuesRevisions, listValuesRevisions } from './values-revision';
 
 /*
  * CreateValuesRevision is the only writer of a ValuesRevision, and the server
@@ -88,5 +88,32 @@ describe('listApprovedValuesRevisions', () => {
     expect(sent.releaseDefinitionId).toBe('def-1');
     expect(sent.status).toBe(ValuesStatus.APPROVED);
     expect(revisions.map((revision) => revision.id)).toEqual(['rev-approved']);
+  });
+
+  /*
+   * The re-filter is an equality check, so an unreadable status must not be able to
+   * pass it. It used to be mapped to `draft` — the one value that makes the selector
+   * offer a revision a release operation cannot bind to — so the mapper's fallback is
+   * part of this contract, not a display detail.
+   */
+  it('cannot let a status the console cannot read through the approved filter', async () => {
+    listRpc.mockReset().mockResolvedValue({
+      items: [
+        create(ValuesRevisionSchema, { id: 'rev-approved', releaseDefinitionId: 'def-1', status: ValuesStatus.APPROVED }),
+        // UNSPECIFIED is what the server sends for a stored status it cannot read;
+        // 99 stands for a status a newer server added and this console does not know.
+        create(ValuesRevisionSchema, { id: 'rev-unspecified', releaseDefinitionId: 'def-1', status: ValuesStatus.UNSPECIFIED }),
+        create(ValuesRevisionSchema, { id: 'rev-future', releaseDefinitionId: 'def-1', status: 99 as ValuesStatus }),
+      ],
+    });
+
+    const revisions = await listValuesRevisions('def-1');
+
+    expect(revisions.map((revision) => [revision.id, revision.status])).toEqual([
+      ['rev-approved', 'approved'],
+      ['rev-unspecified', 'unknown'],
+      ['rev-future', 'unknown'],
+    ]);
+    expect(await listApprovedValuesRevisions('def-1')).toHaveLength(1);
   });
 });

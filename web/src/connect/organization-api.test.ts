@@ -20,6 +20,7 @@ import {
   getOrganization,
   mapOrganizationError,
   updateOrganization,
+  type OrganizationStatus,
 } from './organization-api';
 
 /*
@@ -75,13 +76,48 @@ describe('createOrganization', () => {
     });
   });
 
-  it('reports the organization as active whenever the wire status is not "disabled"', async () => {
+  /*
+   * `Organization.status` is a free-form string on the wire and the server passes the
+   * stored column through verbatim (internal/auth/org_service.go toProtoOrg ->
+   * `string(o.Status)`). A value this console cannot read is therefore neither active
+   * nor disabled: the old mapping answered `active` for everything that was not
+   * `disabled`, which is a state nobody had established. (This case used to assert
+   * `active`; it was the negative control for the opposite mistake — reporting an
+   * unknown status as `disabled` — and it now pins the neutral answer instead.)
+   */
+  it('leaves a wire status it cannot read unknown instead of calling the organization active', async () => {
     vi.spyOn(organizationClient, 'createOrganization').mockResolvedValue({
-      // A future/unknown status must not be silently reported as disabled.
       organization: protoOrganization({ status: 'pending' }),
     } as never);
 
+    const created = await createOrganization('Acme');
+
+    expect(created.status).toBe('unknown');
+    expect(created.status).not.toBe('active');
+    expect(created.status).not.toBe('disabled');
+  });
+
+  // Positive control: the two statuses the console does know must survive.
+  it('keeps reporting the two statuses it can read', async () => {
+    const spy = vi.spyOn(organizationClient, 'createOrganization');
+    spy.mockResolvedValueOnce({ organization: protoOrganization({ status: 'active' }) } as never);
+    spy.mockResolvedValueOnce({ organization: protoOrganization({ status: 'disabled' }) } as never);
+
     expect((await createOrganization('Acme')).status).toBe('active');
+    expect((await createOrganization('Acme')).status).toBe('disabled');
+  });
+
+  /*
+   * Type-level control (vitest erases types, so `vue-tsc -b` is the runner): the page
+   * pre-check reads `status === 'disabled'`. It is only honest while `unknown` is a
+   * member of `OrganizationStatus` — removing the third state turns this directive into
+   * an unused one, which is a compile error.
+   */
+  it('keeps unknown out of the two wire states', () => {
+    // @ts-expect-error `unknown` is a third state; the wire pair must not swallow it.
+    const wireState: Exclude<OrganizationStatus, 'unknown'> = 'unknown' as OrganizationStatus;
+
+    expect(typeof wireState).toBe('string');
   });
 
   /*

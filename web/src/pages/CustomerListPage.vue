@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import { onMounted } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -42,8 +43,10 @@ onMounted(() => store.loadList(true));
             <h2>{{ customer.name }}</h2>
             <p>{{ customer.slug }}</p>
           </div>
-          <span :class="['status', customer.status === 'active' ? 'status--active' : 'status--disabled']">
-            {{ customer.status === 'active' ? t('status.active') : t('status.disabled') }}
+          <!-- Three-way on purpose: `unknown` is a value this console could not read, so
+               it must not borrow the copy or the colour of either real state. -->
+          <span :class="['status', `status--${customer.status}`]">
+            {{ statusLabel('customer', customer.status) }}
           </span>
         </header>
         <dl class="customer-card__facts">
@@ -76,6 +79,8 @@ onMounted(() => store.loadList(true));
 .status { font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
 .status--active { color: var(--color-success); }
 .status--disabled { color: var(--color-error); }
+/* Unreadable is neither success nor failure. */
+.status--unknown { color: var(--color-muted-strong); }
 .customer-card__facts { display: flex; gap: 1.5rem; margin: 0; }
 .customer-card__facts dt { color: var(--color-muted); font-size: var(--font-size-xs); }
 .customer-card__facts dd { margin: 0.25rem 0 0; font-weight: 700; }

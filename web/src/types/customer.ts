@@ -1,4 +1,10 @@
-export type CustomerStatus = 'active' | 'disabled';
+/**
+ * `Customer.status` is a free-form string on the wire, and only `active` and
+ * `disabled` are states this console can read. `unknown` is the console's own
+ * reading of any other value (or of nothing at all) — it is not a server state
+ * and must never be rendered as one of the other two.
+ */
+export type CustomerStatus = 'active' | 'disabled' | 'unknown';
 
 export interface CustomerSummary {
   id: string;

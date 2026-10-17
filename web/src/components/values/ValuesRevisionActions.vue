@@ -102,6 +102,8 @@ h2, p { margin: 0; }
 .status--approved { background: var(--color-success-surface); color: var(--color-success-ink); }
 .status--rejected { background: var(--color-danger-surface); color: var(--color-error-strong); }
 .status--superseded { background: var(--color-border); color: var(--color-muted-strong); }
+/* A status the console could not read is neutral: neither an approval state nor a failure. */
+.status--unknown { background: var(--color-surface-muted); color: var(--color-muted-strong); }
 .rejection { margin-top: 0.5rem; color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .hint { margin-top: 0.5rem; color: var(--color-warning-ink-strong); font-size: var(--font-size-sm); }
 .revision-actions__buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.65rem; }

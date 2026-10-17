@@ -23,6 +23,7 @@ export type StatusDomain =
   | 'export'
   | 'trustRoot'
   | 'localUser'
+  | 'customer'
   | 'stage'
   | 'emergencyOperation';
 
@@ -59,7 +60,8 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     active: 'status.definition.active',
     disabled: 'status.definition.disabled',
   },
-  // Values revision status as returned by the orchestrator
+  // Values revision status as returned by the orchestrator. `unknown` covers a value
+  // the mapping could not read (open enum) so it is labelled, not left raw.
   valuesRevision: {
     draft: 'values.revision.status.draft',
     pending_approval: 'values.revision.status.pendingApproval',
@@ -67,6 +69,7 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     rejected: 'values.revision.status.rejected',
     superseded: 'values.revision.status.superseded',
     discarded: 'values.revision.status.discarded',
+    unknown: 'values.revision.status.unknown',
   },
   // Convergence task status. The server CHECK constraint allows only these two
   // (migrations/000008_emergency_change.up.sql), so `rejected` is NOT a value here.
@@ -114,11 +117,20 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     SET_APPROVED_ANNOTATION: 'status.emergencyOperation.setAnnotation',
     REVERT_ON_NEXT_RECONCILE: 'status.emergencyOperation.revert',
   },
-  // Local account status (api/proto/auth/v1/auth.proto: active | pending | disabled)
+  // Local account status (api/proto/auth/v1/auth.proto: active | pending | disabled).
+  // `unknown` is the console's own state for a value it could not read, not a server one.
   localUser: {
     active: 'localUser.status.active',
     pending: 'localUser.status.pending',
     disabled: 'localUser.status.disabled',
+    unknown: 'localUser.status.unknown',
+  },
+  // Customer lifecycle status (api/proto/common/v1/domain.proto: Customer.status is a
+  // free-form string; only `active` and `disabled` are states this console can read).
+  customer: {
+    active: 'status.active',
+    disabled: 'status.disabled',
+    unknown: 'status.unknown',
   },
   // internal/orchestrator/preflight/result.go: StageStatus
   stage: {
