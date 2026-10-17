@@ -39,6 +39,7 @@ resources:
   - api-pvc.yaml
   - pdb.yaml
   - networkpolicies.yaml
+  - edge.yaml
 
 # Production configuration replaces the dev files mounted by ../services. The
 # generator key is the file basename and becomes the in-container path, so the

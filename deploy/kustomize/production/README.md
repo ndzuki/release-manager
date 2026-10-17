@@ -5,8 +5,9 @@ management plane. It turns the dev-shaped manifests under
 `deploy/kustomize/{base,services,postgres,redis}` into a persisted,
 ingress-isolated deployment: the PostgreSQL and Redis bare Deployments become
 StatefulSets with PVCs, web runs two replicas, the four request-serving
-components get PodDisruptionBudgets, and a default-deny NetworkPolicy replaces
-the implicit "everything can reach everything" model.
+components get PodDisruptionBudgets, a default-deny NetworkPolicy replaces
+the implicit "everything can reach everything" model, and an in-cluster TLS
+edge terminates HTTPS on the single public entry point (batch 3).
 
 ## Render and verify (no cluster writes)
 
@@ -20,10 +21,13 @@ current kubeconfig for API discovery, so point `KUBECONFIG` at the target
 cluster (or at any cluster that knows the built-in API groups) before running
 it.
 
-The render is 39 objects: 1 Namespace, 7 ConfigMaps, 6 Deployments, 2
-StatefulSets, 4 PodDisruptionBudgets, 9 Services, 4 PVCs (2 standalone + 2 from
-the StatefulSet claim templates) and 8 NetworkPolicies — the default-deny one
-plus 7 allow rules, including `allow-kubelet-probes`.
+The render is 43 objects: 1 Namespace, 8 ConfigMaps, 7 Deployments, 2
+StatefulSets, 4 PodDisruptionBudgets, 10 Services, 2 PVCs, 2 StatefulSet claim
+templates (part of the StatefulSet specs, not separate objects) and 9
+NetworkPolicies — the default-deny one
+plus 8 allow rules, including `allow-kubelet-probes` and `allow-edge-nodeport`.
+The TLS edge contributes one ConfigMap, one Deployment, one Service and one
+NetworkPolicy on top of batch 1's 39 objects.
 
 Apply only after the Secrets in the next section exist and the image tag is set
 (see [Image tags](#image-tags)); the image gate is the last local check:
@@ -50,6 +54,7 @@ credentials.
 | `release-manager-ci-api-key` | `CI_API_KEY` | webhook CI ingress |
 | `release-manager-harbor-service-token` | `HARBOR_SERVICE_TOKEN` (optional `HARBOR_SERVICE_TOKEN_PREVIOUS`) | webhook, orchestrator |
 | `release-manager-notifier-service-token` | `NOTIFIER_SERVICE_TOKEN` (optional `NOTIFIER_SERVICE_TOKEN_PREVIOUS`) | notifier |
+| `release-manager-edge-tls` | `tls.crt`, `tls.key` | edge (TLS terminator, batch 3) |
 
 `DATABASE_DSN` / `NOTIFIER_DATABASE_DSN` must be complete `postgres://` URLs.
 The notifier's Deployment exposes the `NOTIFIER_DATABASE_DSN` key under the
@@ -63,6 +68,85 @@ names prefixed with `DEV_` (for example `DEV_WEBHOOK_SERVICE_TOKEN`). Those are
 code-level identifiers in `cmd/*` and `internal/auth`, not dev-only values;
 renaming them is a code change outside this batch. Their values come from the
 production Secrets above.
+
+## TLS edge and host access (batch 3)
+
+`secure_cookies: true` (the auth default) plus `SameSite=Strict` means the
+console only works over HTTPS on one origin. This cluster cannot use the k3s
+Ingress route: Traefik is installed, but its `svclb-traefik` DaemonSet runs on
+`rancher/klipper-lb`, which is not in this air-gapped image set, so the Traefik
+Service never gets a host port and its pods stay in `ImagePullBackOff`. The
+overlay therefore ships its own TLS terminator (`edge.yaml`): an
+`nginx:1.27-alpine` Deployment that terminates TLS and proxies every path to
+`web:8087`. `web` stays the same-origin router for the SPA and every Connect
+procedure prefix; the edge adds no application contract.
+
+`nginx:1.27-alpine` must exist in the cluster (it is also the base image of
+`release-web`). Import it without involving the registry:
+
+```bash
+docker save --platform linux/amd64 -o /tmp/nginx-127-alpine.tar nginx:1.27-alpine
+k3d image import -c rm-prod /tmp/nginx-127-alpine.tar 2>&1 | tee /tmp/nginx-import.log
+grep -q ERRO /tmp/nginx-import.log && { echo "k3d image import reported ERRO" >&2; exit 1; }
+```
+
+`k3d image import` prints "Successfully imported" even when a node failed, so
+the `ERRO` check is the real gate.
+
+TLS material is provisioned out of band; the private key never enters the repo:
+
+```bash
+mkdir -p /tmp/rm-edge-tls
+openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
+  -keyout /tmp/rm-edge-tls/tls.key -out /tmp/rm-edge-tls/tls.crt \
+  -subj "/CN=localhost/O=release-manager-prod" \
+  -addext "subjectAltName=DNS:localhost,DNS:rm-prod.local,IP:127.0.0.1" \
+  -addext "basicConstraints=critical,CA:FALSE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+  -addext "extendedKeyUsage=serverAuth"
+chmod 600 /tmp/rm-edge-tls/tls.key
+kubectl -n release-manager create secret tls release-manager-edge-tls \
+  --cert=/tmp/rm-edge-tls/tls.crt --key=/tmp/rm-edge-tls/tls.key
+```
+
+The SANs are load-bearing: a certificate without `localhost` and `127.0.0.1`
+fails `https://localhost:8443` with a hostname mismatch even after a trust
+exception.
+
+Map a host port onto the edge NodePort. This edits the k3d load balancer node;
+it does not rebuild the cluster and does not touch PVCs or Secrets:
+
+```bash
+k3d node edit k3d-rm-prod-serverlb --port-add "8443:30443"
+docker port k3d-rm-prod-serverlb
+# 30443/tcp -> 0.0.0.0:8443
+```
+
+k3d rewrites the load balancer's nginx config to forward `30443` to
+`k3d-rm-prod-server-0:30443`, so the host reaches the NodePort. The `edge`
+Service is the only NodePort in this overlay; `edge.yaml` records why that
+exception exists.
+
+NetworkPolicy: `allow-edge-nodeport` opens TCP 443 on the edge pod only. The
+NodePort source is a node address, not a namespace or pod, so the rule
+deliberately has no `from` clause. The edge-to-web hop is admitted by
+`allow-namespace-service-ports` (the edge carries the same `part-of` label) and
+`allow-ingress-to-web` also names the edge pod explicitly.
+
+Verify from the host:
+
+```bash
+openssl s_client -connect localhost:8443 -servername localhost </dev/null \
+  | openssl x509 -noout -subject -ext subjectAltName
+curl -k -s -o /dev/null -w '%{http_code}\n' https://localhost:8443/
+curl -k -s -X POST https://localhost:8443/auth.v1.AuthService/GetInitStatus \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+The certificate is self-signed, so browsers need a one-time trust exception
+(and an automated run needs `ignoreHTTPSErrors: true`). Replace it with a
+CA-issued certificate, or put a real Ingress in front, before anything but a
+throwaway cluster uses this overlay.
 
 ## Image tags
 
@@ -136,8 +220,10 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   the overlay and the notifier ships an empty egress allowlist.
 - The dev service configs (debug logging, SQLite, disabled Secure cookies,
   raised login rate limit) are replaced by `configs/*.production.yaml`.
-- NodePorts 30082-30088 are removed; every Service is ClusterIP and only the
-  Ingress controller may enter the namespace.
+- NodePorts 30082-30088 are removed; every application Service is ClusterIP and
+  only the Ingress controller (where one exists) or the TLS edge may enter the
+  namespace. The edge's own NodePort 30443 (mapped to host 8443) is the single
+  documented exception.
 - The inherited orchestrator PVC remains 1Gi. Growing it is a storage-class
   and capacity decision for a later batch.
 
@@ -151,8 +237,8 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   proven (startup migrations, gateway CA, background workers).
 - The NetworkPolicy assumes the ingress controller runs in `kube-system`
   (k3s Traefik) or `ingress-nginx`. A host-network ingress controller may
-  present a node address instead; re-check this when TASK-337 batch 3 wires
-  the Ingress.
+  present a node address instead; this cluster has no working Ingress
+  controller, so batch 3 enters through the TLS edge's NodePort instead.
 - Kubelet probes are **explicitly allowed** (not a gap left to fix):
   `allow-kubelet-probes` admits `nodeCidr` (`10.42.0.0/16` by default, the k3s
   Pod CIDR) to ports 8082-8088. It is required because k3s' default kube-router
@@ -165,8 +251,15 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   does not evaluate policies on the node path.
 - Redis has no AUTH; it is reachable only from pods in this namespace by
   NetworkPolicy. Add AUTH in the hardening batch if Redis leaves that boundary.
+- The TLS edge terminates TLS with a self-signed certificate and one replica.
+  It is a stopgap for a cluster without a working Ingress controller, not a
+  production TLS story: replace it with an Ingress controller and a CA-issued
+  certificate before real traffic.
+- The host port mapping `8443:30443` binds `0.0.0.0`, so the edge is reachable
+  from every host interface, not just loopback. If the cluster runs on a
+  networked host, restrict the mapping with
+  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"` (edit
+  the existing mapping; the bind address is part of the port spec) or keep the
+  host behind a firewall.
 - No backup/restore CronJob and no Prometheus scrape configuration yet
   (TASK-337 batch 4).
-- Ingress, TLS and the self-signed CA are TASK-337 batch 3; until then
-  `secure_cookies: true` (the auth default) means the console will not keep a
-  session over plain HTTP.

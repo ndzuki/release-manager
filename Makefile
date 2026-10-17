@@ -716,6 +716,70 @@ test-rollback-sdk: ## Run Rollback SDK quality gate (REQ-063)
 	$(GO) test -race -tags=integration -count=1 ./test/integration/ -run 'TestRollbackSDK'
 
 
+# ---------------------------------------------------------------------------
+# All service images (TASK-337 batch 2)
+# ---------------------------------------------------------------------------
+# One build entry for the eight deployable images. The tag is the git short
+# SHA of the checked-out tree — the production overlay defaults to `dev`, and
+# the release render rewrites it to this immutable tag (deploy/kustomize/
+# production/README.md). Unlike dev.sh, this target uses no content-hash tag
+# and no registry: the caller either pushes to a registry of its own or
+# imports the images into a k3d cluster (`make docker-import-all`).
+#
+# GOPROXY is forwarded like dev.sh does (the images' baked default is
+# proxy.golang.org, unreachable from CN hosts). A loopback HTTP(S)_PROXY is
+# dropped for the build: 127.0.0.1 inside a build container is the container.
+DOCKER_SERVICES := api auth orchestrator operator webhook notifier notification-sink web
+IMAGE_PREFIX ?= localhost:5001
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+DOCKER_BUILD_PARALLELISM ?= 4
+CLUSTER ?= rm-prod
+
+.PHONY: docker-build-all
+docker-build-all: ## Build all 8 service images tagged with the git short SHA
+	@set -euo pipefail; \
+		goproxy="$$(go env GOPROXY 2>/dev/null || true)"; \
+		test -n "$$goproxy" || goproxy="https://proxy.golang.org,direct"; \
+		case "$$goproxy" in \
+			*proxy.golang.org*) goproxy="https://goproxy.cn,$$goproxy" ;; \
+		esac; \
+		export BUILD_GOPROXY="$$goproxy"; \
+		export IMAGE_PREFIX="$(IMAGE_PREFIX)" IMAGE_TAG="$(IMAGE_TAG)"; \
+		printf '%s\n' $(DOCKER_SERVICES) | xargs -P "$(DOCKER_BUILD_PARALLELISM)" -I{} sh -c '\
+			svc="$$1"; \
+			dockerfile="deploy/docker/Dockerfile.$$svc"; \
+			test -f "$$dockerfile" || { echo "missing $$dockerfile" >&2; exit 1; }; \
+			image="$$IMAGE_PREFIX/release-$$svc:$$IMAGE_TAG"; \
+			echo ">> build $$image"; \
+			docker build \
+				--build-arg "GOPROXY=$$BUILD_GOPROXY" \
+				--file "$$dockerfile" \
+				--tag "$$image" . \
+				|| { echo "!! build failed: $$image" >&2; exit 1; }' _ {}
+
+.PHONY: docker-push-all
+docker-push-all: ## Push the 8 images to IMAGE_PREFIX (a registry you already run)
+	@set -euo pipefail; \
+		for svc in $(DOCKER_SERVICES); do \
+			docker push "$(IMAGE_PREFIX)/release-$$svc:$(IMAGE_TAG)"; \
+		done
+
+.PHONY: docker-import-all
+docker-import-all: ## Import the 8 images into a k3d cluster (CLUSTER=rm-prod)
+	@set -euo pipefail; \
+		images=""; \
+		for svc in $(DOCKER_SERVICES); do \
+			images="$$images $(IMAGE_PREFIX)/release-$$svc:$(IMAGE_TAG)"; \
+		done; \
+		log="$$(mktemp)"; \
+		trap 'rm -f "$$log"' EXIT INT TERM; \
+		k3d image import --cluster "$(CLUSTER)" $$images 2>&1 | tee "$$log"; \
+		if grep -q ERRO "$$log"; then \
+			echo "k3d image import reported ERRO:" >&2; \
+			grep ERRO "$$log" >&2; \
+			exit 1; \
+		fi
+
 .PHONY: docker-build-operator
 docker-build-operator: ## Build and save operator image as Docker tarball
 	@rm -f "$(OPERATOR_IMAGE_ARCHIVE)"; \

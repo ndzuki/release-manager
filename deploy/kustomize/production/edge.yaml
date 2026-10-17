@@ -1,0 +1,167 @@
+# TLS edge for the production overlay (TASK-337 batch 3).
+#
+# Why an in-cluster nginx and not the k3s Ingress controller: the cluster
+# installs Traefik behind a `svclb-traefik` DaemonSet whose klipper-lb image
+# (rancher/klipper-lb) is not present in this air-gapped k3d cluster and
+# cannot be pulled, so those pods sit in ImagePullBackOff and the Traefik
+# Service never receives a host port. This edge terminates TLS with an image
+# that is already required by the build (nginx:1.27-alpine is the base of
+# release-web) and forwards every path to the `web` Service, which is the
+# same-origin reverse proxy for the SPA and every Connect procedure prefix.
+# It introduces no new application contract: web still owns routing.
+#
+# Why this must be TLS and same-origin: release-auth's browser session uses
+# Secure cookies (browser_session.secure_cookies defaults to true) with
+# SameSite=Strict, so a console served over HTTP can never keep a session.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-nginx-config
+  labels:
+    app.kubernetes.io/name: edge
+    app.kubernetes.io/part-of: release-manager
+data:
+  # Mounted at /etc/nginx/conf.d/default.conf (subPath), replacing the stock
+  # server block from the image. The certificate and key are mounted from the
+  # release-manager-edge-tls Secret (provisioned out of band, README.md).
+  default.conf: |
+    server {
+        listen 443 ssl;
+        server_name _;
+        server_tokens off;
+
+        ssl_certificate     /etc/nginx/tls/tls.crt;
+        ssl_certificate_key /etc/nginx/tls/tls.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+        ssl_session_cache   shared:edge_tls:10m;
+        ssl_session_timeout 1h;
+
+        # Same ceiling as web/nginx.conf: the edge must never be the tighter
+        # limit for values-file and bundle uploads.
+        client_max_body_size 10m;
+
+        location / {
+            proxy_pass http://web:8087;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header Connection "";
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            # Tell web what the browser actually used. web re-derives its own
+            # value for its backends; nothing on the backend reads it today,
+            # but a plain `http` value at this hop would be a lie.
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Port 443;
+            # Connect server-streaming (the `/orchestrator.v1.*Watch*`
+            # procedures) must arrive frame by frame. Buffering at this hop
+            # would hold every frame until the stream closed, turning a live
+            # watch into one delayed response.
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_read_timeout 300s;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge
+  labels:
+    app.kubernetes.io/name: edge
+    app.kubernetes.io/part-of: release-manager
+spec:
+  # One replica: a NodePort-backed TLS terminator is stateless, and the edge
+  # is not on the request-critical path served by web itself. Multi-replica
+  # would need the Service session affinity / LB discussion, not a manifest
+  # change, so this stays at one until there is a measured need.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: edge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: edge
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      containers:
+        - name: edge
+          image: nginx:1.27-alpine
+          # Imported into the cluster with `docker save` + `k3d image import`
+          # (TASK-337 batch 3): the cluster has no route to docker.io.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: https
+              containerPort: 443
+          # tcpSocket, not httpGet: an HTTP probe would have to verify the
+          # self-signed certificate, and a probe must report "not listening"
+          # rather than "the kubelet does not trust this certificate".
+          startupProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+            - name: tls
+              mountPath: /etc/nginx/tls
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: edge-nginx-config
+            items:
+              - key: default.conf
+                path: default.conf
+        - name: tls
+          secret:
+            # Must exist before this Deployment starts; the overlay does not
+            # create it (same fail-closed rule as the other Secrets).
+            secretName: release-manager-edge-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge
+  labels:
+    app.kubernetes.io/name: edge
+    app.kubernetes.io/part-of: release-manager
+spec:
+  # The ONE NodePort in the production overlay, and a documented exception to
+  # "every Service is ClusterIP, only the Ingress controller may enter".
+  # Rationale: there is no functioning Ingress controller in this cluster
+  # (Traefik's svclb cannot pull klipper-lb), so the TLS terminator has to be
+  # reachable from the host by k3d's port mapping. NodePort 30443 is bound to
+  # host 8443 with `k3d node edit ... --port-add 8443:30443` (README.md).
+  # No other Service in this overlay exposes a NodePort.
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: edge
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+      nodePort: 30443
