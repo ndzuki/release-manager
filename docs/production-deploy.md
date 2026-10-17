@@ -786,6 +786,60 @@ kubectl -n release-manager get pod -l app.kubernetes.io/name=api -o wide
 - Pod 事件：旧 Pod 只有 `Killing`；新 Pod 同一秒内 `SuccessfulCreate` → `Scheduled` → `Pulled`（镜像已在节点）→ `Created` → `Started`。B 轮另有 `BackOff`（`spec.containers{api}`），见下条。
 - **自愈成立，但单副本有代价**：`/`（静态页）与经 edge 的 `/readyz` 全程 200（A 43/43、B 84/84 采样），用户感知是「审计页请求失败」，不是「控制台打不开」。`/audit` 没有副本接管，api 不在就 502；两次的不可用窗口（首坏→首好）约 **5.5 s / 26.0 s**。
 - ⚠️ **异常（未定位，必须记录）**：两次删除中，新 api 容器**首次启动**都以 `failed to register service … ping PostgreSQL: … connection refused` 退出（exit 1），被 kubelet 重启后才成功（A 1 次、B 2 次）。同一时刻用同 namespace、同 `app.kubernetes.io/part-of=release-manager` 标签启动的探针 Pod **可立即连上** PostgreSQL（18:22:05 UTC、18:23:04 UTC 两次实测，首次尝试即成功），所以**不是** PG 不可用；根因未在本任务定位（怀疑与网络策略/连接建立的时序有关，但未取证）。结论：**api 的 Pod 级 RTO 不能按「镜像已在节点上」估算**，实测有 5.7 s 与 26.2 s 两档；复验若看到 `BackOff`，先看 `kubectl logs <pod> --previous` 里是否有这条 ping 错误。
+  **时点更新（2026-10-18 03:00 +08）**：本条「根因未定位」已被 **TASK-351** 推翻并修复——根因是 kube-router 的策略源 ipset 尚未写入新 Pod 地址（**不是** PG 不可用，探针 Pod 也从没踩进那个窗口），修法与修复前后 RTO 见 §9.2.1.1。
+
+#### 9.2.1.1 根因与修复：新 Pod 首启连 PG 被拒（TASK-351，2026-10-18 02:52–02:58 +08 复测）
+
+**结论**：不是 PostgreSQL 宕机，也不是 NetworkPolicy 配得过严，而是**新 Pod 的地址还没进入 kube-router 的策略源 ipset，容器就已经开始连库**。表现是「新 Pod 首启撞一次 `connection refused` → `exit 1` → CrashLoopBackOff 重启」，往下一层是 `REJECT --reject-with icmp-port-unreachable`。
+
+取证（每条均可复验）：
+
+1. **拒绝发生在 `postgres` Pod 的 NetworkPolicy 链上，不在数据库**。在节点上 `iptables-save` 可看到 `postgres-0` 的 per-Pod 链在未命中任何 allow 规则后落到：
+   ```text
+   -A KUBE-POD-FW-XDAFXEN63UPBNKZY … -m mark ! --mark 0x10000/0x10000 -j REJECT --reject-with icmp-port-unreachable
+   ```
+   `icmp-port-unreachable` 在客户端就是 `connect: connection refused`（**不是**超时，所以 `--max-time` 类重试不会兜住它）。放行规则 `allow-postgres` 同时匹配目标集 `KUBE-DST-…`（`postgres` Pod 自己的 IP）和**源**集 `KUBE-SRC-CXUVBLCR4AU3QSVB`（带 `app.kubernetes.io/part-of=release-manager` 的 Pod IP 集合）。
+
+2. **源集的成员来自 apiserver 里 Pod 对象的 `status.podIP`，而 kubelet 是异步上报的**；容器在 sandbox 就绪后立刻启动，此时 Pod 对象可能还没有 IP，kube-router 无从把地址加进集合。用一个「启动后立刻连库」的探针 Pod（同 namespace、同 `part-of` 标签、镜像 `postgres:16`）复现，首次连接被拒、集合加入其 IP 后立刻成功：
+
+   | 事件 | 时刻（UTC 2026-10-17） |
+   | --- | --- |
+   | 容器内首次 `pg_isready` | `18:52:19.600` → **REFUSED** |
+   | apiserver 的 Pod 对象出现 `status.podIP` | `18:52:19.652` |
+   | 该 IP 进入 `KUBE-SRC-…` | `18:52:19.658` |
+   | 下一次 `pg_isready` | `18:52:19.669` → **OK** |
+
+   实测窗口 **60–800 ms**（多轮不同），足以让「启动即 ping」的容器必踩一次。
+
+3. **TASK-350 里「同刻探针可立即连上」不构成 PG 健康的证据**：那条连接是在 Pod 已经 Running 之后用 `kubectl run`/`kubectl exec` 发起的，等到它真正拨号时集合早已更新——探针从未踩进那个窗口。§9.2.1 的「排除 PG 宕机」结论仍然成立，但理由要换成这条。
+
+4. **同一个 bug 影响所有「启动即连库」的服务**：`auth`、`orchestrator`、`notifier` 的 `--previous` 日志里是同一条错误（2026-10-17 10:57:15 UTC，即本次部署时），三者当前 `restartCount=2`（重启次数含该次，但两次的成因没有逐个取证）。
+
+**修法**：`internal/postgres/db.go` 的 `Open` 改为调用 `internal/postgres/connect.go` 的**有界等待**——最多 5 次、指数退避 1 s→8 s（±20% jitter）、总预算 20 s、单次 ping 5 s 超时；**只重试传输层错误**（refused/reset/unreachable/DNS/单次超时），服务端已经应答的错误（`28P01` 密码错、`3D000` 库不存在等）**立即失败不重试**；预算耗尽仍不可达则照旧 `exit 1`，错误串仍是 `connection_unavailable: ping PostgreSQL: … after N attempts`。日志区分「重试中」与「最终失败」：
+```text
+WARN  PostgreSQL not reachable yet, retrying  attempt=1 of=5 retry_in=1.105555444s error="… connect: connection refused"
+INFO  PostgreSQL answered after startup retry  attempt=2
+ERROR PostgreSQL still unreachable after startup retries  attempts=5 error="…"
+```
+（第三行是耗尽分支，本次真机未触发，由 `internal/postgres/connect_test.go` 覆盖。）
+
+**修复前后对比**（同一集群 `rm-prod`、同一方法：`kubectl delete pod` → 新 Pod `Ready`；UTC 2026-10-17）：
+
+| 轮次 | 镜像 | 删除时刻 | 新 Pod Ready | RTO | 容器重启 | 首启是否撞 refused |
+| --- | --- | --- | --- | --- | --- | --- |
+| A1 | 修复前 `b618062` | 18:52:36.164 | 18:52:41.799 | **5.635 s** | 1 | 是 |
+| A2 | 修复前 | 18:52:43.810 | 18:52:49.719 | **5.909 s** | 1 | 是 |
+| A3 | 修复前 | 18:52:51.962 | 18:53:17.827 | **25.866 s** | 2 | 是 |
+| A4 | 修复前 | 18:53:22.778 | 18:53:28.740 | **5.962 s** | 1 | 是 |
+| F1 | 修复后 | 18:57:17.990 | 18:57:24.090 | **6.100 s** | **0** | 是（第 2 次尝试成功） |
+| F2 | 修复后 | 18:57:26.457 | 18:57:32.072 | **5.615 s** | **0** | 是（第 2 次尝试成功） |
+| F3 | 修复后 | 18:57:34.483 | 18:57:40.132 | **5.649 s** | **0** | 是（第 2 次尝试成功） |
+
+F1 轮把失败时刻与集合更新对齐：首 ping 被拒 `18:57:18.469` → 新 IP `10.42.0.108` 进入 `KUBE-SRC-…` `18:57:19.114` → 退避后第 2 次 ping 成功 `18:57:19.577`。
+
+**读法**：竞态**没有消失**（它属于策略面数据同步，任何 CNI 都有），消失的是「竞态 → 容器重启 → 退避」这条放大链。修复后 3/3 轮 RTO 稳定在 **5.6–6.1 s**、**0 次容器重启**，**26 s 那一档不再出现**；剩余 ~5 s 主要是 `readinessProbe.periodSeconds: 5` 的探测相位，不是连库等待。修复前 25.9 s 那轮 = 两次失败 + kubelet 重启退避。
+
+**为什么不改 PG/CNI/策略**：把 `allow-postgres` 放宽或换选择器都不能消除「新 Pod 地址尚未入集」这个窗口，只会削弱策略；正确做法是把「启动顺序」在应用侧等掉。**未做/风险**：等待参数目前是常量（未做成配置项）；`auth`/`orchestrator`/`notifier` 只按同一路径受益，未做各自的真机删 Pod 复测；**坏 DSN/解析不到的主机名会多等约 20 s 才失败**（此前立即失败），这是换取启动窗口的代价；单次 ping 5 s 超时之外的「黑洞路由」场景未实测。
 
 #### 9.2.2 删 `web` 的一个 Pod（Deployment，2 副本）
 
