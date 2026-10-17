@@ -1,7 +1,10 @@
 # Nightly logical backups of the two production databases (TASK-340).
 #
 # Scope: `release_manager` (required) and `release_notifier` (dumped only when
-# the database exists and holds at least one user table). The dumps are
+# the database is proven to exist and to hold at least one base table). Any
+# failure while probing or dumping either database fails the Job: the optional
+# database may be skipped only when its absence (or emptiness) is positively
+# established, never because a connection or query failed. The dumps are
 # PostgreSQL custom-format archives (`pg_dump -Fc`) written to a dedicated
 # ReadWriteOnce PVC, so they survive Pod and node restarts but stay on the same
 # node as this single-node cluster. Off-site copies are still an operator
@@ -39,8 +42,12 @@ spec:
   # 02:00 UTC every day. The cluster runs with UTC; the filename timestamp is
   # UTC as well (`date -u`), so a dump's name and its schedule agree.
   schedule: "0 2 * * *"
-  # Never let two backups overlap (a second run could dump while the first is
-  # still writing the same filenames) and tolerate a short node outage.
+  # Automatic runs never overlap: Forbid makes the CronJob controller skip a
+  # scheduled run while the previous one is still active (a second run could
+  # dump while the first is still writing). It does NOT serialise manual runs:
+  # `kubectl create job --from=cronjob/...` creates an independent Job that
+  # this policy knows nothing about, so an operator triggering one by hand must
+  # stay clear of the 02:00 UTC slot. Tolerate a short node outage as well.
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 3
@@ -109,33 +116,70 @@ spec:
                   target="$backup_dir/release_manager-$stamp.dump"
                   pg_dump --format=custom --no-owner --no-privileges \
                     --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
-                    --file="$target"
+                    --file="$target" || {
+                    printf 'pg_dump failed for release_manager\n' >&2
+                    exit 1
+                  }
                   printf 'dumped release_manager -> %s (%s bytes)\n' \
                     "$target" "$(wc -c < "$target")"
 
                   # release_notifier is optional: skip it when the database is
-                  # absent or a freshly initialised database has no user tables
-                  # yet. Both checks are read-only.
-                  if psql --username="$POSTGRES_USER" --dbname=postgres \
-                       --tuples-only --no-align \
-                       --command="SELECT 1 FROM pg_database WHERE datname = 'release_notifier'" \
-                       | grep -qx 1; then
-                    tables="$(psql --username="$POSTGRES_USER" --dbname=release_notifier \
-                      --tuples-only --no-align \
-                      --command="SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")"
-                    if [ "$tables" -gt 0 ]; then
-                      target="$backup_dir/release_notifier-$stamp.dump"
-                      pg_dump --format=custom --no-owner --no-privileges \
-                        --username="$POSTGRES_USER" --dbname=release_notifier \
-                        --file="$target"
-                      printf 'dumped release_notifier -> %s (%s bytes)\n' \
-                        "$target" "$(wc -c < "$target")"
-                    else
-                      printf 'skip release_notifier: 0 base tables\n'
-                    fi
-                  else
-                    printf 'skip release_notifier: database does not exist\n'
-                  fi
+                  # absent or a freshly initialised database has no base tables
+                  # yet. Both checks are read-only and both run with
+                  # ON_ERROR_STOP=1, and the query output is captured instead of
+                  # being piped into `if`/`grep`: the image's /bin/sh is dash,
+                  # which has no `pipefail`, so a failing `psql` inside a
+                  # pipeline would take the else-branch and the log would claim
+                  # "database does not exist" while the Job stayed green and
+                  # the database went unbacked-up. A failed probe is an unknown
+                  # state, therefore a failed Job.
+                  exists="$(psql -v ON_ERROR_STOP=1 --username="$POSTGRES_USER" \
+                    --dbname=postgres \
+                    --tuples-only --no-align \
+                    --command="SELECT 1 FROM pg_database WHERE datname = 'release_notifier'")" || {
+                    printf 'psql failed while probing release_notifier (database status unknown)\n' >&2
+                    exit 1
+                  }
+                  case "$exists" in
+                    '')
+                      printf 'release_notifier database does not exist; skipping\n' >&2
+                      ;;
+                    1)
+                      tables="$(psql -v ON_ERROR_STOP=1 --username="$POSTGRES_USER" \
+                        --dbname=release_notifier \
+                        --tuples-only --no-align \
+                        --command="SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'")" || {
+                        printf 'psql failed while counting release_notifier base tables\n' >&2
+                        exit 1
+                      }
+                      # `[ "" -gt 0 ]` is an "integer expression expected" error
+                      # in dash and would land in the skip branch: validate the
+                      # count before comparing it.
+                      case "$tables" in
+                        ''|*[!0-9]*)
+                          printf "unexpected release_notifier table count: '%s'\n" "$tables" >&2
+                          exit 1
+                          ;;
+                      esac
+                      if [ "$tables" -gt 0 ]; then
+                        target="$backup_dir/release_notifier-$stamp.dump"
+                        pg_dump --format=custom --no-owner --no-privileges \
+                          --username="$POSTGRES_USER" --dbname=release_notifier \
+                          --file="$target" || {
+                          printf 'pg_dump failed for release_notifier\n' >&2
+                          exit 1
+                        }
+                        printf 'dumped release_notifier -> %s (%s bytes)\n' \
+                          "$target" "$(wc -c < "$target")"
+                      else
+                        printf 'release_notifier has no base tables; skipping\n' >&2
+                      fi
+                      ;;
+                    *)
+                      printf "unexpected release_notifier probe result: '%s'\n" "$exists" >&2
+                      exit 1
+                      ;;
+                  esac
 
                   # Retention: keep the last 7 days, delete older *.dump files.
                   # The postgres image is Debian-based and ships GNU find

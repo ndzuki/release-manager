@@ -6,11 +6,12 @@ metadata:
     app.kubernetes.io/part-of: release-manager
 data:
   # Storage class used by every PVC this overlay creates or inherits
-  # (PostgreSQL 10Gi, Redis 5Gi, release-api 1Gi, orchestrator 1Gi).
+  # (PostgreSQL 10Gi, Redis 5Gi, release-api 1Gi, backups 5Gi, orchestrator 1Gi).
   # `local-path` is the k3d/k3s default; change this one value for a cluster
   # whose default provisioner has another name. The replacement at the bottom of
   # kustomization.yaml writes it into the PostgreSQL/Redis volumeClaimTemplates
-  # and both standalone PVCs, so no manifest has to be edited.
+  # and the three standalone PVCs (release-api, backups, orchestrator), so no
+  # manifest has to be edited.
   storageClassName: local-path
   # Source range the kubelet probes from. `10.42.0.0/16` is the k3s default
   # Pod CIDR. k3s' default kube-router installs NetworkPolicies into the filter

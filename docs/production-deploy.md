@@ -375,7 +375,7 @@ curl -k -s -X POST https://localhost:8443/auth.v1.AuthService/GetInitStatus \
 ### 7.1 备份
 
 **自动备份已存在**（TASK-340）：`CronJob/release-manager-backup` 每日 `02:00 UTC` 对
-`release_manager`（必需）与 `release_notifier`（有用户表时）各做一次 `pg_dump -Fc`，
+`release_manager`（必需）与 `release_notifier`（确证存在且有基表时）各做一次 `pg_dump -Fc`，
 写入 PVC `release-manager-backups`（5Gi），保留 7 天。schedule/保留/位置/手动触发见 §7.4。
 
 手工 dump 仍可用于临时取样（在宿主执行）：
@@ -458,7 +458,7 @@ all checks passed
 | 项 | 值 |
 | --- | --- |
 | 调度 | `0 2 * * *`（02:00 UTC），`concurrencyPolicy: Forbid`，`startingDeadlineSeconds: 600` |
-| 库 | `release_manager`（必需）+ `release_notifier`（存在且有用户表时；空库跳过） |
+| 库 | `release_manager`（必需）+ `release_notifier`（探针确证存在且有基表时；空库跳过；**探针或 dump 失败一律 Job 红**，不再把连接失败误记成“库不存在”） |
 | 格式/位置 | `pg_dump -Fc`，PVC `release-manager-backups`（5Gi，与 PG 同一 `storageClassName` 旋钮），容器内 `/backups` |
 | 文件名 | `release_manager-<UTC 时间戳>.dump` / `release_notifier-<UTC 时间戳>.dump`（`YYYYmmddTHHMMSSZ`） |
 | 保留 | 同一次运行内 `find … -mtime +7 -delete`：删除 **7 天前**的文件（不是“保留 7 个文件”，漏跑一次不会把最后一份好 dump 删掉） |
@@ -478,6 +478,7 @@ kubectl -n release-manager logs job/backup-manual
 
 **运维注意**：
 
+- `concurrencyPolicy: Forbid` 只约束 CronJob 控制器**自动调度**的运行：`create job --from=cronjob/...` 生成的是独立 Job，控制器不追踪它 ⇒ **手动触发不受防重约束**。请避开 02:00 UTC 的自动场次（两者共用同一 PVC，且都会执行 7 天清理）。
 - Job Pod 启动瞬间，新 Pod IP 可能尚未被节点 NetworkPolicy 放行（k3s kube-router 实测约 **2 s**）。脚本先 `pg_isready` 有界等待（60 × 2 s）再 dump；这不是多余的重试，去掉会在 02:00 偶发 `connection refused`。
 - 备份与 PostgreSQL **同节点同盘**（`local-path`）：节点丢失会同时丢库和备份；且没有 WAL 归档，RPO 最长为 24 h。生产使用前必须加异地拷贝，并单独备份 §3.2 的三份私钥。
 - 镜像 `postgres:16` 必须已在节点本地（本集群无 docker.io 出口），否则 CronJob 会 `ImagePullBackOff`。

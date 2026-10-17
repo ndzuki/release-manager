@@ -197,7 +197,7 @@ class.
 | Property | Value |
 | --- | --- |
 | Schedule | `0 2 * * *` (02:00 UTC), `concurrencyPolicy: Forbid` |
-| Databases | `release_manager` (required) and `release_notifier` (only when it has at least one user table) |
+| Databases | `release_manager` (required) and `release_notifier` (only when the probe proves it exists and has at least one base table; a failed probe fails the Job instead of skipping) |
 | Format | `pg_dump -Fc` (PostgreSQL custom format), one file per database per run |
 | Location | PVC `release-manager-backups` (5Gi, same storage class), mounted at `/backups` |
 | File names | `release_manager-<UTC stamp>.dump`, `release_notifier-<UTC stamp>.dump` (`YYYYmmddTHHMMSSZ`) |
@@ -218,6 +218,13 @@ kubectl -n release-manager create job --from=cronjob/release-manager-backup back
 kubectl -n release-manager wait --for=condition=complete job/backup-manual --timeout=600s
 kubectl -n release-manager logs job/backup-manual
 ```
+
+`concurrencyPolicy: Forbid` only serialises runs the CronJob controller
+schedules. A Job created with `create job --from=cronjob/...` is a separate
+object the controller does not track, so a manual run can overlap the
+automatic one; trigger it away from the 02:00 UTC slot. Both runs share the
+PVC and both execute the 7-day retention pass, so overlapping is not
+recommended even though each run uses its own timestamped file names.
 
 The dump directory is only mounted in the backup Pod; inspect it from a
 throwaway Pod that mounts the same claim:
