@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import EnrollmentTokenModal from './EnrollmentTokenModal.vue';
 import { useOperatorStore } from '@/stores/operator';
 import { createEnrollmentToken, revokePendingEnrollmentToken } from '@/connect/operator-api';
+import { t } from '@/i18n/messages';
 import type * as OperatorApi from '@/connect/operator-api';
 
 vi.mock('@/connect/operator-api', async (importOriginal) => {
@@ -104,5 +105,42 @@ describe('EnrollmentTokenModal', () => {
     expect(wrapper.text()).toContain('plaintext-token');
     expect(wrapper.text()).toContain('Failed to fetch');
     expect(revokePendingEnrollmentToken).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * UX-039. What Escape must not destroy is the plaintext; the failure branch has
+   * none on screen and already offers Cancel, so the keyboard gets the same exit.
+   */
+  it('closes on Escape when generation failed and no secret is on screen (UX-039)', async () => {
+    vi.mocked(createEnrollmentToken).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const wrapper = mount(EnrollmentTokenModal, {
+      global: { stubs: { Teleport: true } },
+      props: { customerId: 'customer-1', clusterId: 'cluster-1' },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain(t('operator.token.failedTitle'));
+    expect(wrapper.text()).not.toContain('plaintext-token');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  it('refuses Escape while the one-time token is on screen (UX-039)', async () => {
+    const wrapper = mount(EnrollmentTokenModal, {
+      global: { stubs: { Teleport: true } },
+      props: { customerId: 'customer-1', clusterId: 'cluster-1' },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('plaintext-token');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.text()).toContain('plaintext-token');
   });
 });

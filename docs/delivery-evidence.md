@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
 | REQ-058（50 AC） | ✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
-| `docs/ux-review.md` 87 条 | ✅ 25 / ⚠️ 5 / ⏳ 55 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷 |
+| `docs/ux-review.md` 87 条 | ✅ 27 / ⚠️ 4 / ⏳ 54 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅ |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
 四条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
@@ -170,7 +170,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-018 | major | ⚠️ | 行可点仍是 `tabindex="0"` + 仅 Enter：`web/src/components/audit/AuditEventTable.vue:62`、`:64`；但 `:focus-visible` 已可见（`:165`） |
 | UX-019 | major | ⏳ | `web/src/components/audit/AuditEventDetail.vue` 无 Esc 处理（`grep Escape/onKeydown` 零命中） |
 | UX-020 | major | ⏳ | `web/src/components/operations/TimelineEntryItem.vue:46` 仍 `tabindex="0"`；`OperationTimeline.vue` 无 `aria-live` |
-| UX-021 | major | ⏳ | `web/src/components/customers/DisableCustomerDialog.vue:19`（`confirmed` 只在 `cancel()` 复位）；父组件未 `v-if`（`web/src/pages/CustomerDetailPage.vue:132`）⇒ 成功关闭后仍勾选 |
+| UX-021 | major | ✅ | 已修（TASK-325）：`open` 由 false→true 时复位 `confirmed`（`web/src/components/customers/DisableCustomerDialog.vue:29-34`），`cancel()` 的复位保留（`:36-40`）⇒ 「成功关闭后仍勾选」不再成立；测试 `web/src/components/customers/DisableCustomerDialog.test.ts:32`（关闭后重开断言未勾选 + 确认键重新 disabled） |
 | UX-022 | major | ⏳ | `web/src/components/operators/RevokeOperatorDialog.vue:19` 由空 reason 直接算 `violation`（`:50` 立即渲染 `role="alert"`） |
 | UX-023 | major | ✅ | `web/src/components/emergency/EmergencyChangeForm.vue:59-60`（`aria-describedby` 含计数器 id，不再并入 label） |
 | UX-024 | major | ⏳ | `web/src/components/operations/PatchOverrideEditor.vue:44` 仍 `props.errorIndex === index` 门控 ⇒ 无 index 的错误不渲染 |
@@ -188,7 +188,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-036 | major | ⏳ | `web/src/pages/ConvergenceTasksPage.vue:61-62` 仍 `catch { parentVersion.value = 0n }` |
 | UX-037 | major | ⏳ | 三个状态组件仍用固定 id：`web/src/components/common/EmptyState.vue:22`、`web/src/components/common/ErrorState.vue:24`、`web/src/components/common/ForbiddenState.vue:22`（`AppDialog`/`FormField` 已用 `useId`，但状态组件未改） |
 | UX-038 | major | ⏳ | `web/src/components/values/ValuesCodeEditor.vue:116` 仍只在宿主 div 上 `aria-label`；extensions 无 `history()`/`keymap` |
-| UX-039 | major | ⚠️ | 已迁到 `AppDialog`（获得焦点陷阱 + backdrop 关闭），但 `:close-on-escape="false"`：`web/src/components/operators/EnrollmentTokenModal.vue:87`；「未勾选像卡死」由 backdrop 关闭缓解，Esc 仍不可用 |
+| UX-039 | major | ✅ | 已修（TASK-325，前一条 TASK-177/299 已迁 `AppDialog`）：Escape 仅在**没有明文可失**时可用——`:close-on-escape="escapeClosable"`（`web/src/components/operators/EnrollmentTokenModal.vue:94`），判据 `!generating && !plaintext`（`:39`）；成功分支仍以两个勾选为唯一出口。测试 `web/src/components/operators/EnrollmentTokenModal.test.ts:114`（失败分支 Esc 关闭）与 `:131`（成功分支 Esc 不关闭） |
 | UX-040 | major | ✅ | 已接线：`web/src/pages/EmergencyChangePage.vue:237` 渲染 `EmergencyAnnotationEditor` |
 | UX-041 | minor | ⏳ | 破坏性操作成功仍无可见反馈：`ClusterDetailPage`/`CustomerDetailPage`/`OperatorListPage`/`OperatorDetailPage` 均未引入 Toast（Toast 消费者只有 `DefinitionsPage`/`LocalUsersPage`/`OrganizationPage`/`ValuesEditorPage`） |
 | UX-042 | minor | ✅ | `web/src/pages/OperationDetailPage.vue:230` 声明、`:380` 已绑定 `ref="cancelTrigger"` |
@@ -238,10 +238,10 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-086 | nit | ⛔ | 属**证据口径**问题（`web/dist` 是构建产物、不能当首屏证据），`docs/ux-review.md:257` 已带 `check-docs:ignore` 说明；无需修复 |
 | UX-087 | nit | ⛔ | 属**度量任务**（build 后看 chunk 划分），非缺陷；当前无 `manualChunks` 配置即为其现状记录 |
 
-**冻结计数：✅ 25 / ⚠️ 5 / ⏳ 55 / ⛔ 2（共 87）。**
+**冻结计数：✅ 27 / ⚠️ 4 / ⏳ 54 / ⛔ 2（共 87）。**
 
 按原严重度回看：4 条 blocker **全部** ✅ 或 ⚠️（UX-001/002/003 ✅、UX-004 ✅）⇒ **没有残留 blocker**。
-剩余 55 条 ⏳ 中 blocker 为 0 条、major 为 26 条（3–5 节据此排序）。
+剩余 54 条 ⏳ 中 blocker 为 0 条、major 为 25 条（3–5 节据此排序）。
 
 ---
 
@@ -310,7 +310,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | # | 一句话 | 证据 / 落点 | 估计 | 关键路径？ |
 | --- | --- | --- | --- | --- |
 | W10 | 破坏性操作成功无反馈（4 页） | UX-041；Toast 消费者仅 4 页 | **S** | 间接（H3 相关） |
-| W11 | 统一确认/对话框残留：`EnrollmentTokenModal` 的 Esc、`DisableCustomerDialog` 的勾选复位 | UX-039、UX-021 | **S** | 间接（H3 相关） |
+| W11 | ~~统一确认/对话框残留：`EnrollmentTokenModal` 的 Esc、`DisableCustomerDialog` 的勾选复位~~ **2026-10-17 已交付（TASK-325）**：两条均改为 ✅（见 §3.2 的 `UX-021`/`UX-039` 行）；专项回归见 §9 | UX-039、UX-021 | **0**（无需再做） | 间接（H3 相关） |
 | W12 | 表单错误可见性：无 index 的 patch 错误、provider 违规、blur 校验与提交后聚焦 | UX-024、UX-028、UX-053 | **S** | 否 |
 | W13 | 假阳性显示：`ReleaseStatusBadge` 未知状态显示为 Active | UX-061 | **S** | 否 |
 | W14 | 键盘/读屏：状态组件固定 id、Audit 详情无 Esc、时间线 500 个 tab 停靠点、表格 caption | UX-037、UX-019、UX-020、UX-017 | **M** | 间接（H5 相关） |
@@ -399,3 +399,8 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
   `make check-error-codes` / `make check-reqs` / `make check-tasks` 需 `REQS_DIR=<vault>/Requirements`
   （缺省报「no REQ documents found」，是环境配置而非失败），传入后三者均 exit 0
   （`errcodecheck`：135 个断言错误码可发射 / 7 例外；taskcheck：306 卡 0 violation）。
+- **2026-10-17 修订（TASK-325：UX-021 + UX-039 体验债）**：本次改动 `web/**` 两个组件 + 两处测试
+  （`DisableCustomerDialog` 的勾选复位、`EnrollmentTokenModal` 的失败分支 Esc）。门禁在**本卡自己的 worktree**
+  （基于 `origin/main` @ `f805596`）内量：`cd web && npm run lint`（0 error / 2 既有 warning）、
+  `npm test`（119 files / 1257 tests 全绿，exit 0）、`npm run build`（vue-tsc + vite，exit 0）、
+  `make check-docs` **PASS**。未动 Go/proto/生成物，未改 i18n catalog（无新增文案）。
