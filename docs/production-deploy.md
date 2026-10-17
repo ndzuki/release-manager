@@ -765,7 +765,9 @@ ValuesRevision 批准会被 `release_definition_owner_unresolved` 拒绝）→ `
 - `PublishRelease` 仍是骨架（返回 `not_implemented`），流程里不要等它。
 - `CreateOperation` 返回 `state=preflight`；预检四段 `artifact → render → cluster → runtime_pull` 全 `passed`
   后**自动**进 `queued → running → succeeded`，没有「人工点 apply」这一步 ⇒ **「plan」就是 `preflightResult`**；
-  想只到 plan、不落 apply，只能在预检阶段用 `CancelOperation` 拦住。
+  想只到 plan、不落 apply 就得抢时间：`CancelOperation` 在 `pending`/`preflight`/`queued` 都合法
+  （`internal/orchestrator/operation/state.go` 的 `validTransitions`），但 `queued` 之后 operator 可能已经开跑，
+  取消会走 `cancelling` 而不是干净地停在 plan。
 - chart 必须写成 `oci://` 且 `chart_digest` 是 chart 归档的 sha256（`internal/orchestrator/bundle_service.go`），
   由**客户集群**去拉。本机 demo 在客户集群里跑了一个 `registry:3` + `helm push --plain-http`；生产应指向客户可达的
   chart 仓库。
