@@ -592,6 +592,47 @@ check-error-codes: ## Check that every error code an AC asserts is emittable (TA
 check-migrations: ## Static gate: migration numbering is contiguous and every version has up+down (REQ-008 §8-19)
 	$(GO) test -race -count=1 -run TestMigrationVersionsAreContinuousAndPaired ./migrations/
 
+# ---------------------------------------------------------------------------
+# PostgreSQL migrations (TASK-337)
+# ---------------------------------------------------------------------------
+# migrations/ is the production schema authority (ADR-014). Services also run
+# migrations at startup, but operators need an explicit, reviewable step for
+# first boot, restore and upgrade runbooks. golang-migrate is already a module
+# dependency (internal/postgres), so the upstream CLI is built from the module
+# cache — no extra binary has to be installed. The `postgres` build tag is
+# required: the CLI registers database drivers only behind build tags.
+DATABASE_DSN ?=
+MIGRATE ?= $(GO) run -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate
+
+.PHONY: migrate
+migrate: ## Apply pending PostgreSQL migrations (DATABASE_DSN=postgres://user:pass@host:5432/db?sslmode=disable)
+	@test -n "$(DATABASE_DSN)" || { printf "$(RED)error: DATABASE_DSN is required, e.g. make migrate DATABASE_DSN=postgres://user:pass@host:5432/db?sslmode=disable$(NC)\n"; exit 1; }
+	$(MIGRATE) -path migrations -database "$(DATABASE_DSN)" up
+
+# ---------------------------------------------------------------------------
+# Production overlay image gate (TASK-337)
+# ---------------------------------------------------------------------------
+# The committed production overlay renders with `:dev` tags so that
+# `kubectl kustomize` stays self-contained without a release tag. That default
+# must never be applied, and "remember to re-tag" is not a check. This gate
+# renders the overlay locally (no cluster contact) and fails on any `:dev` tag,
+# printing the offending lines. Run it right before `kubectl apply`, after
+# `kustomize edit set image` (see deploy/kustomize/production/README.md).
+KUBECTL ?= kubectl
+PRODUCTION_OVERLAY ?= deploy/kustomize/production
+
+.PHONY: check-production-images
+check-production-images: ## Gate: refuse ':dev' image tags in the production overlay render (run before kubectl apply)
+	@set -eu; \
+		out="$$($(KUBECTL) kustomize $(PRODUCTION_OVERLAY))" || { printf "$(RED)FAIL check-production-images: $(KUBECTL) kustomize $(PRODUCTION_OVERLAY) failed$(NC)\n"; exit 1; }; \
+		hits="$$(printf '%s\n' "$$out" | grep -E '^[[:space:]]*(-[[:space:]]+)?image:.*:dev([[:space:]]|$$)' || true)"; \
+		if [ -n "$$hits" ]; then \
+			printf "$(RED)FAIL check-production-images: ':dev' image tag(s) in $(PRODUCTION_OVERLAY) — set the release tag with 'kustomize edit set image' first$(NC)\n"; \
+			printf '%s\n' "$$hits"; \
+			exit 1; \
+		fi; \
+		printf "$(GREEN)OK check-production-images: no ':dev' image tag$(NC)\n"
+
 .PHONY: check-store-surface
 check-store-surface: ## Gate the store interface surface: every method needs a caller or a registered exception (TASK-224)
 	@mkdir -p bin

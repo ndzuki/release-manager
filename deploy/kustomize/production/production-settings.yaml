@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: production-settings
+  labels:
+    app.kubernetes.io/part-of: release-manager
+data:
+  # Storage class used by every PVC this overlay creates or inherits
+  # (PostgreSQL 10Gi, Redis 5Gi, release-api 1Gi, orchestrator 1Gi).
+  # `local-path` is the k3d/k3s default; change this one value for a cluster
+  # whose default provisioner has another name. The replacement at the bottom of
+  # kustomization.yaml writes it into the PostgreSQL/Redis volumeClaimTemplates
+  # and both standalone PVCs, so no manifest has to be edited.
+  storageClassName: local-path
+  # Source range the kubelet probes from. `10.42.0.0/16` is the k3s default
+  # Pod CIDR. k3s' default kube-router installs NetworkPolicies into the filter
+  # INPUT chain, so node->pod traffic (kubelet probes) traverses them and is
+  # dropped by default-deny unless explicitly allowed (k3s issue #10030). The
+  # replacement at the bottom of kustomization.yaml writes this value into the
+  # allow-kubelet-probes ipBlock. Change it when the cluster uses another Pod
+  # CIDR: a multi-node k3s cluster normally keeps 10.42.0.0/16 for pods, but
+  # verify against `--cluster-cidr`; a CNI that does not evaluate policies on
+  # the node path may not need this rule at all.
+  nodeCidr: 10.42.0.0/16

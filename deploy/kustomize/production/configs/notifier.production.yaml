@@ -1,0 +1,19 @@
+# release-notifier — production configuration.
+http_port: 8086
+log_level: info
+database:
+  # PostgreSQL is the production authority (ADR-014); the process reads
+  # DATABASE_DSN, which the Deployment sources from the Secret's
+  # NOTIFIER_DATABASE_DSN key. The notifier owns its own database (created by
+  # ../postgres/init.sql).
+  driver: postgres
+notifier:
+  # Deny-by-default outbound webhook delivery. Production does not deploy the
+  # dev notification-sink, so this list is empty until operators add the real
+  # receiver URLs. An empty list blocks every destination, which is the safe
+  # default; widening it is a configuration change, never a request field.
+  egress_allowlist: []
+  vault:
+    # ADR-020 resolver: disabled until a Vault Kubernetes-auth integration and
+    # its credential references exist (batch 4).
+    enabled: false

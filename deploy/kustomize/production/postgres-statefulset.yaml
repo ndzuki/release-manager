@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: release-manager
+spec:
+  # Replaces the dev ../postgres Deployment (deleted by a patch in
+  # kustomization.yaml). The Service and init ConfigMap are intentionally
+  # reused from ../postgres: they are namespace-agnostic and the Service
+  # selector matches this StatefulSet's pod labels.
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: release-manager
+    spec:
+      # The postgres image runs as uid/gid 999. fsGroup makes the local-path
+      # volume writable for that group without running the container as root
+      # for the lifetime of the pod (the entrypoint still starts as root and
+      # drops privileges with gosu).
+      securityContext:
+        fsGroup: 999
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB are provisioned out
+          # of band (TASK-337 batch 4); the image refuses to initialize without
+          # them, so a missing Secret fails closed instead of using dev creds.
+          envFrom:
+            - secretRef:
+                name: release-manager-credentials
+          env:
+            # PGDATA lives in a subdirectory: the volume mount point itself is
+            # root-owned, and initdb refuses a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_INITDB_ARGS
+              value: --auth-host=scram-sha-256
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d/init.sql
+              subPath: init.sql
+          # exec probes launch the command directly, with no shell, so the
+          # expansion is made explicit: `sh -c` starts a shell inside the
+          # container and the single `$` lets that shell expand the POSTGRES_*
+          # variables from envFrom at probe time. (The kubelet also expands
+          # `$(VAR)` in command/args; one `$` here keeps the shell -- not the
+          # kubelet -- as the expander, so the probe reads the container's
+          # environment instead of relying on substitution rules.)
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        # Replaced from production-settings.storageClassName; kept literal here
+        # so the manifest is valid when rendered standalone.
+        storageClassName: local-path

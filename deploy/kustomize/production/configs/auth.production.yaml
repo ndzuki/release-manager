@@ -1,0 +1,20 @@
+# release-auth — production configuration.
+http_port: 8085
+log_level: info
+database:
+  # PostgreSQL is the production authority (ADR-014). The DSN is injected as
+  # DATABASE_DSN from the release-manager-credentials Secret and bound by
+  # internal/config (bindDatabaseEnvironment); never put it in this file.
+  driver: postgres
+redis:
+  address: redis:6379
+authorization:
+  policy_reload_interval: 5s
+maintenance: false
+# login_rate_limit is intentionally omitted: production keeps the compiled-in
+# 5 attempts/minute default. The dev overlay raises it only because the
+# fixture re-authenticates the canonical accounts during reseeding.
+#
+# browser_session is intentionally omitted: secure_cookies defaults to true,
+# which is only correct behind TLS. Batch 3 terminates TLS at the Ingress; do
+# not disable Secure cookies to "make HTTP work".

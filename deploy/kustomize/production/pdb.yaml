@@ -1,0 +1,66 @@
+# PodDisruptionBudgets for the four request-serving components.
+#
+# `unhealthyPodEvictionPolicy: AlwaysAllow` (Kubernetes 1.27+) lets a drain
+# evict pods that are already unhealthy; without it a broken replica can block
+# a node drain forever.
+#
+# NOTE: only web runs more than one replica today. For api/auth/orchestrator
+# minAvailable=1 with replicas=1 intentionally blocks *voluntary* eviction
+# (node drain) until a second replica is proven safe; scaling those services
+# is a later TASK-337 batch (startup migrations / background workers need
+# verification). Do not read these PDBs as an uptime guarantee yet.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  labels:
+    app.kubernetes.io/name: web
+    app.kubernetes.io/part-of: release-manager
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: web
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: release-manager
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth
+  labels:
+    app.kubernetes.io/name: auth
+    app.kubernetes.io/part-of: release-manager
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: auth
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orchestrator
+  labels:
+    app.kubernetes.io/name: orchestrator
+    app.kubernetes.io/part-of: release-manager
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orchestrator
