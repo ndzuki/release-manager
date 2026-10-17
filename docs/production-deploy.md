@@ -1210,6 +1210,8 @@ dispatch 分支在 `internal/orchestrator/preflight/coordinator.go:221`。`inter
 （本次没有伪造 verdict 去「跑通」）。⇒ 要在真实环境做 image 紧急变更，需要先完成签名与信任根接线
 （REQ-043 / REQ-079），不在本演示范围。
 
+> TASK-355 随后用产品代码路径把这条门禁走通了（全程未手工改库）：门禁条件、合法步骤与残留缺口见 §12.7。
+
 #### 12.6.4 未做与残留
 
 - 未在 UI 里实际点一遍 rollback 按钮（只取证了 RPC、代码接线与列表按钮条件；UI 行为未实测）；
@@ -1219,6 +1221,181 @@ dispatch 分支在 `internal/orchestrator/preflight/coordinator.go:221`。`inter
   `sessions` 3 行、`operations` 3 行（INSTALL / UPGRADE / ROLLBACK 各一）、`release_bundles` 2 行、
   candidate artifacts 若干；`release_inventory` 的 `e2e-plan` 行停在 `revision=3 / active`，集群删除后
   不会再更新。`rm-prod` 未动（10/10 Pod、edge 200、网关 TLS `Verify return code: 0`）。
+
+### 12.7 紧急变更的信任门禁与合法路径（TASK-355 实测）
+
+§12.6.3 的 `candidate artifact is not trusted` 是**信任门禁**拒绝，不是入口缺失。TASK-355 用产品路径
+（无手工改库）把 image 紧急变更走通了一次；本节写清门禁判什么、合法路径怎么走、以及它**不**证明什么。
+行号基于 `0623788`。
+
+#### 12.7.1 门禁条件（`resolveEmergencyArtifact`）
+
+`internal/orchestrator/emergency.go:871-924`，按顺序：
+
+| # | 条件 | 依据 |
+| --- | --- | --- |
+| 1 | candidate 是 image 且**已校验**（`ArtifactType=image`、`ValidatedAt != nil`） | `:883-889` |
+| 2 | policy version 与 verifier 同源：`trust.PolicyVersion(GetPolicy(targetEnv).Version)` | `:890-897` |
+| 3 | 必须存在一条 **trusted** verdict（只查 `verification_records`，不重算签名） | `:898-901` |
+| 4 | verdict 的 `RevocationEpoch` 不低于当前 epoch | `:902-904` |
+| 5 | 签发根**仍然活着**：`GetActiveByEnvironment` + `verdictRootIsLive`（有 `root_id` 按 root 匹配，没有则退回 `key_id`；两者皆空即拒） | `:912-918`、`:784-800` |
+| 6 | ref 规范化：已是 `ref@sha256:…` 直接用，否则拼成 `ref@digest` | `:919-923` |
+
+`targetEnv` 是 orchestrator 的 `--target-env`，默认 `staging`（`cmd/orchestrator/main.go:977`）；**生产 overlay
+只替换了 args 里的 `--config`**（`deploy/kustomize/production/kustomization.yaml:216-228`），没有覆盖这个
+flag ⇒ 现网生产 orchestrator 的信任环境也是 `staging`。登记信任根时 `environment` 必须与它逐字一致，
+否则查的是另一个环境的 policy。
+
+⚠️ 门禁**不验签**、**不要求 attestation/SBOM**、**不要求镜像自身有签名**：它只断言「存在一条 trusted、
+未撤销、签发根还活着的行」，不判断这行是谁、以什么流程写进来的。
+
+#### 12.7.2 bundle 回退：为什么「签 bundle」能授权 image
+
+`trustedVerificationForArtifact`（`internal/orchestrator/emergency.go:825-868`）：
+
+- 先按 **image digest** 查 verdict（`:828`）；命中即用，**且 artifact 自己的 verdict 说了算**——即使它是
+  rejected，也不会被一个 trusted 的 bundle 覆盖（`:832-834`）。
+- 未命中才回退：`BundlesForArtifact` 列出「真正交付过这个 image 的 bundle」（`:835-851`，走
+  `bundle_candidate_artifacts` 链接表），再用 bundle 的 `DigestAlg:DigestValue` 查同一 policy 的 verdict
+  （`:848-852`），**只接受 trusted**（`:859`）。
+- 原因是产品里唯一的 trusted 写入者签的是 **bundle** digest（见 12.7.3），而 `common.v1.BundleImage`
+  没有自己的签名。
+
+#### 12.7.3 最小合法步骤（命令级）
+
+前置：`platform_admin` 的 bearer token（`TrustService` 写 RPC 要 `trust_root/write`），以及一个**在线**的
+operator（离线会留失败操作，见 12.7.5）。管理面用 port-forward 打通（生产 overlay 只有 ClusterIP）：
+
+```bash
+kubectl -n release-manager port-forward svc/orchestrator 8083:8083 &
+```
+
+**① 登记信任根**（产品 RPC `TrustService.CreateTrustRoot`，`api/proto/trust/v1/trust.proto:168`，实现
+`internal/trust/service.go:40-81`；返回新 policy，version +1）：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8083/trust.v1.TrustService/CreateTrustRoot \
+  -H "Authorization: Bearer $PLATFORM_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "environment": "staging",
+    "keyId": "task355-demo-key",
+    "issuer": "release-manager-ci",
+    "subjectPattern": "pipeline-",
+    "publicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+  }'
+```
+
+必填：`environment` + `keyId` + `issuer` + 可解析的 `publicKeyPem`（`internal/trust/types.go:53-76`）；
+`valid_from` 缺省为 now，`subjectPattern` 可省（空 = 任意 subject）。匹配规则是 **issuer 全等 + subject
+前缀**（`internal/trust/types.go:100-105`），所以 `signatureRef.issuer` 必须与登记值逐字相等。
+**不幂等**：重放会因 `key_id`/issuer 与现有 active root 重叠而 `INVALID_ARGUMENT`
+（`internal/trust/service.go:55-58`），重试不能「修复」，先读 policy 确认根是否已存在。
+
+**② 取要签的 digest —— 是 bundle 的服务端 canonical digest**
+
+```bash
+curl -sS -X POST http://127.0.0.1:8083/orchestrator.v1.BundleService/ListBundles \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"releaseDefinitionId":"<definition>"}'
+# → bundles[].digest = {"algorithm":"sha256","value":"<64 hex>"}
+```
+
+要签的字符串是 `sha256:<64 hex>`，写进 `signatureRef.digest`；`CreateOperation` 用的正是
+`DigestAlg + ":" + DigestValue`（`internal/orchestrator/service.go:386-389`）。注意这个 hex 是**服务端对
+提交字段算的 canonical hash**（`internal/orchestrator/bundle_service.go:541-558`），不是镜像或 chart 的字节。
+
+**③ 签名（外部流水线义务，仓库里没有 signer）**
+
+```bash
+printf '%s' 'sha256:<64 hex>' > /tmp/bundle-digest.txt   # 必须无换行：签名对象是 []byte(digest)
+openssl pkeyutl -sign -inkey /path/to/ed25519-signing.key -rawin \
+  -in /tmp/bundle-digest.txt | base64 -w0 > /tmp/bundle-digest.sig.b64
+```
+
+裸 Ed25519，消息 = digest 的 ASCII 字节（`internal/trust/ed25519.go:156`），签名的标准 base64 放进
+`signatureRef.signature`。⚠️ 私钥不在仓库、不在集群，`cmd/` 下也没有 signer 子命令——**「谁签、私钥放
+哪」是流水线侧必须自己补的一环**。（这两条命令 2026-10-18 用 openssl 3.6.5 实测：openssl 产出的签名能
+被 Go 的 `ed25519.Verify` 验过；**多一个换行就验不过**。）
+
+**④ 触发 verifier 落 trusted（产品侧唯一写入路径）**
+
+`CreateOperation` 带 `signatureRef`（`api/proto/orchestrator/v1/orchestrator.proto:251`；字段
+`digest`/`signature`/`issuer`/`subject`，见 `api/proto/common/v1/trust.proto:30-37`）：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8083/orchestrator.v1.OrchestratorService/CreateOperation \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"operationType":"INSTALL","bundleId":"<bundle>","releaseDefinitionId":"<def>",
+       "valuesRevisionId":"<approved rev>",
+       "signatureRef":{"digest":"sha256:<64 hex>","signature":"<base64>",
+                       "issuer":"release-manager-ci","subject":"pipeline-355"}}'
+```
+
+`verificationResult` 应为 `TRUSTED`。`Ed25519Verifier`（`internal/trust/ed25519.go:58-79`，装配在
+`cmd/orchestrator/main.go:366-376`）按当前 policy 现算并 `persist` 一行（`:173-189`；`signature_identity`
+是 digest|signature|issuer|subject 的 sha256）。两个必须知道的点：
+
+- **没有独立的 verify/sign RPC**：要让 verdict 落库就必须建一条真操作（INSTALL/UPGRADE），它不是 dry-run，
+  预检通过后会继续走到 apply。不要为了「试一下」对生产 definition 发它。
+- **顺序不能反**：任何 root mutation 都会 bump policy version，而 policy version 是 verdict 的查询键
+  （`internal/orchestrator/emergency.go:890-897` 与 `:898-901`）⇒ 先签后建根（或中途 rotate）会让那条
+  trusted 行查不到，必须重新走一次本步。
+
+**⑤ 发起紧急变更**（`artifactRef` 用 `ListCandidateArtifacts` 返回的 candidate id）：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8083/orchestrator.v1.OrchestratorService/ExecuteEmergencyChange \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"releaseDefinitionId":"<def>",
+       "workloadRef":"deployments/<namespace>/<name>",
+       "container":"<container>",
+       "artifactRef":"<candidate artifact id>",
+       "convergenceStrategy":"REVERT_ON_NEXT_RECONCILE",
+       "operationVersion":"v1.0.0",
+       "idempotencyKey":"<uuid>"}'
+```
+
+`workloadRef` 形如 `<gvr.resource>/<namespace>/<name>`（`api/proto/orchestrator/v1/orchestrator.proto:1718-1742`）；
+`REQUIRE_PROMOTION` 还要带 `targetLocks`（同文件 `:1725`）。成功时 intent 的 `image_reference` 是
+`ref@sha256:…`、操作终态 `succeeded`。
+
+#### 12.7.4 三条缺口（别把「能跑通」当成能力）
+
+1. **没有 signer 工具/文档**：签名、私钥托管、CI 里怎么调用都没有实现；`cmd/` 下没有 signer 子命令，
+   12.7.3 ③ 是手工/流水线命令，不是产品能力。
+2. **没有 per-image 签名**：`common.v1.BundleImage` 不自带签名，image 的 trusted 只能靠 12.7.2 的 bundle
+   回退。于是 **`RecordArtifactEvent` 产生的 candidate 永远不可 trusted**：它不经过 bundle 提交，没有
+   `bundle_candidate_artifacts` 链接，也就没有可回退的 verdict。
+3. **`trusted ≠ 内容一致性`**：被签的 digest 是服务端对提交字段算的 canonical hash
+   （`internal/orchestrator/bundle_service.go:541-558`），而校验「声明内容 vs 实际制品字节」的
+   `verifyDigestParity` 是**空实现**（`internal/orchestrator/validation_worker.go:150-153`，唯一调用点
+   `:97` 恒返回 nil）。所以 trusted 的含义只有：「有人用一把已登记的 key，对这份**声明**的 hash 签了字」。
+   它不证明 chart/镜像的字节与声明一致，也不证明构建来源；§10 第 8 条（无镜像签名、无
+   cosign/attestation/SBOM）仍然成立。
+
+#### 12.7.5 实测边界与 operator 离线注意
+
+实测（2026-10-18，TASK-355）：建根 `42616b42…`（staging / keyId `task355-demo-key`，`audit_events` 有
+`create_root|succeeded`）→ 用它的私钥对 bundle `1483e50f…` 的 canonical digest `sha256:170a4a42…` 签名 →
+`CreateOperation(INSTALL)` 让 `Ed25519Verifier` **由产品写入** trusted 行（`verification_records` 里 trusted
+行的 digest = bundle digest；**image digest `sha256:b7817ff0…` 的 verdict 行数 = 0** ⇒ 12.7.2 的回退得到
+实证）→ `ExecuteEmergencyChange` 返回 SUCCEEDED、`effectStatus=APPLIED`：Deployment 镜像
+`…release-fixture:dev` → `…:dev@sha256:b7817ff0…`，新 Pod 1/1 Running，`emergency_intents` persisted/APPLIED，
+`audit_events` 有 `emergency_change|succeeded`。**全程没有手工改库。**
+
+边界（别把它们当成可复算的证据）：
+
+- **客户集群已删除**：上面「镜像真的变了 / Pod 1/1」只有当时的记录，**现在无法现场复验**。
+- **签名私钥未留存**：无法用密码学方法复算那条 verdict；「它由产品写入、不是手工插入」的依据是 `summary`
+  模板文案 + 非空 `signature_identity` + `create_root` 审计 + 时间线，属**推断**。
+- **operator 离线会留下失败操作**：`ExecuteEmergencyChange` **先**建 operation + intent
+  （`internal/orchestrator/emergency.go:271-289`）**后**才查 operator 是否在线（`:290-294`）。所以只要信任门
+  已过而 operator 离线，就会留下一条 `failed` 的 EMERGENCY operation + 一条 intent（实测 `5a2410e5…`，
+  `operator_offline`），且 intent 的 `image_reference` 已经是 `ref@sha256:…`（信任门在更早的 `:152` 就过了）。
+  重试是**另一次** operation，不是对这条的续跑。
+
+交叉引用：§10 已知限制（第 8 条：无镜像签名 / 无 attestation）；§12.6.3 的拒绝是 TASK-353 时点的结论，
+现在应理解为「可走通，但按 12.7.4 的缺口理解它的含义」。
 
 ## 事实源
 
