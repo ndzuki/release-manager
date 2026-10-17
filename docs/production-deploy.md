@@ -23,7 +23,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:a6707b6` | 审计读面；生产清单仍传 `--db`（SQLite 文件在 PVC 上），代码已支持 `DATABASE_DRIVER=postgres`（TASK-338），切换见 §10-1 |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:3ecf69b` | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图仍空，见 §10-1 |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`） |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -59,7 +59,7 @@
 | --- | --- | --- | --- | --- |
 | `data-postgres-0` | 10Gi | `local-path` | StatefulSet `volumeClaimTemplates` | PostgreSQL 数据目录 |
 | `data-redis-0` | 5Gi | `local-path` | 同上 | Redis AOF/RDB |
-| `release-manager-api-data` | 1Gi | `local-path` | overlay `api-pvc.yaml` | `release-api` 的 SQLite 文件与归档 |
+| `release-manager-api-data` | 1Gi | `local-path` | overlay `api-pvc.yaml` | `release-api` 的审计归档 `/data/archives`；`--db` 的 SQLite 文件仅在未选 PG 时使用 |
 | `release-manager-orchestrator-data` | 1Gi | `local-path` | 继承自 `deploy/kustomize/base` | agent 网关 CA、审计 spool |
 
 `local-path` 是 k3d/k3s 默认 provisioner，卷**绑定节点**：这套 overlay 只适合单节点集群，多节点需要网络卷类（改 `deploy/kustomize/production/production-settings.yaml:14` 的 `storageClassName` 一处即可，见 overlay README 的「Storage class」）。
@@ -463,7 +463,7 @@ kubectl -n release-manager get pods
 | `/metrics` | **只有 auth(8085) 与 orchestrator(8083)** 暴露 Prometheus 文本 | 实测：8083、8085 → 200；8082、8086、8088 → **404** |
 | web 的 `/metrics` | ⚠️ 返回 **200，但内容是 SPA 的 HTML**（`location /` 的 `try_files … /index.html` 兜底） | 实测 `Content-Type: text/html`、4,666 B |
 | 日志 | JSON（slog）写 stderr，`kubectl logs` 直接可读；字段含 `time/level/msg/request_id/procedure/error` | 实测 auth 启动/请求日志 |
-| 审计 | `audit_events` 表在 PostgreSQL；控制台 `/audit` 走 `release-api`（`web/nginx.conf:91` → `api:8088`） | 见 §10-1 的缺口 |
+| 审计 | `audit_events` 表在 PostgreSQL；控制台 `/audit` 走 `release-api`（`web/nginx.conf:91` → `api:8088`），api 已按 `DATABASE_DRIVER=postgres` 读 PG | 见 §10-1：默认组织视图仍空（PG 现有事件均为 `system` 范围） |
 | Prometheus / Grafana | **不存在**：`deploy/` 下无 `ServiceMonitor`、无 scrape 注解、无 dashboard、无告警规则 | `grep` 0 命中 |
 
 **建议（当前未做）**：补 Prometheus 抓取配置（至少 auth/orchestrator）、Grafana dashboard、告警规则，以及给 release-api 补 `/metrics` 或明确其不参与抓取。
@@ -472,7 +472,7 @@ kubectl -n release-manager get pods
 
 逐条都是实测或读码确认，**不是猜测**。排障时不要假设这些能力存在。
 
-1. **`release-api` 的引擎选择尚未接进生产清单**：代码层已支持 `DATABASE_DRIVER=postgres`（TASK-338：`cmd/api/store.go` 按 driver 选择 `postgresstore.Open`/`sqlitestore.Open`，默认仍是 `--db` 的 SQLite），但 `deploy/kustomize/services/api.yaml` 既没注入 `DATABASE_DRIVER`/`DATABASE_DSN`，也仍传 `--db /data/api.db` ⇒ **当前部署的 api 仍只读 SQLite**。实测（2026-10-17，TASK-337 会话）：PG `audit_events` 有 **2 行**，同一次会话 `/audit` 界面返回 **0 行**；`/audit` 本身 HTTP 200（空态）。下一步：给 api 注入与 auth/orchestrator 相同的 DSN、换镜像后实测 `/audit` 非空；在那之前不要删 `release-manager-api-data` PVC。
+1. **`release-api` 已接 PostgreSQL，但控制台 `/audit` 默认组织视图仍为空（数据范围问题，不是引擎问题）**：生产 overlay 已为 `api` 注入 `DATABASE_DRIVER=postgres` 与 `DATABASE_DSN`（Secret `release-manager-credentials`；`deploy/kustomize/production/kustomization.yaml`，TASK-338），`--db /data/api.db` 与 PVC 保留（审计归档目录 `/data/archives` 仍需持久卷）。实测（2026-10-17，TASK-338 会话，镜像 `release-api:3ecf69b`）：api 启动日志为 `{"msg":"store opened","driver":"postgres"}`；PG `audit_events` 仍 **2 行**且 `organization_id` 全部为 `system`（orchestrator GC），按控制台管理员所属组织过滤为 **0 行**；同一登录会话直连 `POST /audit.v1.AuditService/QueryAuditEvents` 时，`filter.organization_id="system"`（platform_admin 跨组织）返回 **2 条**（这 2 行由 orchestrator 直接写入 PG），证明 api 读的是 PG；空 filter 与显式登录组织均返回 **0 条**，浏览器 `/audit` 响应零事件并渲染「暂无审计事件」。结论：**引擎选择缺口已关闭**；`/audit` 仍空是因为 PG 里只有 `system` 范围的系统事件，而控制台按登录组织过滤（`web/src/pages/AuditPage.vue:29`）。要看到这些事件需要产品决策（给 platform_admin 提供全组织/系统范围查询，或把系统事件写入可查询的组织范围）；在此之前不要删 `release-manager-api-data` PVC，也不要把「/audit 空」再归因于 SQLite。
 2. **探针放行依赖 k3s 版本与 Pod CIDR**：`allow-kubelet-probes` 解决了 issue #10030，但 k3s **< v1.28.9 / < v1.29.4** 仍会拦掉探针；换 CIDR 必须改 `production-settings.yaml` 的 `nodeCidr`。本集群 v1.31.5 实测无问题。
 3. **授权策略热重载窗口约 5 s**：auth 的 `authorization.policy_reload_interval: 5s`（`deploy/kustomize/production/configs/auth.production.yaml`）。首次 `Initialize` 后 5 s 内，控制台可能被弹到 `/forbidden`——刷新即可，不是权限配错。
 4. **edge 单副本 + 自签证书**：浏览器需要一次性信任例外；edge 重启期间控制台不可用（后端仍在跑）。且 edge 的 `server_name _` 不区分主机名。
