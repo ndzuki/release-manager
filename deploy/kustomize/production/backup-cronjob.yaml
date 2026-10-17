@@ -18,8 +18,14 @@
 #
 # Archives are written atomically per database (TASK-342): `pg_dump` writes
 # `<db>-<stamp>.dump.tmp`, and only a successful, non-empty, synced archive is
-# renamed to `<db>-<stamp>.dump`. A failed run never publishes a *.dump under
-# the final name, so a red Job leaves no file that looks like a good backup.
+# renamed to `<db>-<stamp>.dump`. Every failure path deletes the temporary
+# file, so a failing dump step never publishes anything under the final name
+# (in particular never a 0-byte or incomplete archive). The guarantee is per
+# database, not per Job: if `release_manager` is dumped first and the later
+# `release_notifier` dump then fails, the Job still turns red and keeps the
+# valid `release_manager` archive from that same run. A red Job can therefore
+# leave a usable *.dump behind; what it never leaves is a *.dump produced by
+# the step that failed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -153,6 +159,19 @@ spec:
                         "$label" >&2
                       return 1
                     fi
+                    # Residual risk, accepted on purpose: these checks only
+                    # establish that the archive is non-empty. If `pg_dump`
+                    # exits 0 while the file it produced is truncated (a short
+                    # write it did not notice -- no such mechanism has been
+                    # observed), the truncated archive is published under the
+                    # final name. An integrity pass (`pg_restore --list`) before
+                    # the rename would catch that case, but it reads every
+                    # archive a second time: extra I/O and minutes on a
+                    # multi-hundred-MB dump, inside the 30-minute
+                    # activeDeadlineSeconds, to guard a failure mode that has
+                    # never been seen (pg_dump -Fc exits 0 only after writing
+                    # the archive trailer). If such a case ever shows up, add
+                    # the `pg_restore --list` check here, before the sync.
                     # Flush before the rename so a node crash cannot leave a
                     # complete-looking *.dump whose contents never reached the
                     # disk.

@@ -209,11 +209,19 @@ class.
 Archives are written atomically per database: `pg_dump` writes
 `<db>-<stamp>.dump.tmp`, and the file is renamed to `<db>-<stamp>.dump` only
 after the dump exits successfully, the archive is non-empty, and it has been
-synced to disk. Any failure removes the temporary file and fails the Job, so a
-red run never leaves a `<db>-<stamp>.dump` that looks like a good backup.
-Without the rename, a failed `pg_dump` (for example wrong credentials) left a
-0-byte file under the final name that was indistinguishable from a real archive
-until the 7-day retention deleted it. Retention still matches only `*.dump`;
+synced to disk. Any failure removes the temporary file and fails the Job, so the
+step that failed never publishes a `<db>-<stamp>.dump` — in particular never a
+0-byte or truncated one. The guarantee is per database, not per Job: when
+`release_manager` is dumped first and the later `release_notifier` dump fails,
+the Job turns red but the valid `release_manager` archive of that run stays in
+`/backups`. A red Job can therefore leave a usable `*.dump` behind; what it
+never leaves is a `*.dump` from the step that failed. Without the rename, a
+failed `pg_dump` (for example wrong credentials) left a 0-byte file under the
+final name that was indistinguishable from a real archive until the 7-day
+retention deleted it. The check is non-emptiness only: a `pg_dump` that exits 0
+with a truncated archive would still be published, which is not a failure mode
+observed in practice and whose verification (`pg_restore --list`) would cost a
+second full read of every archive. Retention still matches only `*.dump`;
 `*.dump.tmp` files orphaned by a hard kill are removed by an age-guarded pass in
 the same run.
 
