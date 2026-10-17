@@ -6,13 +6,21 @@
  * user-facing copy that lives in attributes or in `<script setup>`.
  *
  * Scope, stated explicitly because a gate's blind spots are part of its contract:
- *  - template TEXT nodes (comments stripped)
- *  - template ATTRIBUTE values that render to the user (aria-label/placeholder/title/alt/label)
+ *  - template TEXT nodes (comments stripped). A text node renders by construction, so a
+ *    single Han character in one is user copy, not structure: the quantifier/conjunction
+ *    fragments `共 {{ n }} 个`, `与`, `个`, `条`, `（{{ n }} 条）` were invisible while the
+ *    rule asked for two consecutive letters (TASK-318);
+ *  - template ATTRIBUTE values that render to the user. The name list below covers the
+ *    native attributes and the component props known to render, and a Han-carrying value
+ *    is reported whatever the name, because Chinese copy has no capital and no space for
+ *    the shape rule to match (TASK-318);
  *  - template EXPRESSION literals: quoted strings inside `{{ … }}` and inside bound
  *    directives — English by shape (capitalised word or sentence punctuation) and Chinese
  *    by the same Han run the script layer uses; backtick template literals there are
  *    scanned by the Han rule only, because a machine value such as
- *    `operation-row-${row.operationId}` satisfies the shape rule;
+ *    `operation-row-${row.operationId}` satisfies the shape rule. A backtick literal is a
+ *    composed, rendered string, so one Han character is enough there:
+ *    `${patch.length} 项` was invisible at two-or-more (TASK-318);
  *  - `<script>` string literals that look like a SENTENCE (contain whitespace and at
  *    least two letter runs) — this is what catches rendered messages like
  *    'Unable to switch organization.' while ignoring identifiers, CSS classes,
@@ -26,7 +34,18 @@
  * not per fragment.
  */
 
-const RENDERED_ATTRIBUTES = ['aria-label', 'placeholder', 'title', 'alt', 'label', 'message', 'description'];
+/*
+ * Attribute names whose value renders to the user even when the value is short and carries
+ * no shape the `looksLikeCopy` heuristic could see (`title="Hi"`).
+ *
+ * `action-label` is a COMPONENT PROP, not a native attribute: ErrorState, EmptyState and
+ * ForbiddenState declare `actionLabel` and render it as `{{ actionLabel }}`
+ * (ErrorState.vue:32, EmptyState.vue:26, ForbiddenState.vue:26). Every static
+ * `action-label="…"` in this repo (12 of them) sits on one of those three components, so
+ * the name is rendered copy and belongs on this list. A value that no component renders
+ * must NOT be added here — the list is an assertion about the render path, not a wish.
+ */
+const RENDERED_ATTRIBUTES = ['aria-label', 'placeholder', 'title', 'alt', 'label', 'message', 'description', 'action-label'];
 
 /** Technical attributes whose values are never user-facing copy. */
 const NON_COPY_ATTRIBUTES = new Set([
@@ -117,6 +136,11 @@ function sections(text: string): { template: string; script: string } {
  * Literal text shown by the template. Interpolations are removed rather than used to
  * exclude the whole node: `<p>Sign out {{ name }}</p>` hides real copy, and the first
  * version of this detector skipped any node containing braces.
+ *
+ * A node is reported when it carries two consecutive letters OR a single Han character
+ * (HAN_FRAGMENT): nodes render by construction, so the two-letter floor only exists to keep
+ * one-letter ASCII noise out, and it also hid `共 个`, `与`, `个`, `条` and `（ 条）` — real
+ * fragments the user reads (TASK-318).
  */
 export function templateLiterals(text: string): string[] {
   // Attribute values are not text nodes. They must go first: an arrow function inside a
@@ -132,7 +156,10 @@ export function templateLiterals(text: string): string[] {
   const literals: string[] = [];
   for (const match of template.matchAll(/>([^<>]*)</gu)) {
     const literal = match[1]!.replace(/\s+/g, ' ').trim();
-    if (literal && /\p{L}{2,}/u.test(literal)) literals.push(literal);
+    // Text nodes render by construction: `\p{L}{2,}` keeps the English/identifier floor,
+    // and a single Han character is copy here (`共 {{ n }} 个` collapses to `共 个`, whose
+    // two Han characters are not adjacent, and `与`/`个`/`条` stand alone).
+    if (literal && (/\p{L}{2,}/u.test(literal) || HAN_FRAGMENT.test(literal))) literals.push(literal);
   }
   return literals;
 }
@@ -144,20 +171,42 @@ export function templateLiterals(text: string): string[] {
  * slipped through: the name was not on the list and the text-node scan strips
  * attributes. Any non-bound attribute whose value reads like copy is reported now, and
  * the known rendering props are still checked even when their value is short.
+ *
+ * The shape rule is English-shaped (capital, sentence punctuation or a space), so Chinese
+ * copy such as `action-label="重试"` passed it even once the name was known: TASK-318
+ * measured 12 such values, all on rendered components. The Han rule below closes the class
+ * rather than the name, so a future alias prop cannot reopen it — and it cannot over-report
+ * on this repo, because the same measurement shows every Han-carrying value in a
+ * non-technical attribute is user-visible.
  */
 export function attributeLiterals(text: string): string[] {
   const template = stripComments(sections(text).template);
   const literals: string[] = [];
   const looksLikeCopy = (value: string): boolean =>
     /\p{Lu}/u.test(value) || /[.!?。！？]$/u.test(value) || value.trim().includes(' ');
+  const isCopyValue = (name: string, value: string): boolean => {
+    const known = RENDERED_ATTRIBUTES.includes(name);
+    const technical = NON_COPY_ATTRIBUTES.has(name) || name.startsWith('data-');
+    return !technical && value.trim() !== '' && (known || looksLikeCopy(value) || isHanCopyLiteral(value));
+  };
   // Only plain attributes: `:prop="expr"`, `@event="handler"` and `v-if` are expressions,
   // and their values are covered by templateExpressionLiterals instead.
   for (const match of template.matchAll(/\s((?!v-)[a-zA-Z][\w-]*)\s*=\s*"([^"{][^"]*)"/g)) {
     const [, name, value] = match as unknown as [string, string, string];
-    const known = RENDERED_ATTRIBUTES.includes(name);
-    const technical = NON_COPY_ATTRIBUTES.has(name) || name.startsWith('data-');
-    if (technical) continue;
-    if (value.trim() && (known || looksLikeCopy(value))) literals.push(value.trim());
+    if (isCopyValue(name, value)) literals.push(value.trim());
+  }
+  // Vue accepts single quotes around an attribute value too (`title='中文'`), and unlike the
+  // double-quoted form that quote is ALSO the string syntax inside an expression, so the scan
+  // runs on a copy with every double-quoted value and interpolation removed first: otherwise
+  // an assignment inside a handler (`@click="mode = 'edit'"`) reads as an attribute named
+  // `mode`. This repo uses double quotes exclusively (measured, TASK-318), so the branch
+  // reports nothing today — it is here so the surface is complete rather than half-covered.
+  const singleQuoted = template
+    .replace(/\s[\w:@.-]+\s*=\s*"[^"]*"/g, ' ')
+    .replace(/\{\{[\s\S]*?\}\}/g, ' ');
+  for (const match of singleQuoted.matchAll(/\s((?!v-)[a-zA-Z][\w-]*)\s*=\s*'([^'{][^']*)'/g)) {
+    const [, name, value] = match as unknown as [string, string, string];
+    if (isCopyValue(name, value)) literals.push(value.trim());
   }
   // Bound attributes can carry a literal too: :title="'Sign out'".
   for (const match of template.matchAll(/:\w[\w-]*="\s*'([^']+)'\s*"/g)) {
@@ -220,6 +269,20 @@ function isSentenceLiteral(literal: string): boolean {
 const HAN_COPY = /\p{Script=Han}{2,}/u;
 
 /**
+ * A single Han character, for the surfaces that render by construction.
+ *
+ * `HAN_COPY` needs two because a code literal can be a separator (`changed.join('、')`);
+ * a template TEXT node and a backtick template literal in a template expression are not
+ * code — Vue renders them, so one Han character there is copy. TASK-318 measured the whole
+ * repo: adopting this rule adds exactly six literals and all six are user-visible
+ * quantifier/conjunction/unit fragments (`共 个`, `与`, `个`, `条`, `（ 条）`,
+ * `${patch.length} 项`), so the narrower threshold is not a blanket relaxation. It is
+ * deliberately NOT applied to quoted literals or to `<script>` literals; see
+ * templateExpressionLiterals for the residual that keeps.
+ */
+const HAN_FRAGMENT = /\p{Script=Han}/u;
+
+/**
  * Han-carrying literals that are not copy. Every class is matched as a SHAPE, so a real
  * label cannot hide behind one: a URL has a scheme, a test id appears as an
  * attribute-match expression, and a module specifier starts with a path prefix. The
@@ -237,6 +300,11 @@ function isMachineLiteral(literal: string): boolean {
 
 function isHanCopyLiteral(literal: string): boolean {
   return HAN_COPY.test(literal) && !isMachineLiteral(literal);
+}
+
+/** The same exclusion, at one Han character, for the surfaces that render (see HAN_FRAGMENT). */
+function isHanFragmentCopy(literal: string): boolean {
+  return HAN_FRAGMENT.test(literal) && !isMachineLiteral(literal);
 }
 
 /**
@@ -436,9 +504,15 @@ export function templateExpressionLiterals(text: string): string[] {
     // `Rollback ${releaseName}`, so it would report 29 machine values to catch 6 labels.
     // A run of Han characters does not occur in those machine values at all, which is the
     // same reason the script layer's Han pass can scan backticks unambiguously.
+    //
+    // A backtick literal is a composed, rendered string, so ONE Han character is enough:
+    // `{{ n > 0 ? `${n} 项` : t('operation.confirm.noPatch') }}` rendered `项` while the
+    // gate stayed green (TASK-318). The quoted form keeps HAN_COPY: a lone Han quoted
+    // literal is indistinguishable at this level from a code-level separator, and the repo
+    // has none (measured, TASK-318) — that residual is pinned by the '无' case below.
     for (const match of withoutRegex.matchAll(/`([^`]+)`/g)) {
       const literal = match[1]!.trim();
-      if (isHanCopyLiteral(literal)) literals.push(literal);
+      if (isHanFragmentCopy(literal)) literals.push(literal);
     }
   }
   return literals;
