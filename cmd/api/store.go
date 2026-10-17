@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"os"
 
 	"github.com/ndzuki/release-manager/internal/config"
@@ -27,6 +28,26 @@ func databaseConfigFromService(cfg *config.ServiceConfig) config.DatabaseConfig 
 	}
 }
 
+// storeConstructors is the pair of engine constructors openStore dispatches to.
+// The indirection exists so the engine choice is testable without a database:
+// postgresstore.Open dials and migrates a real server, so a test cannot otherwise
+// observe which constructor a driver selected. Production always dispatches
+// through productionStoreConstructors, which are the real constructors, so this
+// changes no behavior.
+type storeConstructors struct {
+	sqlite   func(dsn string) (store.Store, error)
+	postgres func(ctx context.Context, cfg config.DatabaseConfig, migrationFS fs.FS) (store.Store, error)
+}
+
+var productionStoreConstructors = storeConstructors{
+	sqlite: func(dsn string) (store.Store, error) {
+		return sqlitestore.Open(dsn)
+	},
+	postgres: func(ctx context.Context, cfg config.DatabaseConfig, migrationFS fs.FS) (store.Store, error) {
+		return postgresstore.Open(ctx, cfg, migrationFS)
+	},
+}
+
 // openStore selects the persistence engine the audit surface reads and writes.
 // database.driver (bound from DATABASE_DRIVER) defaults to SQLite, which keeps
 // the long-standing --db file authoritative for dev/test; postgres routes the
@@ -35,8 +56,15 @@ func databaseConfigFromService(cfg *config.ServiceConfig) config.DatabaseConfig 
 // constructor choice rather than an adapter. Startup runs on the process
 // context, the same shape as cmd/auth and cmd/orchestrator.
 func openStore(sqlitePath string, cfg config.DatabaseConfig) (store.Store, error) {
+	return openStoreWith(productionStoreConstructors, sqlitePath, cfg)
+}
+
+// openStoreWith is openStore with the constructors injected. The selection and
+// validation rules live here, so tests can pin the routing decision itself
+// (TASK-338) instead of the engine's network I/O.
+func openStoreWith(ctors storeConstructors, sqlitePath string, cfg config.DatabaseConfig) (store.Store, error) {
 	if cfg.Driver == "" {
-		return sqlitestore.Open(sqlitePath)
+		return ctors.sqlite(sqlitePath)
 	}
 	if cfg.Driver == "sqlite" && cfg.DSN == "" {
 		// --db has always been this service's SQLite connection string; keep it
@@ -49,9 +77,9 @@ func openStore(sqlitePath string, cfg config.DatabaseConfig) (store.Store, error
 	if cfg.Driver == "postgres" {
 		// Same constructor as auth/orchestrator: shared pool plus the embedded
 		// migrations (ADR-070, migrations/embed.go).
-		return postgresstore.Open(context.Background(), cfg, migrations.FS)
+		return ctors.postgres(context.Background(), cfg, migrations.FS)
 	}
-	return sqlitestore.Open(cfg.DSN)
+	return ctors.sqlite(cfg.DSN)
 }
 
 // storeLogAttrs describes the opened engine without ever logging a PostgreSQL

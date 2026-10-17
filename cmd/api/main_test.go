@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -265,6 +266,75 @@ func TestOpenStoreRejectsInvalidDriverConfig(t *testing.T) {
 			st, err := openStore(filepath.Join(t.TempDir(), "api.db"), tt.cfg)
 			require.ErrorContains(t, err, tt.want)
 			require.Nil(t, st)
+		})
+	}
+}
+
+// TASK-338: the engine selection must be assertable without a database. Both
+// constructors are replaced with recorders, so this pins which one openStore
+// dispatches to and with which DSN; the real PostgreSQL constructor dials and
+// migrates a server and cannot otherwise be observed. A driver branch mutated to
+// always take SQLite makes the postgres case fail here instead of only in CI.
+func TestOpenStoreSelectsConstructorByDriver(t *testing.T) {
+	const pgDSN = "postgres://release_manager:s3cret@postgres:5432/release_manager?sslmode=disable"
+	dbPath := filepath.Join(t.TempDir(), "api.db")
+
+	tests := []struct {
+		name       string
+		cfg        config.DatabaseConfig
+		wantEngine string
+		wantDSN    string
+		wantErr    string
+	}{
+		{
+			name:       "postgres driver reaches the postgres constructor",
+			cfg:        config.DatabaseConfig{Driver: "postgres", DSN: pgDSN},
+			wantEngine: "postgres",
+			wantDSN:    pgDSN,
+		},
+		{
+			name:       "unset driver keeps the sqlite default",
+			cfg:        config.DatabaseConfig{},
+			wantEngine: "sqlite",
+			wantDSN:    dbPath,
+		},
+		{
+			name:       "explicit sqlite without dsn falls back to db path",
+			cfg:        config.DatabaseConfig{Driver: "sqlite"},
+			wantEngine: "sqlite",
+			wantDSN:    dbPath,
+		},
+		{
+			name:    "invalid driver is rejected before any constructor",
+			cfg:     config.DatabaseConfig{Driver: "mysql"},
+			wantErr: "database.driver must be postgres or sqlite",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var engine, gotDSN string
+			ctors := storeConstructors{
+				sqlite: func(dsn string) (store.Store, error) {
+					engine, gotDSN = "sqlite", dsn
+					return nil, nil
+				},
+				postgres: func(_ context.Context, cfg config.DatabaseConfig, _ fs.FS) (store.Store, error) {
+					engine, gotDSN = "postgres", cfg.DSN
+					return nil, nil
+				},
+			}
+
+			opened, err := openStoreWith(ctors, dbPath, tt.cfg)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				require.Nil(t, opened)
+				require.Empty(t, engine, "an invalid driver must not reach a constructor")
+				return
+			}
+			require.NoError(t, err)
+			require.Nil(t, opened, "the recorder constructors return no store")
+			assert.Equal(t, tt.wantEngine, engine)
+			assert.Equal(t, tt.wantDSN, gotDSN)
 		})
 	}
 }
