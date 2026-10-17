@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
 | REQ-058（50 AC） | ✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
-| `docs/ux-review.md` 87 条 | ✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；两 PR 叠加后按 §3.2 表逐行重数 |
+| `docs/ux-review.md` 87 条 | ✅ 30 / ⚠️ 4 / ⏳ 51 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；UX-009、UX-055 ⏳→✅（W20）；各 PR 叠加后按 §3.2 表逐行重数 |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
 四条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
@@ -158,7 +158,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-006 | major | ⏳ | `web/src/pages/ReleaseInventoryPage.vue:80` 仍是 `onActivated`，全仓无 `KeepAlive` ⇒ 该分支仍是死代码（挂载由 `:71` 的 watch immediate 覆盖） |
 | UX-007 | major | ⚠️ | 已有退避 + 预算：`web/src/composables/useOperatorPolling.ts:55`（`operatorPollingRetryDelayMs`，上限 `:52`）、`:86`（预算用尽才停）、`:105`（成功清零）、`:109`（由失败计数派生 `stopped`）、`:114`（`resume()`，TASK-325）。**已做**「把自动刷新状态暴露给 UI」：`web/src/components/operators/OperatorPollingNotice.vue` 在列表页与详情页各呈现一处（`role="status"` + 恢复按钮）；**仍缺**「最后更新时间」 |
 | UX-008 | major | ⏳ | key 仍只有 `values_draft:<releaseDefinitionId>`：`web/src/stores/valuesEditor.ts:27`、`:45-47`；无时间戳/TTL/scope。`setItem` 已进 try（`:189`、`:213`） |
-| UX-009 | major | ⏳ | `web/src/components/operators/EnrollmentTokenModal.vue:52-53` `copy()` 仍无 try/catch、无失败反馈 |
+| UX-009 | major | ✅ | 2026-10-17 修复（W20）：`web/src/components/operators/EnrollmentTokenModal.vue:70-81`（`copy()` 对「无 `navigator.clipboard`」与写入被拒都落到 `copyNotice`）+ `:139-154`（success 走 `role="status"`、error 走 `role="alert"` 的 `Toast` 分支）；文案 `web/src/i18n/messages.ts:207-208`；测试 `web/src/components/operators/EnrollmentTokenModal.test.ts:155`、`:179`、`:201` |
 | UX-010 | major | ✅ | `web/src/pages/AuditPage.vue:103-127` 收进单条 `v-if/v-else-if` 链，有数据时降级为页内 warning（`:126`） |
 | UX-011 | major | ⏳ | `web/src/pages/AuditPage.vue:68-76` 仍 deep watch → `syncQuery()`，无 debounce |
 | UX-012 | major | ✅ | `web/src/pages/AuditPage.vue:107`（`permission_denied` 分支）→ `ForbiddenState` |
@@ -204,7 +204,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-052 | minor | ✅ | `web/src/components/operations/OperationForm.vue` 已无 `aria-label`（grep 零命中） |
 | UX-053 | minor | ⏳ | 表单仍只在 submit 校验、无 blur 校验、提交后不聚焦首个错误字段（`OperationForm.vue` 无 `blur`/`focus()`） |
 | UX-054 | minor | ⏳ | `web/src/components/customers/CustomerForm.vue:27` `canSubmit` 仍只要求 name 非空 |
-| UX-055 | minor | ⏳ | `web/src/composables/useSessionExpiry.ts:20-21` `delay` 仍无 2^31-1 clamp |
+| UX-055 | minor | ✅ | 2026-10-17 修复（W20）：`web/src/composables/useSessionExpiry.ts:17`（`SESSION_EXPIRY_MAX_DELAY_MS = 2 ** 31 - 1`）+ `:41-50`（上界 clamp + 每次唤醒重算剩余并分段重排 ⇒ 超长有效期不再被平台当 1ms，也不在到点前提前登出）；测试 `web/src/composables/useSessionExpiry.test.ts:69`、`:90`（30 天：2ms 内不登出 + 到期只登出一次） |
 | UX-056 | minor | ⏳ | 两条过期入口仍在（`web/src/connect/client.ts` 的 401 路径 + `useSessionExpiry`） |
 | UX-057 | minor | ⏳ | `web/src/pages/ReleaseInventoryPage.vue:120` 仍 `@click="inventory.refresh"`（传 MouseEvent），且刷新/加载更多标志未统一 |
 | UX-058 | minor | ⏳ | `web/src/components/audit/AuditFilters.vue:17` 仍对 `model.actor` 写嵌套属性 |
@@ -319,7 +319,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | W17 | 双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 6 份 | UX-076、UX-071、UX-077 | **M** | 否 |
 | W18 | 巨型组件再拆分（`OperationDetailPage` 481 行） | UX-070 | **M** | 否 |
 | W19 | 草稿安全：Values 草稿无 scope/TTL/时间戳 | UX-008 | **S** | 否 |
-| W20 | 会话/剪贴板边界：`useSessionExpiry` 无 clamp、`copy()` 无失败反馈 | UX-055、UX-009 | **S** | 否 |
+| W20 | ~~会话/剪贴板边界：`useSessionExpiry` **无 2^31-1 上界 clamp**（`web/src/composables/useSessionExpiry.ts:20` 已有下界 `Math.max(0, …)`，真缺陷是 `setTimeout` 的上界溢出 ⇒ 超长有效期会被当 1ms 立刻登出；精确口径同 §3.2 的 UX-055 行）、`copy()` 无失败反馈~~ **2026-10-17 已交付（TASK-325）**：延迟改为分段重排（`web/src/composables/useSessionExpiry.ts:17` 的 2^31-1 上限 + `:41-50` 每次唤醒重算剩余，到点才登出）；`copy()` 失败/成功都出 `Toast`（`web/src/components/operators/EnrollmentTokenModal.vue:70-81`、`:139-154`）。证据见 §3.2 的 UX-055/UX-009 行 | UX-055、UX-009 | **S**（已完成） | 否 |
 | W21 | 设计令牌收尾：`ClusterDetail` 三列无断点、`OperatorTable` nowrap、`EmergencyResultPanel` 溢出未换行 | UX-032、UX-031、UX-033 | **S** | 否 |
 | W22 | 中文收敛（`NOT_YET_MIGRATED` 台账） | UX-084；决策 **G5/D9 延后** | **M** | 否（已裁定延后） |
 
