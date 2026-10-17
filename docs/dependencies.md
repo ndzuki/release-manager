@@ -9,7 +9,7 @@
 
 | 范围 | 数量 | 通过 | 待复核 | 强 copyleft | 无许可证 | 例外 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Go 模块（默认构建闭包） | 169 | 169 | 0 | 0 | 0 | 0 |
+| Go 模块（默认构建闭包） | 170 | 170 | 0 | 0 | 0 | 0 |
 | 前端运行时依赖 | 50 | 50 | 0 | 0 | 0 | 0 |
 | 自带 NOTICE 的 Go 模块（正文已汇总到仓库根目录 `NOTICE`） | 11 | — | — | — | — | — |
 
@@ -142,10 +142,11 @@
 | `github.com/xlab/treeprint` | v1.2.0 | MIT |  |
 | `go.etcd.io/bbolt` | v1.5.0 | MIT |  |
 | `go.opentelemetry.io/auto/sdk` | v1.2.1 | Apache-2.0 |  |
-| `go.opentelemetry.io/otel` | v1.46.0 | Apache-2.0 |  |
-| `go.opentelemetry.io/otel/metric` | v1.46.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel` | v1.47.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel/log` | v1.47.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel/metric` | v1.47.0 | Apache-2.0 |  |
 | `go.opentelemetry.io/otel/sdk` | v1.46.0 | Apache-2.0 |  |
-| `go.opentelemetry.io/otel/trace` | v1.46.0 | Apache-2.0 |  |
+| `go.opentelemetry.io/otel/trace` | v1.47.0 | Apache-2.0 |  |
 | `go.uber.org/atomic` | v1.11.0 | MIT |  |
 | `go.yaml.in/yaml/v2` | v2.4.4 | Apache-2.0|MIT |  |
 | `go.yaml.in/yaml/v3` | v3.0.5 | Apache-2.0 |  |
