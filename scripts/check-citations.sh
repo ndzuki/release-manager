@@ -56,6 +56,12 @@
 #      removed without a doc update fails), and each row of a documented trigger
 #      table must state the trigger class its job's `if:` actually has.
 #
+#      The job set comes from an awk extractor that reads one job-id spelling,
+#      and is cross-checked against a real YAML parse of the same file: two
+#      parsers, one file, same job names or a finding. A job id the extractor
+#      cannot spell would otherwise leave both the count and the set claims
+#      measured against the wrong workflow (TASK-317).
+#
 # Rules are stored one per line as   doc;line_re;spec;start_re;end_re;must_re
 # with `;` as the separator, so a pattern must NOT contain `;` (a literal `|`,
 # e.g. a markdown table cell delimiter, is written `\|`).
@@ -63,6 +69,10 @@
 # Usage:
 #   scripts/check-citations.sh           dry run: inventory + findings; exit 0
 #   scripts/check-citations.sh --check    exit 1 when anything is wrong
+#
+# Needs bash, awk, grep, comm, sort, git, and python3 with PyYAML (the ledger
+# cross-checks its awk job extractor against a YAML parse; where that parse is
+# unavailable the ledger fails instead of quietly narrowing, see layer 3).
 set -euo pipefail
 
 # Findings must come out in the same order on every machine.
@@ -240,6 +250,68 @@ if [ "$n_jobs" -lt 1 ]; then
   fail "  [FAIL] layer 3: no jobs parsed out of $TARGET — the job extractor no longer matches the file, so every job-set claim below would pass vacuously" ""
 fi
 
+# Cross-check the extractor above against a real YAML parse of the same file.
+#
+# The extractor reads exactly one spelling of a job id, `[a-z][a-z0-9_-]*`, while
+# YAML accepts any mapping key: `MutantJobX`, `x_y.z`, a quoted `"build":`. Such a
+# job is invisible above, so a "N 个 job" claim AND a job-name table both stay
+# green while the workflow has one more job — the gate is fail-open precisely
+# where it is supposed to bind. Measured 2026-10-16 on the TASK-315 tree:
+# appending a `MutantJobX` job left the ledger reporting 18 and the job-set check
+# silent; only the incidental `lines` count noticed, which is luck, not a
+# guarantee. So the job names the two parsers see must be the same set.
+#
+# The YAML side reads key text off the parse tree instead of `safe_load(...)
+# ["jobs"]`: under YAML 1.1 a legal job id such as `on`, `no` or `null` resolves
+# to a bool/None, which would report a mismatch on a correctly documented tree.
+# `yaml.compose` keeps the spelling the file actually wrote.
+yaml_state=ok
+yaml_job_keys=""
+if ! command -v python3 >/dev/null 2>&1; then
+  yaml_state=no-python3
+elif ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  yaml_state=no-pyyaml
+elif ! yaml_job_keys=$(python3 -c '
+import sys, yaml
+
+def find(node, name):
+    if isinstance(node, yaml.MappingNode):
+        for key, value in node.value:
+            if key.value == name:
+                return value
+    return None
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    try:
+        doc = yaml.compose(fh)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = "" if mark is None else " at line %d column %d" % (mark.line + 1, mark.column + 1)
+        raise SystemExit("YAML parse error: %s%s" % (getattr(exc, "problem", exc), where))
+
+jobs = find(doc, "jobs")
+if not isinstance(jobs, yaml.MappingNode):
+    raise SystemExit("no jobs: mapping in " + sys.argv[1])
+print("\n".join(sorted({key.value for key, _ in jobs.value})))
+' "$TARGET" 2>"$tmpd/yaml.err"); then
+  yaml_state=parse-failed
+fi
+
+if [ "$yaml_state" = ok ]; then
+  n_yaml_jobs=$(printf '%s\n' "$yaml_job_keys" | grep -cE '.' || true)
+  awk_only=$(comm -23 <(printf '%s\n' "$job_keys") <(printf '%s\n' "$yaml_job_keys") | tr '\n' ' ')
+  yaml_only=$(comm -13 <(printf '%s\n' "$job_keys") <(printf '%s\n' "$yaml_job_keys") | tr '\n' ' ')
+  if [ "$n_yaml_jobs" != "$n_jobs" ] || [ -n "$awk_only" ] || [ -n "$yaml_only" ]; then
+    fail "  [FAIL] layer 3: PyYAML reads $n_yaml_jobs job(s) under \`jobs:\` in $TARGET, the awk extractor reads $n_jobs (extractor only: ${awk_only:-none}; YAML only: ${yaml_only:-none}) — the extractor spells job ids \`[a-z][a-z0-9_-]*\`, so a job outside that spelling cannot be measured and every count and job-set claim below would be checked against the wrong workflow; rename the job id or widen the extractor deliberately" ""
+  fi
+else
+  if [ "$yaml_state" = parse-failed ]; then
+    fail "  [FAIL] layer 3: python3 + PyYAML cannot parse $TARGET — $(tr '\n' ' ' <"$tmpd/yaml.err" | cut -c1-160) — a workflow that does not parse has no verifiable job set" ""
+  else
+    fail "  [FAIL] layer 3: the awk job extractor cannot be cross-checked against a YAML parser ($yaml_state) — that cross-check is what keeps a job id outside \`[a-z][a-z0-9_-]*\` from leaving the job count and the job set quietly short; install python3 + PyYAML (e.g. \`python3 -m pip install pyyaml\`)" ""
+  fi
+fi
+
 metric_value() {
   case "$1" in
     jobs) printf '%s\n' "$n_jobs" ;;
@@ -414,7 +486,7 @@ if [ "$mode" = dry ]; then
 fi
 
 echo "check-citations: ${#md[@]} markdown files; $n_cites citations to $TARGET ($n_inv doc/spec pairs); $n_rules semantic rules over $n_rule_parts cited ranges; $n_verified ranges semantically verified; $((n_inv - n_verified)) without a passing rule"
-echo "check-citations: ledger: $TARGET has $n_jobs jobs; $n_counts count claim(s), $n_sets job-name set(s) and $n_triggers trigger table(s) checked against it"
+echo "check-citations: ledger: $TARGET has $n_jobs jobs (awk extractor vs PyYAML: $yaml_state); $n_counts count claim(s), $n_sets job-name set(s) and $n_triggers trigger table(s) checked against it"
 if [ -s "$tmpd/fails" ]; then
   sort -u "$tmpd/fails"
   echo "check-citations: FAIL ($n_fail cited range(s) contradict their rule; anchor/file failures are listed above)"
