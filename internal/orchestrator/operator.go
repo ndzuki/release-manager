@@ -36,7 +36,10 @@ const (
 	// defines no identity, token, or operator-address flags (TASK-346). The
 	// gateway address stays a placeholder: whether the management-plane
 	// listener is reachable from a customer cluster is a deployment fact the
-	// control plane cannot know.
+	// control plane cannot know. The ENROLLMENT_TOKEN export is deliberately a
+	// self-reference: only the console substitutes the plaintext token, so a
+	// caller that uses the raw RPC response must supply a real token itself --
+	// copied verbatim, the export yields an empty value.
 	installTemplate = `# release-operator reads its agent identity from --config (agent.customer_id,
 # agent.cluster_id) and its enrollment token from ENROLLMENT_TOKEN; neither is a
 # command-line flag.
