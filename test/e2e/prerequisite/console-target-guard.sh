@@ -17,7 +17,8 @@
 # where the manifest says it must?"
 #
 # The manifest's titles are copied verbatim from the specs in console.sh's SPECS
-# (`E2E_CONSOLE_SPECS`, default `e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts`).
+# (`E2E_CONSOLE_SPECS`, default `e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts
+# e2e/delivery-criteria.spec.ts`).
 # console.sh refuses to start when a spec it was asked to run has no manifest
 # entry, and the completeness gate below refuses to pass when the report collected
 # a case no entry declares, so the manifest cannot silently fall behind the lane.

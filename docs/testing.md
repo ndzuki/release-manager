@@ -447,12 +447,13 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 ## 控制台（浏览器）E2E：CI 车道与 spec 归属（TASK-270）
 
-`web/e2e/` 下三个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
+`web/e2e/` 下四个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
 
 | spec | 覆盖 | 车道 |
 | --- | --- | --- |
 | `web/e2e/rollback.spec.ts` | REQ-056 AC-056-08 浏览器回滚路径（TASK-240） | `e2e-prerequisite`：**push main / `workflow_dispatch`**，PR 不跑 |
 | `web/e2e/emergency-smoke.spec.ts` | REQ-058 紧急变更走查（`REQUIRE_PROMOTION` 成功路径）+ **跨角色审批**（AC-058-41） | 同上（TASK-270 起纳入） |
+| `web/e2e/delivery-criteria.spec.ts` | 交付判据 H1–H5 中可无人介入判定的部分：登录成败、关键页可达、危险操作 Esc 取消、失败原因 + `requestId`、焦点陷阱（TASK-325；判据定义见 H 组交付判据 §4.2） | 同上（TASK-325 起纳入） |
 | `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑 | **不在 CI 车道**；本地手工跑（需 `E2E_VIEWER_PASS`，见 spec 头注释） |
 
 - **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
@@ -472,8 +473,9 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   本地等价入口 `make e2e-prerequisite`（`dev-up dev-seed dev-status` + `smoke.sh` + `console.sh`；
   需要 k3d/kustomize 与 Chrome，结束不自动 purge）。
 - **跑哪些 spec 由 `console.sh` 决定**：默认
-  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts'`，并显式 `--workers=1`（两个 spec
-  共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>` 可临时收窄。
+  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts'`，并显式
+  `--workers=1`（三个 spec 共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>`
+  可临时收窄。
 - **跨角色审批的第二审批人**：`console.sh` 把 `E2E_ADMIN_B_USER=e2e-runner` 与
   `E2E_ADMIN_B_PASS=$E2E_RUNNER_PASSWORD` 传给 spec。口令来自 `data/dev-credentials.env`（`e2e-prerequisite`
   job 没有 `DEV_PROFILE`，走 local profile 由 `dev-seed` 生成；CI 的同名 Secret 只注入 `e2e` job）。
@@ -510,7 +512,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   `make dev-up` 报 unchanged、Deployment 不更新、pod 继续服务**旧 bundle**：本地
   `make e2e-prerequisite` 可能在你从未改过的控制台上"通过"。修法 = 把 `web/src`、`web/index.html`、
   `web/vite.config.ts`、`web/nginx.conf`、`web/tsconfig*.json`、`web/env.d.ts` 纳入哈希。
-- **skip 不等于通过**：`E2E_BACKEND` 未设时三个 spec 整体以显式原因 skip；声明栈已起后，`rollback`
+- **skip 不等于通过**：`E2E_BACKEND` 未设时四个 spec 整体以显式原因 skip；声明栈已起后，`rollback`
   的入口/凭据缺失是**硬失败**，`emergency-smoke` 的两个前置（绑定 ReleaseDefinition 的 release、
   `pending_promotion` 任务）各自 **skip 并写明原因**。注意这只描述 spec 自身的层级；在 CI 车道里清单把
   这两个用例声明为**必须 `passed`**（`smoke.sh` 已备好上述前置），所以前置缺失而真的 skip 时守卫会**红**，
@@ -521,8 +523,9 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   （`--reporter=list,json,html` + `PLAYWRIGHT_JSON_OUTPUT_NAME`，落在 `e2e-results/console/results.json`
   并随 artifact 上传），由 `test/e2e/prerequisite/console-target-guard.sh` 按**期望用例清单**
   `test/e2e/prerequisite/console-expected-cases.json` **逐条**判定。清单来源＝该车道实跑的 spec
-  （`console.sh` 的 `SPECS`，即 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开，见 `console.sh:62-63`）内
-  **实际收集到的用例**，当前 = `rollback.spec.ts` 两例 + `emergency-smoke.spec.ts` 三例。声明
+  （`console.sh` 的 `SPECS`，即 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开，见 `console.sh:67-68`）内
+  **实际收集到的用例**，当前 = `rollback.spec.ts` 两例 + `emergency-smoke.spec.ts` 三例 +
+  `delivery-criteria.spec.ts` 六例（H1–H5，TASK-325）。声明
   `expect: passed` 的用例必须**最终结果状态恰为 `passed`**（取最后一次 result，即重试后的终态）；
   kill-switch 一例声明为**带原因的期望 skip**（`skipReasonContains: E2E_EMERGENCY_DISABLED`——该门只在
   `emergencyChangeEnabled=false` 的栈上存在，本车道不建这种栈），**理由写在清单里**，因此它是有据的
@@ -534,8 +537,8 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。
   **双向校验（TASK-307 新增）**：① **报告收集到清单未声明的用例**（车道悄悄长出新用例）⇒ 红——否则
   它的 skip 与 pass 无法区分；② **`console.sh` 被要求跑的 spec 在清单里没有任何条目** ⇒ **启动前即拒绝**
-  （`console.sh:170-173` 的 pre-flight 循环），而不是跑完 16 分钟才红。守卫与清单比较 spec 时都取
-  **basename**（`console-target-guard.sh:77` 取调用方 spec；`:115` 取报告里 `spec.file` 最后一个 `/` 段），
+  （`console.sh:175-178` 的 pre-flight 循环），而不是跑完 16 分钟才红。守卫与清单比较 spec 时都取
+  **basename**（`console-target-guard.sh:86` 取调用方 spec；`:124` 取报告里 `spec.file` 最后一个 `/` 段），
   所以传 `e2e/rollback.spec.ts` 还是 `rollback.spec.ts` 不影响判定，`not-rollback.spec.ts` 也不会误匹配。
 - **失败诊断产物（TASK-307）**：`playwright.config.ts` 加 `html` reporter（`outputFolder:
   'playwright-report'`）与 `screenshot: 'only-on-failure'`（trace 保持 `retain-on-failure`）；`console.sh`

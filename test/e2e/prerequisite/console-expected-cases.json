@@ -4,8 +4,9 @@
     "test/e2e/prerequisite/console-target-guard.sh (TASK-307).",
     "",
     "SOURCE OF TRUTH for the case titles: the specs console.sh's SPECS names",
-    "(E2E_CONSOLE_SPECS, default 'e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts';",
-    "see test/e2e/prerequisite/console.sh). Each title below is copied verbatim from",
+    "(E2E_CONSOLE_SPECS, default 'e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts",
+    "e2e/delivery-criteria.spec.ts'; see test/e2e/prerequisite/console.sh). Each title",
+    "below is copied verbatim from",
     "the spec; console.sh refuses to start when a spec it was asked to run has no",
     "entry here, and the guard refuses to pass when the report collected a case no",
     "entry declares — so neither a renamed case nor a newly added spec can slip",
@@ -53,6 +54,42 @@
       ],
       "covers": "AC-058-05",
       "why": "The gate under test only exists on a stack started with emergencyChangeEnabled=false (web/e2e/emergency-smoke.spec.ts:206-209), and this lane builds the default stack with the feature enabled; the case therefore cannot execute here. Declaring that skip is the opposite of the silent skip this guard exists to stop: if it skips for another reason, fails, or times out, the lane goes red."
+    },
+    {
+      "spec": "delivery-criteria.spec.ts",
+      "title": "H1 登录：成功离开登录页并下发会话 cookie；失败留在登录页且显示失败文案",
+      "expect": "passed",
+      "covers": "docs/delivery-evidence.md §4.2 H1 — login success (session cookie present, URL leaves the login route inside the 4s budget) and login failure (visible copy, no session, stays on the login route)"
+    },
+    {
+      "spec": "delivery-criteria.spec.ts",
+      "title": "H2 关键页可达：客户 → 集群 → 发布清单 → 创建操作 → 操作历史 → 操作详情",
+      "expect": "passed",
+      "covers": "docs/delivery-evidence.md §4.2 H2 — every hop from the home workbench to the operation detail has a visible entry and the right page title; the operation-history hop uses the definition smoke.sh drove (E2E_DEFINITION_ID), so the lane's own prerequisite supplies the rows"
+    },
+    {
+      "spec": "delivery-criteria.spec.ts",
+      "title": "H3 危险操作确认：回滚走自定义 alertdialog，Esc 取消且不发出请求",
+      "expect": "passed",
+      "covers": "docs/delivery-evidence.md §4.2 H3 — the rollback confirmation is a custom role=alertdialog (no native confirm), Escape closes it, and no RollbackRelease request leaves the browser"
+    },
+    {
+      "spec": "delivery-criteria.spec.ts",
+      "title": "H4 读取失败：ErrorState 渲染含 requestId 的相关行，且与空态不同屏",
+      "expect": "passed",
+      "covers": "docs/delivery-evidence.md §4.2 H4 (read failure) — the aggregated read is rewritten in flight into a 503 carrying X-Request-ID; the ErrorState's technical details must show code=Unavailable · requestId=…, and the empty state must not share the screen (UX-010)"
+    },
+    {
+      "spec": "delivery-criteria.spec.ts",
+      "title": "H4 权限不足：403 渲染 403 文案而非空态，且与读取失败可区分",
+      "expect": "passed",
+      "covers": "docs/delivery-evidence.md §4.2 H4 (403) — a PERMISSION_DENIED response routes to the forbidden surface with the 403 marker and the server's message, distinguishable from the read-failure state, with no empty state"
+    },
+    {
+      "spec": "delivery-criteria.spec.ts",
+      "title": "H5 焦点陷阱：对话框内 Tab 与 Shift+Tab 不逃逸，Esc 关闭后焦点回到触发按钮",
+      "expect": "passed",
+      "covers": "docs/delivery-evidence.md §4.2 H5 — Tab and Shift+Tab cycle inside the rollback dialog (AppDialog/useFocusTrap) and closing returns focus to the trigger button"
     }
   ]
 }
