@@ -3,6 +3,8 @@ import { create } from '@bufbuild/protobuf';
 import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import { PromotionMappingListSchema, PromotionMappingSchema } from '@/gen/orchestrator/v1/orchestrator_pb';
 import {
+  CreateReleaseDefinitionRequestSchema,
+  DisableReleaseDefinitionRequestSchema,
   GetReleaseDefinitionRequestSchema,
   ListReleaseDefinitionsRequestSchema,
   UpdateReleaseDefinitionRequestSchema,
@@ -92,6 +94,26 @@ export interface UpdateDefinitionInput {
   namespace?: string;
   releaseName?: string;
   chartName?: string;
+  promotionMappings?: PromotionMappingView[];
+}
+
+/**
+ * Input for {@link createDefinition}.
+ *
+ * `enabled` is REQUIRED and has no wrapper-level default on purpose: the server
+ * derives the initial status from it (`enabled: false` ⇒ DRAFT), so a caller that
+ * forgot the field would otherwise silently activate a definition. The proto also
+ * documents a natural-key tuple (customer, cluster, namespace, release_name): the
+ * server answers ALREADY_EXISTS rather than returning the existing row, so a retry
+ * after a lost response must check before repeating.
+ */
+export interface CreateDefinitionInput {
+  customerId: string;
+  clusterId: string;
+  namespace?: string;
+  releaseName: string;
+  chartName?: string;
+  enabled: boolean;
   promotionMappings?: PromotionMappingView[];
 }
 
@@ -232,6 +254,30 @@ export async function listDefinitions(filters: DefinitionFilters = {}): Promise<
   return response.definitions.map(toView);
 }
 
+/**
+ * Creates a definition. `enabled` decides the initial status (false ⇒ DRAFT) and
+ * the server derives `name` from release_name, so the caller cannot set a separate
+ * display name here.
+ */
+export async function createDefinition(input: CreateDefinitionInput): Promise<DefinitionView> {
+  const response = await orchestratorClient.createReleaseDefinition(
+    create(CreateReleaseDefinitionRequestSchema, {
+      customerId: input.customerId,
+      clusterId: input.clusterId,
+      namespace: input.namespace ?? '',
+      releaseName: input.releaseName,
+      chartName: input.chartName ?? '',
+      enabled: input.enabled,
+      // A create has no stored list to preserve, so the plain repeated field is
+      // unambiguous here (unlike update, which needs the presence-carrying wrapper).
+      promotionMappings: (input.promotionMappings ?? []).map((mapping) =>
+        create(PromotionMappingSchema, mapping),
+      ),
+    }),
+  );
+  return toView(response.definition!);
+}
+
 export async function updateDefinition(input: UpdateDefinitionInput): Promise<DefinitionView> {
   const response = await orchestratorClient.updateReleaseDefinition(
     create(UpdateReleaseDefinitionRequestSchema, {
@@ -252,6 +298,22 @@ export async function updateDefinition(input: UpdateDefinitionInput): Promise<De
           })
         : undefined,
     }),
+  );
+  return toView(response.definition!);
+}
+
+/**
+ * Disables a definition so no new operation can target it; its history and
+ * inventory are kept. The write is versioned like update (a stale version is
+ * refused with FAILED_PRECONDITION + `optimistic_lock_conflict`), and the server
+ * is convergent for the DISABLED state itself: disabling an already disabled
+ * definition answers success again (it short-circuits before the version check).
+ * It is therefore NOT convergent for a retry after a lost response — that retry
+ * still carries the old version and is refused.
+ */
+export async function disableDefinition(definitionId: string, expectedVersion: bigint): Promise<DefinitionView> {
+  const response = await orchestratorClient.disableReleaseDefinition(
+    create(DisableReleaseDefinitionRequestSchema, { definitionId, expectedVersion }),
   );
   return toView(response.definition!);
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
 import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import { mapRollbackError, rollbackRelease, type RollbackFailure } from '@/connect/rollback-api';
@@ -29,7 +29,23 @@ const targetRevision = ref('');
 const reason = ref('');
 const submitting = ref(false);
 const failure = ref<RollbackFailure | null>(null);
-const validationError = ref('');
+
+/*
+ * Which control a message belongs to. H5 of docs/delivery-evidence.md §4.2 requires
+ * a form field error to carry an `aria-describedby` association, so the association
+ * is part of the criterion rather than decoration: a bare role=alert leaves a screen
+ * reader free to announce the message while the offending field still looks valid.
+ */
+type ValidationField = 'targetRevision' | 'reason';
+
+const validationError = ref<{ field: ValidationField; message: string } | null>(null);
+/*
+ * One id per mounted dialog (Vue's useId), advertised ONLY by the control the
+ * message is about and only while the message exists — marking both fields
+ * described/invalid would be as misleading as marking neither. Same mechanism as
+ * RevokeOperatorDialog.vue and RejectRevisionDialog.vue, not a new one.
+ */
+const validationErrorId = useId();
 /*
  * One idempotency key per ATTEMPT, not per request: the server replays the same
  * operation for a repeated key, which is exactly what a retry after a lost response
@@ -52,7 +68,7 @@ watch(
     targetRevision.value = '';
     reason.value = '';
     failure.value = null;
-    validationError.value = '';
+    validationError.value = null;
     idempotencyKey.value = crypto.randomUUID();
     lastPayload = '';
   },
@@ -63,18 +79,21 @@ const canSubmit = computed(() => !submitting.value && props.currentRevision > 1)
 
 function validate(): boolean {
   if (!reason.value.trim()) {
-    validationError.value = '回滚必须填写原因';
+    validationError.value = { field: 'reason', message: '回滚必须填写原因' };
     return false;
   }
   if (!Number.isInteger(parsedTarget.value) || parsedTarget.value < 1) {
-    validationError.value = '目标 Revision 必须是 1 以上的整数';
+    validationError.value = { field: 'targetRevision', message: '目标 Revision 必须是 1 以上的整数' };
     return false;
   }
   if (parsedTarget.value >= props.currentRevision) {
-    validationError.value = `目标 Revision 必须小于当前 Revision（${props.currentRevision}）`;
+    validationError.value = {
+      field: 'targetRevision',
+      message: `目标 Revision 必须小于当前 Revision（${props.currentRevision}）`,
+    };
     return false;
   }
-  validationError.value = '';
+  validationError.value = null;
   return true;
 }
 
@@ -142,15 +161,35 @@ async function submit(): Promise<void> {
       </label>
       <label>
         目标 Revision
-        <input v-model="targetRevision" name="targetRevision" inputmode="numeric" placeholder="例如 1" />
+        <input
+          v-model="targetRevision"
+          name="targetRevision"
+          inputmode="numeric"
+          placeholder="例如 1"
+          :aria-invalid="validationError?.field === 'targetRevision'"
+          :aria-describedby="validationError?.field === 'targetRevision' ? validationErrorId : undefined"
+        />
       </label>
       <label>
         原因（必填）
-        <textarea v-model="reason" name="reason" rows="3" placeholder="为什么要回滚"></textarea>
+        <textarea
+          v-model="reason"
+          name="reason"
+          rows="3"
+          placeholder="为什么要回滚"
+          :aria-invalid="validationError?.field === 'reason'"
+          :aria-describedby="validationError?.field === 'reason' ? validationErrorId : undefined"
+        ></textarea>
       </label>
 
-      <p v-if="validationError" class="rollback-dialog__error" role="alert" data-testid="rollback-validation">
-        {{ validationError }}
+      <p
+        v-if="validationError"
+        :id="validationErrorId"
+        class="rollback-dialog__error"
+        role="alert"
+        data-testid="rollback-validation"
+      >
+        {{ validationError.message }}
       </p>
 
       <div class="rollback-dialog__actions">

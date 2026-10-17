@@ -243,21 +243,17 @@ func TestChartArchivePackaging_RealFixtureChart(t *testing.T) {
 	// The fixture chart ships with the repo (deploy/fixtures/chart); verify
 	// the helm-SDK packaging produces a valid content digest without any
 	// registry involvement.
-	tgz, err := packageChartArchive(filepath.Join("..", "..", "deploy", "fixtures", "chart"))
+	archive, err := packageChartArchive(filepath.Join("..", "..", "deploy", "fixtures", "chart"))
 	require.NoError(t, err)
-	defer os.Remove(tgz) //nolint:errcheck // test cleanup
 
-	digest, err := archiveDigest(tgz)
-	require.NoError(t, err)
+	digest := archiveDigest(archive)
 	require.True(t, strings.HasPrefix(digest, "sha256:"))
 	require.Len(t, digest, len("sha256:")+64)
 
 	// Deterministic: packaging the same chart twice yields the same digest.
-	tgz2, err := packageChartArchive(filepath.Join("..", "..", "deploy", "fixtures", "chart"))
+	archive2, err := packageChartArchive(filepath.Join("..", "..", "deploy", "fixtures", "chart"))
 	require.NoError(t, err)
-	defer os.Remove(tgz2) //nolint:errcheck // test cleanup
-	digest2, err := archiveDigest(tgz2)
-	require.NoError(t, err)
+	digest2 := archiveDigest(archive2)
 	require.Equal(t, digest, digest2)
 }
 

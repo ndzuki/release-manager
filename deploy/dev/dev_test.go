@@ -21,8 +21,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 
 	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/jwtauth"
+	"github.com/ndzuki/release-manager/internal/shellquote"
 	"gopkg.in/yaml.v3"
 )
 
@@ -106,26 +109,214 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// fakeOperatorGatewayPort is the loopback port fakeEnv points the operator
-// mTLS gateway TCP readiness probe at (dev.sh DEV_OPERATOR_GATEWAY_PORT
-// seam). It lives outside the DEV_PORTS_OVERRIDE band so the preflight port
-// gate (require_ports_free) never sees it occupied.
-const fakeOperatorGatewayPort = "19984"
-
 var (
 	fakeGatewayOnce sync.Once
 	fakeGatewayLn   net.Listener
 	fakeGatewayErr  error
 )
 
+// listenerPort reports the TCP port a listener is actually bound to, so the
+// tested path is handed the real port instead of the one that was requested
+// (the fakes below ask the kernel for any free port with ":0").
+func listenerPort(t *testing.T, ln net.Listener) string {
+	t.Helper()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("cannot read bound port from %q: %v", ln.Addr(), err)
+	}
+	return port
+}
+
+// devTestBandSlots is the width of the host-port band handed to dev.sh: the
+// seven entries of DEV_PORTS in lib/host.sh (8082-8088).
+const devTestBandSlots = 7
+
+var (
+	devTestBandOnce  sync.Once
+	devTestBandPorts [devTestBandSlots]int
+	// devTestBandFds holds the bound-but-not-listening sockets that reserve
+	// devTestBandPorts for the lifetime of this test binary. They are
+	// deliberately never closed; the process exit releases them.
+	devTestBandFds [devTestBandSlots]int
+	devTestBandErr error
+)
+
+// devTestBand returns the per-process band of idle loopback ports that
+// DEV_PORTS_OVERRIDE points dev.sh at (slot 0 = webhook/8082 ... slot 6 =
+// api/8088). It is probed once per test binary from the kernel's ephemeral
+// range, so two copies of this package can run at the same time, and the host's
+// real dev environment keeps its own fixed 8082-8088 ports (the ephemeral range
+// does not contain them). A literal band made every overlapping pair fail with
+// port_conflict, because the one test that really occupies a port handed the
+// conflict to every other test in the other copy.
+//
+// probeIdlePortBand reserves every slot (devTestBandFds) for the lifetime of
+// this test binary, so a port that was idle at probe time cannot be taken by
+// anyone else while the package runs.
+func devTestBand(t *testing.T) [devTestBandSlots]int {
+	t.Helper()
+	devTestBandOnce.Do(func() {
+		devTestBandPorts, devTestBandErr = probeIdlePortBand(t)
+	})
+	if devTestBandErr != nil {
+		t.Fatalf("cannot probe an idle dev port band: %v", devTestBandErr)
+	}
+	return devTestBandPorts
+}
+
+// devTestBandPort returns one slot of the probed band so assertions follow the
+// ports dev.sh was actually given.
+func devTestBandPort(t *testing.T, slot int) int {
+	t.Helper()
+	if slot < 0 || slot >= devTestBandSlots {
+		t.Fatalf("dev test band slot %d out of range [0,%d)", slot, devTestBandSlots)
+	}
+	return devTestBand(t)[slot]
+}
+
+// formatDevTestBand renders the band in the space-separated form lib/host.sh
+// parses from DEV_PORTS_OVERRIDE.
+func formatDevTestBand(t *testing.T) string {
+	t.Helper()
+	band := devTestBand(t)
+	parts := make([]string, len(band))
+	for i, port := range band {
+		parts[i] = strconv.Itoa(port)
+	}
+	return strings.Join(parts, " ")
+}
+
+// probeIdlePortBand reserves devTestBandSlots consecutive idle loopback ports
+// for the lifetime of the test binary (devTestBandFds) and returns them. The
+// base is sampled with ":0", so the kernel only hands out ephemeral ports
+// (32768-60999 on this host): the band misses the fixed 8082-8088 host ports
+// and the fixed 19984 / 15432 ports the fakes used to pin (they bind their own
+// ":0" now). Every offset is bound at once, which proves the whole run is free
+// and — unlike the earlier probe-then-release design — keeps it that way.
+//
+// Reserving the slots closes the probe/preflight TOCTOU (TASK-324) instead of
+// narrowing it:
+//
+//   - a bound port is no longer in the kernel's pool of allocatable ephemeral
+//     ports, so a ":0" sample can never be handed a band slot: not by a
+//     concurrent copy of this package, not by another test binary in the same
+//     `go test ./...` job, not by any other host process;
+//   - an explicit binder of a band slot fails with EADDRINUSE, so a deliberate
+//     occupier cannot take one either. The AC-065-07 fixture therefore binds its
+//     own ":0" port instead of a band slot (see
+//     TestDevUpFailsWhenADevPortIsOccupied);
+//   - dev.sh's preflight gate (require_ports_free) still sees the band as idle,
+//     because port_in_use probes with connect(2) and a socket that is bound but
+//     never listen(2)ed refuses the connection exactly like an unused port. The
+//     sockets stay deliberately unlistened: keeping them LISTENING would make
+//     the gate report this binary's own ports as a conflict, which is why the
+//     old probe released them.
+func probeIdlePortBand(t *testing.T) ([devTestBandSlots]int, error) {
+	t.Helper()
+	var band [devTestBandSlots]int
+	for attempt := 0; attempt < 64; attempt++ {
+		baseFd, base, err := reserveLoopbackPort(0)
+		if err != nil {
+			return band, fmt.Errorf("reserve a base loopback port: %w", err)
+		}
+		// fds collects only the sockets actually bound, so an incomplete
+		// candidate run releases those and never a zero-valued slot.
+		fds := make([]int, 0, devTestBandSlots)
+		fds = append(fds, baseFd)
+		complete := true
+		for offset := 1; offset < devTestBandSlots && complete; offset++ {
+			port := base + offset
+			if port > 65535 {
+				complete = false
+				break
+			}
+			fd, reserved, reserveErr := reserveLoopbackPort(port)
+			if reserveErr != nil || reserved != port {
+				complete = false
+				break
+			}
+			fds = append(fds, fd)
+		}
+		if !complete {
+			for _, fd := range fds {
+				releaseReservedPort(fd)
+			}
+			continue
+		}
+		for i := range band {
+			band[i] = base + i
+		}
+		copy(devTestBandFds[:], fds)
+		return band, nil
+	}
+	return band, fmt.Errorf("no idle %d-port band found in 64 attempts", devTestBandSlots)
+}
+
+// reserveLoopbackPort binds a TCP socket to 127.0.0.1:port (0 asks the kernel
+// for any idle ephemeral port) and returns the descriptor plus the port the
+// kernel actually assigned, without ever calling listen(2).
+//
+// bind(2) alone already reserves the address: the kernel stops handing it out
+// for ":0" allocations and a second binder of the same address fails with
+// EADDRINUSE. That holds for both 127.0.0.1 and 0.0.0.0, and bind conflicts are
+// per-socket rather than per-process, so a foreign binder takes the same kernel
+// path. Not listening keeps the connect(2) probe require_ports_free uses
+// failing, so the gate reads a reserved port as idle. The descriptor is
+// close-on-exec, so dev.sh's children inherit nothing.
+func reserveLoopbackPort(port int) (fd, assigned int, err error) {
+	fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return -1, 0, fmt.Errorf("socket: %w", err)
+	}
+	syscall.CloseOnExec(fd)
+	if err = syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}, Port: port}); err != nil {
+		releaseReservedPort(fd)
+		return -1, 0, fmt.Errorf("bind 127.0.0.1:%d: %w", port, err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		releaseReservedPort(fd)
+		return -1, 0, fmt.Errorf("getsockname for 127.0.0.1:%d: %w", port, err)
+	}
+	addr, ok := sa.(*syscall.SockaddrInet4)
+	if !ok {
+		releaseReservedPort(fd)
+		return -1, 0, fmt.Errorf("unexpected socket address %T for 127.0.0.1:%d", sa, port)
+	}
+	return fd, addr.Port, nil
+}
+
+// releaseReservedPort closes a reservation the probe decided not to keep (an
+// incomplete candidate run). Its close error cannot change the outcome — the
+// descriptor is abandoned either way — so it is not surfaced, but it is still
+// checked rather than dropped.
+func releaseReservedPort(fd int) {
+	if fd < 0 {
+		return
+	}
+	if err := syscall.Close(fd); err != nil {
+		return
+	}
+}
+
 // fakeOperatorGateway binds one shared loopback listener for the whole test
 // package (fakeEnv is called multiple times per test; a per-call listener
-// would collide with itself). The connection is accepted and immediately
-// closed — the readiness probe only needs a TCP open to succeed.
-func fakeOperatorGateway(t *testing.T) {
+// would collide with itself) and returns the port it got, which fakeEnv
+// exports to dev.sh as DEV_OPERATOR_GATEWAY_PORT (the operator mTLS gateway
+// TCP readiness seam). The connection is accepted and immediately closed —
+// the readiness probe only needs a TCP open to succeed.
+//
+// It binds ":0" instead of a fixed port so two copies of this package can run
+// concurrently (parallel CI jobs, concurrent local sessions): with the old
+// literal 19984 every such pair died with "cannot bind fake operator gateway
+// listener: ... address already in use". The kernel-assigned port is drawn from
+// the ephemeral range, as is the DEV_PORTS_OVERRIDE band, but the band's slots
+// are bound for the lifetime of this test binary (probeIdlePortBand), so this
+// ":0" bind can never be handed a band port whatever the call order.
+func fakeOperatorGateway(t *testing.T) string {
 	t.Helper()
 	fakeGatewayOnce.Do(func() {
-		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeOperatorGatewayPort)
+		fakeGatewayLn, fakeGatewayErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if fakeGatewayErr != nil {
 			return
 		}
@@ -142,12 +333,8 @@ func fakeOperatorGateway(t *testing.T) {
 	if fakeGatewayErr != nil {
 		t.Fatalf("cannot bind fake operator gateway listener: %v", fakeGatewayErr)
 	}
+	return listenerPort(t, fakeGatewayLn)
 }
-
-// fakeResetPgPort is the loopback port the reset-data port-forward wait
-// probes (dev.sh DEV_RESET_PG_PORT seam, real default 5432). A dedicated
-// port keeps the fake test deterministic without touching a host PostgreSQL.
-const fakeResetPgPort = "15432"
 
 var (
 	fakeResetPgOnce sync.Once
@@ -157,11 +344,14 @@ var (
 
 // fakeResetPostgres binds one shared loopback listener for the whole test
 // package so every reset-data test's TCP probe succeeds (accepted and closed
-// immediately, exactly like fakeOperatorGateway).
-func fakeResetPostgres(t *testing.T) {
+// immediately, exactly like fakeOperatorGateway) and returns the port it got,
+// which fakeEnv exports to dev.sh as DEV_RESET_PG_PORT (the real default is
+// 5432). It also binds ":0": a fixed port would collide both with a host
+// PostgreSQL and with a concurrent run of this package.
+func fakeResetPostgres(t *testing.T) string {
 	t.Helper()
 	fakeResetPgOnce.Do(func() {
-		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:"+fakeResetPgPort)
+		fakeResetPgLn, fakeResetPgErr = new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
 		if fakeResetPgErr != nil {
 			return
 		}
@@ -178,6 +368,7 @@ func fakeResetPostgres(t *testing.T) {
 	if fakeResetPgErr != nil {
 		t.Fatalf("cannot bind fake reset postgres listener: %v", fakeResetPgErr)
 	}
+	return listenerPort(t, fakeResetPgLn)
 }
 
 // fakeEnv builds an environment that points the lifecycle module at fake
@@ -188,6 +379,11 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Bind the fake loopback listeners before building env: both take a
+	// kernel-assigned port, and dev.sh's probes must be pointed at the port
+	// the listener actually got, not at a hard-coded one.
+	operatorGatewayPort := fakeOperatorGateway(t)
+	resetPgPort := fakeResetPostgres(t)
 	env = append(os.Environ(),
 		"DEV_DATA_DIR="+stateDir,
 		// Pin FIXTURE_VERSION so dev.sh skips its `go run ./cmd/devseed/
@@ -200,20 +396,36 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		// behavior-identical and makes every fake-CLI test deterministic.
 		"FIXTURE_VERSION=v2",
 		// Probe idle test ports, not the real 8082-8088: the actual dev
-		// environment may be running on the host during tests.
-		"DEV_PORTS_OVERRIDE=19082 19083 19084 19085 19086 19087 19088",
+		// environment may be running on the host during tests. The band is
+		// reserved per process from the kernel's ephemeral range and held for
+		// the lifetime of this test binary (probeIdlePortBand), so two copies
+		// of this package running at once get disjoint bands and neither can
+		// have a slot taken afterwards — no residual overlap, unlike the old
+		// literal 19082-19088 band's guaranteed clash.
+		"DEV_PORTS_OVERRIDE="+formatDevTestBand(t),
 		// The operator gateway readiness is a TCP probe without an HTTP
 		// endpoint to shim; point dev.sh's probe at the shared loopback
-		// listener above.
-		"DEV_OPERATOR_GATEWAY_PORT="+fakeOperatorGatewayPort,
+		// listener above (kernel-assigned port).
+		"DEV_OPERATOR_GATEWAY_PORT="+operatorGatewayPort,
 		// The reset-data port-forward wait probes a loopback TCP port; point
 		// it at the shared fake listener (real default 5432).
-		"DEV_RESET_PG_PORT="+fakeResetPgPort,
+		"DEV_RESET_PG_PORT="+resetPgPort,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
-	fakeOperatorGateway(t)
-	fakeResetPostgres(t)
 	return env, binDir
+}
+
+// setEnvValue returns env with key set to value, dropping every earlier entry
+// for that key so the child sees exactly one definition.
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	kept := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			kept = append(kept, entry)
+		}
+	}
+	return append(kept, prefix+value)
 }
 
 // writeShim writes an executable fake CLI.
@@ -320,9 +532,14 @@ func TestLockConflictReportsHolder(t *testing.T) {
 	releasePath := filepath.Join(stateDir, "release-lock")
 	holdCtx, holdCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer holdCancel()
+	// shellQuote, never %q: %q escapes for a Go literal, so under bash a lock
+	// or release path holding $ dies with "unbound variable" and one holding a
+	// backtick runs the command substitution (TASK-312). Single quotes make
+	// both paths literal, spaces included (TASK-306).
 	hold := exec.CommandContext(holdCtx, "bash", "-c", fmt.Sprintf(
-		"source %q; acquire_lock down; while [ ! -f %q ]; do sleep 0.1; done",
-		filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh"), releasePath))
+		"source %s; acquire_lock down; while [ ! -f %s ]; do sleep 0.1; done",
+		shellquote.Quote(filepath.Join(repoRoot(t), "deploy", "dev", "lib", "lock.sh")),
+		shellquote.Quote(releasePath)))
 	hold.Env = env
 	if err := hold.Start(); err != nil {
 		t.Fatal(err)
@@ -532,7 +749,10 @@ func fakeK3d(t *testing.T, binDir, stateDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := "#!/usr/bin/env bash\nFAKE_K3D_STATE=\"" + stateDir + "\"\n" + string(data)
+	// shellQuote, not "%s": the state dir sits in a double-quoted assignment,
+	// so an unescaped $ or backtick in it would be expanded by the shim's
+	// shell before the shim ever runs (TASK-312).
+	body := "#!/usr/bin/env bash\nFAKE_K3D_STATE=" + shellquote.Quote(stateDir) + "\n" + string(data)
 	writeShim(t, binDir, "k3d", body)
 }
 
@@ -616,7 +836,9 @@ exit 0
 	// shim delegates -ensure-jwt-keys to the real toolchain instead of emulating
 	// it — dev.sh's wiring is then proven end to end against the helper that
 	// cmd/devseed unit-tests. The path is resolved before the fake binDir is
-	// prepended to the child PATH.
+	// prepended to the child PATH, and reaches the generated script through
+	// shellQuote: the toolchain path may contain spaces and must stay one word
+	// for exec (TASK-312).
 	realGo, lookErr := exec.LookPath("go")
 	if lookErr != nil {
 		t.Fatalf("resolve real go for the devseed shim: %v", lookErr)
@@ -643,7 +865,7 @@ for c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated de
   printf 'fake-token\n' > "$DEV_DATA_DIR/dev-enrollment-tokens/$c.token"
 done
 exit 0
-`, realGo))
+`, shellquote.Quote(realGo)))
 	// awk: consume stdin fully (real awk reads all input before exiting —
 	// an early exit SIGPIPEs the pipe writer), then answer the memory probe
 	// in MiB (24 GiB) or the df pipeline in KiB (500 GiB).
@@ -677,6 +899,64 @@ func clusterCreates(records []string) []string {
 		}
 	}
 	return clusters
+}
+
+// repositoryMirrorPath is the repository's containerd mirror config, derived
+// from the detected checkout root rather than any absolute prefix, so the
+// assertion holds wherever the worktree lives (TASK-305).
+func repositoryMirrorPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repoRoot(t), "deploy", "k3d", "registries.yaml")
+}
+
+// k3dArgvHeader delimits the per-invocation argv records the fake k3d shim
+// writes to k3d-create-argv.log.
+const k3dArgvHeader = "#argv"
+
+// k3dCreateArgvs returns the exact argv of every `k3d cluster create`
+// invocation. The shim records one argument per line — arguments may legally
+// contain spaces (a checkout path can) — with a k3dArgvHeader line delimiting
+// invocations, so argument boundaries survive verbatim.
+func k3dCreateArgvs(stateDir string) [][]string {
+	data, err := os.ReadFile(filepath.Join(stateDir, "k3d-create-argv.log"))
+	if err != nil {
+		return nil
+	}
+	trimmed := strings.TrimSuffix(string(data), "\n")
+	if trimmed == "" {
+		return nil
+	}
+	var argvs [][]string
+	for _, line := range strings.Split(trimmed, "\n") {
+		if line == k3dArgvHeader {
+			argvs = append(argvs, nil)
+			continue
+		}
+		if len(argvs) == 0 {
+			continue
+		}
+		argvs[len(argvs)-1] = append(argvs[len(argvs)-1], line)
+	}
+	return argvs
+}
+
+// registryConfigArg extracts the value dev.sh handed to k3d's
+// --registry-config from the recorded cluster creates. The argv record keeps
+// one argument per line, so a value containing spaces (a checkout path may)
+// survives verbatim; the value is the argument following the flag.
+func registryConfigArg(t *testing.T, stateDir string) string {
+	t.Helper()
+	argvs := k3dCreateArgvs(stateDir)
+	for _, argv := range argvs {
+		for i, arg := range argv {
+			if arg == "--registry-config" && i+1 < len(argv) {
+				return argv[i+1]
+			}
+		}
+	}
+	t.Fatalf("no --registry-config argument in the k3d cluster creates recorded at %s:\n%v",
+		filepath.Join(stateDir, "k3d-create-argv.log"), argvs)
+	return ""
 }
 
 func TestDevUpCreatesFiveClustersAndMergedKubeconfig(t *testing.T) {
@@ -799,9 +1079,11 @@ exit 0
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 19088 is the DEV_PORTS_OVERRIDE entry for the api band slot (8088).
-	if !strings.Contains(string(curlLog), "19088/readyz") {
-		t.Fatalf("dev-up must probe the api /readyz on the 8088 band slot:\n%s", curlLog)
+	// Slot 6 of the probed band is the override entry for the api band slot
+	// (8088).
+	apiPort := devTestBandPort(t, 6)
+	if !strings.Contains(string(curlLog), fmt.Sprintf("%d/readyz", apiPort)) {
+		t.Fatalf("dev-up must probe the api /readyz on the 8088 band slot (%d):\n%s", apiPort, curlLog)
 	}
 }
 
@@ -843,6 +1125,42 @@ YAML
 `)
 }
 
+// TestRegistryConfigArgKeepsSpacedArguments is the regression guard for the
+// space-joined argv record: with `argv="$*"` the shim's record was split on
+// spaces, so a --registry-config value under a checkout path containing a
+// space (e.g. `/run/user/1000/rm 305 space/...`) was truncated to its first
+// fragment and the path assertion compared garbage (TASK-305 follow-up). The
+// shim now records the argv one argument per line.
+func TestRegistryConfigArgKeepsSpacedArguments(t *testing.T) {
+	stateDir := t.TempDir()
+	const want = "/run/user/1000/rm 305 space/deploy/k3d/registries.yaml"
+	record := strings.Join([]string{
+		k3dArgvHeader,
+		"release-manager-control",
+		"--registry-use",
+		"release-manager-registry",
+		"--registry-config",
+		want,
+		"--wait",
+		k3dArgvHeader,
+		"dev-customer-a-direct",
+		"--registry-config",
+		"/tmp/other mirror/registries.yaml",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(stateDir, "k3d-create-argv.log"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	argvs := k3dCreateArgvs(stateDir)
+	if len(argvs) != 2 {
+		t.Fatalf("expected two recorded create invocations, got %d: %v", len(argvs), argvs)
+	}
+	if got := registryConfigArg(t, stateDir); got != want {
+		t.Fatalf("the spaced --registry-config argument must survive verbatim, got %q want %q", got, want)
+	}
+}
+
 // TestRegistryPortOverrideDerivesEveryReference covers the concurrency defect
 // this seam fixes: REGISTRY_PORT and the k3d control-plane API port were
 // hardcoded, so a second dev environment on the same host could not start at
@@ -870,8 +1188,9 @@ func TestRegistryPortOverrideDerivesEveryReference(t *testing.T) {
 	if strings.Contains(creates, "--api-port 127.0.0.1:6443") {
 		t.Fatalf("the hardcoded API port must be gone:\n%s", creates)
 	}
-	if strings.Contains(creates, "k3d/registries.yaml") || !strings.Contains(creates, "--registry-config /tmp/") {
-		t.Fatalf("an overridden registry port must use a materialized mirror config:\n%s", creates)
+	mirrorConfig := registryConfigArg(t, stateDir)
+	if filepath.Clean(mirrorConfig) == repositoryMirrorPath(t) {
+		t.Fatalf("an overridden registry port must materialize its own mirror config, not reuse the repository one:\n%s", creates)
 	}
 	mirror, err := os.ReadFile(filepath.Join(stateDir, "registry-config.yaml"))
 	if err != nil {
@@ -927,8 +1246,12 @@ func TestDefaultRegistryPortUsesTheRepositoryMirror(t *testing.T) {
 	if !strings.Contains(creates, "--api-port 127.0.0.1:6443") {
 		t.Fatalf("the default API port must stay 6443:\n%s", creates)
 	}
-	if !strings.Contains(creates, "k3d/registries.yaml") || strings.Contains(creates, "--registry-config /tmp/") {
-		t.Fatalf("the default path must use the repository mirror config:\n%s", creates)
+	// The default path must carry the repository mirror file itself (not a
+	// materialized copy): the assertion names the exact file, derived from the
+	// checkout root, so a wrong directory suffix cannot pass (TASK-305).
+	if mirrorConfig := registryConfigArg(t, stateDir); filepath.Clean(mirrorConfig) != repositoryMirrorPath(t) {
+		t.Fatalf("the default path must use the repository mirror config %s, got %s:\n%s",
+			repositoryMirrorPath(t), mirrorConfig, creates)
 	}
 	mirror, err := os.ReadFile(filepath.Join(stateDir, "registry-config.yaml"))
 	if err != nil {
@@ -1030,7 +1353,7 @@ func TestClusterCreateInjectsProxyEnv(t *testing.T) {
 	// network-IP probes still answer: agents_up resolves the customer-agent
 	// hostAliases from them.
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> "+shellquote.Quote(filepath.Join(stateDir, "docker-calls.log"))+"\nexit 0\n")
 	// GOPROXY is explicitly cleared so dev.sh takes the `go env GOPROXY`
 	// fallback path and the shim's fixed output is asserted — otherwise an
 	// inherited host GOPROXY (e.g. goproxy.cn) makes the assertion
@@ -1122,7 +1445,7 @@ func TestClusterCreateInjectsReachableProxyEnv(t *testing.T) {
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 	writeShim(t, binDir, "docker",
-		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/docker-calls.log\"\nexit 0\n")
+		"#!/usr/bin/env bash\n"+dockerIPProbeShim()+"if [ \"$1\" = \"manifest\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"container\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nif [ \"$1\" = \"network\" ] && [ \"$2\" = \"inspect\" ]; then exit 1; fi\nprintf '%s\\n' \"$*\" >> "+shellquote.Quote(filepath.Join(stateDir, "docker-calls.log"))+"\nexit 0\n")
 	env = append(env, "HTTP_PROXY=http://proxy.corp.internal:3128", "HTTPS_PROXY=http://proxy.corp.internal:3128",
 		"GOPROXY=", "DEV_DOCKER_MIRROR=docker.1ms.run/library/")
 
@@ -2472,7 +2795,7 @@ func TestDevSeedPassesTimeoutRetryOverrides(t *testing.T) {
 	// The split-seed agents_up stage needs the enrollment tokens (written by
 	// the fake devseed below), the docker IP probes and kubectl/kustomize
 	// pass-throughs.
-	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \""+stateDir+"/go-calls.log\"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; exit 0; fi\nmkdir -p \"$DEV_DATA_DIR/dev-enrollment-tokens\"\nfor c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do printf 'fake-token\\n' > \"$DEV_DATA_DIR/dev-enrollment-tokens/$c.token\"; done\nexit 0\n")
+	writeShim(t, binDir, "go", "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> "+shellquote.Quote(filepath.Join(stateDir, "go-calls.log"))+"\nif [ \"$1\" = \"env\" ]; then printf 'https://proxy.golang.org,direct\\n'; exit 0; fi\nmkdir -p \"$DEV_DATA_DIR/dev-enrollment-tokens\"\nfor c in dev-customer-a-direct dev-customer-a-cache dev-customer-b-replicated dev-customer-b-mixed; do printf 'fake-token\\n' > \"$DEV_DATA_DIR/dev-enrollment-tokens/$c.token\"; done\nexit 0\n")
 	writeShim(t, binDir, "docker", `#!/usr/bin/env bash
 if [ "$1" = "container" ] && [ "$2" = "inspect" ]; then
   if [ "$3" = "--format" ]; then
@@ -2523,12 +2846,132 @@ exit 0
 func runJwtHelper(t *testing.T, expr string) string {
 	t.Helper()
 	lib := filepath.Join(repoRoot(t), "deploy", "dev", "lib", "jwt.sh")
-	script := "set -euo pipefail\nsource " + lib + "\n" + expr + "\n"
+	// shellQuote the library path, never %q: %q keeps spaces intact under bash
+	// (TASK-306) but hands $ and backticks to the shell, which expands the
+	// first and executes the second (TASK-312). expr stays a raw shell
+	// fragment on purpose — it is the expression under test, not a value, and
+	// every caller quotes its own arguments through shellQuote.
+	script := fmt.Sprintf("set -euo pipefail\nsource %s\n%s\n", shellquote.Quote(lib), expr)
 	out, err := exec.CommandContext(context.Background(), "bash", "-c", script).Output()
 	if err != nil {
 		t.Fatalf("jwt helper %q failed: %v", expr, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// bashWordCase is one value fed to a real bash through both quotings. qFails
+// and qEvidence record what Go's %q is measured to do to it; the shellQuote
+// half must be byte-exact for every case.
+type bashWordCase struct {
+	name  string
+	value string
+	// qFails marks a value %q provably loses: bash expands it, executes it, or
+	// keeps Go's C-style escape literally.
+	qFails bool
+	// qEvidence is a substring the %q run must show on stdout+stderr.
+	qEvidence string
+	// qSideEffect marks a value whose %q run must leave the injection marker
+	// on disk — proof the command substitution really executed.
+	qSideEffect bool
+}
+
+// TestShellQuoteIsLiteralUnderRealBash is the falsifiable core of TASK-312: it
+// feeds the same value to bash — the interpreter the dev lifecycle runs under —
+// through Go's %q and through shellquote.Quote, and requires the latter to come
+// back byte-for-byte. %q is a Go literal escape, not a shell escape: a value
+// holding $ aborts with "unbound variable", one holding a backtick runs the
+// command substitution (the marker assertion below proves execution), and one
+// holding a newline or tab keeps the two-character C escape, so the path stops
+// naming the file. Reverting an interpolation site to %q fails here.
+//
+// The subtests share the marker file, so they deliberately do not run in
+// parallel.
+func TestShellQuoteIsLiteralUnderRealBash(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not installed: the quoting contract cannot be measured")
+	}
+	work := t.TempDir()
+	// The injected command is relative on purpose: cmd.Dir is work, so the
+	// payload must not depend on the temp path being free of spaces.
+	marker := filepath.Join(work, "injected-marker")
+	// gocritic reads a literal backslash/newline/tab as a path separator and
+	// rejects it inside filepath.Join; keeping them in variables leaves the
+	// host separator out of the picture while the byte string the shell sees
+	// stays exactly what the case names.
+	backslash := `a\b`
+	newline := "a\nb"
+	tab := "a\tb"
+	cases := []bashWordCase{
+		{name: "plain", value: filepath.Join(work, "plain.sh")},
+		{name: "spaces", value: filepath.Join(work, "a b", "c.sh")},
+		{name: "dollar", value: filepath.Join(work, "a$b", "c.sh"), qFails: true, qEvidence: "unbound variable"},
+		{name: "backtick", value: filepath.Join(work, "a`touch injected-marker`b", "c.sh"), qFails: true, qSideEffect: true},
+		{name: "backslash", value: filepath.Join(work, backslash, "c.sh")},
+		{name: "single quote", value: filepath.Join(work, "it's", "c.sh")},
+		{name: "newline", value: filepath.Join(work, newline, "c.sh"), qFails: true, qEvidence: `a\nb`},
+		{name: "tab", value: filepath.Join(work, tab, "c.sh"), qFails: true, qEvidence: `a\tb`},
+		{name: "glob", value: filepath.Join(work, "a*", "c.sh")},
+		{name: "tilde", value: "~/dev.sh"},
+		{name: "unicode", value: filepath.Join(work, "路径", "脚本.sh")},
+		{name: "empty", value: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// printf receives the word as one argument, so the comparison is
+			// byte-exact; set -u is the same hard failure mode dev.sh runs
+			// under, which is what turns a stray $ into an abort.
+			const sink = "set -euo pipefail; printf '%s' "
+
+			qOut, qErr, qRunErr := runBashWord(t, work, sink+fmt.Sprintf("%q", tc.value))
+			_, statErr := os.Stat(marker)
+			markerWritten := statErr == nil
+			if markerWritten {
+				if err := os.Remove(marker); err != nil {
+					t.Fatalf("remove the injection marker: %v", err)
+				}
+			}
+			if tc.qSideEffect != markerWritten {
+				t.Fatalf("the %%q command substitution marker on disk = %v, want %v (stdout=%q stderr=%q)",
+					markerWritten, tc.qSideEffect, qOut, qErr)
+			}
+			if tc.qFails {
+				if qRunErr == nil && qOut == tc.value {
+					t.Fatalf("%%q round-tripped %q: re-measure the TASK-312 premise", tc.value)
+				}
+				if tc.qEvidence != "" && !strings.Contains(qOut+qErr, tc.qEvidence) {
+					t.Fatalf("expected %%q evidence %q, got stdout=%q stderr=%q", tc.qEvidence, qOut, qErr)
+				}
+			} else if qRunErr != nil || qOut != tc.value {
+				t.Fatalf("this value was measured to survive %%q, got stdout=%q stderr=%q err=%v",
+					qOut, qErr, qRunErr)
+			}
+
+			sOut, sErr, sRunErr := runBashWord(t, work, sink+shellquote.Quote(tc.value))
+			if sRunErr != nil || sOut != tc.value {
+				t.Fatalf("shellquote.Quote lost the value: stdout=%q err=%v stderr=%q", sOut, sRunErr, sErr)
+			}
+			if _, statErr := os.Stat(marker); statErr == nil {
+				if err := os.Remove(marker); err != nil {
+					t.Fatalf("remove the injection marker: %v", err)
+				}
+				t.Fatalf("shellquote.Quote let the command substitution run for %q", tc.value)
+			}
+		})
+	}
+}
+
+// runBashWord runs script under bash with dir as the working directory and
+// returns its stdout, stderr and run error. A command substitution inside the
+// script therefore writes its side effect where the test can see it.
+func runBashWord(t *testing.T, dir, script string) (stdout, stderr string, err error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", script)
+	cmd.Dir = dir
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	return outBuf.String(), errBuf.String(), err
 }
 
 // TestJwtAlgHelperDetectsTheSigningAlgorithm is the falsifiable core of the
@@ -2556,7 +2999,7 @@ func TestJwtAlgHelperDetectsTheSigningAlgorithm(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := runJwtHelper(t, "jwt_alg '"+tt.token+"'")
+			got := runJwtHelper(t, "jwt_alg "+shellquote.Quote(tt.token))
 			if got != tt.want {
 				t.Fatalf("jwt_alg(%q) = %q, want %q", tt.token, got, tt.want)
 			}
@@ -2574,13 +3017,13 @@ func TestJwtHs256ProbeTokenIsAWellFormedHs256Jwt(t *testing.T) {
 		t.Skip("openssl not installed: the HMAC probe cannot be built")
 	}
 	const secret = "change-me-in-production"
-	token := runJwtHelper(t, "jwt_hs256_token "+secret)
+	token := runJwtHelper(t, "jwt_hs256_token "+shellquote.Quote(secret))
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		t.Fatalf("expected a three-segment JWT, got %d segments: %q", len(parts), token)
 	}
-	if alg := runJwtHelper(t, "jwt_alg '"+token+"'"); alg != "HS256" {
+	if alg := runJwtHelper(t, "jwt_alg "+shellquote.Quote(token)); alg != "HS256" {
 		t.Fatalf("probe header alg = %q, want HS256", alg)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -2615,7 +3058,7 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 
 	lengthOf := func(pad int) (int, string) {
 		claims := fmt.Sprintf(`{"sub":"downgrade-probe","pad":%q}`, strings.Repeat("x", pad))
-		token := runJwtHelper(t, fmt.Sprintf("jwt_hs256_token change-me-in-production '%s'", claims))
+		token := runJwtHelper(t, "jwt_hs256_token "+shellquote.Quote("change-me-in-production")+" "+shellquote.Quote(claims))
 		return len(token), token
 	}
 
@@ -2633,7 +3076,7 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 		t.Skip("could not produce HS256 tokens straddling the EdDSA length")
 	}
 	for _, token := range []string{below, above} {
-		if alg := runJwtHelper(t, "jwt_alg '"+token+"'"); alg != "HS256" {
+		if alg := runJwtHelper(t, "jwt_alg "+shellquote.Quote(token)); alg != "HS256" {
 			t.Fatalf("the padded token must still be HS256, got %q", alg)
 		}
 	}
@@ -2647,12 +3090,12 @@ func TestLengthOnlyAssertionWouldMissHs256(t *testing.T) {
 	// The two candidate assertion forms, evaluated on the same HS256 token.
 	// The weakened form (length only) records a pass — it is exactly the
 	// mutation the smoke must be immune to; the real form fails it.
-	weakOut := runJwtHelper(t, "TOKEN='"+above+"'\n"+
+	weakOut := runJwtHelper(t, "TOKEN="+shellquote.Quote(above)+"\n"+
 		`if [ ${#TOKEN} -ge 400 ]; then printf pass; else printf fail; fi`)
 	if weakOut != "pass" {
 		t.Fatalf("the weakened (length-only) assertion must accept an HS256 token, got %q", weakOut)
 	}
-	realOut := runJwtHelper(t, "TOKEN='"+above+"'\n"+
+	realOut := runJwtHelper(t, "TOKEN="+shellquote.Quote(above)+"\n"+
 		`if [ "$(jwt_alg "$TOKEN")" = "EdDSA" ]; then printf pass; else printf fail; fi`)
 	if realOut != "fail" {
 		t.Fatalf("the real (alg) assertion must reject an HS256 token, got %q", realOut)
@@ -3728,22 +4171,84 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 100
 	}
 }
 
+// probeIdlePortBand must reserve every band slot for the lifetime of the test
+// binary: that is what turns the CI failure this change fixes (TASK-324) from a
+// rare race into an impossibility. A competing binder can be a concurrent copy
+// of this package, another test binary in the same `go test ./...` job or any
+// host process; bind(2) conflicts are per-socket, so this in-process binder
+// exercises the same kernel path as a foreign one.
+func TestDevTestBandSlotsAreReserved(t *testing.T) {
+	band := devTestBand(t)
+	reserved := make(map[int]bool, len(band))
+	for slot, port := range band {
+		reserved[port] = true
+		// The reservation socket must still be open and bound to its slot.
+		bound, boundErr := syscall.Getsockname(devTestBandFds[slot])
+		if boundErr != nil {
+			t.Errorf("band slot %d is not reserved: getsockname(fd %d): %v", slot, devTestBandFds[slot], boundErr)
+		} else if addr, ok := bound.(*syscall.SockaddrInet4); !ok || addr.Port != port {
+			t.Errorf("band slot %d reservation is bound to %v, want 127.0.0.1:%d", slot, bound, port)
+		}
+		// And no competing binder may take the slot.
+		listener, err := new(net.ListenConfig).Listen(
+			context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			_ = listener.Close()
+			t.Errorf("band slot %d (127.0.0.1:%d) was bindable by another socket; the probe must reserve every slot for the whole test binary", slot, port)
+		}
+	}
+	// The kernel must also stop handing the slots out to ":0" allocations: that
+	// is the path the CI failure took, where a concurrent test binary's
+	// ephemeral listener landed on a band port. 20000 draws over the ~28232
+	// port ephemeral range catch a regression with ~99% probability; the
+	// deterministic guarantee is the bind conflict asserted above.
+	for draw := 0; draw < 20000; draw++ {
+		listener, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("ephemeral allocation %d failed: %v", draw, err)
+		}
+		portStr := listenerPort(t, listener)
+		_ = listener.Close()
+		port, convErr := strconv.Atoi(portStr)
+		if convErr != nil {
+			t.Fatalf("cannot parse the ephemeral port %q: %v", portStr, convErr)
+		}
+		if reserved[port] {
+			t.Fatalf("ephemeral allocation %d was handed band port %d; the reservation must keep band slots out of the allocatable pool", draw, port)
+		}
+	}
+}
+
 // AC-065-07: the port gate must name the conflict. port_in_use probes with the
 // bash /dev/tcp builtin, which cannot be shimmed, so the fixture occupies the
 // port for real and the gate has to notice.
+//
+// The occupied port is the fixture's own ":0" listener, not a band slot: every
+// band slot is reserved by this test binary for its whole lifetime
+// (probeIdlePortBand), so binding one would always fail here and the fixture
+// could never run. The override band keeps its seven entries — slot 0 (the
+// 8082 / webhook remap) points at the occupied port and the other six stay on
+// the reserved band, which the gate reads as idle.
 func TestDevUpFailsWhenADevPortIsOccupied(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 
-	// fakeEnv overrides the dev ports to 19082-19087 so a real dev environment
-	// can run alongside the test.
-	listener, listenErr := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:19082")
+	occupied, listenErr := new(net.ListenConfig).Listen(
+		context.Background(), "tcp", "127.0.0.1:0")
 	if listenErr != nil {
-		t.Skipf("port 19082 is not free on this host, cannot build the fixture: %v", listenErr)
+		t.Fatalf("cannot bind the fixture's occupied port: %v", listenErr)
 	}
-	defer func() { _ = listener.Close() }()
+	defer func() { _ = occupied.Close() }()
+
+	band := devTestBand(t)
+	override := make([]string, 0, devTestBandSlots)
+	override = append(override, listenerPort(t, occupied))
+	for slot := 1; slot < devTestBandSlots; slot++ {
+		override = append(override, strconv.Itoa(band[slot]))
+	}
+	env = setEnvValue(env, "DEV_PORTS_OVERRIDE", strings.Join(override, " "))
 
 	out, err := runDev(t, env, "up")
 	if err == nil {
