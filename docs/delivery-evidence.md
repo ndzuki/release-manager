@@ -72,6 +72,15 @@
 判定口径：AC 文本以 2026-09-28 两次 `scope-change` **之后的现行文本**为准（AC-058-18 的「漂移」断言已标 `deferred`、
 AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定「不可达/延期」的条目单列 ⛔。
 
+**「发射点」口径与命令**：本表的「发射点」= 该错误码以**引号包裹的小写 snake_case 字面量**出现在 `.go`/`.sh`
+源文件中，即 `make check-error-codes` 的发射者定义（`internal/quality/errcodes/check.go` 的 `emitIndex`/`quotedSnake`：
+扫描跳过 `.git` / `.worktrees` / `node_modules` / `gen` / `web`，**测试文件计入**）。列举某码的全部发射点，把
+`<CODE>` 换成错误码：
+`grep -rn -E '"<CODE>"' --include=*.go --include=*.sh --exclude-dir=.git --exclude-dir=.worktrees --exclude-dir=node_modules --exclude-dir=gen --exclude-dir=web .`
+**本表只写「多处」、不写条数**：可发射性本身是**存在性判定**（`emitIndex` 只建集合、不计数），由
+`make check-error-codes`（需 `REQS_DIR`）负责；而「N 处」的条数随测试增删漂移，历史行里的旧值在两种可辩口径下
+对不上（复核与采样见 §9 的 TASK-335 条）⇒ 本表不再写条数。
+
 | AC | 判定 | 证据（本轮读取确认） | 缺口 / 落点 |
 | --- | --- | --- | --- |
 | **058-01** HPA 阻断（web 展示范围） | ✅ | 服务端拒绝：`internal/orchestrator/emergency.go:724`（`hpa_managed`）；投影 `internal/orchestrator/emergency_queries.go:345`（`HpaManaged`）；测试 `internal/orchestrator/emergency_test.go:749`；前端可用性/校验 `web/src/stores/emergencyChange.ts:201-205` | — |
@@ -89,7 +98,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-13** Annotation 批量边界 | ✅ | 0 条/超量/重复/跨 scope 四个码见 058-02 行；测试 `internal/orchestrator/emergency_annotations_test.go:41`（校验）+ `:133`（正例） | — |
 | **058-14** Mapping 完整性 | ✅ | `internal/orchestrator/emergency.go:732`、`:764`（`promotion_not_supported`）；测试 `internal/orchestrator/emergency_test.go:774` | 前端「REQUIRE_PROMOTION 不可选并固定 REVERT」：`web/src/stores/emergencyChange.ts:243-263`（mapping 完整性 + `effectivePolicy`） |
 | **058-15** 幂等响应丢失 | ✅ | 服务端按 key hash 回放：`internal/orchestrator/emergency.go:151`（`hashEmergencyIdempotencyKey`）、`:247`（落库 scope+key）；测试 `internal/orchestrator/emergency_test.go:317`（`TestExecuteEmergencyChangeIdempotency`）、`:801`（replicas 同族） | — |
-| **058-16** 幂等冲突 | ✅ | 同 scope/key 异 intent ⇒ `idempotency_conflict`（`internal/orchestrator/` 内 13 处发射点，主判在 emergency 幂等分支） | 前端不自动换 key：`web/src/stores/emergencyChange.ts:86` 的 `KEY_INVALIDATING_CODES` 已按 AC-058-16 收窄（`idempotency_conflict` 不在其中） |
+| **058-16** 幂等冲突 | ✅ | 同 scope/key 异 intent ⇒ `idempotency_conflict`（发射点：多处；主判在 emergency 幂等分支；口径与命令见本节「发射点」） | 前端不自动换 key：`web/src/stores/emergencyChange.ts:86` 的 `KEY_INVALIDATING_CODES` 已按 AC-058-16 收窄（`idempotency_conflict` 不在其中） |
 | **058-17** Intent 变化换 key | ✅ | 冻结/失效逻辑 `web/src/stores/emergencyChange.ts:630`（freeze）、`:645`（`randomUUID`）、`:653`（关窗保留 snapshot）、`:705`（按码失效）；测试 `web/src/stores/emergencyChange.test.ts` | — |
 | **058-18** `operation_version` 形状校验 | ✅ | `internal/orchestrator/emergency.go:502-508`：非空且不匹配 `^v?\d+\.\d+\.\d+$` ⇒ `EMERGENCY_REASON_CODE_VERSION_INVALID`（`CodeInvalidArgument`）；为空跳过 | 原「目标漂移 ⇒ `target_changed`」断言已由 2026-09-28 `scope-change` 显式标 `deferred`；本次不改（`errcodes.exceptions.yaml` 仍跟踪该字面量） |
 | **058-19** 异步接受响应 | ⚠️ 部分 | `ExecuteEmergencyChangeResponse` 只回 `result` / `operation_id` / `operation_version`（`api/proto/orchestrator/v1/orchestrator.proto:1744-1748`），`EmergencyResult.requested` 表示「已受理」 | AC 要求响应含 **`acceptedAt`** —— proto 无该字段；也不返回 task id（这一半符合）。落点：要么补 `accepted_at`，要么按已合入契约改写 AC |
@@ -107,10 +116,10 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-31** NOT_APPLIED 无 task | ✅ | 同事务删除 pending task：`internal/store/sqlite/emergency_converge.go:249-259`（`abandonConvergenceTaskTx`，`WHERE operation_id = ? AND status = 'pending_promotion'`）；双引擎同构见 `internal/store/postgres/emergency_intents.go` | — |
 | **058-32** REVERT 无门禁 | ✅ | REVERT 不建 task（建 task 分支只在 APPLIED+REQUIRE_PROMOTION：`internal/orchestrator/emergency.go:257` 上下文）；标准门禁只查 `pending_promotion`（`internal/orchestrator/service.go:248-253`） | — |
 | **058-33** REVERT 实际对账 | ❌ 已裁定不可达 | 第 1 层已交付（store 列 + `SaveRevertReconciliation`，见 REQ-058 变更记录 2026-09-27）；第 2 层比对需要集群字段观测能力 | 用户裁决 **D-R / R-1**：当前架构不可达，转独立评估卡 TASK-154。**不计入本轮验收面** |
-| **058-34** 前端预判与服务端裁决 | ✅ | 服务端裁决：`convergence_conflict` 发射点（`internal/` 内 6 处）；前端预判与冲突渲染：`web/src/stores/convergenceSelection.ts`；测试 `web/src/stores/convergenceSelection.test.ts:44`、`:89` | — |
+| **058-34** 前端预判与服务端裁决 | ✅ | 服务端裁决：`convergence_conflict` 发射点（多处；口径与命令见本节「发射点」）；前端预判与冲突渲染：`web/src/stores/convergenceSelection.ts`；测试 `web/src/stores/convergenceSelection.test.ts:44`、`:89` | — |
 | **058-35** URL 安全 | ✅ | 只传 mode + opaque token：`web/src/pages/ValuesEditorPage.vue:45-46`（`mode`/`prepareToken` 从 query 读） | — |
 | **058-36** Prepare 可读多次/创建单次 | ✅ | 过期判定 `internal/orchestrator/values_revision.go:130`；消费冲突 `:443-444`（`prepare_token_consumed`） | — |
-| **058-37** Prepare 过期 | ✅ | `internal/orchestrator/values_revision.go:130`（`ExpiresAt` 比较）+ `prepare_token_expired` 发射点（`internal/` 内 6 处） | — |
+| **058-37** Prepare 过期 | ✅ | `internal/orchestrator/values_revision.go:130`（`ExpiresAt` 比较）+ `prepare_token_expired` 发射点（多处；口径与命令见本节「发射点」） | — |
 | **058-38** Draft 不自动提交 | ✅ | `CreateValuesRevision` 只建 draft（REQ-068 契约，服务端实现于 `internal/orchestrator/values_revision.go`）；前端显式 Submit 由 `web/src/components/values/ValuesRevisionActions.vue:68` 独立按钮承载 | — |
 | **058-39** 显式 Discard | ✅ | `internal/orchestrator/values_revision.go:280-283`（`DiscardValuesRevision`）+ `:467`（`discard_not_allowed`） | — |
 | **058-40** Reject 解绑 | ⚠️ 部分 | 绑定关系以 revision 的 `ConvergenceTaskIds` 表达（`internal/orchestrator/values_approval.go:484-485` 读取该字段） | **未找到** Reject 事务里清除 binding 的显式语句或专属测试 ⇒ 「tasks 保持 pending_promotion 且 active binding 清空」属推论，需一条 reject→task 可重新 Prepare 的测试钉住 |
@@ -404,3 +413,15 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
   （基于 `origin/main` @ `f805596`）内量：`cd web && npm run lint`（0 error / 2 既有 warning）、
   `npm test`（119 files / 1257 tests 全绿，exit 0）、`npm run build`（vue-tsc + vite，exit 0）、
   `make check-docs` **PASS**。未动 Go/proto/生成物，未改 i18n catalog（无新增文案）。
+- **2026-10-17 修订（TASK-335：发射点计数与门禁快照）**：本节上面两条**只代表各自那次运行**，不是现值。
+  ① `da7244c` 那条的 `taskcheck：306 卡 0 violation` 是**该次运行的快照**：vault 卡数会增长，既不可回放也不该
+  写死；现值按现场命令取（`TASKS_DIR` 缺省取 `<REQS_DIR>/../Tasks`），在 **2026-10-17T16:45:54+08:00** 实测
+  `make check-tasks REQS_DIR=<vault>/Requirements` → `taskcheck: 315 completed card(s) ... 0 violation(s)`；
+  同刻 `make check-error-codes REQS_DIR=<vault>/Requirements` → `errcodecheck: 135 asserted error codes are
+  emittable (7 exceptions)`（与旧记录一致）。
+  ② TASK-325 那条的 `119 files / 1257 tests` 同样是**那次 `npm test` 的运行记录**，随测试增长而漂移。
+  ③ §2 三处「发射点」旧计数已按 §2 的「发射点」口径**去数字化**。按该命令在 **2026-10-17T16:45:47+08:00** 实测：
+  `idempotency_conflict` 整仓 13 条（`internal/orchestrator/` 内 11，原始子串命中 14）、`convergence_conflict`
+  6 条、`prepare_token_expired` 5 条。⇒ `13` 只在**整仓**引号字面量口径下成立，而旧行把范围写作
+  `internal/orchestrator/`；`convergence_conflict` 的 `6` 与口径相符；`prepare_token_expired` 的 `6` 在任何口径下
+  都对不上（当时与现在都是 5，疑与相邻行的 `6` 同源）。这些数字只作旧值诊断与本次采样记录，不应被引用为现值。
