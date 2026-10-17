@@ -5,7 +5,7 @@ import { timestampDate } from '@bufbuild/protobuf/wkt';
 import type { Customer as ProtoCustomer, CustomerEvent as ProtoCustomerEvent } from '@/gen/common/v1/domain_pb';
 import { OrchestratorService } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { transport } from '@/connect/client';
-import type { CustomerEvent, CustomerFormInput, CustomerSummary, SaveError } from '@/types/customer';
+import type { CustomerEvent, CustomerFormInput, CustomerStatus, CustomerSummary, SaveError } from '@/types/customer';
 
 let client: Client<typeof OrchestratorService> = createClient(OrchestratorService, transport);
 
@@ -13,12 +13,23 @@ export function setCustomerClientForTest(replacement: Client<typeof Orchestrator
   client = replacement;
 }
 
+/**
+ * Only a wire status this console can read becomes a state. `Customer.status` is a
+ * free-form string (api/proto/common/v1/domain.proto) that the server passes through
+ * verbatim (internal/orchestrator/customer.go -> `string(c.Status)`), so "not
+ * disabled" is not evidence of active: an unreadable value stays `unknown` rather
+ * than being reported as an account state nobody established.
+ */
+function customerStatus(status: string): CustomerStatus {
+  return status === 'active' || status === 'disabled' ? status : 'unknown';
+}
+
 function mapCustomer(customer: ProtoCustomer): CustomerSummary {
   return {
     id: customer.id,
     name: customer.name,
     slug: customer.slug,
-    status: customer.status === 'disabled' ? 'disabled' : 'active',
+    status: customerStatus(customer.status),
     version: Number(customer.version),
     createdAt: customer.createdAt ? timestampDate(customer.createdAt).toISOString() : undefined,
   };

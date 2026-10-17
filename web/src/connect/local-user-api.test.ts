@@ -1,7 +1,9 @@
 import { Code, ConnectError } from '@connectrpc/connect';
-import { describe, expect, it } from 'vitest';
-import { mapLocalUserError, LOCAL_USER_ROLES } from './local-user-api';
+import { describe, expect, it, vi } from 'vitest';
+import { createLocalUser, mapLocalUserError, LOCAL_USER_ROLES } from './local-user-api';
+import { authClient } from './client';
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 
 /** A ConnectError carrying the headers the server sets (see error-copy.ts). */
 function failure(code: Code, headers: Record<string, string> = {}): ConnectError {
@@ -79,5 +81,35 @@ describe('grantable roles', () => {
   // D-16 rejects platform_admin here, and the console must not offer it.
   it('never offers platform_admin', () => {
     expect(LOCAL_USER_ROLES).toEqual(['viewer', 'deployer', 'release_admin']);
+  });
+});
+
+/*
+ * A CreateLocalUser response without the user message left the wrapper to synthesise
+ * one field by field, and it filled the status in as `active` — which, per
+ * api/proto/auth/v1/auth.proto, is the claim that the account can authenticate.
+ * Whatever the reason the message is missing, that is not something the console knows.
+ */
+describe('createLocalUser without the user message', () => {
+  it('does not claim the account is active', async () => {
+    vi.spyOn(authClient, 'createLocalUser').mockResolvedValue({} as never);
+
+    const created = await createLocalUser({ username: 'ada', password: 'correct-horse', role: 'viewer' });
+
+    expect(created.status).toBe('unknown');
+    expect(created.status).not.toBe('active');
+    // The label is what the page renders, so `unknown` must not leak through raw.
+    expect(statusLabel('localUser', created.status)).toBe('未知');
+  });
+
+  // Positive control: a response that DOES carry the user keeps its status.
+  it('keeps the status the server did send', async () => {
+    vi.spyOn(authClient, 'createLocalUser').mockResolvedValue({
+      user: { id: 'u-1', username: 'ada', roles: ['viewer'], orgId: 'org-1', status: 'pending' },
+    } as never);
+
+    const created = await createLocalUser({ username: 'ada', password: 'correct-horse', role: 'viewer' });
+
+    expect(created.status).toBe('pending');
   });
 });

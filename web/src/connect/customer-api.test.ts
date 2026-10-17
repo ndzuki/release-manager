@@ -4,15 +4,17 @@ import type { Client } from '@connectrpc/connect';
 import { describe, expect, it, vi } from 'vitest';
 import { CustomerSchema } from '@/gen/common/v1/domain_pb';
 import { OrchestratorService } from '@/gen/orchestrator/v1/orchestrator_pb';
+import type { CustomerStatus } from '@/types/customer';
 import {
   disableCustomer,
   listCustomerEvents,
+  listCustomers,
   mapSaveError,
   setCustomerClientForTest,
   updateCustomer,
 } from './customer-api';
 
-function protoCustomer(overrides: Partial<{ name: string; slug: string; version: bigint }> = {}) {
+function protoCustomer(overrides: Partial<{ name: string; slug: string; version: bigint; status: string }> = {}) {
   return create(CustomerSchema, {
     id: 'cust-1',
     name: 'Acme',
@@ -49,6 +51,58 @@ describe('updateCustomer', () => {
       slug: 'renamed',
       expectedVersion: 2n,
     });
+  });
+});
+
+/*
+ * `Customer.status` is a free-form string on the wire and the server passes the stored
+ * column through verbatim (internal/orchestrator/customer.go -> `string(c.Status)`).
+ * The old mapping answered `active` for every value that was not `disabled`, and the
+ * list page and the detail page both render that state and gate Edit/Disable on it —
+ * so an unreadable status produced a confident, actionable "active" customer.
+ */
+describe('customer status mapping', () => {
+  it('leaves a wire status it cannot read unknown instead of calling the customer active', async () => {
+    const testClient = mockClient({
+      listCustomers: vi.fn().mockResolvedValue({ customers: [protoCustomer({ status: 'suspended' })] }),
+    });
+    setCustomerClientForTest(testClient);
+
+    const [customer] = await listCustomers();
+
+    expect(customer.status).toBe('unknown');
+    expect(customer.status).not.toBe('active');
+    expect(customer.status).not.toBe('disabled');
+  });
+
+  // Positive control: the two real states must survive, or "unknown for everything"
+  // would satisfy the case above.
+  it('keeps reading the two statuses it knows', async () => {
+    const testClient = mockClient({
+      listCustomers: vi
+        .fn()
+        .mockResolvedValue({ customers: [protoCustomer({ status: 'active' }), protoCustomer({ status: 'disabled' })] }),
+    });
+    setCustomerClientForTest(testClient);
+
+    const customers = await listCustomers();
+
+    expect(customers.map((customer) => customer.status)).toEqual(['active', 'disabled']);
+  });
+});
+
+/*
+ * Type-level control (vitest erases types, so `vue-tsc -b` is the runner): the list and
+ * detail pages both reduce the status to "disabled or not". That reduction is only safe
+ * while `unknown` is a member of `CustomerStatus` — removing it turns this directive
+ * into an unused one, which is a compile error.
+ */
+describe('the CustomerStatus union', () => {
+  it('keeps unknown out of the two wire states', () => {
+    // @ts-expect-error `unknown` is a third state; a two-state reduction must not swallow it.
+    const wireState: Exclude<CustomerStatus, 'unknown'> = 'unknown' as CustomerStatus;
+
+    expect(typeof wireState).toBe('string');
   });
 });
 

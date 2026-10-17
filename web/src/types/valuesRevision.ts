@@ -1,7 +1,15 @@
 import type { ValuesStatus } from '@/gen/common/v1/domain_pb';
 
 export type EditorLanguage = 'yaml' | 'json';
-export type RevisionStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'superseded' | 'discarded';
+/**
+ * `unknown` is a DISPLAY state for a value this console could not classify; it is
+ * not a server state and must never be sent back as a filter. The wire filter is a
+ * proto `ValuesStatus` and `UNSPECIFIED` means "no filter" to the server (see
+ * listValuesRevisions), so a filter built from this union would silently return
+ * every row. Nothing builds one today: every caller passes `ValuesStatus.APPROVED`
+ * or no filter at all.
+ */
+export type RevisionStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'superseded' | 'discarded' | 'unknown';
 
 export interface SecretRef {
   path?: string;
@@ -81,6 +89,13 @@ export function statusFromProto(status: ValuesStatus): RevisionStatus {
     case 6:
       return 'discarded';
     default:
-      return 'draft';
+      // `ValuesStatus` is an open proto3 enum, so a value this console does not know
+      // (a newer server) and `UNSPECIFIED` (0) both land here. `UNSPECIFIED` is also
+      // what the server's own mapper returns for a stored status it cannot read
+      // (internal/orchestrator/values_approval.go valuesStatusToProto). Reading either
+      // as DRAFT claimed a specific approval state nobody had established, and the
+      // editor gates Submit/Discard on `status === 'draft'`, so the false draft was
+      // an actionable one. Unknown is its own state now.
+      return 'unknown';
   }
 }

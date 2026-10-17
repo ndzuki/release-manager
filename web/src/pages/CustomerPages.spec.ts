@@ -143,3 +143,47 @@ describe('customer detail route reuse', () => {
     expect(store.loadHistory).toHaveBeenCalledWith('new-1');
   });
 });
+
+/*
+ * `Customer.status` is a free-form string on the wire. The list page used to render
+ * every non-active value as "已停用" and offered Edit on `status === 'active'`; a
+ * status the console cannot read now has to read as neither state, because both of
+ * the old answers were claims about the tenant that nobody had established.
+ */
+describe('customer list status pill', () => {
+  it('renders a status it cannot read as unknown rather than as a real state', async () => {
+    authenticateAdmin();
+    const store = useCustomerStore();
+    store.loading = false;
+    store.customers = [{ id: 'cust-1', name: 'Acme', slug: 'acme', status: 'unknown', version: 1 }];
+    store.loadList = vi.fn().mockResolvedValue(undefined);
+
+    const wrapper = await mountAt(CustomerListPage, '/customers');
+    await nextTick();
+
+    const pill = wrapper.get('.status');
+    expect(pill.text()).toBe('未知');
+    expect(pill.classes()).toContain('status--unknown');
+    expect(pill.classes()).not.toContain('status--active');
+    expect(pill.classes()).not.toContain('status--disabled');
+    // Edit is gated on a status the console CAN read, so it must not be offered here.
+    expect(wrapper.text()).not.toContain('编辑');
+  });
+
+  // Positive control for the 3-way branch above.
+  it('still labels the two real states', async () => {
+    authenticateAdmin();
+    const store = useCustomerStore();
+    store.loading = false;
+    store.customers = [
+      { id: 'cust-1', name: 'Acme', slug: 'acme', status: 'active', version: 1 },
+      { id: 'cust-2', name: 'Globex', slug: 'globex', status: 'disabled', version: 1 },
+    ];
+    store.loadList = vi.fn().mockResolvedValue(undefined);
+
+    const wrapper = await mountAt(CustomerListPage, '/customers');
+    await nextTick();
+
+    expect(wrapper.findAll('.status').map((pill) => pill.text())).toEqual(['生效中', '已停用']);
+  });
+});

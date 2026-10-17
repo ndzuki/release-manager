@@ -130,6 +130,7 @@ const zhCN = {
   // Status labels (the store's values stay English; only the display label is Chinese)
   'status.active': '生效中',
   'status.disabled': '已停用',
+  'status.unknown': '未知',
   // Wave 3: customer/cluster/release-inventory sub-components
   'customer.form.name': '名称',
   'customer.form.slug': '标识',
@@ -393,6 +394,7 @@ const zhCN = {
   'values.revision.status.rejected': '已驳回',
   'values.revision.status.superseded': '已被取代',
   'values.revision.status.discarded': '已丢弃',
+  'values.revision.status.unknown': '未知',
   'values.page.title': 'Values 文档',
   'values.page.editor': 'ValuesRevision 编辑器',
   'values.page.language': '语言',
@@ -741,6 +743,7 @@ const zhCN = {
   'localUser.status.active': '生效中',
   'localUser.status.pending': '待激活',
   'localUser.status.disabled': '已停用',
+  'localUser.status.unknown': '未知',
   'localUser.list.empty': '还没有本地账号。',
   'localUser.list.loading': '正在加载本地用户…',
   'localUser.list.loadMore': '加载更多',

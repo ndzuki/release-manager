@@ -175,22 +175,36 @@ function withSharedCopy<T extends { message: string; details: string }>(failure:
  *    X-Reason-Code: organization_disabled), and disabling is TERMINAL: no
  *    procedure reverses it.
  */
+
+/**
+ * The statuses this console can read off the wire. `unknown` is the console's own
+ * reading of any other value: `Organization.status` is a free-form string
+ * (api/proto/auth/v1/auth.proto) and the server passes the stored column through
+ * verbatim (internal/auth/org_service.go toProtoOrg -> `string(o.Status)`), so a
+ * value this console does not know is a value it must not classify.
+ */
+export type OrganizationStatus = 'active' | 'disabled' | 'unknown';
+
 export interface OrganizationView {
   id: string;
   name: string;
-  /** 'active' | 'disabled'; disabling is terminal. */
-  status: string;
+  /** 'active' | 'disabled'; disabling is terminal. 'unknown' means unreadable. */
+  status: OrganizationStatus;
   optimisticVersion: bigint;
   createdAt: string | null;
   updatedAt: string | null;
 }
 
-/** The wire status is a free string; anything that is not `disabled` reads as active. */
+/** Only a wire value this console can read becomes a state; anything else stays unknown. */
+function organizationStatus(status: string): OrganizationStatus {
+  return status === 'active' || status === 'disabled' ? status : 'unknown';
+}
+
 function toOrganizationView(organization: Organization): OrganizationView {
   return {
     id: organization.id,
     name: organization.name,
-    status: organization.status === 'disabled' ? 'disabled' : 'active',
+    status: organizationStatus(organization.status),
     optimisticVersion: organization.optimisticVersion,
     createdAt: organization.createdAt ? timestampDate(organization.createdAt).toISOString() : null,
     updatedAt: organization.updatedAt ? timestampDate(organization.updatedAt).toISOString() : null,

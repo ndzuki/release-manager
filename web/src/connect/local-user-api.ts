@@ -75,7 +75,10 @@ export async function createLocalUser(input: {
     username: user?.username ?? input.username,
     roles: user?.roles ?? [input.role],
     orgId: user?.orgId ?? '',
-    status: user?.status ?? 'active',
+    // A response without the user says nothing about the account's state. The old
+    // fallback read `active`, which is the claim that the account can authenticate
+    // (api/proto/auth/v1/auth.proto); `unknown` claims nothing.
+    status: user?.status ?? 'unknown',
   };
 }
 
