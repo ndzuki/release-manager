@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -133,7 +134,11 @@ const devTestBandSlots = 7
 var (
 	devTestBandOnce  sync.Once
 	devTestBandPorts [devTestBandSlots]int
-	devTestBandErr   error
+	// devTestBandFds holds the bound-but-not-listening sockets that reserve
+	// devTestBandPorts for the lifetime of this test binary. They are
+	// deliberately never closed; the process exit releases them.
+	devTestBandFds [devTestBandSlots]int
+	devTestBandErr error
 )
 
 // devTestBand returns the per-process band of idle loopback ports that
@@ -144,6 +149,10 @@ var (
 // does not contain them). A literal band made every overlapping pair fail with
 // port_conflict, because the one test that really occupies a port handed the
 // conflict to every other test in the other copy.
+//
+// probeIdlePortBand reserves every slot (devTestBandFds) for the lifetime of
+// this test binary, so a port that was idle at probe time cannot be taken by
+// anyone else while the package runs.
 func devTestBand(t *testing.T) [devTestBandSlots]int {
 	t.Helper()
 	devTestBandOnce.Do(func() {
@@ -177,48 +186,43 @@ func formatDevTestBand(t *testing.T) string {
 	return strings.Join(parts, " ")
 }
 
-// probeIdlePortBand finds devTestBandSlots consecutive idle loopback ports. The
+// probeIdlePortBand reserves devTestBandSlots consecutive idle loopback ports
+// for the lifetime of the test binary (devTestBandFds) and returns them. The
 // base is sampled with ":0", so the kernel only hands out ephemeral ports
 // (32768-60999 on this host): the band misses the fixed 8082-8088 host ports
 // and the fixed 19984 / 15432 ports the fakes used to pin (they bind their own
-// ":0" now). The whole run is then bound at once to prove every offset is free,
-// and released again because dev.sh's preflight port gate must observe the band
-// as free (AC-065-07).
+// ":0" now). Every offset is bound at once, which proves the whole run is free
+// and — unlike the earlier probe-then-release design — keeps it that way.
 //
-// Trade-off: the probe runs once per test binary (devTestBand's sync.Once) and
-// releases its sockets immediately, so the band is reused for the whole package
-// run — 83-86s from the probe to the last test's preflight across the runs
-// measured for this change, not just the sub-millisecond window in which the
-// probe itself holds the sockets. During that window a competing binder (a
-// concurrent copy of this package, the ":0" fakes above, or any other process)
-// can take a probed port, so a collision with a concurrent copy is a residual
-// probabilistic TOCTOU rather than an impossibility: a fresh ":0" sample lands
-// inside the other copy's devTestBandSlots-port band with probability ≈2.5e-4
-// (7 slots over the 28232 ephemeral ports 32768-60999 measured here, i.e. 7 in
-// 28000 in round numbers), down from the certainty of the old literal band. No
-// false port_conflict was observed in the verification for this change: 7
-// full-package runs (2 rounds of two concurrent copies plus 3 runs with an
-// external occupier). The band cannot stay bound for the process lifetime (the
-// gate would report the test's own ports as a conflict), and the t.Skipf in the
-// conflict fixture only covers the slot 0 port it occupies, so a residual
-// collision on any other slot would surface as a port_conflict failure in the
-// tests that need the band free.
+// Reserving the slots closes the probe/preflight TOCTOU (TASK-324) instead of
+// narrowing it:
+//
+//   - a bound port is no longer in the kernel's pool of allocatable ephemeral
+//     ports, so a ":0" sample can never be handed a band slot: not by a
+//     concurrent copy of this package, not by another test binary in the same
+//     `go test ./...` job, not by any other host process;
+//   - an explicit binder of a band slot fails with EADDRINUSE, so a deliberate
+//     occupier cannot take one either. The AC-065-07 fixture therefore binds its
+//     own ":0" port instead of a band slot (see
+//     TestDevUpFailsWhenADevPortIsOccupied);
+//   - dev.sh's preflight gate (require_ports_free) still sees the band as idle,
+//     because port_in_use probes with connect(2) and a socket that is bound but
+//     never listen(2)ed refuses the connection exactly like an unused port. The
+//     sockets stay deliberately unlistened: keeping them LISTENING would make
+//     the gate report this binary's own ports as a conflict, which is why the
+//     old probe released them.
 func probeIdlePortBand(t *testing.T) ([devTestBandSlots]int, error) {
 	t.Helper()
 	var band [devTestBandSlots]int
 	for attempt := 0; attempt < 64; attempt++ {
-		sampled, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		baseFd, base, err := reserveLoopbackPort(0)
 		if err != nil {
-			return band, fmt.Errorf("sample ephemeral port: %w", err)
+			return band, fmt.Errorf("reserve a base loopback port: %w", err)
 		}
-		base, err := strconv.Atoi(listenerPort(t, sampled))
-		if err != nil {
-			_ = sampled.Close()
-			return band, fmt.Errorf("parse sampled port %q: %w", sampled.Addr(), err)
-		}
-		// Keep the sampled base bound while probing the remaining offsets, so
-		// the whole run is verified as free simultaneously.
-		extra := make([]net.Listener, 0, devTestBandSlots-1)
+		// fds collects only the sockets actually bound, so an incomplete
+		// candidate run releases those and never a zero-valued slot.
+		fds := make([]int, 0, devTestBandSlots)
+		fds = append(fds, baseFd)
 		complete := true
 		for offset := 1; offset < devTestBandSlots && complete; offset++ {
 			port := base + offset
@@ -226,30 +230,73 @@ func probeIdlePortBand(t *testing.T) ([devTestBandSlots]int, error) {
 				complete = false
 				break
 			}
-			ln, listenErr := new(net.ListenConfig).Listen(
-				context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
-			if listenErr != nil {
+			fd, reserved, reserveErr := reserveLoopbackPort(port)
+			if reserveErr != nil || reserved != port {
 				complete = false
 				break
 			}
-			extra = append(extra, ln)
+			fds = append(fds, fd)
 		}
-		for _, ln := range extra {
-			_ = ln.Close()
-		}
-		closeErr := sampled.Close()
 		if !complete {
+			for _, fd := range fds {
+				releaseReservedPort(fd)
+			}
 			continue
-		}
-		if closeErr != nil {
-			return band, fmt.Errorf("release sampled port %d: %w", base, closeErr)
 		}
 		for i := range band {
 			band[i] = base + i
 		}
+		copy(devTestBandFds[:], fds)
 		return band, nil
 	}
 	return band, fmt.Errorf("no idle %d-port band found in 64 attempts", devTestBandSlots)
+}
+
+// reserveLoopbackPort binds a TCP socket to 127.0.0.1:port (0 asks the kernel
+// for any idle ephemeral port) and returns the descriptor plus the port the
+// kernel actually assigned, without ever calling listen(2).
+//
+// bind(2) alone already reserves the address: the kernel stops handing it out
+// for ":0" allocations and a second binder of the same address fails with
+// EADDRINUSE. That holds for both 127.0.0.1 and 0.0.0.0, and bind conflicts are
+// per-socket rather than per-process, so a foreign binder takes the same kernel
+// path. Not listening keeps the connect(2) probe require_ports_free uses
+// failing, so the gate reads a reserved port as idle. The descriptor is
+// close-on-exec, so dev.sh's children inherit nothing.
+func reserveLoopbackPort(port int) (fd, assigned int, err error) {
+	fd, err = syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		return -1, 0, fmt.Errorf("socket: %w", err)
+	}
+	syscall.CloseOnExec(fd)
+	if err = syscall.Bind(fd, &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}, Port: port}); err != nil {
+		releaseReservedPort(fd)
+		return -1, 0, fmt.Errorf("bind 127.0.0.1:%d: %w", port, err)
+	}
+	sa, err := syscall.Getsockname(fd)
+	if err != nil {
+		releaseReservedPort(fd)
+		return -1, 0, fmt.Errorf("getsockname for 127.0.0.1:%d: %w", port, err)
+	}
+	addr, ok := sa.(*syscall.SockaddrInet4)
+	if !ok {
+		releaseReservedPort(fd)
+		return -1, 0, fmt.Errorf("unexpected socket address %T for 127.0.0.1:%d", sa, port)
+	}
+	return fd, addr.Port, nil
+}
+
+// releaseReservedPort closes a reservation the probe decided not to keep (an
+// incomplete candidate run). Its close error cannot change the outcome — the
+// descriptor is abandoned either way — so it is not surfaced, but it is still
+// checked rather than dropped.
+func releaseReservedPort(fd int) {
+	if fd < 0 {
+		return
+	}
+	if err := syscall.Close(fd); err != nil {
+		return
+	}
 }
 
 // fakeOperatorGateway binds one shared loopback listener for the whole test
@@ -263,10 +310,9 @@ func probeIdlePortBand(t *testing.T) ([devTestBandSlots]int, error) {
 // concurrently (parallel CI jobs, concurrent local sessions): with the old
 // literal 19984 every such pair died with "cannot bind fake operator gateway
 // listener: ... address already in use". The kernel-assigned port is drawn from
-// the ephemeral range, as is the DEV_PORTS_OVERRIDE band this package now probes,
-// so a coincidence with one of the band ports is possible in principle and the
-// preflight port gate (require_ports_free) would then see that band port as
-// occupied.
+// the ephemeral range, as is the DEV_PORTS_OVERRIDE band, but the band's slots
+// are bound for the lifetime of this test binary (probeIdlePortBand), so this
+// ":0" bind can never be handed a band port whatever the call order.
 func fakeOperatorGateway(t *testing.T) string {
 	t.Helper()
 	fakeGatewayOnce.Do(func() {
@@ -351,10 +397,11 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		"FIXTURE_VERSION=v2",
 		// Probe idle test ports, not the real 8082-8088: the actual dev
 		// environment may be running on the host during tests. The band is
-		// probed per process from the kernel's ephemeral range, so two copies
-		// of this package running at once normally get disjoint bands instead
-		// of the old literal 19082-19088 band's guaranteed clash (a residual
-		// overlap is still possible; see probeIdlePortBand).
+		// reserved per process from the kernel's ephemeral range and held for
+		// the lifetime of this test binary (probeIdlePortBand), so two copies
+		// of this package running at once get disjoint bands and neither can
+		// have a slot taken afterwards — no residual overlap, unlike the old
+		// literal 19082-19088 band's guaranteed clash.
 		"DEV_PORTS_OVERRIDE="+formatDevTestBand(t),
 		// The operator gateway readiness is a TCP probe without an HTTP
 		// endpoint to shim; point dev.sh's probe at the shared loopback
@@ -366,6 +413,19 @@ func fakeEnv(t *testing.T, stateDir string) (env []string, binDir string) {
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	return env, binDir
+}
+
+// setEnvValue returns env with key set to value, dropping every earlier entry
+// for that key so the child sees exactly one definition.
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	kept := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			kept = append(kept, entry)
+		}
+	}
+	return append(kept, prefix+value)
 }
 
 // writeShim writes an executable fake CLI.
@@ -4111,27 +4171,84 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 100
 	}
 }
 
+// probeIdlePortBand must reserve every band slot for the lifetime of the test
+// binary: that is what turns the CI failure this change fixes (TASK-324) from a
+// rare race into an impossibility. A competing binder can be a concurrent copy
+// of this package, another test binary in the same `go test ./...` job or any
+// host process; bind(2) conflicts are per-socket, so this in-process binder
+// exercises the same kernel path as a foreign one.
+func TestDevTestBandSlotsAreReserved(t *testing.T) {
+	band := devTestBand(t)
+	reserved := make(map[int]bool, len(band))
+	for slot, port := range band {
+		reserved[port] = true
+		// The reservation socket must still be open and bound to its slot.
+		bound, boundErr := syscall.Getsockname(devTestBandFds[slot])
+		if boundErr != nil {
+			t.Errorf("band slot %d is not reserved: getsockname(fd %d): %v", slot, devTestBandFds[slot], boundErr)
+		} else if addr, ok := bound.(*syscall.SockaddrInet4); !ok || addr.Port != port {
+			t.Errorf("band slot %d reservation is bound to %v, want 127.0.0.1:%d", slot, bound, port)
+		}
+		// And no competing binder may take the slot.
+		listener, err := new(net.ListenConfig).Listen(
+			context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			_ = listener.Close()
+			t.Errorf("band slot %d (127.0.0.1:%d) was bindable by another socket; the probe must reserve every slot for the whole test binary", slot, port)
+		}
+	}
+	// The kernel must also stop handing the slots out to ":0" allocations: that
+	// is the path the CI failure took, where a concurrent test binary's
+	// ephemeral listener landed on a band port. 20000 draws over the ~28232
+	// port ephemeral range catch a regression with ~99% probability; the
+	// deterministic guarantee is the bind conflict asserted above.
+	for draw := 0; draw < 20000; draw++ {
+		listener, err := new(net.ListenConfig).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("ephemeral allocation %d failed: %v", draw, err)
+		}
+		portStr := listenerPort(t, listener)
+		_ = listener.Close()
+		port, convErr := strconv.Atoi(portStr)
+		if convErr != nil {
+			t.Fatalf("cannot parse the ephemeral port %q: %v", portStr, convErr)
+		}
+		if reserved[port] {
+			t.Fatalf("ephemeral allocation %d was handed band port %d; the reservation must keep band slots out of the allocatable pool", draw, port)
+		}
+	}
+}
+
 // AC-065-07: the port gate must name the conflict. port_in_use probes with the
 // bash /dev/tcp builtin, which cannot be shimmed, so the fixture occupies the
 // port for real and the gate has to notice.
+//
+// The occupied port is the fixture's own ":0" listener, not a band slot: every
+// band slot is reserved by this test binary for its whole lifetime
+// (probeIdlePortBand), so binding one would always fail here and the fixture
+// could never run. The override band keeps its seven entries — slot 0 (the
+// 8082 / webhook remap) points at the occupied port and the other six stay on
+// the reserved band, which the gate reads as idle.
 func TestDevUpFailsWhenADevPortIsOccupied(t *testing.T) {
 	stateDir := t.TempDir()
 	env, binDir := fakeEnv(t, stateDir)
 	fakeK3d(t, binDir, stateDir)
 	happyShims(t, binDir)
 
-	// Occupy the first slot of the band fakeEnv pointed dev.sh at (the 8082 /
-	// webhook remap). The band belongs to this test binary, so unlike the old
-	// literal 19082 it does not hand a conflict to every test in a concurrent
-	// copy — a concurrent copy only overlaps it with the residual probability
-	// described on probeIdlePortBand, and its t.Skipf only protected this test.
-	occupiedPort := devTestBandPort(t, 0)
-	listener, listenErr := (&net.ListenConfig{}).Listen(
-		context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", occupiedPort))
+	occupied, listenErr := new(net.ListenConfig).Listen(
+		context.Background(), "tcp", "127.0.0.1:0")
 	if listenErr != nil {
-		t.Skipf("band port %d is not free on this host, cannot build the fixture: %v", occupiedPort, listenErr)
+		t.Fatalf("cannot bind the fixture's occupied port: %v", listenErr)
 	}
-	defer func() { _ = listener.Close() }()
+	defer func() { _ = occupied.Close() }()
+
+	band := devTestBand(t)
+	override := make([]string, 0, devTestBandSlots)
+	override = append(override, listenerPort(t, occupied))
+	for slot := 1; slot < devTestBandSlots; slot++ {
+		override = append(override, strconv.Itoa(band[slot]))
+	}
+	env = setEnvValue(env, "DEV_PORTS_OVERRIDE", strings.Join(override, " "))
 
 	out, err := runDev(t, env, "up")
 	if err == nil {
