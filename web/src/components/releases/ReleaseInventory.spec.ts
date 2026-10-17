@@ -6,13 +6,26 @@ import ReleaseInventoryTable from './ReleaseInventoryTable.vue';
 
 describe('release inventory presentation', () => {
   it.each([
+    ['active', 'Release 与最近一次同步结果一致', '生效中'],
     ['missing', 'Release 已从集群中消失', '缺失'],
     ['out_of_sync', '配置与期望不一致', '不同步'],
+    ['unknown', '服务端返回了控制台无法识别的状态；请刷新或升级控制台', '未知'],
   ] as const)('explains %s status without relying on color', (status, tooltip, label) => {
     const wrapper = mount(ReleaseStatusBadge, { props: { status } });
 
     expect(wrapper.attributes('title')).toBe(tooltip);
     expect(wrapper.text()).toContain(label);
+  });
+
+  // UX-061: an unrecognised status is not evidence of Active — it renders the
+  // neutral unknown state, and the neutral class hook keeps it out of the green
+  // success styling.
+  it('never renders an unrecognised status as Active', () => {
+    const wrapper = mount(ReleaseStatusBadge, { props: { status: 'unknown' } });
+
+    expect(wrapper.classes()).toContain('release-status--unknown');
+    expect(wrapper.classes()).not.toContain('release-status--active');
+    expect(wrapper.text()).not.toContain('生效中');
   });
 
   it('keeps same-name releases distinct by namespace', () => {

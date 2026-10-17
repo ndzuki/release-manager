@@ -7,12 +7,16 @@ const props = defineProps<{ status: ReleaseStatus }>();
 
 const details = computed(() => {
   switch (props.status) {
+    case 'active':
+      return { label: t('release.status.active'), icon: '✓', tooltip: 'Release 与最近一次同步结果一致' };
     case 'missing':
       return { label: t('release.status.missing'), icon: '!', tooltip: 'Release 已从集群中消失' };
     case 'out_of_sync':
       return { label: t('release.status.outOfSync'), icon: '↯', tooltip: '配置与期望不一致' };
     default:
-      return { label: t('release.status.active'), icon: '✓', tooltip: 'Release 与最近一次同步结果一致' };
+      // UX-061: neutral, catalog-sourced copy for every status the console does not
+      // recognise — an unknown value is not evidence of Active.
+      return { label: t('release.status.unknown'), icon: '?', tooltip: t('release.status.unknownTooltip') };
   }
 });
 </script>
@@ -38,4 +42,6 @@ const details = computed(() => {
 .release-status--active { color: var(--color-success-ink); background: var(--color-success-surface-soft); }
 .release-status--missing { color: var(--color-error-strong); background: var(--color-danger-soft); }
 .release-status--out_of_sync { color: var(--color-warning-ink); background: var(--color-warning-soft); }
+/* Unknown is neutral: neither the success green nor a failure colour. */
+.release-status--unknown { color: var(--color-muted-strong); background: var(--color-surface-muted); }
 </style>

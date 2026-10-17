@@ -37,6 +37,8 @@ const zhCN = {
   'release.status.outOfSync': '不同步',
   'release.status.missing': '缺失',
   'release.status.active': '生效中',
+  'release.status.unknown': '未知',
+  'release.status.unknownTooltip': '服务端返回了控制台无法识别的状态；请刷新或升级控制台',
   'operator.api.missingResponse': 'Operator 响应缺少必要字段。',
   'operator.api.requestFailed': 'Operator 请求失败。',
   'client.timeout': '请求超时；API 可能不可达',

@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
 | REQ-058（50 AC） | ✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
-| `docs/ux-review.md` 87 条 | ✅ 27 / ⚠️ 4 / ⏳ 54 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅ |
+| `docs/ux-review.md` 87 条 | ✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；两 PR 叠加后按 §3.2 表逐行重数 |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
 四条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
@@ -165,7 +165,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-013 | major | ✅ | `web/src/pages/OperationDetailPage.vue:133`（`preflightFailure`）→ 渲染 `:357-361`；注释即 TASK-281 |
 | UX-014 | major | ⏳ | `web/src/pages/OperationDetailPage.vue` 仍无 `Forbidden` 分支（`grep Forbidden` 零命中） |
 | UX-015 | major | ✅ | `web/src/connect/error-copy.ts:50`（读 requestId）、`:65-69`（`correlationLine`）；≥10 处调用点（如 `web/src/pages/OperationDetailPage.vue:157`） |
-| UX-016 | major | ⏳ | `web/src/stores/releaseInventory.ts:103` 非 `Unavailable` 时仍返回 `connectError.rawMessage` |
+| UX-016 | major | ⏳ | `web/src/stores/releaseInventory.ts:114` 非 `Unavailable` 时仍返回 `connectError.rawMessage` |
 | UX-017 | major | ⏳ | 全仓仍无 `<caption>`（`grep "<caption"` 零命中）；`scope="col"` 已补（如 `web/src/components/releases/ReleaseInventoryTable.vue:63`） |
 | UX-018 | major | ⚠️ | 行可点仍是 `tabindex="0"` + 仅 Enter：`web/src/components/audit/AuditEventTable.vue:62`、`:64`；但 `:focus-visible` 已可见（`:165`） |
 | UX-019 | major | ⏳ | `web/src/components/audit/AuditEventDetail.vue` 无 Esc 处理（`grep Escape/onKeydown` 零命中） |
@@ -210,7 +210,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-058 | minor | ⏳ | `web/src/components/audit/AuditFilters.vue:17` 仍对 `model.actor` 写嵌套属性 |
 | UX-059 | minor | ✅ | 分页控件由共享基元承载（`web/src/components/common/Pagination.vue`，`<nav>` 命名区域）；`web/src/components/audit/AuditEventTable.vue:89` 使用它 |
 | UX-060 | minor | ✅ | `web/src/components/common/Pagination.vue:58`（`pageLabel` 计算，渲染于 `:79` 的 `role="status"`） |
-| UX-061 | minor | ⏳ | `web/src/components/releases/ReleaseStatusBadge.vue:14` `default` 仍渲染 `release.status.active` |
+| UX-061 | minor | ✅ | 2026-10-17 修复（W13）：`web/src/components/releases/ReleaseStatusBadge.vue:16-19`（`default` 渲染 catalog 中性「未知」态 + `:46` 中性色）+ `web/src/stores/releaseInventory.ts:64-78`（`default` 返回 `'unknown'`，`UNSPECIFIED` 与未知枚举值不再映射为 `active`；映射类型见 `:15-22`）；测试 `web/src/stores/releaseInventory.test.ts:61-88`、`web/src/components/releases/ReleaseInventory.spec.ts:8-29` |
 | UX-062 | minor | ⏳ | `web/src/components/values/ValuesRevisionActions.vue:100-104` 仍无 `.status--discarded` 样式 |
 | UX-063 | minor | ⚠️ | 已收编两处：`web/src/components/audit/AuditExportPanel.vue:21`、`web/src/components/emergency/EmergencyConvergenceCard.vue:38` 用 `statusLabel`；`web/src/components/operations/TimelineEntryItem.vue:46` 仍 `kindLabel[entry.kind] ?? entry.kind` 直出 |
 | UX-064 | minor | ⏳ | `web/src/components/customers/CustomerHistory.vue:17` 仍机械 `replace()` |
@@ -238,10 +238,10 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-086 | nit | ⛔ | 属**证据口径**问题（`web/dist` 是构建产物、不能当首屏证据），`docs/ux-review.md:257` 已带 `check-docs:ignore` 说明；无需修复 |
 | UX-087 | nit | ⛔ | 属**度量任务**（build 后看 chunk 划分），非缺陷；当前无 `manualChunks` 配置即为其现状记录 |
 
-**冻结计数：✅ 27 / ⚠️ 4 / ⏳ 54 / ⛔ 2（共 87）。**
+**冻结计数：✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2（共 87）。**
 
 按原严重度回看：4 条 blocker **全部** ✅ 或 ⚠️（UX-001/002/003 ✅、UX-004 ✅）⇒ **没有残留 blocker**。
-剩余 54 条 ⏳ 中 blocker 为 0 条、major 为 24 条（3–5 节据此排序）。
+剩余 53 条 ⏳ 中 blocker 为 0 条、major 为 24 条（3–5 节据此排序）。
 
 ---
 
@@ -312,7 +312,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | W10 | 破坏性操作成功无反馈（4 页） | UX-041；Toast 消费者仅 4 页 | **S** | 间接（H3 相关） |
 | W11 | ~~统一确认/对话框残留：`EnrollmentTokenModal` 的 Esc、`DisableCustomerDialog` 的勾选复位~~ **2026-10-17 已交付（TASK-325）**：两条均改为 ✅（见 §3.2 的 `UX-021`/`UX-039` 行）；专项回归见 §9 | UX-039、UX-021 | **0**（无需再做） | 间接（H3 相关） |
 | W12 | 表单错误可见性：无 index 的 patch 错误、provider 违规、blur 校验与提交后聚焦 | UX-024、UX-028、UX-053 | **S** | 否 |
-| W13 | 假阳性显示：`ReleaseStatusBadge` 未知状态显示为 Active | UX-061 | **S** | 否 |
+| W13 | ~~假阳性显示：`ReleaseStatusBadge` 未知状态显示为 Active~~ **2026-10-17 已修**：未知/`UNSPECIFIED`/字段缺失一律渲染 catalog 中性「未知」态，store 映射的 `default` 同步改为 `'unknown'`（证据见 §3.2 的 UX-061 行） | UX-061 | **S**（已完成） | 否 |
 | W14 | 键盘/读屏：状态组件固定 id、Audit 详情无 Esc、时间线 500 个 tab 停靠点、表格 caption | UX-037、UX-019、UX-020、UX-017 | **M** | 间接（H5 相关） |
 | W15 | 列表容量：三处无分页/虚拟滚动 + Inventory 表窄屏横滚 | UX-065、UX-073、UX-035 | **M** | 否 |
 | W16 | 请求风暴：Audit 每次按键 `router.replace`、Inventory 刷新未去重 | UX-011、UX-057 | **S** | 否 |

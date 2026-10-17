@@ -47,6 +47,9 @@
    上述 1–4 类缺陷正是「没有任何自动化在浏览器里点过一次」的直接后果。
 6. **假阳性风险**：Preflight 面板把任何非 `failed` 的 overall 显示为「通过」；
    ReleaseStatusBadge 把未知状态显示为 `Active`（与 Preflight 同一类「未知即放行」）。
+   > 2026-10-17 修正：`ReleaseStatusBadge` 已改（`web/src/components/releases/ReleaseStatusBadge.vue`）——
+   > 未知 / `UNSPECIFIED` / 状态字段缺失一律渲染 catalog 的中性「未知」态，`web/src/stores/releaseInventory.ts`
+   > 的映射 `default` 同步返回 `'unknown'` 而非 `'active'`；Preflight 面板（UX-002）此前已改判中性态。本条风险已关闭。
 
 ## 2. 浏览器实测发现（B1–B6）
 
@@ -226,7 +229,7 @@ render passed {"render_digest":"a36d52d3…","resources":[{"api_version":"apps/v
 | UX-013 | major | 1/6 | `OperationDetailPage.vue:54-57` `catch {}` 吞掉 preflight 读取失败并置 `null`；`PreflightResultPanel.vue:11` `v-if="result"` ⇒ 准入证据读取失败时页面无痕迹 | 区分「尚未产生」与「读取失败」，失败给 ErrorState + 重试 | mock reject 断言有错误与重试 |
 | UX-014 | major | 1/6 | `OperationDetailPage.vue:197-203` 无 Forbidden 分支，权限不足与瞬时失败同文案 | 按 `initialError.code` 分流 | mock PermissionDenied |
 | UX-015 | major | 2/6 | 错误对象普遍不含 `requestId`（`connect/operation-api.ts:45-57`、`stores/operationTimeline.ts:19-23`、`utils/valuesErrors.ts:3-7`）⇒ 用户报障没有追踪号 | 错误映射带上 requestId 并在 `ErrorState` details 中可复制 | 错误分支断言 DOM 含 request id |
-| UX-016 | major | 1 | 原始服务端消息直出（`stores/releaseInventory.ts:103`、`stores/audit.ts:198`、`utils/valuesErrors.ts:31` 的 `rawMessage`/`raw`）⇒ 中文界面里出现 `rpc error: …` 之类实现细节（B4 就是实例） | 默认给稳定文案，原始信息放折叠 details | mock 未知错误断言主文案稳定 |
+| UX-016 | major | 1 | 原始服务端消息直出（`stores/releaseInventory.ts:114`、`stores/audit.ts:198`、`utils/valuesErrors.ts:31` 的 `rawMessage`/`raw`）⇒ 中文界面里出现 `rpc error: …` 之类实现细节（B4 就是实例） | 默认给稳定文案，原始信息放折叠 details | mock 未知错误断言主文案稳定 |
 | UX-020 | major | 4 | `TimelineEntryItem.vue:45` 每个 `<li>` 都 `tabindex="0"`，时间线上限 500 ⇒ 最多 500 个 tab 停靠点；列表无 `aria-live` | 去掉 li 的 tabindex；列表加 `aria-live="polite"` | Tab 遍历计数 |
 | UX-021 | major | 4 | `DisableCustomerDialog.vue:17` 的 `confirmed` 只在 `cancel()` 复位 ⇒ 下次打开仍是勾选态，破坏性操作一键误确认 | `watch(() => props.open)` 复位，或状态移入 `v-if` 子组件 | 关闭后重开断言未勾选 |
 | UX-022 | major | 3 | 打开就报错：`RevokeOperatorDialog.vue:17,34` 的 `violation` 由空 reason 直接算出 ⇒ 用户没动就被判「填错了」；`EmergencyChangeForm.vue:25,51` 同类 | 用 touched/submitted 门控（`CancelOperationDialog.vue:15,23` 已有模式） | 打开对话框断言无错误文案 |
@@ -247,7 +250,7 @@ render passed {"render_digest":"a36d52d3…","resources":[{"api_version":"apps/v
 | UX-024/025/028 | major | 3/7 | `PatchOverrideEditor.vue:43` 无 index 的错误永不渲染；`:22` 用 `:key="index"` 于可增删列表；`RouteRuleEditor.vue:87-90` Provider 输入既不显示违规也无 `aria-invalid` | 无 index 时给表单级摘要；改用稳定 id 作 key；补 Provider 违规展示（**待核实**服务端是否会返回该字段） | 单测 + mock 违规 |
 | UX-033/041/042/043/044 | major/minor | 2/5 | `EmergencyResultPanel.vue:100-102` 长 image ref 泄出网格；破坏性操作成功后无可见反馈（`ClusterDetailPage.vue:25-28` 等 4 处）；`OperationDetailPage.vue:115` 死模板 ref；`:295` 模板内写 `.then(...)`；`CancelOperationDialog.vue:37,43` 提交中仍可 Esc/点 backdrop 关闭 | 补 `overflow-wrap`；统一 toast；删死代码；抽 async 函数；关闭路径统一判 `submitting` | 视觉 + 单测 |
 | UX-050/055/056/057 | minor | 4/6 | 骨架动画忽略 `prefers-reduced-motion`；`useSessionExpiry.ts:20-21` 无上限的 `setTimeout`（>24.8 天会被当 1ms **立刻登出**）；401 与定时到期两条过期路径并存（可能重复跳转或丢 returnUrl）；`ReleaseInventoryPage.vue:96` 把 MouseEvent 当 refresh 首参传入 | 加 media query；clamp 到 2^31-1；统一过期入口；改为 `@click="inventory.refresh()"` | 单测（30 天有效期不立即触发）+ 连点计数 |
-| UX-058/059/060/061/063/064/069/073/074/075/076/080/081/084/085 | minor~nit | 1/2/4/5/7 | 长尾：`AuditFilters.vue:4` 对 `defineModel` 写嵌套属性（父层改只读即静默失效）；`<div aria-label>` 无 role；分页无页码；`ReleaseStatusBadge.vue:13` 未知状态显示为 `Active`；原始枚举直出；`HomePage.vue:18-24` 用 EmptyState 做欢迎提示且每次进入重现；窄屏表格只能横滚；多处 EmptyState/ForbiddenState 用英文默认文案；时间格式 `toLocaleString()` 与固定 `zh-CN` 混用；提交中按钮文案不变；只读用户无法切换 YAML/JSON；**无 i18n 框架**（非 gen 的 `.ts`/`.vue` 共 160 个文件，其中 68 个含中文字面量，同页中英混排）；`package.json` 声明 `js-yaml ^5.2.2` 而 `node_modules` 是 5.2.1 | 见下节「修复顺序」 | 逐项视觉/a11y 检查 |
+| UX-058/059/060/061/063/064/069/073/074/075/076/080/081/084/085 | minor~nit | 1/2/4/5/7 | 长尾：`AuditFilters.vue:4` 对 `defineModel` 写嵌套属性（父层改只读即静默失效）；`<div aria-label>` 无 role；分页无页码；`ReleaseStatusBadge.vue` 未知状态曾显示为 `Active`（2026-10-17 已修，见 §1 第 6 条修正注）；原始枚举直出；`HomePage.vue:18-24` 用 EmptyState 做欢迎提示且每次进入重现；窄屏表格只能横滚；多处 EmptyState/ForbiddenState 用英文默认文案；时间格式 `toLocaleString()` 与固定 `zh-CN` 混用；提交中按钮文案不变；只读用户无法切换 YAML/JSON；**无 i18n 框架**（非 gen 的 `.ts`/`.vue` 共 160 个文件，其中 68 个含中文字面量，同页中英混排）；`package.json` 声明 `js-yaml ^5.2.2` 而 `node_modules` 是 5.2.1 | 见下节「修复顺序」 | 逐项视觉/a11y 检查 |
 
 ### 4.2 前端门禁缺口（UX-001 是根因）
 
