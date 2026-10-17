@@ -25,8 +25,8 @@
 #
 # Usage: console.sh            (every knob is an env var)
 #   E2E_CONSOLE_BASE_URL  console base URL   (default http://127.0.0.1:8087)
-#   E2E_CONSOLE_SPECS     web-relative specs (default: rollback + emergency-smoke;
-#                         a space-separated list, run serially)
+#   E2E_CONSOLE_SPECS     web-relative specs (default: rollback + emergency-smoke
+#                         + delivery-criteria; a space-separated list, run serially)
 #   E2E_CONSOLE_SPEC      single-spec override for ad-hoc runs; when set it wins
 #   E2E_CONSOLE_CHANNEL   Playwright channel; UNSET => chrome (system Chrome,
 #                         the local convention); set to the EMPTY string to use
@@ -55,11 +55,16 @@ OUTPUT_DIR="$(resolve_dir "${E2E_OUTPUT_DIR:-e2e-results}")"
 CREDENTIALS_FILE="${E2E_CREDENTIALS_FILE:-$DATA_DIR/dev-credentials.env}"
 FIXTURE_FILE="${E2E_FIXTURE_FILE:-$DATA_DIR/dev-fixture.json}"
 BASE_URL="${E2E_CONSOLE_BASE_URL:-http://127.0.0.1:8087}"
-# TASK-270: the lane runs BOTH browser specs. E2E_CONSOLE_SPEC stays the
+# TASK-270: the lane runs the browser specs. E2E_CONSOLE_SPEC stays the
 # single-spec override for ad-hoc runs; E2E_CONSOLE_SPECS takes a list. The
 # specs run with --workers=1 (see the invocation) because they mutate shared
 # fixture state over one backend.
-SPECS="${E2E_CONSOLE_SPECS:-e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts}"
+# TASK-325: delivery-criteria.spec.ts joins the default lane — it carries the
+# machine-checkable half of the H1–H7 walkthrough (docs/delivery-evidence.md
+# §4.2) that is not already covered by rollback/emergency-smoke. Every one of its
+# cases is declared in console-expected-cases.json, so the guard below judges it
+# like the two original specs.
+SPECS="${E2E_CONSOLE_SPECS:-e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts}"
 if [ -n "${E2E_CONSOLE_SPEC:-}" ]; then SPECS="$E2E_CONSOLE_SPEC"; fi
 CHANNEL="${E2E_CONSOLE_CHANNEL-chrome}"
 CUSTOMER_KEY="${E2E_CONSOLE_CUSTOMER_KEY:-dev-customer-a}"
@@ -178,7 +183,7 @@ printf 'console-e2e: case guard armed against %s (report=%s)\n' "$EXPECTED_CASES
 printf 'console-e2e: playwright artifacts: traces=%s html=%s\n' "$PLAYWRIGHT_TEST_RESULTS" "$PLAYWRIGHT_HTML_DIR"
 
 cd "$WEB_DIR"
-# --workers=1: the two specs drive one shared dev stack and mutate shared
+# --workers=1: the specs drive one shared dev stack and mutate shared
 # fixture state (release inventory, emergency changes, convergence task); the
 # default worker count parallelizes across FILES and would race them.
 # --reporter=list,json,html: the list reporter stays the human-facing log, the json
