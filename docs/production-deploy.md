@@ -575,6 +575,64 @@ kubectl -n release-manager rollout status deployment/web --timeout=300s
 
 - 迁移在**新进程启动时**自动执行（`m.Up()`），失败即 `migration_failed` + `os.Exit(1)` → CrashLoop，不会有半启动服务接客。
 - **schema 只能前滚**：仓库没有与镜像配套的降级通道。`migrations/*.down.sql` 文件存在，但生产进程从不执行 `RunMigrationsDown`（只有 dev 重置路径用它）⇒ 「新 schema + 旧二进制」通常不可逆。
+- **升级前先备份（§7）并评估 schema 兼容性**：若新版本会前滚 schema，`rollout undo` 只回退镜像、**不会回退迁移**；旧二进制若读不懂新列/新约束，回滚后会起不来。
+
+#### 8.1.1 实测：单服务升级（2026-10-18，TASK-349）
+
+选择 `web` 作为演练对象：`ceda261..b96d964` 之间 api 没有源码变更，web 有真实前端修复（`1851552`，TASK-344），且 web 只依赖未改动的后端、2 副本滚动，影响面最小。**只动 `deployment/web` 一个对象**。
+
+```bash
+# 构建：worktree 在 origin/main（b96d964）
+cd /tmp/rm-wt349
+docker build \
+  --build-arg NODE_IMAGE=docker.1ms.run/library/node:24-alpine \
+  --build-arg NGINX_IMAGE=nginx:1.27-alpine \
+  -f deploy/docker/Dockerfile.web \
+  -t localhost:5001/release-web:b96d964 .
+# 实测 33 s
+
+# 保存 + 导入（多平台/带 attestation 的镜像必须 --platform linux/amd64；判据是 ERRO 而不是 Successfully）
+docker save --platform linux/amd64 -o /tmp/rm349/release-web-b96d964.tar \
+  localhost:5001/release-web:b96d964          # < 1 s，21 MiB
+k3d image import -c rm-prod /tmp/rm349/release-web-b96d964.tar 2>&1 | tee /tmp/rm349/import-web.log
+grep -q ERRO /tmp/rm349/import-web.log && { echo "k3d image import reported ERRO" >&2; exit 1; }
+# 实测 4 s，无 ERRO；节点 containerd 可见 release-web:b96d964
+```
+
+本次只 build/import 了一个服务，没有走 `make docker-build-all`（它会构建全部 8 个镜像）；使用的 Dockerfile、tag 规则和 ERRO 守卫与 Makefile 一致。
+
+```bash
+# 升级（只改一个 Deployment）
+kubectl -n release-manager set image deploy/web web=localhost:5001/release-web:b96d964
+kubectl -n release-manager rollout status deploy/web --timeout=300s
+# output: deployment "web" successfully rolled out        # 8 s
+```
+
+三份基线（同一套命令在升级前/升级后/回滚后各取一次）：
+
+| 项 | 升级前 | 升级后 | 回滚后 |
+| --- | --- | --- | --- |
+| `web` Deployment 镜像 | `release-web:ceda261` | `release-web:b96d964` | `release-web:ceda261` |
+| `web` Deployment revision | `2` | `3` | `4`（见 §8.2.1） |
+| Pod Ready | 10/10 | 10/10 | 10/10 |
+| 6 个服务 `/readyz` | 全 200 | 全 200 | 全 200 |
+| 浏览器登录（真 Chrome） | 11/11，离开 `/login` 672 ms | 11/11，651 ms | 11/11，649 ms |
+| `schema_migrations` | `34\|false` | `34\|false` | `34\|false` |
+| `audit_events` / `users` / `tables` | `12 / 2 / 58` | `12 / 2 / 58` | `12 / 2 / 58` |
+
+验证命令（`/readyz` 逐服务取，`web` 的 `/readyz` 反代的是 orchestrator）：
+
+```bash
+kubectl -n release-manager port-forward svc/web 18087:8087 &   # 其余服务换 svc/端口
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18087/readyz
+kubectl -n release-manager get deploy web \
+  -o jsonpath='{.spec.template.spec.containers[0].image}{"\t"}{.metadata.annotations.deployment\.kubernetes\.io/revision}{"\n"}'
+kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release_manager -Atc \
+  "select version||'|'||dirty from schema_migrations; select count(*) from audit_events; select count(*) from users"
+```
+
+- 升级恰好替换了 2 个 web Pod（旧 Pod `Terminating` → 新 RS 2/2 Ready）；其余 8 个 Pod 的名字和 `RESTARTS` 计数都没变。
+- **本次没有跑数据库迁移**：web 镜像只有 nginx，不执行 `m.Up()`；`schema_migrations` 三次都是 `34|false`。这是“镜像升级”而不是“schema 升级”，边界见 §8.4。
 
 ### 8.2 回滚
 
@@ -584,8 +642,41 @@ kubectl -n release-manager rollout status deployment/auth --timeout=300s
 ```
 
 - 只回退镜像，**不回退 schema**。若新版本已经前滚了不兼容的 schema，回滚镜像后会起不来，唯一退路是从 §7 的 dump 恢复。
-- 实测当前集群每个 Deployment 只有 `REVISION 1`（`kubectl rollout history`）：**第一次发布之后 `rollout undo` 才有东西可退**，别把它当成第一次部署的保险。
+- 实测（2026-10-18 演练前）`auth`/`notifier`/`orchestrator`/`webhook` 仍是 `REVISION 1`，`api` 已到 `4`、`web` 到 `2`（前几次镜像 tag 发布累积）⇒ **`rollout undo` 只在发布过至少两次的 Deployment 上有可退版本**，别把它当成第一次部署的保险。
 - 更长久的做法是把上一版 tag 记在发布记录里，回滚时重新 `kustomize edit set image` 到旧 tag 再 apply（与 8.1 同一条链路，可审计）。
+
+#### 8.2.1 实测：同一次演练的回滚（2026-10-18，TASK-349）
+
+```bash
+kubectl -n release-manager rollout undo deploy/web
+# Warning: resource deployments/web was previously managed with 'kubectl apply'. ...
+kubectl -n release-manager rollout status deploy/web --timeout=300s
+# output: deployment "web" successfully rolled out        # 8 s
+```
+
+回滚后镜像回到 `release-web:ceda261`，2 个新 web Pod Ready，`/readyz` 全 200，登录 11/11（649 ms），DB 三次数值不变（见 §8.1.1 表）。
+
+⚠️ **revision 陷阱：undo 是“新开一个 revision”，不是把 revision 号退回去。**
+
+```text
+# 升级后
+REVISION  CHANGE-CAUSE
+1         <none>
+2         <none>
+3         <none>
+
+# 回滚后
+REVISION  CHANGE-CAUSE
+1         <none>
+3         <none>
+4         <none>
+```
+
+revision 2 的 ReplicaSet 被复用并把注解改成 `4`（Pod 模板 = 旧镜像 `ceda261`），revision 3 是被回滚掉的新镜像。后果：
+
+- **回滚后再执行一次 `rollout undo` 会回到 revision 3（新镜像 `b96d964`）**，等于把升级又做一遍。要“撤销回滚”必须显式 `--to-revision=<旧号>`，或走 §8.1 的 kustomize 链路把 tag 改回去。
+- `rollout undo` 不更新 `kubectl.kubernetes.io/last-applied-configuration`（上面的 Warning 就是它）。经 kustomize 管理的 Deployment，回滚也建议 `kustomize edit set image` + `apply`，保持清单、注解、集群三者一致。
+- 本次演练前 web 的 `last-applied-configuration` 仍是首次部署的 `a6707b6`，而活体镜像在演练前已是 `ceda261` ⇒ 两者本来就不一致；这不是本次演练引入的，但说明 live tag 与 Git 清单的对应关系必须靠发布记录维护。
 
 ### 8.3 停机/重启验证
 
@@ -595,6 +686,15 @@ kubectl -n release-manager get pods
 ```
 
 实测停服约 **57 s**，重启后 10/10 Pod 恢复 Ready，PostgreSQL/Redis 数据完好（`local-path` 卷留在宿主，随 `k3d cluster delete` 才会丢）。注意 `k3d cluster stop` 之后 `kubectl` 会连接失败，属预期。
+
+### 8.4 本次演练的边界（未验证项，不要外推）
+
+- **只升级/回滚了 `web` 一个 Deployment**：`api`/`auth`/`orchestrator`/`notifier`/`webhook` 全程未动（镜像与 revision 不变）。
+- **没有跑任何数据库迁移**：web 镜像是 nginx，不执行 `m.Up()`；升级前后 `schema_migrations` 都是 `34|false`。因此本次**没有**验证「新 schema + 旧镜像」的兼容性，也没有验证“回滚后的迁移兼容”。要验证那条路径，需要一个会前滚 schema 的新版本，先按 §7 备份、再升级、再回滚镜像，单独做一次演练。
+- 新 web 镜像包含 TASK-344 的前端修复（`1851552`），但本次只验证了登录、会话刷新、审计页和 `/readyz` 仍正常，**没有逐项验证该修复的行为**。
+- 镜像构建用了本机 CN 镜像前缀 `docker.1ms.run/library/{node,nginx}:…`；Dockerfile 默认是 digest 固定的官方镜像，两者不保证逐字节相同。CI 或可复现构建应使用默认参数。
+- 演练用 `kubectl set image` + `rollout undo`，**绕过了 kustomize 的 tag 默认值**：仓库里的 6 个 tag 仍是 `:dev`，本次也没有改 `last-applied-configuration`。正式发布仍以 §2.3 + `kubectl apply -k` 为准；本节的命令只用于单服务、可回滚的紧急升级。
+- 演练结束后 `web` Deployment 的镜像与 Pod 数已回到演练前（`ceda261`、2/2），但 **revision 注解从 2 变成 4**、revision 序列变成了 `1,3,4`；这是 `rollout undo` 的记账副作用，不是配置漂移。
 
 ## 9. 可观测
 
@@ -689,6 +789,7 @@ spec:
 | 登录 | `Set-Cookie` 三个（`rm_access`/`rm_refresh`/`rm_csrf`），登录后 **653 ms** 离开 `/login`，刷新保持会话 | 浏览器访问 `https://localhost:8443`，用 `Initialize` 时创建的管理员账号登录 |
 | 审计页 | `/audit` HTTP 200，列表 0 行（原因见 §10-1，**不是** 500/404） | 浏览器打开 Audit 页面；或按 `api/kulala/audit.http` 的 `QueryAuditEvents` 请求复验 |
 | 停机/重启 | `k3d cluster stop/start` 约 **57 s**，数据完好 | §8.3 |
+| 升级/回滚 | web `ceda261 → b96d964 → ceda261`；升级 **8 s**、回滚 **8 s**；三次都是 10/10 Pod、6 个 `/readyz` 200、登录 11/11（672/651/649 ms）、DB 行数 `12 / 2 / 58` 与 `schema 34` 不变 | §8.1.1、§8.2.1 |
 | 备份/恢复 | 手工：dump 93,201 B / 58 表；自动：133,173 B + 4,592 B → restore `rm_backup_check` → `34|false`、58 表/146 索引/关键表行数全部与源库一致 | §7.1–§7.4 |
 | 镜像门禁 | 未改 tag 时 `make check-production-images` FAIL 并打印 6 行 `:dev`；改后 PASS | §2.3 |
 
