@@ -70,6 +70,42 @@ describe('RollbackReleaseDialog', () => {
     expect(mockedRollback).not.toHaveBeenCalled();
   });
 
+  /*
+   * H5 of docs/delivery-evidence.md §4.2 requires a form field error to carry an
+   * `aria-describedby` association. Both directions are asserted on purpose: the
+   * control the message is about must advertise the error id, and the other control
+   * must NOT (marking every field described/invalid is as misleading as marking
+   * none). Both branches are exercised because the message belongs to a different
+   * control in each. Every read re-queries: rendering the error replaces the form
+   * controls (true before this change as well), so a handle taken earlier goes stale.
+   */
+  it('associates the validation error with the control it is about', async () => {
+    const wrapper = mountDialog();
+
+    // reason branch: the empty-reason message describes the textarea, not the input.
+    await wrapper.get('input[name="targetRevision"]').setValue('2');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    const reasonErrorId = wrapper.get('[data-testid="rollback-validation"]').attributes('id');
+    expect(reasonErrorId, '校验错误必须有 id，否则 aria-describedby 无处可指').toBeTruthy();
+    expect(wrapper.get('textarea[name="reason"]').attributes('aria-describedby')).toBe(reasonErrorId);
+    expect(wrapper.get('textarea[name="reason"]').attributes('aria-invalid')).toBe('true');
+    expect(wrapper.get('input[name="targetRevision"]').attributes('aria-describedby')).toBeUndefined();
+
+    // targetRevision branch: the revision message describes the input, not the textarea.
+    await wrapper.get('textarea[name="reason"]').setValue('because');
+    await wrapper.get('input[name="targetRevision"]').setValue('0');
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    const targetError = wrapper.get('[data-testid="rollback-validation"]');
+    expect(targetError.text()).toContain('1 以上的整数');
+    expect(wrapper.get('input[name="targetRevision"]').attributes('aria-describedby')).toBe(targetError.attributes('id'));
+    expect(wrapper.get('input[name="targetRevision"]').attributes('aria-invalid')).toBe('true');
+    expect(wrapper.get('textarea[name="reason"]').attributes('aria-describedby')).toBeUndefined();
+  });
+
   it('sends the target, the expected current revision and a fresh idempotency key', async () => {
     const wrapper = mountDialog();
 
