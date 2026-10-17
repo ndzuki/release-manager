@@ -15,8 +15,7 @@ kind: Kustomization
 #
 # Scope of this batch: production namespace, persistent PostgreSQL/Redis,
 # availability guards (PDB) and ingress isolation (NetworkPolicy). Image
-# publishing is TASK-337 batch 2; the TLS edge is batch 3; secret provisioning
-# is batch 4.
+# publishing, Ingress/TLS and secret provisioning are later TASK-337 batches.
 
 namespace: release-manager
 
@@ -108,10 +107,15 @@ patches:
   # credentials are provisioned out of band (batch 4); deleting the dev Secret
   # makes a missing production Secret fail closed instead of silently booting
   # on shared dev credentials.
-  # The selector is kind-only: narrow it before adding Secret resources to this
-  # overlay.
+  #
+  # The target MUST stay name-scoped. A bare `kind: Secret` deletes *every*
+  # Secret in the build: adding any Secret to this overlay (or to a base it
+  # includes) would then silently render zero Secrets while `kubectl kustomize`
+  # still exits 0, and the workloads only fail at admission. Keep one target
+  # per dev Secret listed by name; never widen this back to kind-only.
   - target:
       kind: Secret
+      name: release-manager-dev-credentials
     patch: |-
       apiVersion: v1
       kind: Secret
@@ -330,12 +334,9 @@ patches:
                       secretKeyRef:
                         name: release-manager-credentials
                         key: NOTIFIER_DATABASE_DSN
-  # NodePorts are a dev-only entry mechanism for the application Services:
-  # they bypass the TLS boundary this batch introduces. Every application
-  # Service is ClusterIP and only the TLS edge may enter the namespace. The
-  # edge Service itself is the single NodePort exception (30443 -> host 8443),
-  # because this cluster has no working Ingress controller; see edge.yaml and
-  # README.md.
+  # NodePorts are a dev-only entry mechanism: they bypass the Ingress/TLS
+  # boundary batch 3 introduces. In production every Service is ClusterIP and
+  # only the Ingress controller may enter the namespace.
   - target:
       kind: Service
       name: web
@@ -400,7 +401,12 @@ patches:
       - op: remove
         path: /spec/ports/0/nodePort
 
-# One knob for every PVC's storage class.
+# One knob for every PVC's storage class: the two StatefulSet claim templates and
+# the two standalone claims (release-api's new one and the orchestrator claim
+# inherited from base). The inherited claim ships without an explicit class, so
+# `create: true` is required to write the field into it -- otherwise it would
+# follow the cluster default while the other three follow production-settings,
+# i.e. one overlay silently using two storage classes.
 replacements:
   - source:
       kind: ConfigMap
@@ -422,3 +428,23 @@ replacements:
           name: release-manager-api-data
         fieldPaths:
           - spec.storageClassName
+      - select:
+          kind: PersistentVolumeClaim
+          name: release-manager-orchestrator-data
+        fieldPaths:
+          - spec.storageClassName
+        options:
+          create: true
+  # One knob for the kubelet-probe source range (see production-settings.yaml).
+  # Same mechanism as storageClassName: the cidr is written into the
+  # allow-kubelet-probes ipBlock so the range is never hard-coded in two places.
+  - source:
+      kind: ConfigMap
+      name: production-settings
+      fieldPath: data.nodeCidr
+    targets:
+      - select:
+          kind: NetworkPolicy
+          name: allow-kubelet-probes
+        fieldPaths:
+          - spec.ingress.0.from.0.ipBlock.cidr

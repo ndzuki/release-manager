@@ -21,9 +21,18 @@ current kubeconfig for API discovery, so point `KUBECONFIG` at the target
 cluster (or at any cluster that knows the built-in API groups) before running
 it.
 
-Apply only after the Secrets in the next section exist:
+The render is 43 objects: 1 Namespace, 8 ConfigMaps, 7 Deployments, 2
+StatefulSets, 4 PodDisruptionBudgets, 10 Services, 4 PVCs (2 standalone + 2 from
+the StatefulSet claim templates) and 9 NetworkPolicies — the default-deny one
+plus 8 allow rules, including `allow-kubelet-probes` and `allow-edge-nodeport`.
+The TLS edge contributes one ConfigMap, one Deployment, one Service and one
+NetworkPolicy on top of batch 1's 39 objects.
+
+Apply only after the Secrets in the next section exist and the image tag is set
+(see [Image tags](#image-tags)); the image gate is the last local check:
 
 ```bash
+make check-production-images   # fails while the committed ':dev' default is in effect
 kubectl apply -k deploy/kustomize/production
 ```
 
@@ -157,16 +166,25 @@ done
 Never apply the `dev` tags to production. `kustomize edit` rewrites this
 directory's `kustomization.yaml` in place; commit only the `dev` defaults.
 
+The check is mechanical, not a matter of remembering: run
+`make check-production-images` before `kubectl apply`. It renders the overlay
+locally (no cluster contact) and exits non-zero, printing the offending lines,
+if any `image:` value still ends in `:dev`. It passes only after
+`kustomize edit set image` has rewritten all six tags.
+
 ## Storage class
 
 `production-settings.yaml` holds the single `storageClassName` value used by
-the PostgreSQL 10Gi and Redis 5Gi volume claim templates and the release-api
-1Gi PVC. Change that one value before rendering for a cluster whose provisioner
-is not `local-path` (editing the applied ConfigMap does not resize or rebind an
-existing PVC). The orchestrator PVC inherited from `base` has no explicit class
-and therefore follows the cluster default. `local-path` volumes are node-bound:
-this overlay targets the single-node k3d production cluster; a multi-node
-cluster needs a network volume class.
+all four claims: the PostgreSQL 10Gi and Redis 5Gi volume claim templates, the
+release-api 1Gi PVC and the orchestrator 1Gi PVC inherited from `base`. Change
+that one value before rendering for a cluster whose provisioner is not
+`local-path` (editing the applied ConfigMap does not resize or rebind an
+existing PVC). The inherited orchestrator claim ships without a class, so the
+replacement writes the field into it (`create: true`) rather than leaving that
+one claim on the cluster default — one overlay must not span two storage
+classes. `local-path` volumes are node-bound: this overlay targets the
+single-node k3d production cluster; a multi-node cluster needs a network volume
+class.
 
 ## Database migrations
 
@@ -177,6 +195,24 @@ by first-boot and restore runbooks) is:
 make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_manager?sslmode=disable'
 ```
 
+## Runbook notes (read before operating)
+
+- **`make migrate` (CLI) is not equivalent to the service's startup
+  migration.** The service path in `internal/postgres` first calls
+  `repairHistoricalMigrationVersion()`, which rewinds `schema_migrations` to
+  replay the idempotent migrations that independently developed branches
+  reused on versions 7/8; the golang-migrate CLI does not. On a database with
+  pre-existing history (a restored dump, a long-lived dev database) start the
+  service once and let its startup migration repair and move the version, then
+  use `make migrate` for subsequent explicit steps. On a fresh database both
+  paths converge.
+- **PDB drain trap.** api/auth/orchestrator run one replica with
+  `minAvailable: 1`, so `kubectl drain <node>` on a node hosting them blocks
+  forever on voluntary eviction. That is deliberate (a second replica has not
+  been proven safe), not a bug to work around by deleting the PDB. Plan for
+  `--disable-eviction` with the resulting downtime, or scale the service to two
+  replicas first and let the PDB hold one available.
+
 ## Deliberate exclusions
 
 - `notification-sink` is a dev-only local webhook receiver; it is deleted by
@@ -184,8 +220,9 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
 - The dev service configs (debug logging, SQLite, disabled Secure cookies,
   raised login rate limit) are replaced by `configs/*.production.yaml`.
 - NodePorts 30082-30088 are removed; every application Service is ClusterIP and
-  only the TLS edge may enter the namespace. The edge's own NodePort 30443
-  (mapped to host 8443) is the single documented exception.
+  only the Ingress controller (where one exists) or the TLS edge may enter the
+  namespace. The edge's own NodePort 30443 (mapped to host 8443) is the single
+  documented exception.
 - The inherited orchestrator PVC remains 1Gi. Growing it is a storage-class
   and capacity decision for a later batch.
 
@@ -199,20 +236,23 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   proven (startup migrations, gateway CA, background workers).
 - The NetworkPolicy assumes the ingress controller runs in `kube-system`
   (k3s Traefik) or `ingress-nginx`. A host-network ingress controller may
-  present a node address instead; re-check this when an Ingress controller is
-  actually available (batch 3 uses the in-cluster edge instead). Kubelet
-  probes under default-deny also need a real-cluster check.
+  present a node address instead; this cluster has no working Ingress
+  controller, so batch 3 enters through the TLS edge's NodePort instead.
+- Kubelet probes are **explicitly allowed** (not a gap left to fix):
+  `allow-kubelet-probes` admits `nodeCidr` (`10.42.0.0/16` by default, the k3s
+  Pod CIDR) to ports 8082-8088. It is required because k3s' default kube-router
+  evaluates NetworkPolicies in the filter INPUT chain: kubelet -> pod probe
+  packets from the node traverse that chain, hit `default-deny-ingress` and are
+  dropped, so without this rule every application pod would stay non-Ready
+  (k3s issue #10030). Set `nodeCidr` in `production-settings.yaml` to the
+  cluster's Pod CIDR when it is not `10.42.0.0/16`. A real cluster still has to
+  confirm the rule for a host-network ingress controller or a non-k3s CNI that
+  does not evaluate policies on the node path.
 - Redis has no AUTH; it is reachable only from pods in this namespace by
   NetworkPolicy. Add AUTH in the hardening batch if Redis leaves that boundary.
-- No backup/restore CronJob and no Prometheus scrape configuration yet
-  (TASK-337 batch 4).
 - The TLS edge terminates TLS with a self-signed certificate and one replica.
   It is a stopgap for a cluster without a working Ingress controller, not a
   production TLS story: replace it with an Ingress controller and a CA-issued
   certificate before real traffic.
-- Immediately after `Initialize`, release-orchestrator and release-api keep
-  serving the Casbin policy they loaded before bootstrap until their own
-  `authorization.policy_reload_interval` tick (5s default). A login inside that
-  window can bounce the console to `/forbidden` even though the cookies and the
-  session are valid; after one reload window the same user is authorized. This
-  was observed in the batch 3 acceptance run and is not a TLS/session failure.
+- No backup/restore CronJob and no Prometheus scrape configuration yet
+  (TASK-337 batch 4).
