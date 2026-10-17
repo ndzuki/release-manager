@@ -143,4 +143,74 @@ describe('EnrollmentTokenModal', () => {
     expect(wrapper.emitted('close')).toBeUndefined();
     expect(wrapper.text()).toContain('plaintext-token');
   });
+
+  /*
+   * UX-009. The clipboard write fails for reasons the page cannot argue with: an
+   * insecure origin has no `navigator.clipboard` at all (measured 2026-10-17:
+   * `undefined` on an http:// page, an object on http://127.0.0.1 — see the guard in the
+   * component), and a secure one still rejects while the document is unfocused or the
+   * permission is denied. The old handler awaited the write with no catch, so the click
+   * looked like a copy that worked.
+   */
+  it('reports a clipboard write the browser refused (UX-009)', async () => {
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValueOnce(
+      new DOMException('Document is not focused.', 'NotAllowedError'),
+    );
+    const wrapper = mount(EnrollmentTokenModal, {
+      global: { stubs: { Teleport: true } },
+      props: { customerId: 'customer-1', clusterId: 'cluster-1' },
+    });
+    await flushPromises();
+
+    await wrapper.findAll('button').find((button) => button.text() === t('operator.token.copy'))!.trigger('click');
+    await flushPromises();
+
+    const notice = wrapper.find('[data-testid="enrollment-copy-notice"]');
+    expect(notice.exists()).toBe(true);
+    // Assertive, not polite: the user must know the clipboard was not written before
+    // closing the dialog and losing the plaintext.
+    expect(notice.attributes('role')).toBe('alert');
+    expect(notice.text()).toContain(t('operator.token.copyFailed'));
+    // The fallback the notice points at: the plaintext is still on screen to select.
+    expect(wrapper.text()).toContain('plaintext-token');
+    expect(wrapper.emitted('close')).toBeUndefined();
+  });
+
+  it('reports the missing clipboard API of an insecure origin (UX-009)', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    try {
+      const wrapper = mount(EnrollmentTokenModal, {
+        global: { stubs: { Teleport: true } },
+        props: { customerId: 'customer-1', clusterId: 'cluster-1' },
+      });
+      await flushPromises();
+
+      await wrapper.findAll('button').find((button) => button.text() === t('operator.token.copy'))!.trigger('click');
+      await flushPromises();
+
+      const notice = wrapper.find('[data-testid="enrollment-copy-notice"]');
+      expect(notice.attributes('role')).toBe('alert');
+      expect(notice.text()).toContain(t('operator.token.copyFailed'));
+    } finally {
+      if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
+  it('confirms a successful copy with a polite status notice (UX-009)', async () => {
+    const wrapper = mount(EnrollmentTokenModal, {
+      global: { stubs: { Teleport: true } },
+      props: { customerId: 'customer-1', clusterId: 'cluster-1' },
+    });
+    await flushPromises();
+
+    await wrapper.findAll('button').find((button) => button.text() === t('operator.token.copy'))!.trigger('click');
+    await flushPromises();
+
+    const notice = wrapper.find('[data-testid="enrollment-copy-notice"]');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.text()).toContain(t('operator.token.copied'));
+    expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith('plaintext-token');
+  });
 });

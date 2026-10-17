@@ -198,6 +198,14 @@ const zhCN = {
   'operator.token.oneTimeSecret': '一次性密钥',
   'operator.token.closeWarning': '关闭该对话框会从浏览器中永久移除明文。',
   'operator.token.copy': '复制令牌',
+  /*
+   * UX-009: the clipboard write can fail (an insecure origin has no
+   * `navigator.clipboard`, a secure one can still reject while the document is
+   * unfocused or the permission is denied). The failure copy names the manual fallback
+   * because the plaintext stays selectable on screen.
+   */
+  'operator.token.copied': '已复制到剪贴板。',
+  'operator.token.copyFailed': '复制失败：浏览器未允许写入剪贴板，请手动选中并复制。',
   'operator.token.deploymentCommand': '部署命令',
   'operator.token.template': '模板 ·',
   'operator.token.copyCommand': '复制命令',

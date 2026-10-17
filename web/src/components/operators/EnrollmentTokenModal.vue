@@ -3,6 +3,7 @@ import { t } from '@/i18n/messages';
 import { computed, onMounted, onUnmounted, shallowRef } from 'vue';
 import AppDialog from '@/components/common/AppDialog.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import { useOperatorStore } from '@/stores/operator';
 import type { EnrollmentTokenMetadata } from '@/types/operator';
 
@@ -20,6 +21,9 @@ const plaintext = shallowRef<string | null>(null);
 const savedConfirmed = shallowRef(false);
 const discardConfirmed = shallowRef(false);
 const generating = shallowRef(false);
+// UX-009: the outcome of the last copy attempt, so a refused write is visible instead
+// of looking like a successful one. `null` means "nothing copied yet".
+const copyNotice = shallowRef<'success' | 'error' | null>(null);
 // The dialog owns one title (AppDialog renders the labelled heading), so the
 // heading follows the state instead of only existing in the result branch.
 const title = computed(() => {
@@ -55,8 +59,25 @@ async function generate(): Promise<void> {
   }
 }
 
+/*
+ * UX-009: both failure modes used to be silent. An insecure origin has no
+ * `navigator.clipboard` at all (measured 2026-10-17: `undefined` on an http:// page,
+ * an object on http://127.0.0.1), and a secure origin can still reject the write when
+ * the document is not focused or the permission is denied. Neither reached the user:
+ * the click simply did nothing. The plaintext stays selectable either way, so the
+ * failure notice points at the manual fallback instead of pretending it copied.
+ */
 async function copy(value: string): Promise<void> {
-  await navigator.clipboard.writeText(value);
+  if (!navigator.clipboard) {
+    copyNotice.value = 'error';
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    copyNotice.value = 'success';
+  } catch {
+    copyNotice.value = 'error';
+  }
 }
 
 function clearPlaintext(): void {
@@ -110,6 +131,27 @@ onUnmounted(clearPlaintext);
         <pre>{{ installCommand }}</pre>
         <button type="button" class="modal-button" @click="copy(installCommand)">{{ t('operator.token.copyCommand') }}</button>
       </details>
+
+      <!-- Copy outcome (UX-009). Success is a polite status; a failure is an assertive
+           alert because the user must know the clipboard was not written before they
+           close the dialog and lose the plaintext. Both are persistent, matching the
+           notification primitive's default and the dialog's own no-timer nature. -->
+      <Toast
+        v-if="copyNotice === 'success'"
+        tone="success"
+        testid="enrollment-copy-notice"
+        @dismiss="copyNotice = null"
+      >
+        {{ t('operator.token.copied') }}
+      </Toast>
+      <Toast
+        v-else-if="copyNotice === 'error'"
+        tone="error"
+        testid="enrollment-copy-notice"
+        @dismiss="copyNotice = null"
+      >
+        {{ t('operator.token.copyFailed') }}
+      </Toast>
 
       <p v-if="store.error" class="error" role="alert">{{ store.error.message }}</p>
 
