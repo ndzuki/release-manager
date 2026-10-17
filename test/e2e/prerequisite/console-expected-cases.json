@@ -5,7 +5,8 @@
     "",
     "SOURCE OF TRUTH for the case titles: the specs console.sh's SPECS names",
     "(E2E_CONSOLE_SPECS, default 'e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts",
-    "e2e/delivery-criteria.spec.ts'; see test/e2e/prerequisite/console.sh). Each title",
+    "e2e/delivery-criteria.spec.ts e2e/stuck-locks.spec.ts'; see",
+    "test/e2e/prerequisite/console.sh). Each title",
     "below is copied verbatim from",
     "the spec; console.sh refuses to start when a spec it was asked to run has no",
     "entry here, and the guard refuses to pass when the report collected a case no",
@@ -90,6 +91,24 @@
       "title": "H5 焦点陷阱：对话框内 Tab 与 Shift+Tab 不逃逸，Esc 关闭后焦点回到触发按钮",
       "expect": "passed",
       "covers": "docs/delivery-evidence.md §4.2 H5 — Tab and Shift+Tab cycle inside the rollback dialog (AppDialog/useFocusTrap) and closing returns focus to the trigger button"
+    },
+    {
+      "spec": "stuck-locks.spec.ts",
+      "title": "S1 解锁页可达：从工作台进入，且渲染空态或有锁态（不同屏、不落错误态）",
+      "expect": "passed",
+      "covers": "REQ-087 §4.1/§4.2 unlock-page route + render (TASK-328) — the workbench tile reaches /emergency/stuck-locks and the real aggregate read settles into exactly one terminal state; no mock at all"
+    },
+    {
+      "spec": "stuck-locks.spec.ts",
+      "title": "S2 释放确认：有锁态打开 alertdialog，Esc 取消且不发出释放请求",
+      "expect": "passed",
+      "covers": "AC-087-08 (TASK-328) — the irreversible-release confirmation is a role=alertdialog with the lock's path in its title and its warning wired via aria-describedby; Escape closes it and no ReleaseEmergencyLock request leaves the browser. The list response is rewritten in flight (a real stuck lock needs the operator to miss the observe window, which this lane does not produce); the release request counter is real"
+    },
+    {
+      "spec": "stuck-locks.spec.ts",
+      "title": "S3 释放提交：空原因被服务前守卫拦住，提交后载荷与可见反馈一致",
+      "expect": "passed",
+      "covers": "AC-087-08/09 (TASK-328) — an empty reason is refused before any request; the accepted submission carries intentId/reason/mode/evidence as the server requires (decoded from the outgoing frame), and the store's own re-read removes the row and shows the release notice. Both RPC responses are rewritten in flight; the server-side release semantics live in internal/orchestrator/emergency_stuck_handler_test.go"
     }
   ]
 }

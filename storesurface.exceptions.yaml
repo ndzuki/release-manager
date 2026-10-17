@@ -15,12 +15,26 @@
 # When counting by name, exclude THIS FILE: the reasons below spell identifiers out, so a naive
 # grep counts the registry itself as a hit (hit twice on 2026-09-30). Call forms are written
 # without the trailing parenthesis for the same reason.
+#
+# Citations (TASK-328). Every `file:line` a reason cites inside this repository is declared
+# once under `citations:` and verified by the gate: the file must exist, the line must be
+# inside it, and that line must contain the declared `contains` substring. The entry's reason
+# must name the same file (by basename) and line, and every `file:line` the reason names must
+# be declared — so the human-readable copy and the machine-checked pointer cannot drift apart.
+# This closes the hole the registry shipped with: seven citations pointed 9-171 lines past
+# their evidence and `make check-store-surface` stayed green, because it never looked at them.
+# Knowledge-base references (REQ-064:266, REQ-068:143) live outside this repository and stay
+# unverified here on purpose; check-docs covers markdown, not this file.
 
 exceptions:
   - interface: AuditEventStore
     method: DeleteByIDs
     reason: "[local-narrow-iface] 同为 internal/audit/archiver.go 的本地窄接口调用（archiver.go:124，归档完成后删除已导出事件）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/audit/archiver.go
+        line: 124
+        contains: "DeleteByIDs"
   - interface: AuditEventStore
     method: GetByID
     reason: "[test-utility] 生产 0、测试 12；生产读取走 Query/ListOlderThan（归档链路），本方法只被测试用来断言单条写入结果"
@@ -29,14 +43,38 @@ exceptions:
     method: ListOlderThan
     reason: "[local-narrow-iface] 生产经 internal/audit/archiver.go 的消费者本地窄接口 archiveEventStore 调用（archiver.go:71、:151）；门禁按类型同一性匹配故未识别。保留：删除会砍掉生产审计归档链路（TASK-230）"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/audit/archiver.go
+        line: 71
+        contains: "ListOlderThan"
+      - file: internal/audit/archiver.go
+        line: 151
+        contains: "ListOlderThan"
   - interface: BundleStore
     method: Create
-    reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 sqlite bundle transactions are unsupported（:385）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
+    reason: "[sqlite-tx-only] PostgreSQL 生产走 BundleSubmissions → CreateTx；SQLite 的摄取尚未支持（BundleSubmissions().Submit 是 errPostgresIngestionRequired stub），非事务 Create 是 SQLite 上唯一存在的创建能力（SQLite 侧 INSERT INTO release_bundles 仅此一处，sqlite/bundles.go:28），CreateTx 返回 sqlite bundle transactions are unsupported（:386）⇒ 为保住双引擎能力保留，而非因为有生产调用者；69 个测试调用点"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/store/sqlite/bundles.go
+        line: 28
+        contains: "INSERT INTO release_bundles"
+      - file: internal/store/sqlite/bundles.go
+        line: 386
+        contains: "sqlite bundle transactions are unsupported"
   - interface: CandidateArtifactStore
     method: Create
     reason: "[sqlite-tx-only] PostgreSQL 生产走 ArtifactEventSubmissions → UpsertTx/UpsertLocationTx；SQLite 的摄取尚未支持（Record 是 stub），非事务 Create/Upsert 是 SQLite 上唯一的制品写入能力（SQLite 侧 INSERT INTO candidate_artifacts 仅此一处，sqlite/candidate_artifacts.go:51），两个 Tx 变体 unsupported（:206/:210）⇒ 为保住双引擎能力保留；51 个测试调用点"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/store/sqlite/candidate_artifacts.go
+        line: 51
+        contains: "INSERT INTO candidate_artifacts"
+      - file: internal/store/sqlite/candidate_artifacts.go
+        line: 206
+        contains: "sqlite candidate transactions are unsupported"
+      - file: internal/store/sqlite/candidate_artifacts.go
+        line: 210
+        contains: "sqlite candidate location transactions are unsupported"
   - interface: CandidateArtifactStore
     method: LinkToBundle
     reason: "[test-utility] 非事务版链接 API：两引擎现在都写链接表 bundle_candidate_artifacts（与生产同一关联），生产链路用 UoW 的 linkCandidateArtifacts / PG 的 LinkToBundleTx；本方法仅测试 fixture 使用（TASK-229）"
@@ -45,10 +83,30 @@ exceptions:
     method: Create
     reason: "[test-utility] 生产 0、测试 8；生产落库由操作创建 UoW 的 insertConvergenceTask 承担（sqlite/uow.go:132）——本方法供 fixture 播种任意收敛任务状态"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/store/sqlite/uow.go
+        line: 132
+        contains: "insertConvergenceTask"
   - interface: EmergencyIntentStore
     method: ResolveEmergencyEffect
-    reason: "[test-utility] 保留（B-4b 2026-09-30 取证，0/4 可迁移；口径：strict `EmergencyIntents().ResolveEmergencyEffect 命中 4 处 = sqlite/emergency_store_test.go:163/182/204 + orchestrator/service_test.go:2514，全部为测试）：名义替代 ConvergeEmergencyResult（生产调用 internal/operator/service.go:881）是严格超集但语义不可替换——① EmergencyConvergeResult 无 Timeline 字段，而 :163 断言 resolveResult.Timeline 非空且 Kind=EMERGENCY_EFFECT_RESOLVED；② :204 断言「非终态 ⇒ ErrInvalidState」，而 Converge 对非终态会沿 EMERGENCY 链推进到终态而非报错；③ Converge 还要求 IntentID+终态 Status，NOT_APPLIED 时额外 abandonConvergenceTaskTx 并回写投影 EffectStatus；④ 已解析为「不同 effect」时 Resolve 返回 Resolved=false，Converge 返回 ErrInvalidState（幂等契约不同）⇒ 整条保留"
+    reason: "[test-utility] 保留（B-4b 2026-09-30 取证，0/4 可迁移；口径：strict `EmergencyIntents().ResolveEmergencyEffect 命中 4 处 = sqlite/emergency_store_test.go:172/191/213 + orchestrator/service_test.go:2685，全部为测试）：名义替代 ConvergeEmergencyResult（生产调用 internal/operator/service.go:881）是严格超集但语义不可替换——① EmergencyConvergeResult 无 Timeline 字段，而 :172 断言 resolveResult.Timeline 非空且 Kind=EMERGENCY_EFFECT_RESOLVED；② :213 断言「非终态 ⇒ ErrInvalidState」，而 Converge 对非终态会沿 EMERGENCY 链推进到终态而非报错；③ Converge 还要求 IntentID+终态 Status，NOT_APPLIED 时额外 abandonConvergenceTaskTx 并回写投影 EffectStatus；④ 已解析为「不同 effect」时 Resolve 返回 Resolved=false，Converge 返回 ErrInvalidState（幂等契约不同）⇒ 整条保留"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/store/sqlite/emergency_store_test.go
+        line: 172
+        contains: ".ResolveEmergencyEffect("
+      - file: internal/store/sqlite/emergency_store_test.go
+        line: 191
+        contains: ".ResolveEmergencyEffect("
+      - file: internal/store/sqlite/emergency_store_test.go
+        line: 213
+        contains: ".ResolveEmergencyEffect("
+      - file: internal/orchestrator/service_test.go
+        line: 2685
+        contains: ".ResolveEmergencyEffect("
+      - file: internal/operator/service.go
+        line: 881
+        contains: "ConvergeEmergencyResult("
   - interface: EmergencyIntentStore
     method: SaveRevertReconciliation
     reason: "[unwired-write] 回退对账结果保存无调用者"
@@ -65,10 +123,24 @@ exceptions:
     method: Update
     reason: "[test-utility] 保留（B-4a 2026-09-30 取证，3/6 已迁移、3/6 不可迁移）：名义替代 OperatorLifecycle().UpdateCertificate 是按 cert_serial 的 CAS 且硬要求 status='active'，只能改证书两列。已迁移 3 处 expiry-only/serial 轮换（gateway_mtls_test.go 的 ADR-018 serial 轮换、renew_test.go 的两处 renew-window 移动；迁移前后两文件断言计数 delta 均为 0）；剩余 3 处是 status 变更（renew_test.go:66/117 的 superseded/revoked 表用例、gateway_mtls_test.go:322 的 status 表用例）——superseded 无生产写者，revoked 只能走 RevokeOperator（附带 session 级联与审计副作用，会改变用例前提）⇒ 整条保留"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/operator/renew_test.go
+        line: 66
+        contains: "st.Operators().Update("
+      - file: internal/operator/renew_test.go
+        line: 117
+        contains: "st.Operators().Update("
+      - file: internal/operator/gateway_mtls_test.go
+        line: 322
+        contains: "st.Operators().Update("
   - interface: OutboxStore
     method: Get
-    reason: "[test-utility] 生产 0、测试 14；OutboxStore 的生产派发走 GetNextPending（operator/service.go:1393）与 UpdateStatus/PersistAck/GetByCommandID，本方法只被测试用来读取单条 outbox 记录"
+    reason: "[test-utility] 生产 0、测试 14；OutboxStore 的生产派发走 GetNextPending（operator/service.go:1417）与 UpdateStatus/PersistAck/GetByCommandID，本方法只被测试用来读取单条 outbox 记录"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/operator/service.go
+        line: 1417
+        contains: "GetNextPending"
   - interface: RolloutTrackingStore
     method: Get
     reason: "[unwired-read] 保留（用户裁定 2026-09-30）：REQ-021 只定义 rollout 表+写入、REQ-064:266 不定义发布 ⇒ 显式「只写不读」；该接口只有 Get ⇒ 无级联；保留供 TASK-232 的 rollout 读面"
@@ -103,5 +175,18 @@ exceptions:
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get
-    reason: "[deferred-unwired] 暂缓保留（用户裁定 2026-09-30「暂缓不得删」）：整个漏洞例外面**未装配**——vulnerability.NewService 在**生产无调用者**（仅测试 internal/orchestrator/vulnerability_test.go:48 构造未装配实例）、Service.SetVulnerabilityEvaluator **无任何调用点**（只有其声明、doc 注释，以及 SECURITY.md:501 与 docs/runbook.md:222 两处文档提及，两文都写着「尚无生产调用者」）；REQ-042 的 SBOM/漏洞准入扫描器方案未裁定（见 gotcha req042-vulnerability-admission）。本方法**生产 0 调用**（仅 1 处测试读取 internal/store/postgres/store_test.go:1193）⇒ 属「未装配」而非死代码，删除会抹掉未来接线的锚点。待 REQ-042 方案落定后重新裁定。"
+    reason: "[deferred-unwired] 暂缓保留（用户裁定 2026-09-30「暂缓不得删」）：整个漏洞例外面**未装配**——vulnerability.NewService 在**生产无调用者**（仅测试 internal/orchestrator/vulnerability_test.go:48 构造未装配实例）、Service.SetVulnerabilityEvaluator **无任何调用点**（只有其声明、doc 注释，以及 SECURITY.md:511 与 docs/runbook.md:233 两处文档提及，两文都写着「尚无生产调用者」）；REQ-042 的 SBOM/漏洞准入扫描器方案未裁定（见 gotcha req042-vulnerability-admission）。本方法**生产 0 调用**（仅 1 处测试读取 internal/store/postgres/store_test.go:1193）⇒ 属「未装配」而非死代码，删除会抹掉未来接线的锚点。待 REQ-042 方案落定后重新裁定。"
     review_by: "2026-12-31"
+    citations:
+      - file: internal/orchestrator/vulnerability_test.go
+        line: 48
+        contains: "vulnerability.NewService("
+      - file: SECURITY.md
+        line: 511
+        contains: "SetVulnerabilityEvaluator"
+      - file: docs/runbook.md
+        line: 233
+        contains: "SetVulnerabilityEvaluator"
+      - file: internal/store/postgres/store_test.go
+        line: 1193
+        contains: "VulnerabilityExceptions().Get("

@@ -63,8 +63,8 @@ BASE_URL="${E2E_CONSOLE_BASE_URL:-http://127.0.0.1:8087}"
 # machine-checkable half of the H1–H7 walkthrough (docs/delivery-evidence.md
 # §4.2) that is not already covered by rollback/emergency-smoke. Every one of its
 # cases is declared in console-expected-cases.json, so the guard below judges it
-# like the two original specs.
-SPECS="${E2E_CONSOLE_SPECS:-e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts}"
+# like the two original specs. TASK-328 adds stuck-locks.spec.ts (REQ-087 unlock page) on the same terms.
+SPECS="${E2E_CONSOLE_SPECS:-e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts e2e/stuck-locks.spec.ts}"
 if [ -n "${E2E_CONSOLE_SPEC:-}" ]; then SPECS="$E2E_CONSOLE_SPEC"; fi
 CHANNEL="${E2E_CONSOLE_CHANNEL-chrome}"
 CUSTOMER_KEY="${E2E_CONSOLE_CUSTOMER_KEY:-dev-customer-a}"

@@ -167,7 +167,7 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
 | 审计写入结构门禁 | `go test ./internal/store/` 的 `TestAuditWritesStayOnSanctionedPaths`：除登记的 6 个 store 文件外，任何 `INSERT [OR IGNORE] INTO audit_events` 都失败；事务写入者必须调用 `store.SanitizeAuditEvent` 兜底脱敏（负控制在同文件） | 无 | CI `test` job 的全量 `go test` |
 | `make web-install` | 按 `web/package-lock.json` 安装前端依赖（`npm ci`）：锁文件即契约，避免 `node_modules` 漂移 | Node（`web/package.json` 的 `engines`: ^20 \|\| ^22 \|\| >=24）+ 网络 | 本地；CI 的 `web` job 用同一 `npm ci`（`.github/workflows/test.yml`，`pull_request` 触发） |
 | `make web-check` | 前端三关：`npm run lint`（eslint）+ `npm test`（vitest）+ `npm run build`（`vue-tsc -b && vite build`）。缺 `web/node_modules` 时**明确报错并指向 `make web-install`**，不以其它失败形式掩盖 <!-- check-docs:ignore web/node_modules npm 本地安装产物，gitignore 掉，干净检出中本就不存在 --> | 同上（需先 `make web-install`） | 本地 + `make quality` 已含；CI 的 `web` job 跑等价的三步（15 分钟超时，`pull_request` 触发） |
-| `make check-store-surface` | 门禁 `internal/store` 的**接口面**：每个声明的方法必须在**非测试代码里、通过它的接口（或被**显式绑定**到该接口的具体类型）被调用**，否则要登记到 `storesurface.exceptions.yaml`（含理由与复核日期）。判定用 **`go/types`**（`golang.org/x/tools/go/packages`）解析真实调用点：**注释/字符串不算**、**同名方法跨接口不互相掩盖**（绑定判定刻意不用结构的 `types.Implements`：方法集相同时它会互相掩盖，反例已固化为单测）、被**显式绑定**到该接口的具体类型上的调用算活（不限 store 包内）。这是 TASK-221 排查的机检化（旧版按裸方法名 grep，漏报了 31 个真死方法且一行注释即可绕过）。检查项：未登记的零调用方法、已失效的例外条目、缺理由、复核日期已过 | `go`（纯静态，无外部依赖） | 本地 + `make quality` 已含；CI `store-surface` job |
+| `make check-store-surface` | 门禁 `internal/store` 的**接口面**：每个声明的方法必须在**非测试代码里、通过它的接口（或被**显式绑定**到该接口的具体类型）被调用**，否则要登记到 `storesurface.exceptions.yaml`（含理由与复核日期）。判定用 **`go/types`**（`golang.org/x/tools/go/packages`）解析真实调用点：**注释/字符串不算**、**同名方法跨接口不互相掩盖**（绑定判定刻意不用结构的 `types.Implements`：方法集相同时它会互相掩盖，反例已固化为单测）、被**显式绑定**到该接口的具体类型上的调用算活（不限 store 包内）。这是 TASK-221 排查的机检化（旧版按裸方法名 grep，漏报了 31 个真死方法且一行注释即可绕过）。检查项：未登记的零调用方法、已失效的例外条目、缺理由、复核日期已过、**引用的 `file:line` 内容不符**（TASK-328：条目 `citations:` 声明的每个 `file:line` 必须存在、行号落在文件内、该行含声明的 `contains`，且条目 reason 必须点名同一 basename 与行号——正反两向都查，单改一侧即红；此前只验"理由里写了行号"，四处漂移 9~171 行仍全绿） | `go`（纯静态，无外部依赖） | 本地 + `make quality` 已含；CI `store-surface` job |
 | `make check-dead-methods` | 门禁**另一类盲区**：**未导出接收类型上的导出方法**。`check-store-surface` 只看接口方法，`golangci-lint` 的 `unused` 又**故意不报**这一形态（它保守假设该类型可能实现某个接口）⇒ 这类死代码两道门都看不见（TASK-226 手工删掉的 7 个正是如此，加回去两道门仍全绿）。判定用 **`go/types`** 回答三问：①**引用**——方法对象是否出现在 `TypesInfo.Uses`/`Selections`（覆盖调用、方法值、方法表达式；注释/字符串/同名方法不算）；②**接口成员**——加载图里**任一**接口（**含 stdlib 与第三方**：`database/sql.Result`、Casbin `persist.Adapter`、client-go `RESTClientGetter`、universe 的 `error`）是否以同名同签名声明它且接收者类型实现该接口；③**晋升与按名派发**——被内嵌（方法被提升）或名字出现在 `reflect` `MethodByName("X")` 字面量里的，视为存活。**②是核心防线**：变异实测把它关掉，本仓 691 个候选里 **671 个**被误报（生成 connect 客户端等接口实现），合成模块测试里 `sql.Result`/第三方风格接口/`error` 用例同步变红。未登记的不可达方法、已失效条目、缺理由、复核日期已过都会失败；例外登记在 `deadmethods.exceptions.yaml`（reason + review_by）。边界（**大多是**安全方向，**但有一条会过报**）：结构式接口成员判定会让「恰好满足某无关接口」的类型存活、跨模块消费者不可见；按名派发**只承认字符串字面量** ⇒ 运行时拼接的名字（`MethodByName("By"+"Computed")`）看不见，**确实被这样调用**的方法会被报出（唯一指向不安全方向的边界，独立复核 2026-09-30 合成模块实测；正因如此该 job **不进 required 清单**（仓库当前无分支保护；将来引入时应保持非必需））；默认**不加载测试文件**（只有测试引用的方法需登记理由）。实现：`internal/quality/deadmethods` + `cmd/deadmethods` | `go`（纯静态，无外部依赖） | CI 的 `dead-methods` job（**不在 required 清单上**——仓库当前尚无分支保护，故今天没有任何检查阻塞合并；将来引入分支保护时应继续保持它非必需）+ 本地 `make check-dead-methods`；**不在 `make quality`**（刻意保留） |
 | `make check-licenses` | 校验所有**会进入产物**的依赖许可证（Go 默认构建闭包 + 前端生产依赖）：拒绝 GPL/AGPL/LGPL、SSPL、BUSL、Elastic 以及无许可证文件的依赖；同时校验根目录 `NOTICE` 未过期 | `go`（模块缓存）；前端部分需 `jq`，缺失时**显式报「未检查」**而非静默通过 | 本地 + CI `license-check` job（同一脚本、同一策略、同一例外文件 `license-exceptions.tsv`） |
 | `make check-docs` | 文档事实门禁：`docs/**` 与各级 README 里写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须与当前代码一致；无匹配即失败，陈述"某物不存在"的行用同行 `<!-- check-docs:ignore 理由 -->` 豁免 | 无 | 本地（CI 未接入该 target）；`make quality` 已含 |
@@ -447,13 +447,14 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 ## 控制台（浏览器）E2E：CI 车道与 spec 归属（TASK-270）
 
-`web/e2e/` 下四个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
+`web/e2e/` 下五个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
 
 | spec | 覆盖 | 车道 |
 | --- | --- | --- |
 | `web/e2e/rollback.spec.ts` | REQ-056 AC-056-08 浏览器回滚路径（TASK-240） | `e2e-prerequisite`：**push main / `workflow_dispatch`**，PR 不跑 |
 | `web/e2e/emergency-smoke.spec.ts` | REQ-058 紧急变更走查（`REQUIRE_PROMOTION` 成功路径）+ **跨角色审批**（AC-058-41） | 同上（TASK-270 起纳入） |
 | `web/e2e/delivery-criteria.spec.ts` | 交付判据 H1–H5 中可无人介入判定的部分：登录成败、关键页可达、危险操作 Esc 取消、失败原因 + `requestId`、焦点陷阱（H5 的「表单字段错误有 `aria-describedby` 关联」一半由 `web/src/components/releases/RollbackReleaseDialog.test.ts` 钉住）（TASK-325；判据定义见 `docs/delivery-evidence.md` §4.2） | 同上（TASK-325 起纳入） |
+| `web/e2e/stuck-locks.spec.ts` | REQ-087 §4.1/§4.2 解锁页（`web/src/pages/StuckLocksPage.vue`）：工作台入口可达 + 空态/有锁态渲染（真实后端，不 mock）；`alertdialog` 确认的 Esc 取消且不发 `ReleaseEmergencyLock`；提交载荷与释放后可见反馈（读/写响应在途改写——真实 stuck lock 需 operator 漏掉观察窗口，本车道不制造）（TASK-328） | 同上（TASK-328 起纳入） |
 | `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑 | **不在 CI 车道**；本地手工跑（需 `E2E_VIEWER_PASS`，见 spec 头注释） |
 
 - **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
@@ -473,9 +474,18 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   本地等价入口 `make e2e-prerequisite`（`dev-up dev-seed dev-status` + `smoke.sh` + `console.sh`；
   需要 k3d/kustomize 与 Chrome，结束不自动 purge）。
 - **跑哪些 spec 由 `console.sh` 决定**：默认
-  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts'`，并显式
-  `--workers=1`（三个 spec 共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>`
+  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts e2e/stuck-locks.spec.ts'`，并显式
+  `--workers=1`（四个 spec 共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>`
   可临时收窄。
+- **清单 ↔ 收集集合的本地核对（TASK-328，无需栈）**：清单的权威是"该车道实跑 spec 收集到的用例"，可在起栈前先核对，
+  集合不等即早红，而不是跑完 16 分钟才由守卫发现：
+  ```bash
+  cd web && PLAYWRIGHT_JSON_OUTPUT_NAME=/tmp/list.json npx playwright test --list --reporter=json \
+    e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts e2e/stuck-locks.spec.ts
+  jq -r '.cases[] | [.spec, .title] | @tsv' ../test/e2e/prerequisite/console-expected-cases.json | LC_ALL=C sort > /tmp/manifest.tsv
+  jq -r '[recurse(.suites[]?) | .specs[]? | [(.file|split("/")|last), .title]] | sort | .[] | @tsv' /tmp/list.json | LC_ALL=C sort > /tmp/collected.tsv
+  diff /tmp/manifest.tsv /tmp/collected.tsv
+  ```
 - **跨角色审批的第二审批人**：`console.sh` 把 `E2E_ADMIN_B_USER=e2e-runner` 与
   `E2E_ADMIN_B_PASS=$E2E_RUNNER_PASSWORD` 传给 spec。口令来自 `data/dev-credentials.env`（`e2e-prerequisite`
   job 没有 `DEV_PROFILE`，走 local profile 由 `dev-seed` 生成；CI 的同名 Secret 只注入 `e2e` job）。
@@ -525,7 +535,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   `test/e2e/prerequisite/console-expected-cases.json` **逐条**判定。清单来源＝该车道实跑的 spec
   （`console.sh` 的 `SPECS`，即 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开，见 `console.sh:67-68`）内
   **实际收集到的用例**，当前 = `rollback.spec.ts` 两例 + `emergency-smoke.spec.ts` 三例 +
-  `delivery-criteria.spec.ts` 六例（H1–H5，TASK-325）。声明
+  `delivery-criteria.spec.ts` 六例（H1–H5，TASK-325）+ `stuck-locks.spec.ts` 三例（S1–S3，TASK-328；共 14 例）。声明
   `expect: passed` 的用例必须**最终结果状态恰为 `passed`**（取最后一次 result，即重试后的终态）；
   kill-switch 一例声明为**带原因的期望 skip**（`skipReasonContains: E2E_EMERGENCY_DISABLED`——该门只在
   `emergencyChangeEnabled=false` 的栈上存在，本车道不建这种栈），**理由写在清单里**，因此它是有据的
