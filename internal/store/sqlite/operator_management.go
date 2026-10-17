@@ -453,7 +453,7 @@ func insertOperatorAuditEvent(ctx context.Context, tx *sql.Tx, event *store.Audi
 			ID:             uuid.NewString(),
 			ActorKind:      store.AuditActorSystem,
 			ActorID:        "system",
-			OrganizationID: "system",
+			OrganizationID: store.SystemOrganizationID,
 			Role:           "system",
 			ResourceType:   "operator",
 			Action:         "operator.revoked",

@@ -81,7 +81,10 @@ type AuditServiceClient interface {
 	// organization_id is resolved by release-auth (ADR-021): an omitted value means
 	// the caller's own organization, another organization is allowed only for
 	// platform_admin (otherwise PERMISSION_DENIED), and the response then reads the
-	// effective organization. The time range is capped by the policy-owned window
+	// effective organization. all_organizations=true widens the read to every
+	// organization, including the platform-level "system" scope; a caller without
+	// cross-organization scope is refused with PERMISSION_DENIED and the reason
+	// code cross_organization_denied. The time range is capped by the policy-owned window
 	// the decision returns (31 days, or 366 for platform_admin); a wider range is
 	// rejected with INVALID_ARGUMENT and the reason code range_too_large. Other
 	// filter fields (resource, actor, action, status) are taken from the request.
@@ -97,9 +100,11 @@ type AuditServiceClient interface {
 	// the export needs a write decision for the audit object and is scoped to the
 	// effective organization release-auth returns (ADR-021), so a filter naming
 	// another organization is rejected with PERMISSION_DENIED for every role but
-	// platform_admin. The policy window cap applies here too. No worker consumes the
-	// queue today, so status stays pending. Treat the identifier as a request
-	// receipt, not as a download handle.
+	// platform_admin. The policy window cap applies here too. all_organizations is
+	// not supported for exports (the export row carries one organization); it is
+	// rejected with INVALID_ARGUMENT instead of being silently ignored. No worker
+	// consumes the queue today, so status stays pending. Treat the identifier as a
+	// request receipt, not as a download handle.
 	// Requires a valid access token (no role check).
 	ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error)
 }
@@ -182,7 +187,10 @@ type AuditServiceHandler interface {
 	// organization_id is resolved by release-auth (ADR-021): an omitted value means
 	// the caller's own organization, another organization is allowed only for
 	// platform_admin (otherwise PERMISSION_DENIED), and the response then reads the
-	// effective organization. The time range is capped by the policy-owned window
+	// effective organization. all_organizations=true widens the read to every
+	// organization, including the platform-level "system" scope; a caller without
+	// cross-organization scope is refused with PERMISSION_DENIED and the reason
+	// code cross_organization_denied. The time range is capped by the policy-owned window
 	// the decision returns (31 days, or 366 for platform_admin); a wider range is
 	// rejected with INVALID_ARGUMENT and the reason code range_too_large. Other
 	// filter fields (resource, actor, action, status) are taken from the request.
@@ -198,9 +206,11 @@ type AuditServiceHandler interface {
 	// the export needs a write decision for the audit object and is scoped to the
 	// effective organization release-auth returns (ADR-021), so a filter naming
 	// another organization is rejected with PERMISSION_DENIED for every role but
-	// platform_admin. The policy window cap applies here too. No worker consumes the
-	// queue today, so status stays pending. Treat the identifier as a request
-	// receipt, not as a download handle.
+	// platform_admin. The policy window cap applies here too. all_organizations is
+	// not supported for exports (the export row carries one organization); it is
+	// rejected with INVALID_ARGUMENT instead of being silently ignored. No worker
+	// consumes the queue today, so status stays pending. Treat the identifier as a
+	// request receipt, not as a download handle.
 	// Requires a valid access token (no role check).
 	ExportAuditEvents(context.Context, *connect.Request[v1.ExportAuditEventsRequest]) (*connect.Response[v1.ExportAuditEventsResponse], error)
 }

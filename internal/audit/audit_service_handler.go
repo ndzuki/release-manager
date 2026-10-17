@@ -79,26 +79,7 @@ func (h *auditServiceHandler) Emit(ctx context.Context, req *connect.Request[aud
 // QueryAuditEvents delegates to the store.
 func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect.Request[auditv1.QueryAuditEventsRequest]) (*connect.Response[auditv1.QueryAuditEventsResponse], error) {
 	msg := req.Msg
-	filter := store.AuditEventFilter{}
-
-	if f := msg.GetFilter(); f != nil {
-		filter.OrganizationID = f.GetOrganizationId()
-		filter.ResourceType = f.GetResourceType()
-		filter.ResourceID = f.GetResourceId()
-		filter.ActorID = f.GetActorId()
-		filter.Action = f.GetAction()
-		filter.Status = f.GetStatus()
-		if tr := f.GetTimeRange(); tr != nil {
-			if tr.GetStart() != nil && tr.GetStart().IsValid() {
-				t := tr.GetStart().AsTime()
-				filter.Since = &t
-			}
-			if tr.GetEnd() != nil && tr.GetEnd().IsValid() {
-				t := tr.GetEnd().AsTime()
-				filter.Until = &t
-			}
-		}
-	}
+	filter, allOrganizations := auditEventFilterFromProto(msg.GetFilter())
 
 	// TASK-103 / ADR-021: release-auth decides whether the caller may read the
 	// audit trail in the requested organization and returns the effective scope.
@@ -106,7 +87,23 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 	if err != nil {
 		return nil, err
 	}
-	filter.OrganizationID = decision.OrganizationID
+	// TASK-339: all_organizations is a platform_admin-only widening of the read
+	// scope. A caller without cross-organization scope is refused here, before
+	// the store is touched, so the query never runs and cannot be filtered down
+	// after the fact. The decision's empty-organization guard in
+	// resolveAuditScope already failed closed, so clearing the filter below can
+	// only happen on an authorized decision.
+	if allOrganizations {
+		if !decision.AllowCrossOrganization {
+			return nil, auditQueryError(connect.CodePermissionDenied, "cross_organization_denied",
+				"cross-organization audit access requires platform_admin")
+		}
+		// Reuse the store's "no organization predicate" path: an empty
+		// OrganizationID reads every tenant, including SystemOrganizationID.
+		filter.OrganizationID = ""
+	} else {
+		filter.OrganizationID = decision.OrganizationID
+	}
 	if err := enforceAuditWindow(filter.Since, filter.Until, decision.MaxWindowDays, time.Now().UTC()); err != nil {
 		return nil, err
 	}
@@ -151,6 +148,34 @@ func (h *auditServiceHandler) QueryAuditEvents(ctx context.Context, req *connect
 	}), nil
 }
 
+// auditEventFilterFromProto projects the wire filter onto the store filter and
+// reports whether the caller asked for the all-organizations scope. The
+// organization field is only a request here; the handler replaces it with the
+// scope release-auth returns.
+func auditEventFilterFromProto(f *auditv1.AuditQueryFilter) (store.AuditEventFilter, bool) {
+	filter := store.AuditEventFilter{}
+	if f == nil {
+		return filter, false
+	}
+	filter.OrganizationID = f.GetOrganizationId()
+	filter.ResourceType = f.GetResourceType()
+	filter.ResourceID = f.GetResourceId()
+	filter.ActorID = f.GetActorId()
+	filter.Action = f.GetAction()
+	filter.Status = f.GetStatus()
+	if tr := f.GetTimeRange(); tr != nil {
+		if tr.GetStart() != nil && tr.GetStart().IsValid() {
+			t := tr.GetStart().AsTime()
+			filter.Since = &t
+		}
+		if tr.GetEnd() != nil && tr.GetEnd().IsValid() {
+			t := tr.GetEnd().AsTime()
+			filter.Until = &t
+		}
+	}
+	return filter, f.GetAllOrganizations()
+}
+
 // ExportAuditEvents creates an asynchronous export job and returns its ID.
 func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connect.Request[auditv1.ExportAuditEventsRequest]) (*connect.Response[auditv1.ExportAuditEventsResponse], error) {
 	msg := req.Msg
@@ -162,6 +187,13 @@ func (h *auditServiceHandler) ExportAuditEvents(ctx context.Context, req *connec
 	exportDecision, err := resolveAuditScope(ctx, h.decisions, msg.GetFilter().GetOrganizationId(), auditObject, auditWrite)
 	if err != nil {
 		return nil, err
+	}
+	// TASK-339: an export row carries exactly one organization, so the
+	// all-organizations scope cannot be represented. Reject it explicitly rather
+	// than silently exporting one organization under a union request.
+	if msg.GetFilter().GetAllOrganizations() {
+		return nil, auditQueryError(connect.CodeInvalidArgument, "all_organizations_not_supported",
+			"all_organizations is not supported for audit exports")
 	}
 	scopedOrganization := exportDecision.OrganizationID
 

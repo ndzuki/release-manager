@@ -75,6 +75,8 @@ message EmitAuditResponse {
 
 // AuditQueryFilter restricts audit events returned by a query or export.
 message AuditQueryFilter {
+  // organization_id is the requested scope. An omitted value keeps its existing
+  // meaning: the caller's own organization, as resolved by release-auth.
   string organization_id = 1;
   string resource_type = 2;
   string resource_id = 3;
@@ -82,6 +84,16 @@ message AuditQueryFilter {
   string action = 5;
   string status = 6;
   common.v1.TimestampRange time_range = 7;
+  // all_organizations reads every organization the caller is authorized to see,
+  // including platform-level events recorded under the "system" scope (cleanup,
+  // operator bootstrap). It is honored only for platform_admin: any other caller
+  // is refused with PERMISSION_DENIED and the reason code
+  // cross_organization_denied, before the store is touched. It is mutually
+  // exclusive with organization_id; when set, organization_id is ignored. The
+  // empty organization_id semantics above are unchanged, so this field is the
+  // only way to ask for every organization. ExportAuditEvents does not support
+  // it and rejects it with INVALID_ARGUMENT.
+  bool all_organizations = 8;
 }
 
 // QueryAuditEventsRequest queries organization-scoped audit events.
@@ -114,7 +126,8 @@ message ExportAuditEventsResponse {
 // over release-api. Trust boundary: authenticated bearer token. The service
 // performs no role check of its own, but every request is scoped to the
 // principal's organization: the request cannot read, export, or emit into
-// another tenant (TASK-095).
+// another tenant (TASK-095). The single exception is a platform_admin query
+// that explicitly sets all_organizations (REQ-029 cross-organization scope).
 service AuditService {
   // Buffers audit events for asynchronous persistence and answers as soon as
   // they are queued, before any write reaches the database.
@@ -138,7 +151,10 @@ service AuditService {
   // organization_id is resolved by release-auth (ADR-021): an omitted value means
   // the caller's own organization, another organization is allowed only for
   // platform_admin (otherwise PERMISSION_DENIED), and the response then reads the
-  // effective organization. The time range is capped by the policy-owned window
+  // effective organization. all_organizations=true widens the read to every
+  // organization, including the platform-level "system" scope; a caller without
+  // cross-organization scope is refused with PERMISSION_DENIED and the reason
+  // code cross_organization_denied. The time range is capped by the policy-owned window
   // the decision returns (31 days, or 366 for platform_admin); a wider range is
   // rejected with INVALID_ARGUMENT and the reason code range_too_large. Other
   // filter fields (resource, actor, action, status) are taken from the request.
@@ -154,9 +170,11 @@ service AuditService {
   // the export needs a write decision for the audit object and is scoped to the
   // effective organization release-auth returns (ADR-021), so a filter naming
   // another organization is rejected with PERMISSION_DENIED for every role but
-  // platform_admin. The policy window cap applies here too. No worker consumes the
-  // queue today, so status stays pending. Treat the identifier as a request
-  // receipt, not as a download handle.
+  // platform_admin. The policy window cap applies here too. all_organizations is
+  // not supported for exports (the export row carries one organization); it is
+  // rejected with INVALID_ARGUMENT instead of being silently ignored. No worker
+  // consumes the queue today, so status stays pending. Treat the identifier as a
+  // request receipt, not as a download handle.
   // Requires a valid access token (no role check).
   rpc ExportAuditEvents(ExportAuditEventsRequest) returns (ExportAuditEventsResponse);
 }
