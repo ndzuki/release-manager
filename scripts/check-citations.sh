@@ -609,7 +609,7 @@ echo "check-citations: PASS"
 #.github/SECRETS.md;^\| `RUNS_ON`;166,175,298,306,347,355;^        if: vars\.RUNS_ON != 'self-hosted'$;^        if: vars\.RUNS_ON != 'self-hosted'$;
 #.github/SECRETS.md;^\| `RUNS_ON`;388,473;vars\.RUNS_ON.*self-hosted;vars\.RUNS_ON.*self-hosted;
 #.github/SECRETS.md;^\| `RUNS_ON`;404;WORKLOAD_IMAGE;WORKLOAD_IMAGE;
-#.github/SECRETS.md;^\| `RUNS_ON`;735;^    runs-on: \$\{\{ vars\.RUNS_ON;^    runs-on: \$\{\{ vars\.RUNS_ON;
+#.github/SECRETS.md;^\| `RUNS_ON`;766;^    runs-on: \$\{\{ vars\.RUNS_ON;^    runs-on: \$\{\{ vars\.RUNS_ON;
 #.github/SECRETS.md;^切换命令\(;29-34;^#   failed or your spending limit;gh variable delete RUNS_ON;
 #.github/SECRETS.md;^\*\*不是 secret 的固定值;384;KIND_SHA256;KIND_SHA256;
 #.github/SECRETS.md;^\*\*不是 secret 的固定值;404;WORKLOAD_IMAGE;WORKLOAD_IMAGE;
@@ -657,7 +657,8 @@ echo "check-citations: PASS"
 #.github/SECRETS.md;^\| `test-sdkcheck` \| job \|;332;^  test-sdkcheck:$;^  test-sdkcheck:$;
 #.github/SECRETS.md;^\| `rollout-watch` \| job \|;371;^  rollout-watch:$;^  rollout-watch:$;
 #.github/SECRETS.md;^5\. \*\*下载物完整性;572-573;^          curl -fsSL -o /tmp/k3d-checksums.txt;sha256sum -c -;
-#.github/SECRETS.md;^4\. \*\*下列 10 个 job;421,520;^    if: github\.event_name;^    if: github\.event_name;github\.event_name
+#.github/SECRETS.md;^4\. \*\*下列 11 个 job;421,520;^    if: github\.event_name;^    if: github\.event_name;github\.event_name
+#.github/SECRETS.md;^4\. \*\*下列 11 个 job;765-775;^  backup-script:$;^        run: bash scripts/test-backup-script\.sh$;backup-script
 #test/e2e/README.md;^\| `e2e`\(test\.yml;9-13;^      run-e2e:$;^        type: boolean$;default: true
 #RULES-END
 

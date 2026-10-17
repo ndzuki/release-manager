@@ -744,3 +744,32 @@ jobs:
 
       - name: Check for unreferenced concrete methods
         run: make check-dead-methods
+
+  # TASK-343 — the backup CronJob's inline script
+  # (deploy/kustomize/production/backup-cronjob.yaml) is a dash program: it runs
+  # as `/bin/sh -c` inside postgres:16, where /bin/sh is dash and there is no
+  # `pipefail`. Four failure branches (failed pg_dump, empty archive, failed
+  # sync, failed rename) decide whether a 0-byte or partial archive can end up
+  # under the final *.dump name; until now only a manual drill on a real cluster
+  # exercised them, so a refactor could restore the pre-TASK-342 behaviour with
+  # every gate green. scripts/test-backup-script.sh extracts the script from the
+  # manifest itself (there is no second copy), injects each failure through PATH
+  # shims and asserts the exit code plus the exact set of names in /backups.
+  #
+  # The image is postgres:16, not the postgres:16-alpine pulled by
+  # test-postgres-integration: alpine's /bin/sh is BusyBox ash, so `set -eu`,
+  # `[ ! -s ]` and `find -mtime` would not have the semantics production has.
+  # The pull is the only network dependency — no Go toolchain, cluster,
+  # kubeconfig, PostgreSQL server or secret is involved — and a separate job
+  # keeps that pull and the few-second matrix off the 25-minute database lane.
+  backup-script:
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pull the backup image
+        run: docker pull postgres:16
+
+      - name: Run the backup script failure matrix
+        run: bash scripts/test-backup-script.sh
