@@ -15,6 +15,11 @@
 # `pg_dump` 18.6 -> PostgreSQL 16 `SET transaction_timeout` incompatibility
 # documented in docs/production-deploy.md §7.2: the host-side manual dump still
 # needs that workaround, these archives do not.
+#
+# Archives are written atomically per database (TASK-342): `pg_dump` writes
+# `<db>-<stamp>.dump.tmp`, and only a successful, non-empty, synced archive is
+# renamed to `<db>-<stamp>.dump`. A failed run never publishes a *.dump under
+# the final name, so a red Job leaves no file that looks like a good backup.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -111,17 +116,65 @@ spec:
                   done
                   printf 'postgres is accepting connections\n'
 
-                  # release_manager is the authoritative management-plane
-                  # database: a failure here fails the Job.
-                  target="$backup_dir/release_manager-$stamp.dump"
-                  pg_dump --format=custom --no-owner --no-privileges \
-                    --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" \
-                    --file="$target" || {
-                    printf 'pg_dump failed for release_manager\n' >&2
-                    exit 1
+                  # Write each archive atomically: pg_dump writes
+                  # <db>-<stamp>.dump.tmp, and the file is renamed to
+                  # <db>-<stamp>.dump only after pg_dump succeeds, the archive
+                  # is non-empty, and it has been flushed to disk. Without the
+                  # rename, a failed pg_dump left a 0-byte *.dump that was
+                  # indistinguishable from a good backup until retention
+                  # deleted it seven days later; a failed Job must instead
+                  # leave no archive under the final name (TASK-342).
+                  #
+                  # /bin/sh in the postgres image is dash, which has no
+                  # `pipefail`: every step's status is checked explicitly
+                  # instead of being taken from a pipeline.
+                  dump_database() {
+                    label="$1"
+                    dbname="$2"
+                    final="$backup_dir/$label-$stamp.dump"
+                    tmp="$final.tmp"
+                    # A leftover with this exact name (a killed attempt in the
+                    # same second) must not be mistaken for this attempt's
+                    # output.
+                    rm -f "$tmp"
+                    if ! pg_dump --format=custom --no-owner --no-privileges \
+                         --username="$POSTGRES_USER" --dbname="$dbname" \
+                         --file="$tmp"; then
+                      rm -f "$tmp"
+                      printf 'pg_dump failed for %s; no archive written\n' \
+                        "$label" >&2
+                      return 1
+                    fi
+                    # A zero-length custom-format archive is never valid: treat
+                    # it as a failure instead of publishing it under *.dump.
+                    if [ ! -s "$tmp" ]; then
+                      rm -f "$tmp"
+                      printf 'pg_dump produced an empty archive for %s; no archive written\n' \
+                        "$label" >&2
+                      return 1
+                    fi
+                    # Flush before the rename so a node crash cannot leave a
+                    # complete-looking *.dump whose contents never reached the
+                    # disk.
+                    if ! sync "$tmp"; then
+                      rm -f "$tmp"
+                      printf 'sync failed for %s; no archive written\n' \
+                        "$label" >&2
+                      return 1
+                    fi
+                    if ! mv "$tmp" "$final"; then
+                      rm -f "$tmp"
+                      printf 'failed to rename %s into place\n' "$tmp" >&2
+                      return 1
+                    fi
+                    printf 'dumped %s -> %s (%s bytes)\n' \
+                      "$label" "$final" "$(wc -c < "$final")"
                   }
-                  printf 'dumped release_manager -> %s (%s bytes)\n' \
-                    "$target" "$(wc -c < "$target")"
+
+                  # release_manager is the authoritative management-plane
+                  # database: a failure here fails the Job. `set -e` turns the
+                  # helper's non-zero return into a failed container.
+                  dump_database release_manager "$POSTGRES_DB"
 
                   # release_notifier is optional: skip it when the database is
                   # absent or a freshly initialised database has no base tables
@@ -162,15 +215,7 @@ spec:
                           ;;
                       esac
                       if [ "$tables" -gt 0 ]; then
-                        target="$backup_dir/release_notifier-$stamp.dump"
-                        pg_dump --format=custom --no-owner --no-privileges \
-                          --username="$POSTGRES_USER" --dbname=release_notifier \
-                          --file="$target" || {
-                          printf 'pg_dump failed for release_notifier\n' >&2
-                          exit 1
-                        }
-                        printf 'dumped release_notifier -> %s (%s bytes)\n' \
-                          "$target" "$(wc -c < "$target")"
+                        dump_database release_notifier release_notifier
                       else
                         printf 'release_notifier has no base tables; skipping\n' >&2
                       fi
@@ -191,6 +236,17 @@ spec:
                   find "$backup_dir" -maxdepth 1 -type f -name '*.dump' \
                     -mtime +7 -print -delete
                   printf 'retention applied: files older than 7 days removed\n'
+
+                  # Orphaned temp files: a hard kill (the activeDeadlineSeconds
+                  # watchdog, a node crash) skips the helper's own cleanup and
+                  # leaves a *.dump.tmp behind. Such a file is never a valid
+                  # archive, so drop ones older than a day; the age guard keeps
+                  # this pass from touching the temp file of a run that started
+                  # moments ago. The pattern is '*.dump.tmp' and therefore
+                  # cannot match a completed '*.dump'.
+                  find "$backup_dir" -maxdepth 1 -type f -name '*.dump.tmp' \
+                    -mtime +1 -print -delete
+                  printf 'orphaned .tmp files older than 1 day removed\n'
 
                   ls -l "$backup_dir"
               env:
