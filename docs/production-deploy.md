@@ -460,11 +460,19 @@ all checks passed
 | 调度 | `0 2 * * *`（02:00 UTC），`concurrencyPolicy: Forbid`，`startingDeadlineSeconds: 600` |
 | 库 | `release_manager`（必需）+ `release_notifier`（探针确证存在且有基表时；空库跳过；**探针或 dump 失败一律 Job 红**，不再把连接失败误记成“库不存在”） |
 | 格式/位置 | `pg_dump -Fc`，PVC `release-manager-backups`（5Gi，与 PG 同一 `storageClassName` 旋钮），容器内 `/backups` |
-| 文件名 | `release_manager-<UTC 时间戳>.dump` / `release_notifier-<UTC 时间戳>.dump`（`YYYYmmddTHHMMSSZ`） |
-| 保留 | 同一次运行内 `find … -mtime +7 -delete`：删除 **7 天前**的文件（不是“保留 7 个文件”，漏跑一次不会把最后一份好 dump 删掉） |
+| 文件名 | `release_manager-<UTC 时间戳>.dump` / `release_notifier-<UTC 时间戳>.dump`（`YYYYmmddTHHMMSSZ`）；每个库先写 `….dump.tmp`，成功后才 rename 成该名字 |
+| 保留 | 同一次运行内 `find … -mtime +7 -delete`：删除 **7 天前**的文件（不是“保留 7 个文件”，漏跑一次不会把最后一份好 dump 删掉）；另有一次年龄保护的 `*.dump.tmp` 孤儿清理 |
 | 失败处理 | `backoffLimit: 2`、`activeDeadlineSeconds: 1800`；保留 3 成功 + 3 失败 Job |
 | 凭据 | 从 `release-manager-credentials` 取 `POSTGRES_USER`/`POSTGRES_PASSWORD`（`PGPASSWORD`）/`POSTGRES_DB`；清单与日志中没有口令 |
 | 运行身份 | `postgres:16`，`runAsNonRoot` uid/gid **999**，`fsGroup: 999`，drop ALL caps，只读 rootfs |
+
+**备份原子性（TASK-342）**：每个库先写 `release_manager-<stamp>.dump.tmp`（notifier 同理），只有
+`pg_dump` 返回成功、归档**非空**且已 `sync` 落盘后，才在 `/backups` 内把它 `mv` 成最终的 `*.dump`。
+任何一步失败都会先 `rm -f` 该临时文件再让 Job 变红，因此**失败的运行不会留下与好备份同名的 0 字节
+`*.dump`**（TASK-340 期间实测过该缺陷：`pg_dump` 认证失败留下的 0 字节文件与成功产物同名，只能等
+7 天 retention 清掉；若被误当备份 restore，只会得到空库）。retention 仍只匹配 `*.dump`；被
+`SIGKILL`/节点崩溃跳过的孤儿 `*.dump.tmp` 由同一次运行里的
+`find … -name '*.dump.tmp' -mtime +1 -delete` 清理（`*.dump` 与 `*.dump.tmp` 不会互相误匹配）。
 
 **手动触发**：
 

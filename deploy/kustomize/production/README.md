@@ -200,11 +200,30 @@ class.
 | Databases | `release_manager` (required) and `release_notifier` (only when the probe proves it exists and has at least one base table; a failed probe fails the Job instead of skipping) |
 | Format | `pg_dump -Fc` (PostgreSQL custom format), one file per database per run |
 | Location | PVC `release-manager-backups` (5Gi, same storage class), mounted at `/backups` |
-| File names | `release_manager-<UTC stamp>.dump`, `release_notifier-<UTC stamp>.dump` (`YYYYmmddTHHMMSSZ`) |
-| Retention | files older than 7 days are deleted in the same run (`find … -mtime +7 -delete`) |
+| File names | `release_manager-<UTC stamp>.dump`, `release_notifier-<UTC stamp>.dump` (`YYYYmmddTHHMMSSZ`); each is written as `….dump.tmp` and renamed into place only after the dump succeeds |
+| Retention | files older than 7 days are deleted in the same run (`find … -mtime +7 -delete`); orphaned `*.dump.tmp` older than a day are removed too |
 | History | 3 successful + 3 failed Jobs kept; `backoffLimit: 2`, `activeDeadlineSeconds: 1800` |
 | Credentials | `release-manager-credentials` → `POSTGRES_USER` / `POSTGRES_PASSWORD` (`PGPASSWORD`) / `POSTGRES_DB`; no password in the manifest |
 | Runtime | `postgres:16` (client matches the server major), non-root uid/gid 999 |
+
+Archives are written atomically per database: `pg_dump` writes
+`<db>-<stamp>.dump.tmp`, and the file is renamed to `<db>-<stamp>.dump` only
+after the dump exits successfully, the archive is non-empty, and it has been
+synced to disk. Any failure removes the temporary file and fails the Job, so the
+step that failed never publishes a `<db>-<stamp>.dump` — in particular never a
+0-byte or truncated one. The guarantee is per database, not per Job: when
+`release_manager` is dumped first and the later `release_notifier` dump fails,
+the Job turns red but the valid `release_manager` archive of that run stays in
+`/backups`. A red Job can therefore leave a usable `*.dump` behind; what it
+never leaves is a `*.dump` from the step that failed. Without the rename, a
+failed `pg_dump` (for example wrong credentials) left a 0-byte file under the
+final name that was indistinguishable from a real archive until the 7-day
+retention deleted it. The check is non-emptiness only: a `pg_dump` that exits 0
+with a truncated archive would still be published, which is not a failure mode
+observed in practice and whose verification (`pg_restore --list`) would cost a
+second full read of every archive. Retention still matches only `*.dump`;
+`*.dump.tmp` files orphaned by a hard kill are removed by an age-guarded pass in
+the same run.
 
 The client version is deliberate: the `postgres:16` image produces a dump that
 PostgreSQL 16.15 can restore directly. A host-side `pg_dump` 18.6 dump is not
