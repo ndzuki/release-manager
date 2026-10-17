@@ -4,10 +4,25 @@ import { computed, shallowRef } from 'vue';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { auditClient } from '@/connect/client';
+import { useAuthStore } from '@/stores/auth';
 import type { AuditEvent } from '@/gen/audit/v1/audit_pb';
 
 export const defaultAuditPageSize = 20;
-export const maxAuditRangeDays = 30;
+
+// The audit query window is policy-owned by release-auth (REQ-029: 31 days for
+// every role, 366 for platform_admin) and returned per request as
+// `max_window_days` (api/proto/auth/v1/auth.proto). The console does not read that
+// decision on this page yet, so it mirrors the two policy ceilings to keep the
+// preflight honest. The server remains the authority: it re-checks every query and
+// export and answers INVALID_ARGUMENT / range_too_large, which `failureFrom` still
+// surfaces with the effective window (TASK-344).
+export const defaultAuditRangeDays = 31;
+export const platformAdminAuditRangeDays = 366;
+
+export function auditRangeDays(platformAdmin: boolean): number {
+  return platformAdmin ? platformAdminAuditRangeDays : defaultAuditRangeDays;
+}
+
 // TASK-339: the platform-level audit scope (internal/store.SystemOrganizationID).
 // It is a sentinel stored in audit_events.organization_id, not an organization
 // row, so the scope selector offers it as a static entry.
@@ -139,17 +154,19 @@ function toLocalInput(date: Date): string {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-// Client-side preflight (AC-059-02): a range wider than maxAuditRangeDays is
-// rejected before any RPC is sent.
-function validateRange(filters: AuditFilters): AuditFailure | null {
+// Client-side preflight (TASK-344 supersedes the fixed 30-day AC-059-02 check): a
+// range wider than the role's policy window is rejected before any RPC is sent.
+// This is a UX shortcut only; the server re-checks the same span against
+// release-auth's `max_window_days`.
+function validateRange(filters: AuditFilters, maxRangeDays: number): AuditFailure | null {
   const from = asDate(filters.from);
   const to = asDate(filters.to);
   if (!from || !to) return { reason: 'invalid_argument', message: t('audit.error.range') };
   if (from > to) return { reason: 'invalid_argument', message: t('audit.error.rangeOrder') };
-  if (to.getTime() - from.getTime() > maxAuditRangeDays * 24 * 60 * 60 * 1000) {
+  if (to.getTime() - from.getTime() > maxRangeDays * 24 * 60 * 60 * 1000) {
     return {
       reason: 'range_too_large',
-      message: t('audit.error.narrowDays', { days: String(maxAuditRangeDays) }),
+      message: t('audit.error.narrowDays', { days: String(maxRangeDays) }),
     };
   }
   return null;
@@ -179,7 +196,7 @@ function toProtoFilter(filters: AuditFilters, organizationId: string, allOrganiz
 
 // Server errors are classified by the X-Reason-Code metadata header when present
 // (TASK-029 v2 contract, TASK-027 pattern); otherwise the Connect code decides.
-function failureFrom(error: unknown): AuditFailure {
+function failureFrom(error: unknown, maxRangeDays: number): AuditFailure {
   const connectError = ConnectError.from(error);
   const reason = connectError.metadata.get('X-Reason-Code');
   if (reason === 'permission_denied' || connectError.code === Code.PermissionDenied) {
@@ -188,7 +205,7 @@ function failureFrom(error: unknown): AuditFailure {
   if (reason === 'range_too_large') {
     return {
       reason: 'range_too_large',
-      message: t('audit.error.rangeTooLarge', { days: String(maxAuditRangeDays) }),
+      message: t('audit.error.rangeTooLarge', { days: String(maxRangeDays) }),
     };
   }
   if (reason === 'invalid_cursor') {
@@ -221,6 +238,7 @@ function failureFrom(error: unknown): AuditFailure {
 }
 
 export const useAuditStore = defineStore('audit', () => {
+  const auth = useAuthStore();
   const filters = shallowRef<AuditFilters>(emptyAuditFilters());
   const events = shallowRef<AuditEvent[]>([]);
   const cursor = shallowRef('');
@@ -235,6 +253,10 @@ export const useAuditStore = defineStore('audit', () => {
   const exportTasks = shallowRef<AuditExportTask[]>([]);
   const hasMore = computed(() => nextCursor.value.length > 0);
   const hasPrevious = computed(() => cursorStack.value.length > 0);
+  // The UI affordance behind the preflight: the server still decides (it returns
+  // `max_window_days` per request), so this only keeps the console from refusing a
+  // range the caller is actually allowed to query (TASK-344).
+  const maxRangeDays = computed(() => auditRangeDays(auth.isPlatformAdmin));
 
   function setFilters(nextFilters: AuditFilters): void {
     filters.value = { ...nextFilters };
@@ -255,7 +277,7 @@ export const useAuditStore = defineStore('audit', () => {
     direction: 'first' | 'next' | 'previous' = 'first',
     allOrganizations = false,
   ): Promise<void> {
-    const rangeError = validateRange(filters.value);
+    const rangeError = validateRange(filters.value, maxRangeDays.value);
     if (rangeError) {
       error.value = rangeError;
       return;
@@ -301,7 +323,7 @@ export const useAuditStore = defineStore('audit', () => {
       totalSize.value = response.pagination?.totalSize ?? events.value.length;
       selectedEvent.value = null;
     } catch (requestError) {
-      const failure = failureFrom(requestError);
+      const failure = failureFrom(requestError, maxRangeDays.value);
       error.value = failure;
       if (failure.reason === 'permission_denied') {
         // AC-059-01: filters stay, stale results must not leak other org data.
@@ -323,7 +345,7 @@ export const useAuditStore = defineStore('audit', () => {
   }
 
   async function exportEvents(organizationId: string, allOrganizations = false): Promise<void> {
-    const rangeError = validateRange(filters.value);
+    const rangeError = validateRange(filters.value, maxRangeDays.value);
     if (rangeError) {
       error.value = rangeError;
       return;
@@ -338,7 +360,7 @@ export const useAuditStore = defineStore('audit', () => {
       // status); there is no status-query RPC (D-62), so tasks never poll.
       exportTasks.value = [{ taskId: response.exportId, status: response.status }, ...exportTasks.value];
     } catch (requestError) {
-      error.value = failureFrom(requestError);
+      error.value = failureFrom(requestError, maxRangeDays.value);
     } finally {
       exporting.value = false;
     }
@@ -363,6 +385,7 @@ export const useAuditStore = defineStore('audit', () => {
     exportTasks,
     hasMore,
     hasPrevious,
+    maxRangeDays,
     setFilters,
     clearResults,
     query,

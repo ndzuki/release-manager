@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { auditClient } from '@/connect/client';
+import { useAuthStore } from '@/stores/auth';
 import { emptyAuditFilters, filtersFromQuery, filtersToQuery, useAuditStore } from './audit';
 import type { AuditEvent, ExportAuditEventsResponse, QueryAuditEventsResponse } from '@/gen/audit/v1/audit_pb';
 
@@ -10,12 +11,32 @@ vi.mock('@/connect/client', () => ({
     queryAuditEvents: vi.fn(),
     exportAuditEvents: vi.fn(),
   },
+  // The audit store composes the auth store (TASK-344), whose setup registers this
+  // handler; without the export the import would fail.
+  authClient: { switchOrganization: vi.fn() },
+  setAuthErrorHandler: vi.fn(),
 }));
 
 const queryAuditEvents = vi.mocked(auditClient.queryAuditEvents);
 const exportAuditEvents = vi.mocked(auditClient.exportAuditEvents);
 
 const ORG = 'org-1';
+
+// The preflight window follows the caller's role (TASK-344): the audit store reads
+// `auth.isPlatformAdmin`, so tests pin the session roles the same way the console
+// receives them.
+function signInAs(roles: string[]): void {
+  useAuthStore().$patch({
+    status: 'authenticated',
+    user: {
+      $typeName: 'auth.v1.SessionUser' as const,
+      id: 'u1',
+      username: 'someone',
+      roles,
+      activeOrgId: ORG,
+    },
+  });
+}
 
 function auditEvent(id: string, overrides: Partial<AuditEvent> = {}): AuditEvent {
   return {
@@ -100,16 +121,85 @@ describe('audit query store', () => {
     expect(filters.actor).toBe('');
   });
 
-  it('blocks ranges over 30 days without sending an RPC (AC-059-02)', async () => {
+  it('blocks a range wider than the default 31-day window without sending an RPC (AC-344-02/04)', async () => {
+    const store = useAuditStore();
+    store.setFilters({
+      ...emptyAuditFilters(),
+      // 32 days: one day past release-auth's defaultMaxWindowDays.
+      from: '2026-06-01T00:00',
+      to: '2026-07-03T00:00',
+    });
+    await store.query(ORG);
+    expect(store.error?.reason).toBe('range_too_large');
+    expect(store.error?.message).toContain('31');
+    expect(queryAuditEvents).not.toHaveBeenCalled();
+  });
+
+  it('allows a 31-day range for a non-admin, matching the server boundary (AC-344-02/03)', async () => {
     const store = useAuditStore();
     store.setFilters({
       ...emptyAuditFilters(),
       from: '2026-06-01T00:00',
       to: '2026-07-02T00:00',
     });
+    queryAuditEvents.mockResolvedValueOnce(queryResponse([]));
+    await store.query(ORG);
+    expect(store.error).toBeNull();
+    expect(queryAuditEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a 100-day range for platform_admin (AC-344-01)', async () => {
+    signInAs(['platform_admin']);
+    const store = useAuditStore();
+    expect(store.maxRangeDays).toBe(366);
+    store.setFilters({
+      ...emptyAuditFilters(),
+      from: '2026-01-01T00:00',
+      to: '2026-04-11T00:00',
+    });
+    queryAuditEvents.mockResolvedValueOnce(queryResponse([]));
+    await store.query(ORG);
+    expect(store.error).toBeNull();
+    expect(queryAuditEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a 366-day range for platform_admin and blocks 367 (AC-344-01/03)', async () => {
+    signInAs(['platform_admin']);
+    const store = useAuditStore();
+    store.setFilters({
+      ...emptyAuditFilters(),
+      from: '2026-01-01T00:00',
+      to: '2027-01-02T00:00',
+    });
+    queryAuditEvents.mockResolvedValueOnce(queryResponse([]));
+    await store.query(ORG);
+    expect(store.error).toBeNull();
+    expect(queryAuditEvents).toHaveBeenCalledTimes(1);
+
+    store.setFilters({
+      ...emptyAuditFilters(),
+      from: '2026-01-01T00:00',
+      to: '2027-01-03T00:00',
+    });
     await store.query(ORG);
     expect(store.error?.reason).toBe('range_too_large');
-    expect(queryAuditEvents).not.toHaveBeenCalled();
+    expect(store.error?.message).toContain('366');
+    expect(queryAuditEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the server range_too_large with the platform_admin window (AC-344-01/04)', async () => {
+    signInAs(['platform_admin']);
+    const store = useAuditStore();
+    store.setFilters({
+      ...emptyAuditFilters(),
+      from: '2026-01-01T00:00',
+      to: '2026-04-11T00:00',
+    });
+    queryAuditEvents.mockRejectedValueOnce(connectError(Code.InvalidArgument, 'range too large', 'range_too_large'));
+    await store.query(ORG);
+    expect(store.error?.reason).toBe('range_too_large');
+    // A server refusal must state the effective role window, not a hardcoded 30.
+    expect(store.error?.message).toContain('366');
   });
 
   it('maps a server range_too_large rejection to an inline failure (AC-059-02)', async () => {
