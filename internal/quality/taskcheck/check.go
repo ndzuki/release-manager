@@ -12,10 +12,23 @@
 // pull request it cites must be provably merged (a delivery can land in more than
 // one, TASK-227). Two independent evidence sources are accepted:
 //
-//   - gh pr list output (number/state/mergeCommit), whose mergeCommit OID must
-//     also exist in the local git history; and
+//   - gh pr list output (number/url/state/mergeCommit), whose mergeCommit OID
+//     must also exist in the local git history; and
 //   - the local `git log` subjects, matched on the "Merge pull request #N from"
 //     shape GitHub writes for merge commits.
+//
+// A pull request counts only when its URL names THIS repository. Checking the
+// number alone was a real hole: a card could cite https://github.com/<any
+// owner>/<any repo>/pull/N, and if this repository had a merged PR with the same
+// N the card was accepted -- PR #1 of an unrelated repository "borrowed" PR #1
+// here. The card's pr_url is therefore compared owner/repo-by-owner/repo against
+// the repository the evidence was collected in (the caller passes `git remote
+// get-url origin`; this package never shells out), and a URL naming another
+// repository is a VIOLATION, not missing evidence, so the escape hatch cannot
+// downgrade it. gh's own url for a PR is cross-checked the same way, which makes
+// the online evidence self-describing. When the caller could not supply this
+// repository's identity nothing can be attributed, so every card citing a PR URL
+// is reported UNVERIFIED rather than silently accepted.
 //
 // A PR with neither is reported UNVERIFIED rather than silently accepted. It
 // fails the gate unless the caller sets AllowUnverified (the explicit
@@ -65,6 +78,10 @@ const (
 	KindPRNotMerged = "pr_not_merged"
 	// KindPRUnverified: no evidence the PR was merged (offline or unknown PR).
 	KindPRUnverified = "pr_unverified"
+	// KindForeignRepo: the pull request belongs to a repository other than this
+	// one -- either the card's pr_url names it, or gh attributed the evidence to
+	// it. A contradiction about identity, so it is never downgraded.
+	KindForeignRepo = "foreign_repo"
 	// KindEvidenceChannelMismatch: pr_url claims the direct-commit scheme while
 	// merge_status does not declare merge_status=direct.
 	KindEvidenceChannelMismatch = "evidence_channel_mismatch"
@@ -132,10 +149,13 @@ type MergeCommitRef struct {
 	OID string `json:"oid"`
 }
 
-// PREvidence is one entry of the `gh pr list --json number,state,mergeCommit`
-// output.
+// PREvidence is one entry of the `gh pr list --json number,url,state,mergeCommit`
+// output. URL makes the evidence self-describing: it names the repository gh
+// answered for, so evidence collected in (or pointed at) another repository
+// cannot be mistaken for this one's.
 type PREvidence struct {
 	Number      int             `json:"number"`
+	URL         string          `json:"url"`
 	State       string          `json:"state"`
 	MergeCommit *MergeCommitRef `json:"mergeCommit"`
 }
@@ -154,6 +174,11 @@ type Evidence struct {
 	// path, which would not survive to another machine).
 	directCommits map[DirectRef]struct{}
 	directFiles   map[DirectRef]map[string]struct{}
+	// repo is the owner/repo of the repository this evidence was collected for.
+	// It is what turns a PR number into an identifiable pull request; the zero
+	// slug means the caller did not say, and Check then refuses to attribute any
+	// PR URL (UNVERIFIED) instead of accepting a number on faith.
+	repo RepoSlug
 }
 
 // NewEvidence returns an empty evidence set.
@@ -165,6 +190,18 @@ func NewEvidence() *Evidence {
 		directCommits: make(map[DirectRef]struct{}),
 		directFiles:   make(map[DirectRef]map[string]struct{}),
 	}
+}
+
+// SetRepoSlug records the owner/repo of the repository the evidence was
+// collected for.
+func (e *Evidence) SetRepoSlug(slug RepoSlug) {
+	e.repo = slug
+}
+
+// Repo returns the owner/repo this evidence was collected for, or the zero slug
+// when the caller did not supply it.
+func (e *Evidence) Repo() RepoSlug {
+	return e.repo
 }
 
 var mergePullSubject = regexp.MustCompile(`^Merge pull request #(\d+) from `)
@@ -228,6 +265,16 @@ var directRefRe = regexp.MustCompile(`^direct:([0-9a-fA-F]{40})@(\S+)$`)
 // malformed pointer must be reported, never quietly ignored (an unparsed value
 // that still "looked like evidence" is how a card would smuggle a bogus sha past
 // the gate).
+//
+// The repository segment may not contain a comma or another `direct:` scheme.
+// Without that, `\S+` swallowed a whole second ref -- the value
+// "direct:<sha1>@/repo,direct:<sha2>@/repo" parsed as ONE ref whose repo was
+// "/repo,direct:<sha2>@/repo" -- and the resulting bogus path made the card
+// merely UNVERIFIED (downgradable by ALLOW_UNVERIFIED_TASKS) instead of the
+// malformed pointer it is. The ledger splits multiple values on commas, which is
+// exactly what makes that value ambiguous, so the ambiguity is refused rather
+// than guessed. `\S+` already keeps whitespace (including a newline) out of the
+// repository path.
 func ParseDirectRef(raw string) (DirectRef, bool) {
 	m := directRefRe.FindStringSubmatch(strings.TrimSpace(raw))
 	if m == nil {
@@ -235,6 +282,9 @@ func ParseDirectRef(raw string) (DirectRef, bool) {
 	}
 	repo := m[2]
 	if !strings.HasPrefix(repo, "/") && !strings.HasPrefix(repo, "~/") {
+		return DirectRef{}, false
+	}
+	if strings.Contains(repo, ",") || strings.Contains(strings.ToLower(repo), "direct:") {
 		return DirectRef{}, false
 	}
 	return DirectRef{Repo: repo, SHA: strings.ToLower(m[1])}, true
@@ -513,14 +563,23 @@ func channelFindings(card Card, claimsDirect bool) []Finding {
 }
 
 // verifyPR checks that every pull request the card names is merged with a merge commit
-// present in the local history.//
+// present in the local history.
+//
 // A delivery can genuinely land in more than one pull request (TASK-227: the server half and
 // the console half of one task shipped separately), so pr_url may list several URLs separated
 // by commas, semicolons or whitespace. The rule is not relaxed by that: EACH PR needs its own
 // evidence, so listing more PRs can only ever make a card harder to verify, never easier. The
 // card's PR URL is the primary one, and it should be listed first.
+//
+// Every cited URL must also name THIS repository. A PR number is not an identity: the number
+// is only meaningful together with the repository it belongs to, and checking it alone let a
+// card cite an unrelated repository's merged PR of the same number. A foreign repository is a
+// contradiction about identity, not missing evidence, so it is a VIOLATION that
+// ALLOW_UNVERIFIED_TASKS cannot downgrade. If the caller could not tell us this repository's
+// owner/repo, no URL can be attributed and every card is reported UNVERIFIED -- never
+// silently accepted.
 func verifyPR(card Card, ev *Evidence) (bool, *Finding) {
-	numbers, ok := githubPRNumbers(card.PRURL)
+	refs, ok := githubPRRefs(card.PRURL)
 	if !ok {
 		return false, &Finding{
 			Path:     card.Path,
@@ -529,8 +588,27 @@ func verifyPR(card Card, ev *Evidence) (bool, *Finding) {
 			Message:  fmt.Sprintf("pr_url %q is not a GitHub pull request URL (or lists one that is not); cannot verify the merge", card.PRURL),
 		}
 	}
-	for _, n := range numbers {
-		if finding := verifyOnePR(card, ev, n); finding != nil {
+	repo := ev.Repo()
+	if repo.IsZero() {
+		return false, &Finding{
+			Path:     card.Path,
+			Kind:     KindPRUnverified,
+			Severity: SeverityUnverified,
+			Message: fmt.Sprintf("pr_url %q cannot be attributed to a repository: this repository's owner/repo is unknown "+
+				"(pass -repo-url, from `git remote get-url origin`)", card.PRURL),
+		}
+	}
+	for _, ref := range refs {
+		if !ref.Repo.Equal(repo) {
+			return false, &Finding{
+				Path:     card.Path,
+				Kind:     KindForeignRepo,
+				Severity: SeverityViolation,
+				Message: fmt.Sprintf("pr_url %q names %s, but this repository is %s; a pull request in another repository is not evidence for this ledger",
+					card.PRURL, ref.Repo, repo),
+			}
+		}
+		if finding := verifyOnePR(card, ev, ref.Number); finding != nil {
 			return false, finding
 		}
 	}
@@ -541,6 +619,9 @@ func verifyPR(card Card, ev *Evidence) (bool, *Finding) {
 func verifyOnePR(card Card, ev *Evidence, n int) *Finding {
 	ref := fmt.Sprintf("pull/%d", n)
 	if pr, known := ev.prs[n]; known {
+		if finding := verifyGHEvidenceRepo(card, ev.Repo(), pr, n); finding != nil {
+			return finding
+		}
 		if !strings.EqualFold(pr.State, "MERGED") {
 			return &Finding{
 				Path:     card.Path,
@@ -583,6 +664,46 @@ func verifyOnePR(card Card, ev *Evidence, n int) *Finding {
 		Severity: SeverityUnverified,
 		Message:  fmt.Sprintf("%s has no merge evidence in the local git history and no gh PR data", ref),
 	}
+}
+
+// verifyGHEvidenceRepo cross-checks the repository gh attributed to the pull request it
+// returned. gh's url is what makes the online evidence self-describing: without it the only
+// thing tying a row to a repository is the number, and a `gh pr list` run in -- or later
+// pointed at -- another repository would silently answer for this one. An empty URL means the
+// gh output predates this check and carries no attribution; the card-side repository check
+// still applies, so it is skipped rather than failed. gh answering with a different NUMBER for
+// the row we looked up is missing evidence for that number, not a contradiction, so it is
+// reported unverified.
+func verifyGHEvidenceRepo(card Card, repo RepoSlug, pr PREvidence, n int) *Finding {
+	if strings.TrimSpace(pr.URL) == "" {
+		return nil
+	}
+	ref, ok := githubPRRef(pr.URL)
+	if !ok {
+		return &Finding{
+			Path:     card.Path,
+			Kind:     KindPRUnverified,
+			Severity: SeverityUnverified,
+			Message:  fmt.Sprintf("gh reported pull/%d with url %q, which is not a GitHub pull request URL; its evidence cannot be used", n, pr.URL),
+		}
+	}
+	if ref.Number != n {
+		return &Finding{
+			Path:     card.Path,
+			Kind:     KindPRUnverified,
+			Severity: SeverityUnverified,
+			Message:  fmt.Sprintf("gh's url %q describes pull/%d, not pull/%d; there is no evidence for pull/%d", pr.URL, ref.Number, n, n),
+		}
+	}
+	if !ref.Repo.Equal(repo) {
+		return &Finding{
+			Path:     card.Path,
+			Kind:     KindForeignRepo,
+			Severity: SeverityViolation,
+			Message:  fmt.Sprintf("gh attributed pull/%d to %s, but this repository is %s; foreign evidence cannot verify this ledger", n, ref.Repo, repo),
+		}
+	}
+	return nil
 }
 
 // verifyDirectPaths validates a direct (non-PR) delivery's own declarations and
@@ -643,40 +764,65 @@ func verifyDirectPaths(card Card, ref DirectRef, ev *Evidence) []Finding {
 	return nil
 }
 
-var githubPRRe = regexp.MustCompile(`^https?://github\.com/[^/]+/[^/]+/pull/(\d+)(?:[/?#].*)?$`)
-
-func githubPRNumber(url string) (int, bool) {
-	m := githubPRRe.FindStringSubmatch(strings.TrimSpace(url))
-	if m == nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+// PRRef is one pull request a card cites: the repository its URL names and the
+// number. Keeping them together is the point -- a number without a repository is
+// what used to be accepted.
+type PRRef struct {
+	Repo   RepoSlug
+	Number int
 }
 
-// githubPRNumbers extracts every pull request number a card names. Segments are separated by
-// commas, semicolons or whitespace. A segment that is not a GitHub pull request URL makes the
-// whole value invalid instead of being skipped: silently ignoring one would let an
-// unverifiable PR hide behind a verifiable one.
-func githubPRNumbers(raw string) ([]int, bool) {
+// githubPRRe matches a GitHub pull request URL. The host is matched
+// case-insensitively and an optional "www." is allowed; the URL may carry any
+// /files, ?query or #fragment suffix. The owner and repository are captured
+// loosely on purpose -- what they name is compared against this repository
+// afterwards, never here.
+var githubPRRe = regexp.MustCompile(`(?i)^https?://(?:www\.)?github\.com/([^/?#]+)/([^/?#]+)/pull/(\d+)(?:[/?#].*)?$`)
+
+// githubPRRef parses one GitHub pull request URL into the repository it names and
+// the PR number.
+//
+// Normalization is limited to the forms GitHub itself treats as the same
+// repository: a trailing ".git" and letter case. Nothing else is rewritten -- in
+// particular there is no prefix matching -- so "ndzuki/release-manager-evil"
+// remains a different repository and is reported as one.
+func githubPRRef(raw string) (PRRef, bool) {
+	m := githubPRRe.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil {
+		return PRRef{}, false
+	}
+	n, err := strconv.Atoi(m[3])
+	if err != nil {
+		return PRRef{}, false
+	}
+	owner := strings.ToLower(m[1])
+	name := strings.ToLower(trimGitSuffix(m[2]))
+	if owner == "" || name == "" {
+		return PRRef{}, false
+	}
+	return PRRef{Repo: RepoSlug{Owner: owner, Name: name}, Number: n}, true
+}
+
+// githubPRRefs extracts every pull request a card names. Segments are separated by commas,
+// semicolons or whitespace. A segment that is not a GitHub pull request URL makes the whole
+// value invalid instead of being skipped: silently ignoring one would let an unverifiable PR
+// hide behind a verifiable one.
+func githubPRRefs(raw string) ([]PRRef, bool) {
 	segments := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n'
 	})
 	if len(segments) == 0 {
 		return nil, false
 	}
-	numbers := make([]int, 0, len(segments))
+	refs := make([]PRRef, 0, len(segments))
 	for _, segment := range segments {
-		n, ok := githubPRNumber(segment)
+		ref, ok := githubPRRef(segment)
 		if !ok {
 			return nil, false
 		}
-		numbers = append(numbers, n)
+		refs = append(refs, ref)
 	}
-	return numbers, true
+	return refs, true
 }
 
 // normalizeEvidencePaths separates usable declarations from unusable ones. An

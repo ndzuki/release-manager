@@ -80,41 +80,60 @@ func TestParseGHPullListEmptyIsNotAnError(t *testing.T) {
 	require.Error(t, ev.ParseGHPullList(strings.NewReader("{not json")))
 }
 
-func TestGithubPRNumber(t *testing.T) {
+func TestGithubPRRef(t *testing.T) {
+	repo := RepoSlug{Owner: "ndzuki", Name: "release-manager"}
 	tests := []struct {
 		url  string
-		want int
+		want PRRef
 		ok   bool
 	}{
-		{"https://github.com/ndzuki/release-manager/pull/101", 101, true},
-		{"https://github.com/ndzuki/release-manager/pull/7/files", 7, true},
-		{"http://github.com/o/r/pull/3", 3, true},
-		{"https://example.com/pull/3", 0, false},
-		{"", 0, false},
+		{url: "https://github.com/ndzuki/release-manager/pull/101", want: PRRef{Repo: repo, Number: 101}, ok: true},
+		{url: "https://github.com/ndzuki/release-manager/pull/7/files", want: PRRef{Repo: repo, Number: 7}, ok: true},
+		{url: "http://github.com/o/r/pull/3", want: PRRef{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 3}, ok: true},
+		{url: "https://www.github.com/o/r/pull/3/", want: PRRef{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 3}, ok: true},
+		{url: "https://github.com/O/R.git/pull/3?diff=split#top", want: PRRef{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 3}, ok: true},
+		// A longer name is its own repository, not this one: no prefix matching.
+		{url: "https://github.com/o/release-manager-evil/pull/3", want: PRRef{Repo: RepoSlug{Owner: "o", Name: "release-manager-evil"}, Number: 3}, ok: true},
+		{url: "https://example.com/pull/3", ok: false},
+		{url: "https://github.com/o/r/pull/abc", ok: false},
+		{url: "https://github.com/o/r/commit/abc", ok: false},
+		{url: "", ok: false},
 	}
 	for _, tt := range tests {
-		got, ok := githubPRNumber(tt.url)
-		assert.Equal(t, tt.ok, ok, tt.url)
-		assert.Equal(t, tt.want, got, tt.url)
+		t.Run(tt.url, func(t *testing.T) {
+			got, ok := githubPRRef(tt.url)
+			assert.Equal(t, tt.ok, ok, tt.url)
+			assert.Equal(t, tt.want, got, tt.url)
+		})
 	}
 }
 
-func TestGithubPRNumbers(t *testing.T) {
+func TestGithubPRRefs(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
-		want []int
+		want []PRRef
 		ok   bool
 	}{
-		{"single", "https://github.com/o/r/pull/5", []int{5}, true},
-		{"comma separated", "https://github.com/o/r/pull/5,https://github.com/o/r/pull/7", []int{5, 7}, true},
-		{"mixed separators keep the order", "https://github.com/o/r/pull/7; https://github.com/o/r/pull/5", []int{7, 5}, true},
+		{"single", "https://github.com/o/r/pull/5", []PRRef{{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 5}}, true},
+		{"comma separated", "https://github.com/o/r/pull/5,https://github.com/o/r/pull/7", []PRRef{
+			{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 5},
+			{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 7},
+		}, true},
+		{"mixed separators keep the order", "https://github.com/o/r/pull/7; https://github.com/o/r/pull/5", []PRRef{
+			{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 7},
+			{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 5},
+		}, true},
+		{"each URL keeps its own repository", "https://github.com/o/r/pull/5, https://github.com/other/repo/pull/7", []PRRef{
+			{Repo: RepoSlug{Owner: "o", Name: "r"}, Number: 5},
+			{Repo: RepoSlug{Owner: "other", Name: "repo"}, Number: 7},
+		}, true},
 		{"one bad segment invalidates the value", "https://github.com/o/r/pull/5, nope", nil, false},
 		{"empty", "", nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := githubPRNumbers(tt.raw)
+			got, ok := githubPRRefs(tt.raw)
 			assert.Equal(t, tt.ok, ok)
 			assert.Equal(t, tt.want, got)
 		})
@@ -123,10 +142,11 @@ func TestGithubPRNumbers(t *testing.T) {
 
 func mergedEvidence() *Evidence {
 	ev := NewEvidence()
+	ev.SetRepoSlug(RepoSlug{Owner: "o", Name: "r"})
 	ev.AddCommit("aaaa", "Merge pull request #12 from ndzuki/task/x")
-	ev.AddPR(PREvidence{Number: 20, State: "MERGED", MergeCommit: &MergeCommitRef{OID: "bbbb"}})
+	ev.AddPR(PREvidence{Number: 20, URL: "https://github.com/o/r/pull/20", State: "MERGED", MergeCommit: &MergeCommitRef{OID: "bbbb"}})
 	ev.AddCommit("bbbb", "feat: something")
-	ev.AddPR(PREvidence{Number: 21, State: "OPEN"})
+	ev.AddPR(PREvidence{Number: 21, URL: "https://github.com/o/r/pull/21", State: "OPEN"})
 	return ev
 }
 
@@ -227,6 +247,187 @@ func TestCheckSkipsCardsThatAreNotDoneOrClosed(t *testing.T) {
 	}
 }
 
+// The hole these tests close: a card could cite ANY repository's pull request and pass
+// whenever the number collided with a merged PR of this one. The review of TASK-327
+// reproduced https://github.com/torvalds/linux/pull/1 passing against this repository's
+// merged PR #1, because only the number was read out of the URL. Identity is a
+// contradiction, not missing evidence, so the escape hatch must not downgrade it.
+func TestCheck_RejectsPRFromAnotherRepository(t *testing.T) {
+	t.Parallel()
+
+	card := Card{Path: "TASK-920-foreign.md", Status: "done", MergeStatus: "merged",
+		PRURL: "https://github.com/torvalds/linux/pull/12"}
+	result := Check([]Card{card}, mergedEvidence())
+
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, KindForeignRepo, result.Findings[0].Kind)
+	assert.Equal(t, SeverityViolation, result.Findings[0].Severity)
+	assert.Contains(t, result.Findings[0].Message, "torvalds/linux")
+	assert.Contains(t, result.Findings[0].Message, "o/r")
+	assert.Zero(t, result.Verified)
+	assert.True(t, result.Failed(Options{}))
+	assert.True(t, result.Failed(Options{AllowUnverified: true}),
+		"ALLOW_UNVERIFIED_TASKS must never downgrade a foreign repository")
+}
+
+// Every spelling of the same borrowed pull request is still borrowed. The last case is the
+// forged-prefix shape: "release-manager-evil" merely starts with this repository's name.
+func TestCheck_ForeignRepoVariantsCannotBorrow(t *testing.T) {
+	t.Parallel()
+
+	foreign := []string{
+		"https://github.com/torvalds/linux/pull/12",
+		"https://GitHub.com/Torvalds/Linux/pull/12",
+		"https://www.github.com/torvalds/linux/pull/12",
+		"https://github.com/torvalds/linux.git/pull/12",
+		"https://github.com/torvalds/linux/pull/12/",
+		"https://github.com/torvalds/linux/pull/12?diff=split",
+		"https://github.com/torvalds/linux/pull/12#issuecomment-1",
+		"https://github.com/torvalds/linux/pull/12/files",
+		"https://github.com/o/release-manager-evil/pull/12",
+		"https://github.com/o/r/pull/12, https://github.com/torvalds/linux/pull/13",
+	}
+	for _, url := range foreign {
+		t.Run(url, func(t *testing.T) {
+			t.Parallel()
+
+			card := Card{Path: "TASK-921-variant.md", Status: "done", MergeStatus: "merged", PRURL: url}
+			result := Check([]Card{card}, mergedEvidence())
+
+			require.Len(t, result.Findings, 1, url)
+			assert.Equal(t, KindForeignRepo, result.Findings[0].Kind, url)
+			assert.Equal(t, SeverityViolation, result.Findings[0].Severity, url)
+			assert.True(t, result.Failed(Options{AllowUnverified: true}), url)
+		})
+	}
+}
+
+// The mirror image: every spelling of a pull request IN this repository that the parser
+// accepts still verifies, so tightening identity does not break the canonical forms.
+func TestCheck_OwnRepoVariantsStillVerify(t *testing.T) {
+	t.Parallel()
+
+	for _, url := range []string{
+		"https://github.com/o/r/pull/12",
+		"https://GitHub.com/O/R/pull/12",
+		"https://www.github.com/o/r/pull/12/",
+		"https://github.com/o/r.git/pull/12?diff=split#top",
+	} {
+		t.Run(url, func(t *testing.T) {
+			t.Parallel()
+
+			card := Card{Path: "TASK-922-own.md", Status: "done", MergeStatus: "merged", PRURL: url}
+			result := Check([]Card{card}, mergedEvidence())
+
+			assert.Empty(t, result.Findings, url)
+			assert.Equal(t, 1, result.Verified, url)
+		})
+	}
+}
+
+// When the caller cannot say which repository this is, no PR URL can be attributed. The
+// evidence that would otherwise verify the card is deliberately present, so this fails only
+// if the repository identity is missing: unverified, never a silent pass.
+func TestCheck_UnknownRepositoryCannotVerifyPRURLs(t *testing.T) {
+	t.Parallel()
+
+	ev := NewEvidence()
+	ev.AddCommit("aaaa", "Merge pull request #12 from ndzuki/task/x")
+	card := Card{Path: "TASK-923-no-repo.md", Status: "done", MergeStatus: "merged",
+		PRURL: "https://github.com/o/r/pull/12"}
+	result := Check([]Card{card}, ev)
+
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, KindPRUnverified, result.Findings[0].Kind)
+	assert.Equal(t, SeverityUnverified, result.Findings[0].Severity)
+	assert.Contains(t, result.Findings[0].Message, "owner/repo is unknown")
+	assert.Zero(t, result.Verified)
+	assert.True(t, result.Failed(Options{}))
+	assert.False(t, result.Failed(Options{AllowUnverified: true}), "still downgradable by the explicit hatch")
+}
+
+// gh's url is the online evidence's own identity: evidence gh attributed to another
+// repository must not verify a card even when that PR's merge commit is reachable locally
+// (a fork or mirror can share history).
+func TestCheck_RejectsGHEvidenceFromAnotherRepository(t *testing.T) {
+	t.Parallel()
+
+	ev := mergedEvidence()
+	ev.AddPR(PREvidence{Number: 30, URL: "https://github.com/other/repo/pull/30",
+		State: "MERGED", MergeCommit: &MergeCommitRef{OID: "bbbb"}})
+	card := Card{Path: "TASK-924-foreign-gh.md", Status: "done", MergeStatus: "merged",
+		PRURL: "https://github.com/o/r/pull/30"}
+	result := Check([]Card{card}, ev)
+
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, KindForeignRepo, result.Findings[0].Kind)
+	assert.Equal(t, SeverityViolation, result.Findings[0].Severity)
+	assert.Contains(t, result.Findings[0].Message, "other/repo")
+	assert.True(t, result.Failed(Options{AllowUnverified: true}))
+}
+
+// A gh row whose url cannot be used is not evidence for the number that was looked up:
+// unparsable or describing a different number fails closed, while an absent url (gh output
+// that carries no attribution) is skipped because the card-side repository check still
+// applies.
+func TestCheck_GHEvidenceURLHandling(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		url      string
+		wantKind string
+	}{
+		{"unparsable url", "not-a-url", KindPRUnverified},
+		{"url describes another number", "https://github.com/o/r/pull/31", KindPRUnverified},
+		{"absent url is skipped", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ev := mergedEvidence()
+			ev.AddPR(PREvidence{Number: 30, URL: tt.url, State: "MERGED",
+				MergeCommit: &MergeCommitRef{OID: "bbbb"}})
+			card := Card{Path: "TASK-925-gh-url.md", Status: "done", MergeStatus: "merged",
+				PRURL: "https://github.com/o/r/pull/30"}
+			result := Check([]Card{card}, ev)
+
+			if tt.url == "" {
+				assert.Empty(t, result.Findings)
+				assert.Equal(t, 1, result.Verified)
+				return
+			}
+			require.Len(t, result.Findings, 1)
+			assert.Equal(t, tt.wantKind, result.Findings[0].Kind)
+			assert.Equal(t, SeverityUnverified, result.Findings[0].Severity)
+			assert.Zero(t, result.Verified)
+		})
+	}
+}
+
+// A `direct:` value that swallows a second ref must be a malformed-pointer violation, not a
+// bogus repository path that merely fails to verify. Before ParseDirectRef rejected the
+// embedded comma, "direct:<sha1>@/repo,direct:<sha2>@/repo" produced ONE ref with the repo
+// "/repo,direct:<sha2>@/repo", whose absence from the evidence file made the card UNVERIFIED
+// -- and ALLOW_UNVERIFIED_TASKS=1 then passed it.
+func TestCheck_MultipleDirectRefsIsAMalformedPointerViolation(t *testing.T) {
+	t.Parallel()
+
+	card := directCard("direct:"+directSHA+"@"+directRepo+",direct:"+directOther+"@"+directRepo, directPath)
+	result := Check([]Card{card}, directEvidence())
+
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, KindDirectEvidenceInvalid, result.Findings[0].Kind)
+	assert.Equal(t, SeverityViolation, result.Findings[0].Severity)
+	assert.Zero(t, result.Verified)
+	assert.True(t, result.Failed(Options{}))
+	assert.True(t, result.Failed(Options{AllowUnverified: true}),
+		"ALLOW_UNVERIFIED_TASKS must not downgrade a malformed direct pointer")
+	assert.Empty(t, DirectRefs([]Card{card}),
+		"the collector must not be sent looking for a fabricated repository path")
+}
+
 // TestCheckNegativeControlDoneButUnmerged is the regression the gate exists for:
 // a card that claims a completed delivery while its frontmatter admits the
 // change was never merged must be reported. If the merge_status assertion is
@@ -237,7 +438,7 @@ func TestCheckNegativeControlDoneButUnmerged(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`---
 status: done
 merge_status: unmerged
-pr_url: "https://github.com/ndzuki/release-manager/pull/12"
+pr_url: "https://github.com/o/r/pull/12"
 ---
 `), 0o600))
 
@@ -339,6 +540,10 @@ func TestParseDirectRef(t *testing.T) {
 		{"empty repo", "direct:" + directSHA + "@", DirectRef{}, false},
 		{"relative repo is not a resolvable identity", "direct:" + directSHA + "@dotfiles", DirectRef{}, false},
 		{"repo with whitespace", "direct:" + directSHA + "@~/src/dot files", DirectRef{}, false},
+		{"two refs separated by a comma are not one ref", "direct:" + directSHA + "@" + directRepo + ",direct:" + directOther + "@" + directRepo, DirectRef{}, false},
+		{"a trailing comma is not part of a repo path", "direct:" + directSHA + "@" + directRepo + ",", DirectRef{}, false},
+		{"an embedded direct: scheme is not a repo path", "direct:" + directSHA + "@/tmp/direct:" + directOther, DirectRef{}, false},
+		{"an embedded newline is not a repo path", "direct:" + directSHA + "@" + directRepo + "\ndirect:" + directOther, DirectRef{}, false},
 		{"a plain PR URL is not a direct ref", "https://github.com/o/r/pull/1", DirectRef{}, false},
 		{"empty", "", DirectRef{}, false},
 	}
