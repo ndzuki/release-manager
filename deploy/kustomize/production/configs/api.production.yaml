@@ -1,0 +1,18 @@
+# release-api — production configuration.
+http_port: 8088
+log_level: info
+audit:
+  archive:
+    retention_days: 90
+    poll_interval: 6h
+    batch_size: 1000
+    # The release-api SQLite database lives on the release-manager-api-data
+    # PVC mounted at /data, so archives must live there too (the dev file uses
+    # a cwd-relative path that would land on the container's writable layer).
+    archive_dir: /data/archives
+    compression: gzip_jsonl
+    checksum_algorithm: sha256
+# release-api asks release-auth for the caller's role-aware audit scope
+# (ADR-021); in-cluster the auth Service answers on 8085.
+authorization:
+  auth_url: http://auth:8085

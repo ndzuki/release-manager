@@ -1,0 +1,3 @@
+# release-webhook — production configuration.
+http_port: 8082
+log_level: info

@@ -1,0 +1,54 @@
+# release-orchestrator — production configuration.
+http_port: 8083
+log_level: info
+database:
+  # PostgreSQL is the production authority (ADR-014); the DSN arrives as
+  # DATABASE_DSN from the release-manager-credentials Secret.
+  driver: postgres
+authorization:
+  auth_url: http://auth:8085
+  pull_interval: 1s
+  pull_backoff_max: 30s
+values:
+  max_document_bytes: 1048576
+  secret_patterns: []
+trust:
+  verification_timeout: 5s
+maintenance: false
+gc:
+  interval: 6h
+  bundle_retention_days: 90
+  archive_grace_days: 30
+  candidate_artifact_retention_days: 30
+  preflight_retention_days: 90
+  orphan_preflight_retention_days: 7
+  gc_max_duration_minutes: 55
+  cleanup_idempotency_retention_hours: 24
+gateway:
+  enabled: true
+  port: 8084
+# The mTLS CA is mounted from the release-manager-mtls-ca Secret on these
+# paths by ../services/orchestrator.yaml. That Secret is provisioned out of
+# band (batch 4); the orchestrator fails closed when it is absent.
+ca:
+  key_path: /data/gateway-ca.key
+  cert_path: /data/gateway-ca.crt
+# REQ-081 (D2=A): the orchestrator seeds these keys into app_settings at
+# startup. The emergency kill switch stays available in production.
+emergency:
+  enabled: true
+  operation_timeout: 30s
+  effect_observe_timeout: 24h
+# TASK-098 (REQ-044): operator liveness thresholds (defaults).
+operator_session:
+  heartbeat_interval: 15s
+  suspect_after: 45s
+  offline_after: 90s
+# TASK-098 (REQ-023): operation deadline and non-terminal recovery sweep.
+operation:
+  deadline: 30m
+  recovery_interval: 1m
+# TASK-105: keep the admission evaluation in shadow mode until a vulnerability
+# scanner is configured; enforce without one blocks every release.
+vulnerability_admission:
+  mode: shadow
