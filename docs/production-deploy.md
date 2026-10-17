@@ -1,6 +1,6 @@
 # 生产部署（单节点 k3d `rm-prod`）
 
-本文是 `deploy/kustomize/production` overlay 在**单节点 k3d 集群**上的部署与运维手册：前置条件、必填 Secret、启动顺序、TLS、备份恢复、升级回滚、可观测面与已知限制。manifest 的结构与逐条设计理由不在此重复，见 [production overlay README](deploy/kustomize/production/README.md)；故障处置的通用路径见 [runbook](docs/runbook.md)。
+本文是 `deploy/kustomize/production` overlay 在**单节点 k3d 集群**上的部署与运维手册：前置条件、必填 Secret、启动顺序、TLS、备份恢复、升级回滚、可观测面与已知限制。manifest 的结构与逐条设计理由不在此重复，见 [production overlay README](../deploy/kustomize/production/README.md)；故障处置的通用路径见 [runbook](runbook.md)。
 
 **口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
 
@@ -461,7 +461,7 @@ kubectl -n release-manager get pods
 | `/health` | 5 个 Go 服务恒 200（liveness 无失败路径）；web 8087 反代到 orchestrator；edge 只有 `tcpSocket` | 实测 8082/8083/8085/8086/8087/8088 `/health` 均 200 |
 | `/readyz` | 有失败语义（数据库/Redis/上游），失败 503 + `{"status":"degraded","checks":{...}}`；web 的同名路径报的是 **orchestrator** 的健康度 | 实测 6 个端口 `/readyz` 均 200 |
 | `/metrics` | **只有 auth(8085) 与 orchestrator(8083)** 暴露 Prometheus 文本 | 实测：8083、8085 → 200；8082、8086、8088 → **404** |
-| web 的 `/metrics` | ⚠️ 返回 **200，但内容是 SPA 的 HTML**（`location /` 的 `try_files … /index.html` 兜底） | 实测 `Content-Type: text/html`、4,664 B |
+| web 的 `/metrics` | ⚠️ 返回 **200，但内容是 SPA 的 HTML**（`location /` 的 `try_files … /index.html` 兜底） | 实测 `Content-Type: text/html`、4,666 B |
 | 日志 | JSON（slog）写 stderr，`kubectl logs` 直接可读；字段含 `time/level/msg/request_id/procedure/error` | 实测 auth 启动/请求日志 |
 | 审计 | `audit_events` 表在 PostgreSQL；控制台 `/audit` 走 `release-api`（`web/nginx.conf:91` → `api:8088`） | 见 §10-1 的缺口 |
 | Prometheus / Grafana | **不存在**：`deploy/` 下无 `ServiceMonitor`、无 scrape 注解、无 dashboard、无告警规则 | `grep` 0 命中 |
