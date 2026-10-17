@@ -20,11 +20,11 @@
 | 对象 | 计数 | 备注 |
 | --- | --- | --- |
 | REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
-| REQ-058（50 AC） | ✅ 38 / ⚠️ 8 / ❌ 2 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-27、AC-058-33（前者无 resolution RPC，后者已裁定不可达） |
+| REQ-058（50 AC） | ✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质已由 REQ-087 的 `ReleaseEmergencyLock` 交付，字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
 | `docs/ux-review.md` 87 条 | ✅ 25 / ⚠️ 5 / ⏳ 55 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷 |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
-三条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
+四条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
 
 1. **REQ-056 AC-056-08 不再是缺口**：`RollbackRelease` UI **已交付**并接线
    （`web/src/components/releases/RollbackReleaseDialog.vue`、`web/src/connect/rollback-api.ts:39`、
@@ -36,6 +36,13 @@
 3. **87 条清单的载体不在仓库**：`docs/ux-review.md` 自述「原始清单归档在知识库
    `Notes/Audit-2026-09-28/web-console-static-ux-audit.md`」，该目录在当前 vault 中**已不存在**；
    本文件的 87 条逐条状态以 vault git 历史中该文件最后一版（`8d85daf`）为准冻结（见 §3.1）。
+4. **AC-058-27 的「无 resolution RPC」不是待补实现缺口**（2026-10-17 补测）：原 W4 只看了 store 原语
+   `ResolveEmergencyEffect`，漏看了 REQ-087 已合入的 `ReleaseEmergencyLock` 与既有的控制台入口。
+   **实质的「受审计证据 ⇒ 解析为 NOT_APPLIED（或保留 UNKNOWN）并按规则释放锁」已交付**：
+   `api/proto/orchestrator/v1/orchestrator.proto:1458`、`internal/orchestrator/emergency_stuck.go:127`、
+   `web/src/pages/StuckLocksPage.vue`。字面的「release_admin 必被拒 + 人工解析为 APPLIED」是
+   2026-09-28 owner 裁决 A1/V2 明确**不建**的面（REQ-027 变更记录：「不加 RPC…若将来确实需要解除流程
+   ⇒ 应新开 REQ，不回填本 AC」），因此本版按真值改判 ⚠️ 并撤回 W4 的实现项（详见 §2 该行、§5.1、§5.3）。
 
 ---
 
@@ -93,7 +100,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-24** UNKNOWN 同字段锁 | ✅ | `internal/orchestrator/emergency.go:189-196`（`HasPendingPromotionPath` ⇒ canonical `EMERGENCY_REASON_CODE_LOCKED_PATH`）；另一处 `:967` | 与 2026-09-28 `scope-change`（V9）一致 |
 | **058-25** Annotation scope 锁 | ✅ | 同 key 跨 scope 不冲突、同 scope 被拒：`internal/orchestrator/emergency.go:679`（`annotation_scope_mismatch`）；测试 `internal/orchestrator/emergency_annotations_test.go` | — |
 | **058-26** UNKNOWN 标准发布门禁 | ✅ | `internal/orchestrator/service.go:244`（`emergency_effect_unresolved` + `UnresolvedOperationIds`/`ConvergenceTaskIds`）；ROLLBACK 同门 `internal/orchestrator/rollback.go:91` | — |
-| **058-27** UNKNOWN 人工处置权限 | ❌ 未实现 | 只有能力常量与 store 原语：`internal/store/store.go:917`（`release.emergency.resolve`）、`internal/store/sqlite/emergency_intents.go:320`（`ResolveEmergencyEffect`） | **没有任何 RPC handler 调用它**（`grep` 全仓，`.ResolveEmergencyEffect(` 的非测试调用者为 **0**）⇒ 「普通 release_admin 调用 resolution RPC 得 permission_denied / platform_admin 可解析」当前无面可验。落点：新增受审计的 resolution RPC（或按裁决把本 AC 标延期） |
+| **058-27** UNKNOWN 人工处置权限 | ⚠️ 部分（2026-10-17 改判，原判 ❌） | **实质半条已交付 = 受审计证据 ⇒ NOT_APPLIED（或保留 UNKNOWN）并按规则释放锁**：RPC `ReleaseEmergencyLock`（`api/proto/orchestrator/v1/orchestrator.proto:1458`；消息 `:1905-1922`；`ReleaseMode` `:1867-1878`）+ handler `internal/orchestrator/emergency_stuck.go:127`（reason 必填 ≤1000 / evidence ≤500 / mode 枚举），审计含 who/when/mode/evidence/reason + before/after effect（`:217`）；授权 `release_admin/platform_admin + active binding`（`:45-50`），Connect 面 `internal/auth/procedure_policy.go:167`；非管理员被拒 `internal/orchestrator/emergency_stuck_handler_test.go:253`。**前端入口已存在**：路由 `web/src/router/index.ts:148`、页 `web/src/pages/StuckLocksPage.vue`、store `web/src/stores/stuckLocks.ts:21`、client `web/src/connect/stuck-lock-api.ts:84` | **字面半条不存在，且是 owner 裁决的显式否决面（不是待补缺口）**：`api/proto/**` 无任何 `Resolve*Emergency*` RPC（`grep` 空）；`ResolveEmergencyEffect` 只有 store 原语 `internal/store/sqlite/emergency_intents.go:320`，非测试调用者 **0**（4 处全在测试：`internal/store/sqlite/emergency_store_test.go:172`、`:191`、`:213`、`internal/orchestrator/service_test.go:2685`），且原语**只改 effect + 写 timeline，不释放锁、不建/撤收敛任务**（`:381-441`）⇒ 单独接一个 RPC 也补不齐本 AC。`release.emergency.resolve` 只有授权投影（`internal/auth/authorization_snapshot.go:111`、`internal/authorization/module.go:375`）**无 RPC 消费**（前端只把 `canResolveEmergency` 映射进快照模型、无 resolver 动作：`web/src/connect/emergency-api.ts:47`、`:176`）；REQ-027 变更记录（2026-09-28 A1/V2）：「**不加 RPC**…若将来确实需要解除流程 ⇒ 应**新开 REQ**（含新 RPC + 前端入口），不回填本 AC」。且 REQ-087 反向规定 `ReleaseEmergencyLock` 供 **release_admin** 使用（AC-087-08/09），与「release_admin 必被拒绝」冲突 ⇒ 补齐需知识库裁决，非本仓实现 |
 | **058-28** Queued 取消不确定性 | ⚠️ 部分 | 取消路径 `internal/orchestrator/service.go:1067`（`CancelOperation`）存在；`cancel_not_allowed` 于 `:1102` | 未取证「cancelled 后 `effect_status` 保持 UNKNOWN、锁保留、页面继续观察」的联合断言（需一条 queued→cancelled 的 effect 测试） |
 | **058-29** Running 取消拒绝 | ✅ | `internal/orchestrator/service.go:1102`（`cancel_not_allowed`）；前端按状态隐藏 Cancel（`web/src/components/operations/CancelOperationDialog.vue` + 详情页条件） | — |
 | **058-30** APPLIED 后单 task | ✅ | 建 task 唯一入口 `internal/orchestrator/emergency.go:257`；重放走幂等分支不重复建（`internal/orchestrator/emergency_test.go:317`） | — |
@@ -118,7 +125,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-49** 性能容量 | ⚠️ 部分 | Web 侧 TTI 断言已落地：`web/e2e/emergency-smoke.spec.ts:36-40`（预算 `E2E_TTI_BUDGET_MS` 默认 1500）、`:124-125`（断言）；该 spec 已进 CI（`.github/workflows/test.yml:460` 注释列出 rollback + emergency-smoke） | 服务端 p95 三档仍**无验证载体**（决策 D19=A 归 REQ-065/066 + 指标）；「≤20 并发/同字段互斥」也只在服务端实现层，无观测断言 |
 | **058-50** Canonical 契约门禁 | ⚠️ 部分 | 旧形态已零匹配：全仓无 `EmergencyChange(payload, actor)`，只有 typed `ExecuteEmergencyChange`（`api/proto/orchestrator/v1/orchestrator.proto:1411`） | **没有独立 fixture 工件**（`find` 未见 REQ-058 契约 fixture）；现由 `web/src/gen/**` + `vue-tsc`/`npm run build` 隐式承担「symbol 缺失即失败」。落点：若要严格满足 AC，补一个引用必需符号的编译 fixture 并进 `make web-check` |
 
-**REQ-058 三态计数：✅ 38 / ⚠️ 8 / ❌ 2 / ⛔ 2（共 50）。**
+**REQ-058 三态计数：✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2（共 50）。**
 
 ---
 
@@ -275,7 +282,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 按 `requirement-lifecycle` 的证据门禁，REQ 置 `delivered` 需**逐条 AC 有证据**。因此：
 
 - **REQ-056**：AC-056-01 仍 ⚠️ ⇒ 保持 `accepted`，**不置 `delivered`**（与 REQ 正文现状一致）。
-- **REQ-058**：仍有 ⚠️8 / ❌2 ⇒ 保持 `accepted`，**不置 `delivered`**。
+- **REQ-058**：仍有 ⚠️9 / ❌1 ⇒ 保持 `accepted`，**不置 `delivered`**。
 - ⛔ 的 AC-058-44/45 与 ❌ 的 AC-058-33 属**用户已裁定**的延期/不可达，计数时应单列，不计入「未达标」。
 
 ---
@@ -291,7 +298,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | W1 | **浏览器真机走查 wave**（H1–H7）：本机 `dev-up` 不可用，只能在 CI/有栈环境做 | TASK-293（`status: blocked`）；判据见 §4.2 | **L**（大头是起栈与清理） | 需要可用 dev 栈 |
 | W2 | REPLACE 级：**AC-056-01 后端半边**——`CreateOperation` 补 `non_bundle_image` 产生点 | `errcodes.exceptions.yaml:14`（2026-12-31 到期）；前端已就绪 `web/src/connect/operation-api.ts:374` | **S** | 无 |
 | W3 | **AC-058-48/12 的 reason 载体**：Execute 请求补 `reason` 字段 + 服务端校验 + `reason_display` 投影 | `api/proto/orchestrator/v1/orchestrator.proto:1718-1742`（无 reason）；决策 D16=A | **M** | 契约变更（改 proto + 双端） |
-| W4 | **AC-058-27 resolution RPC**：`ResolveEmergencyEffect` 目前只有 store 原语，无 handler | `internal/store/store.go:917`、`internal/store/sqlite/emergency_intents.go:320`；非测试调用者 0 | **M** | 需先定「谁可解析、审计字段」（见 REQ-087 卡锁先例） |
+| W4 | ~~**AC-058-27 resolution RPC**（原判「需契约 + 实现 + 前端接线」）~~ **2026-10-17 撤回**：实质已由 REQ-087 交付，字面半条为裁决否决面 ⇒ 不是实现项 | `api/proto/orchestrator/v1/orchestrator.proto:1458`；`internal/orchestrator/emergency_stuck.go:127`；`web/src/router/index.ts:148`；否决依据见 §2 的 `058-27` 行 | **0**（无需实现） | 若仍要字面 AC ⇒ 需知识库新开 REQ（含 RPC + 前端入口），**不回填 AC-058-27** |
 | W5 | **AC-058-19 `accepted_at`**：响应补字段或按已合入契约改写 AC | `api/proto/orchestrator/v1/orchestrator.proto:1744-1748` | **S** | 契约变更 |
 | W6 | **AC-058-10 同 repository 过滤取证**：补一条服务端断言（或确认已有测试名） | `web/src/connect/emergency-api.ts:237`；服务端过滤链本轮未取证 | **S** | 无 |
 | W7 | **AC-058-28 联合断言**：queued→cancelled 后 `effect_status` 仍 UNKNOWN、锁保留 | `internal/orchestrator/service.go:1067`、`:1102` | **S** | 无 |
@@ -321,6 +328,9 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 - **UX-086 / UX-087**：度量口径与度量任务，不是缺陷（§3.2 已给理由）。若要首屏体积基线，另立测量卡。
 - **AC-058-44/45**：决策 D18=C 已延期，等后端 cursor 落地再启用。
 - **AC-058-33**：已裁定「当前架构不可达」，归 TASK-154（独立评估）。
+- **AC-058-27 的字面「resolver capability 门禁 + 人工解析为 APPLIED」**：2026-09-28 owner 裁决 A1/V2 已明确
+  **不建 RPC**（REQ-027 变更记录：「不加 RPC…若将来确实需要解除流程 ⇒ 应新开 REQ，不回填本 AC」）；
+  实质的受审计解锁由 REQ-087 `ReleaseEmergencyLock` 交付（证据见 §2 的 `058-27` 行）⇒ 不再作为剩余工作重复评估。
 
 ---
 
@@ -366,6 +376,13 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
    `8d85daf` 冻结。若 vault 侧恢复该目录，应以恢复版本再对一次（条数与 id 集合应一致：87 / `UX-001`–`UX-087`）。
 7. **未核对的字段级事项**：AC-056-02 的前端消息键 `values_not_approved` 与服务端 `revision_not_approved`
    命名不一致（§1），我未改代码，也未把它算作 AC 不通过。
+8. **AC-058-27 的「字面半条」我未实现，且判断不该实现**（2026-10-17 补测）：`api/proto/**` 无任何
+   `Resolve*Emergency*` RPC；唯一相关 store 原语 `ResolveEmergencyEffect` 的非测试调用者为 0，
+   且它既不释放锁、也不建/撤收敛任务（`internal/store/sqlite/emergency_intents.go:381-441`）
+   ⇒ 单独接一个 RPC 也不足以闭合本 AC。而 owner 裁决 2026-09-28 A1/V2 已明确「**不加 RPC**…若将来确实
+   需要解除流程 ⇒ 应新开 REQ，不回填本 AC」（REQ-027 变更记录），REQ-058 自身也写「不提供 resolver UI」
+   （REQ-058 `:915`、`:995`）。因此本次只按真值改判状态，**未新增契约 / 服务端 / 前端代码**；
+   若仍要字面闭合，前置是知识库裁决（新 REQ），不是本仓改造。
 
 ---
 
@@ -373,3 +390,12 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 
 - `make check-docs`：**PASS**（本文件所有 `文件:行号` 引用与路径均已就地读取确认）。
 - 未改动 `web/**`、未改动任何测试/断言/生成物 ⇒ 无需触发前端三关与 `make proto`。
+- **2026-10-17 修订（AC-058-27 取证更正）**：本次同样只改本文件，未动 Go/TS/proto/测试/生成物；
+  新增的 `文件:行号` 引用均已就地 `read`/`grep` 确认；复跑 `make check-docs` **PASS**。
+- **2026-10-17 同 worktree 基线门禁**（`origin/main` @ `da7244c`；**基线测量，非本次改动的专项回归**）：
+  `make lint` 0 issues、`go test -race ./...` 全绿（70 包有测试 / 27 包无测试文件 / 0 `FAIL`，exit 0）、
+  `make lint-proto`、`make sdk-check`、`make check-licenses`、`make check-store-surface`、
+  `make check-dead-methods`、`make check-schema-parity`、`make check-migrations` 均 exit 0；
+  `make check-error-codes` / `make check-reqs` / `make check-tasks` 需 `REQS_DIR=<vault>/Requirements`
+  （缺省报「no REQ documents found」，是环境配置而非失败），传入后三者均 exit 0
+  （`errcodecheck`：135 个断言错误码可发射 / 7 例外；taskcheck：306 卡 0 violation）。
