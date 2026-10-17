@@ -44,6 +44,15 @@ type apiSvc struct {
 	// short interval so an emitted event becomes queryable without waiting for the
 	// production batch tick (audit.DefaultConfig uses 5s); zero keeps the default.
 	auditFlushInterval time.Duration
+
+	// pingDB is the engine's connection ping, wired in Register from the concrete
+	// store. It backs the /readyz "database" check (TASK-352).
+	pingDB func(context.Context) error
+
+	// readinessPingTimeout bounds the /readyz database ping. Zero keeps
+	// defaultReadinessPingTimeout; tests set a short value to observe the
+	// timeout path without waiting for the production budget.
+	readinessPingTimeout time.Duration
 }
 
 func (s *apiSvc) Name() string { return "release-api" }
@@ -53,6 +62,9 @@ func (s *apiSvc) Name() string { return "release-api" }
 var (
 	_ interface{ Run(context.Context) } = (*apiSvc)(nil)
 	_ interface{ Close() error }        = (*apiSvc)(nil)
+	_ interface {
+		ReadinessChecks() map[string]func() error
+	} = (*apiSvc)(nil)
 )
 
 func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
@@ -72,6 +84,7 @@ func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	}
 	logger.Info("store opened", storeLogAttrs(dbCfg, s.dbPath)...)
 	s.store = st
+	s.pingDB = storePing(st)
 	emitterCfg := audit.DefaultConfig()
 	if s.auditFlushInterval > 0 {
 		emitterCfg.FlushInterval = s.auditFlushInterval
@@ -150,6 +163,33 @@ func (s *apiSvc) Close() error {
 		s.closeErr = errors.Join(errs...)
 	})
 	return s.closeErr
+}
+
+// defaultReadinessPingTimeout bounds the /readyz database ping. It matches the
+// 2s budget auth, orchestrator and notifier use, and stays below the probe's
+// timeoutSeconds: 3 so kubelet sees the real 503 rather than a probe timeout.
+const defaultReadinessPingTimeout = 2 * time.Second
+
+// ReadinessChecks implements app's readinessContributor: /readyz pings the
+// database so a PostgreSQL outage removes this Pod from the Service endpoints
+// instead of continuing to accept traffic that would answer 502 (TASK-352).
+// Liveness (/health) is untouched: a short database blip must not restart the
+// process, and the check is a ping — never a query.
+func (s *apiSvc) ReadinessChecks() map[string]func() error {
+	if s.pingDB == nil {
+		return nil
+	}
+	timeout := s.readinessPingTimeout
+	if timeout <= 0 {
+		timeout = defaultReadinessPingTimeout
+	}
+	return map[string]func() error{
+		"database": func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			return s.pingDB(ctx)
+		},
+	}
 }
 
 func archiveConfigFromService(cfg *config.ServiceConfig) audit.ArchiveConfig {
