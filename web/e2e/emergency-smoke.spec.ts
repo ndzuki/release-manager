@@ -26,11 +26,16 @@ const CREDENTIALS = {
 
 // E2E_DEFINITION_ID pins the ReleaseDefinition the single-actor scenario drives.
 // Empty keeps the historical "whatever row renders first" behaviour, which is
-// NOT sufficient for CI: the emergency IMAGE path reads a fresh operator
-// observation (the read model drops one older than 15 minutes), and the operator
-// refreshes that observation per command, so only a definition this run has
-// operated on is reliably actionable. console.sh passes the definition the
-// prerequisite smoke drives last.
+// NOT sufficient for CI: which release sorts first is not the lane's contract,
+// and only a row whose container yields a VERIFIED candidate artifact can walk
+// the IMAGE path (the candidate list is scoped by that container's current image
+// ref). The observation itself is not the constraint the original note assumed:
+// the operator re-reports every deployed release once per 5 minutes
+// (internal/operator/agent/agent.go:380) and the read model keeps an observation
+// for 15 minutes (internal/orchestrator/emergency_queries.go:23), so a healthy
+// operator-managed definition stays actionable whether or not this run has
+// operated on it. console.sh passes the definition the prerequisite smoke staged
+// last. The case still requires the full backend stack (E2E_BACKEND=true).
 const DEFINITION_ID = process.env.E2E_DEFINITION_ID ?? '';
 
 // D19=A: web-side TTI budget assertion — "route entry → form operable"
