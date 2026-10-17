@@ -23,7 +23,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:a6707b6` | 审计读面；**仍用 SQLite**（`/data/api.db` 在 PVC 上），见 §10-1 |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:a6707b6` | 审计读面；生产清单仍传 `--db`（SQLite 文件在 PVC 上），代码已支持 `DATABASE_DRIVER=postgres`（TASK-338），切换见 §10-1 |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`） |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -472,7 +472,7 @@ kubectl -n release-manager get pods
 
 逐条都是实测或读码确认，**不是猜测**。排障时不要假设这些能力存在。
 
-1. **`release-api` 只连 SQLite ⇒ 控制台审计页读不到 PostgreSQL 里的事件**（代码级缺口，未修）。`cmd/api/main.go:59` 打开的是 `sqlitestore`，而 auth/orchestrator 把审计写进 PostgreSQL。实测：PG `audit_events` 有 **2 行**，同一次会话 `/audit` 界面返回 **0 行**；`/audit` 本身 HTTP 200（空态）。PVC 只保证那个 SQLite 文件持久，不解决引擎分裂。
+1. **`release-api` 的引擎选择尚未接进生产清单**：代码层已支持 `DATABASE_DRIVER=postgres`（TASK-338：`cmd/api/store.go` 按 driver 选择 `postgresstore.Open`/`sqlitestore.Open`，默认仍是 `--db` 的 SQLite），但 `deploy/kustomize/services/api.yaml` 既没注入 `DATABASE_DRIVER`/`DATABASE_DSN`，也仍传 `--db /data/api.db` ⇒ **当前部署的 api 仍只读 SQLite**。实测（2026-10-17，TASK-337 会话）：PG `audit_events` 有 **2 行**，同一次会话 `/audit` 界面返回 **0 行**；`/audit` 本身 HTTP 200（空态）。下一步：给 api 注入与 auth/orchestrator 相同的 DSN、换镜像后实测 `/audit` 非空；在那之前不要删 `release-manager-api-data` PVC。
 2. **探针放行依赖 k3s 版本与 Pod CIDR**：`allow-kubelet-probes` 解决了 issue #10030，但 k3s **< v1.28.9 / < v1.29.4** 仍会拦掉探针；换 CIDR 必须改 `production-settings.yaml` 的 `nodeCidr`。本集群 v1.31.5 实测无问题。
 3. **授权策略热重载窗口约 5 s**：auth 的 `authorization.policy_reload_interval: 5s`（`deploy/kustomize/production/configs/auth.production.yaml`）。首次 `Initialize` 后 5 s 内，控制台可能被弹到 `/forbidden`——刷新即可，不是权限配错。
 4. **edge 单副本 + 自签证书**：浏览器需要一次性信任例外；edge 重启期间控制台不可用（后端仍在跑）。且 edge 的 `server_name _` 不区分主机名。

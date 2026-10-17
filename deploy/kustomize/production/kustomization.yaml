@@ -257,10 +257,10 @@ patches:
           name: config
           mountPath: /configs/webhook.production.yaml
           subPath: webhook.production.yaml
-  # release-api is the only service whose store is still SQLite (cmd/api opens
-  # sqlitestore). Keep that data on a PVC instead of the dev emptyDir; the
-  # PostgreSQL read parity for the audit surface is tracked as a known gap in
-  # README.md, not hidden here.
+  # release-api still defaults to SQLite (cmd/api --db) and this overlay injects
+  # no DATABASE_DRIVER/DATABASE_DSN, so keep that data on a PVC instead of the
+  # dev emptyDir. TASK-338 added the PostgreSQL engine selection in code; wiring
+  # the env and dropping this volume is the next step (README.md known gap).
   - target:
       kind: Deployment
       name: api

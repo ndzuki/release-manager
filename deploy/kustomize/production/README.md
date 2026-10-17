@@ -229,9 +229,10 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
 
 ## Known gaps (not fixed in batch 1)
 
-- `release-api` still opens a SQLite store (`cmd/api`), so its audit reads do
-  not see the PostgreSQL data written by auth/orchestrator. The PVC only keeps
-  that SQLite file durable. Fixing the engine split needs a code change.
+- `release-api` now supports `DATABASE_DRIVER=postgres` (TASK-338, `cmd/api/store.go`),
+  but this overlay still passes `--db` and injects no database env, so its audit
+  reads still hit SQLite and do not see the PostgreSQL data written by
+  auth/orchestrator. Wiring the DSN and removing the SQLite PVC is the next step.
 - Only `web` has two replicas. api/auth/orchestrator keep one replica, so their
   `minAvailable: 1` PDB blocks voluntary eviction until multi-replica safety is
   proven (startup migrations, gateway CA, background workers).

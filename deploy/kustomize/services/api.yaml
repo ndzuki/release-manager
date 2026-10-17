@@ -80,9 +80,10 @@ spec:
             - name: config
               mountPath: /configs/api.dev.yaml
               subPath: api.dev.yaml
-            # cmd/api opens a SQLite store (cmd/api/main.go) — the only dev
-            # service that does. An emptyDir keeps it ephemeral, matching the
-            # PostgreSQL/Redis no-persistent-volume rule (批次5 D6).
+            # cmd/api still defaults to SQLite (--db); TASK-338 lets
+            # DATABASE_DRIVER=postgres override that engine. An emptyDir keeps
+            # the default dev file ephemeral, matching the PostgreSQL/Redis
+            # no-persistent-volume rule (批次5 D6).
             - name: data
               mountPath: /data
       volumes:

@@ -210,7 +210,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 |---|---|---|---|---|
 | `http_port` | int | 无 | 监听端口 | dev 8087（仅本地；集群 8087 是 web/nginx）。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
-| `audit.archive.retention_days` | int | 90（`audit.DefaultArchiveConfig`，`internal/audit/archive_config.go:20`；**注意**：文件能读到但键缺失时按零值拷贝即 0=停用归档，见 `archiveConfigFromService` `cmd/api/main.go:123`） | 保留天数，0 关闭归档 | 读取仅发生在 `cmd/api.Register` 的二次 `LoadService`（`cmd/api/main.go:64`），失败只 Warn 回落默认 |
+| `audit.archive.retention_days` | int | 90（`audit.DefaultArchiveConfig`，`internal/audit/archive_config.go:20`；**注意**：文件能读到但键缺失时按零值拷贝即 0=停用归档，见 `archiveConfigFromService` `cmd/api/main.go:155`） | 保留天数，0 关闭归档 | 读取仅发生在 `cmd/api.Register` 的二次 `LoadService`（`cmd/api/main.go:59`），失败只 Warn 回落默认 |
 | `audit.archive.poll_interval` | duration | 6h | 归档轮询周期 | `Validate()` 要求 >0（`internal/audit/archive_config.go:32`） |
 | `audit.archive.batch_size` | int | 1000 | 单批归档条数 | 要求 >0 |
 | `audit.archive.archive_dir` | path | data/archives | 归档输出目录 | 要求非空 |
@@ -371,7 +371,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | agent 无令牌（文件与 `ENROLLMENT_TOKEN` 皆空）或网关不可达 | `operator bootstrap` 错误退出（`internal/operator/bootstrap/token.go:29`） |
 | `gc.*` 低于最小界（如 `interval` 非 0 且 <5m） | `loadRetentionConfig` → `Validate()` 失败，Register 报错退出（`cmd/orchestrator/main.go:649/547`） |
 | notifier/auth 的 postgres 迁移失败 | 启动中止（迁移在 openStore 内跑 `migrations` FS） |
-| api 的 `audit.archive.*` 非法 | 仅 Warn 回落默认，不阻塞启动（`cmd/api/main.go:76-79` 的二次加载失败也只是 `logger.Warn`） |
+| api 的 `audit.archive.*` 非法 | 仅 Warn 回落默认，不阻塞启动（`cmd/api/main.go:59-62` 的二次加载失败也只是 `logger.Warn`） |
 | `log_level` 非法（如 `verbose`） | 不阻塞启动：`applyLogLevel` Warn 一条后保持 debug（`internal/app/loglevel_test.go` 锁定）|
 | `values.max_document_bytes`、`authorization.*`、`maintenance`、`trust.*`、`emergency.*` 写错 | 多数被 `WithDefaults`/解析回落吞掉（trust/emergency/gc 无 env 覆盖，`Diagnostics` 仅告警），启动不炸——改后要自测 |
 

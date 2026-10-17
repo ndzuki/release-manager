@@ -7,9 +7,11 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	"github.com/ndzuki/release-manager/internal/audit"
 	"github.com/ndzuki/release-manager/internal/auth"
+	"github.com/ndzuki/release-manager/internal/config"
 	"github.com/ndzuki/release-manager/internal/store"
 	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -179,4 +182,101 @@ func TestAPISvcCloseDrainsAuditEmitter(t *testing.T) {
 	event, err := st.AuditEvents().GetByID(context.Background(), "event-close")
 	require.NoError(t, err)
 	assert.Equal(t, "org-001", event.OrganizationID)
+}
+
+// TASK-338 AC-338-02: with no database.driver the engine stays SQLite, --db
+// remains the file the audit surface persists to, and the audit query contract
+// reads the event back from that same file.
+func TestRegisterDefaultsToSQLiteAuditPath(t *testing.T) {
+	t.Setenv("DATABASE_DRIVER", "")
+	t.Setenv("DATABASE_DSN", "")
+	dbPath := filepath.Join(t.TempDir(), "api.db")
+
+	svc := &apiSvc{dbPath: dbPath, jwtPublicKey: apiTestJWTPublicKeyPEM}
+	require.NoError(t, svc.Register(http.NewServeMux(), slog.New(slog.DiscardHandler)))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	_, isSQLite := svc.store.(*sqlitestore.Store)
+	require.True(t, isSQLite, "an unset database.driver must keep the SQLite default")
+
+	result := svc.emitter.Emit(&store.AuditEvent{
+		ID:             "event-default-engine",
+		ActorKind:      store.AuditActorSystem,
+		OrganizationID: "org-default",
+		ResourceType:   "api_service",
+		ResourceID:     "release-api",
+		Action:         "query",
+		Status:         "accepted",
+		Metadata:       map[string]string{},
+	})
+	require.True(t, result.Accepted)
+	require.NoError(t, svc.Close())
+
+	// The --db file, not a config-declared path, received the event.
+	require.FileExists(t, dbPath)
+	st, err := sqlitestore.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	page, err := st.AuditEvents().Query(context.Background(), store.AuditEventFilter{OrganizationID: "org-default"}, "", 10)
+	require.NoError(t, err)
+	require.Len(t, page.Events, 1)
+	assert.Equal(t, "event-default-engine", page.Events[0].ID)
+}
+
+// AC-338-02 failure path: an explicit SQLite driver without a DSN keeps --db
+// authoritative instead of failing validation.
+func TestOpenStoreSQLiteDriverFallsBackToDBPath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "explicit.db")
+	st, err := openStore(dbPath, config.DatabaseConfig{Driver: "sqlite"})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+
+	_, isSQLite := st.(*sqlitestore.Store)
+	require.True(t, isSQLite)
+	require.FileExists(t, dbPath)
+}
+
+// AC-338-02 failure path: an unknown or incomplete engine selection is rejected
+// before any store is opened, rather than silently falling back to SQLite.
+func TestOpenStoreRejectsInvalidDriverConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.DatabaseConfig
+		want string
+	}{
+		{
+			name: "unknown driver",
+			cfg:  config.DatabaseConfig{Driver: "mysql"},
+			want: "database.driver must be postgres or sqlite",
+		},
+		{
+			name: "postgres without dsn",
+			cfg:  config.DatabaseConfig{Driver: "postgres"},
+			want: "dsn_invalid",
+		},
+		{
+			name: "postgres with sqlite dsn",
+			cfg:  config.DatabaseConfig{Driver: "postgres", DSN: "data/api.db"},
+			want: "dsn_invalid",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, err := openStore(filepath.Join(t.TempDir(), "api.db"), tt.cfg)
+			require.ErrorContains(t, err, tt.want)
+			require.Nil(t, st)
+		})
+	}
+}
+
+// A PostgreSQL DSN embeds the password, so the opened-store log must name the
+// engine only; the SQLite DSN is a plain file path and stays loggable.
+func TestStoreLogAttrsNeverLeakPostgresDSN(t *testing.T) {
+	const dsn = "postgres://release_manager:s3cret@postgres:5432/release_manager?sslmode=disable"
+	attrs := storeLogAttrs(config.DatabaseConfig{Driver: "postgres", DSN: dsn}, "unused.db")
+	assert.Equal(t, []any{"driver", "postgres"}, attrs)
+	assert.NotContains(t, fmt.Sprint(attrs...), "s3cret")
+
+	sqliteAttrs := storeLogAttrs(config.DatabaseConfig{}, "/data/api.db")
+	assert.Equal(t, []any{"driver", "sqlite", "db", "/data/api.db"}, sqliteAttrs)
 }
