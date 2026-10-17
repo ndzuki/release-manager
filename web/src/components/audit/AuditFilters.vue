@@ -16,6 +16,10 @@ const scope = defineModel<string>('scope', { default: '' });
 defineProps<{
   platformAdmin?: boolean;
   organizations?: ReadonlyArray<{ id: string; name: string }>;
+  // TASK-344: the policy window release-auth applies to this caller (31 days, or
+  // 366 for platform_admin). Shown as a hint because a min/max on one date input
+  // cannot express a span constraint.
+  maxRangeDays?: number;
 }>();
 const emit = defineEmits<{
   submit: [];
@@ -74,6 +78,9 @@ const emit = defineEmits<{
       <span>{{ t('audit.filters.to') }}</span>
       <input v-model="model.to" name="to" type="datetime-local" />
     </label>
+    <p v-if="maxRangeDays" class="audit-filters__hint">
+      {{ t('audit.filters.windowHint', { days: maxRangeDays }) }}
+    </p>
     <div class="audit-filters__actions">
       <button type="submit">{{ t('audit.filters.search') }}</button>
       <button type="button" class="audit-button audit-button--secondary" @click="emit('reset')">{{ t('audit.filters.reset') }}</button>
@@ -113,6 +120,16 @@ const emit = defineEmits<{
 
 .audit-filters__field small {
   color: var(--color-muted);
+  font-weight: 400;
+}
+
+/* The allowed span applies to the pair, not to one input, so the hint spans the
+   whole grid row instead of sitting under a single date field. */
+.audit-filters__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
   font-weight: 400;
 }
 

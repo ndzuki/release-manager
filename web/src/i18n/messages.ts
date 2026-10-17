@@ -326,6 +326,7 @@ const zhCN = {
   'audit.filters.allStatuses': '全部状态',
   'audit.filters.from': '起始时间',
   'audit.filters.to': '结束时间',
+  'audit.filters.windowHint': '当前角色允许的查询跨度最多 {days} 天。',
   'audit.filters.search': '查询',
   'audit.filters.reset': '重置',
   'audit.table.showing': '已显示事件数',

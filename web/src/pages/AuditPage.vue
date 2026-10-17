@@ -156,6 +156,7 @@ watch(organizationId, (next, previous) => {
       v-model:scope="organizationScope"
       :platform-admin="isPlatformAdmin"
       :organizations="auth.organizations"
+      :max-range-days="audit.maxRangeDays"
       @submit="submit"
       @reset="reset"
     />

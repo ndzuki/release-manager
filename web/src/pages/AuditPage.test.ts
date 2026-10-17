@@ -118,6 +118,21 @@ describe('AuditPage', () => {
     );
   });
 
+  it('shows the policy window that matches the caller role (AC-344-01/02)', async () => {
+    signInAs('org-1', ['platform_admin']);
+    queryAuditEvents.mockResolvedValue(queryResponse([]));
+    const adminPage = mountAuditPage();
+    await flushPromises();
+    expect(adminPage.get('.audit-filters__hint').text()).toContain('366');
+
+    // A non-admin caller keeps release-auth's default 31-day window.
+    setActivePinia(createPinia());
+    signInAs('org-1', ['release_admin']);
+    const memberPage = mountAuditPage();
+    await flushPromises();
+    expect(memberPage.get('.audit-filters__hint').text()).toContain('31');
+  });
+
   it('clears stale results and re-queries when the active organization changes (AC-059-06)', async () => {
     signInAs('org-1', ['viewer']);
     queryAuditEvents
