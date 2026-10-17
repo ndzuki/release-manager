@@ -82,6 +82,21 @@ func openStoreWith(ctors storeConstructors, sqlitePath string, cfg config.Databa
 	return ctors.sqlite(cfg.DSN)
 }
 
+// storePing returns the opened engine's connection ping for /readyz (TASK-352).
+// The concrete engines are the only owners of the *sql.DB handle, so the type
+// switch mirrors cmd/auth and cmd/orchestrator instead of widening
+// store.Store. A nil result leaves the service with only the noop check instead
+// of silently reporting a database it cannot ping as ready.
+func storePing(st store.Store) func(context.Context) error {
+	switch st := st.(type) {
+	case *postgresstore.Store:
+		return st.SQLDB().PingContext
+	case *sqlitestore.Store:
+		return st.DB().PingContext
+	}
+	return nil
+}
+
 // storeLogAttrs describes the opened engine without ever logging a PostgreSQL
 // DSN, which embeds the password. The SQLite DSN is a plain file path.
 func storeLogAttrs(cfg config.DatabaseConfig, sqlitePath string) []any {
