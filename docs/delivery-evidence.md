@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
 | REQ-058（50 AC） | ✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
-| `docs/ux-review.md` 87 条 | ✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；两 PR 叠加后按 §3.2 表逐行重数 |
+| `docs/ux-review.md` 87 条 | ✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；两 PR 叠加后按 §3.2 表逐行重数（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status 并计数；采样 **2026-10-17 15:51 (+08:00)** 复算 = ✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2，共 87） |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
 四条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
@@ -190,7 +190,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-038 | major | ⏳ | `web/src/components/values/ValuesCodeEditor.vue:116` 仍只在宿主 div 上 `aria-label`；extensions 无 `history()`/`keymap` |
 | UX-039 | major | ✅ | 已修（TASK-325，前一条 TASK-177/299 已迁 `AppDialog`）：Escape 仅在**没有明文可失**时可用——`:close-on-escape="escapeClosable"`（`web/src/components/operators/EnrollmentTokenModal.vue:94`），判据 `!generating && !plaintext`（`:39`）；成功分支仍以两个勾选为唯一出口。测试 `web/src/components/operators/EnrollmentTokenModal.test.ts:114`（失败分支 Esc 关闭）与 `:131`（成功分支 Esc 不关闭） |
 | UX-040 | major | ✅ | 已接线：`web/src/pages/EmergencyChangePage.vue:237` 渲染 `EmergencyAnnotationEditor` |
-| UX-041 | minor | ⏳ | 破坏性操作成功仍无可见反馈：`ClusterDetailPage`/`CustomerDetailPage`/`OperatorListPage`/`OperatorDetailPage` 均未引入 Toast（Toast 消费者只有 `DefinitionsPage`/`LocalUsersPage`/`OrganizationPage`/`ValuesEditorPage`） |
+| UX-041 | minor | ⏳ | 破坏性操作成功仍无可见反馈：`ClusterDetailPage`/`CustomerDetailPage`/`OperatorListPage`/`OperatorDetailPage` 均未引入 Toast（`Toast` 消费者只有 **3 页**：`DefinitionsPage`/`LocalUsersPage`/`OrganizationPage`；`ValuesEditorPage` 用的是本地 `.notice` div（`web/src/pages/ValuesEditorPage.vue:158`），**并不消费 `Toast`**。口径：`grep -rl 'common/Toast.vue' web/src` 命中 4 个文件，其中 3 个是真正 import 该组件的页面，第 4 个 `web/src/i18n/messages.usage.test.ts:126` 只是 i18n 用量台账里的路径字符串 ⇒ 消费者 3 个；采样 2026-10-17 15:51 (+08:00)） |
 | UX-042 | minor | ✅ | `web/src/pages/OperationDetailPage.vue:230` 声明、`:380` 已绑定 `ref="cancelTrigger"` |
 | UX-043 | minor | ⏳ | `web/src/pages/OperationDetailPage.vue:455` 仍在模板里 `.then(...)` |
 | UX-044 | minor | ✅ | `web/src/components/operations/CancelOperationDialog.vue:38`（`close-on-escape="!submitting"`） |
@@ -235,10 +235,10 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-083 | nit | ✅ | `web/src/components/common/AppDialog.vue:67`（`<Teleport to="body">`） |
 | UX-084 | nit | ⚠️ | **未引入 vue-i18n**（`web/package.json` 无 `vue-i18n`），但按决策 **G5** 改为「单一语种 + 文案集中化」：`web/src/i18n/messages.ts` + `copy-lint` 门禁（`web/src/i18n/messages.usage.test.ts:598` 的 `NOT_YET_MIGRATED` 台账仍在，收敛未完） |
 | UX-085 | nit | ✅ | `web/package.json:25` 与 `web/package-lock.json` 同为 `^5.2.2`；CI 改用 `npm ci`（`.github/workflows/test.yml:690` 注释即指这条漂移）⇒ 漂移由门禁拦住。**本机未装 `node_modules`，未实测** |
-| UX-086 | nit | ⛔ | 属**证据口径**问题（`web/dist` 是构建产物、不能当首屏证据），`docs/ux-review.md:257` 已带 `check-docs:ignore` 说明；无需修复 |
+| UX-086 | nit | ⛔ | 属**证据口径**问题（`web/dist` 是构建产物、不能当首屏证据），`docs/ux-review.md:265` 已带 `check-docs:ignore` 说明（口径：`grep -n 'check-docs:ignore' docs/ux-review.md` 唯一命中 265；原引用的 257 是「现状：仓库级 CI 只跑 Go 门禁」那句，引用已漂移；采样 2026-10-17 15:52 (+08:00)）；无需修复 |
 | UX-087 | nit | ⛔ | 属**度量任务**（build 后看 chunk 划分），非缺陷；当前无 `manualChunks` 配置即为其现状记录 |
 
-**冻结计数：✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2（共 87）。**
+**冻结计数：✅ 28 / ⚠️ 4 / ⏳ 53 / ⛔ 2（共 87）。**（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status；采样 **2026-10-17 15:51 (+08:00)** 复算一致，且与 §0 与下方按原严重度的 major 计数三处一致。）
 
 按原严重度回看：4 条 blocker **全部** ✅ 或 ⚠️（UX-001/002/003 ✅、UX-004 ✅）⇒ **没有残留 blocker**。
 剩余 53 条 ⏳ 中 blocker 为 0 条、major 为 24 条（3–5 节据此排序）。
@@ -309,17 +309,17 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 
 | # | 一句话 | 证据 / 落点 | 估计 | 关键路径？ |
 | --- | --- | --- | --- | --- |
-| W10 | 破坏性操作成功无反馈（4 页） | UX-041；Toast 消费者仅 4 页 | **S** | 间接（H3 相关） |
+| W10 | 破坏性操作成功无反馈（4 页） | UX-041；`Toast` 消费者仅 **3 页**（口径：`grep -rl 'common/Toast.vue' web/src` ⇒ 3 个页面 + 1 个仅提及路径的测试台账；采样 2026-10-17 15:51 (+08:00)） | **S** | 间接（H3 相关） |
 | W11 | ~~统一确认/对话框残留：`EnrollmentTokenModal` 的 Esc、`DisableCustomerDialog` 的勾选复位~~ **2026-10-17 已交付（TASK-325）**：两条均改为 ✅（见 §3.2 的 `UX-021`/`UX-039` 行）；专项回归见 §9 | UX-039、UX-021 | **0**（无需再做） | 间接（H3 相关） |
 | W12 | 表单错误可见性：无 index 的 patch 错误、provider 违规、blur 校验与提交后聚焦 | UX-024、UX-028、UX-053 | **S** | 否 |
 | W13 | ~~假阳性显示：`ReleaseStatusBadge` 未知状态显示为 Active~~ **2026-10-17 已修**：未知/`UNSPECIFIED`/字段缺失一律渲染 catalog 中性「未知」态，store 映射的 `default` 同步改为 `'unknown'`（证据见 §3.2 的 UX-061 行） | UX-061 | **S**（已完成） | 否 |
 | W14 | 键盘/读屏：状态组件固定 id、Audit 详情无 Esc、时间线 500 个 tab 停靠点、表格 caption | UX-037、UX-019、UX-020、UX-017 | **M** | 间接（H5 相关） |
 | W15 | 列表容量：三处无分页/虚拟滚动 + Inventory 表窄屏横滚 | UX-065、UX-073、UX-035 | **M** | 否 |
 | W16 | 请求风暴：Audit 每次按键 `router.replace`、Inventory 刷新未去重 | UX-011、UX-057 | **S** | 否 |
-| W17 | 双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 6 份 | UX-076、UX-071、UX-077 | **M** | 否 |
+| W17 | 双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 **13 个文件**（口径：`grep -rl 'function formatTimestamp' web/src`，命中全部为 `pages/` 或 `components/`、无测试文件；采样 2026-10-17 15:51 (+08:00)；原写「6 份」为漂移，真实情况在扩大） | UX-076、UX-071、UX-077 | **M** | 否 |
 | W18 | 巨型组件再拆分（`OperationDetailPage` 481 行） | UX-070 | **M** | 否 |
 | W19 | 草稿安全：Values 草稿无 scope/TTL/时间戳 | UX-008 | **S** | 否 |
-| W20 | 会话/剪贴板边界：`useSessionExpiry` 无 clamp、`copy()` 无失败反馈 | UX-055、UX-009 | **S** | 否 |
+| W20 | 会话/剪贴板边界：`useSessionExpiry` **无 2^31-1 上界 clamp**（`web/src/composables/useSessionExpiry.ts:20` 已有下界 `Math.max(0, …)`，真缺陷是 `setTimeout` 的上界溢出 ⇒ 超长有效期会被当 1ms 立刻登出；精确口径同 §3.2 的 UX-055 行）、`copy()` 无失败反馈 | UX-055、UX-009 | **S** | 否 |
 | W21 | 设计令牌收尾：`ClusterDetail` 三列无断点、`OperatorTable` nowrap、`EmergencyResultPanel` 溢出未换行 | UX-032、UX-031、UX-033 | **S** | 否 |
 | W22 | 中文收敛（`NOT_YET_MIGRATED` 台账） | UX-084；决策 **G5/D9 延后** | **M** | 否（已裁定延后） |
 
