@@ -25,7 +25,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:3ecf69b` | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图仍空，见 §10-1 |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:ceda261`（2026-10-17 实测为 `3ecf69b`，见 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`），经 `operator` Service 的 NodePort 30844 暴露给客户集群 |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -705,7 +705,7 @@ kubectl -n release-manager get pods
 | `/metrics` | **只有 auth(8085) 与 orchestrator(8083)** 暴露 Prometheus 文本 | 实测：8083、8085 → 200；8082、8086、8088 → **404** |
 | web 的 `/metrics` | ⚠️ 返回 **200，但内容是 SPA 的 HTML**（`location /` 的 `try_files … /index.html` 兜底） | 实测 `Content-Type: text/html`、4,666 B |
 | 日志 | JSON（slog）写 stderr，`kubectl logs` 直接可读；字段含 `time/level/msg/request_id/procedure/error` | 实测 auth 启动/请求日志 |
-| 审计 | `audit_events` 表在 PostgreSQL；控制台 `/audit` 走 `release-api`（`web/nginx.conf:91` → `api:8088`），api 已按 `DATABASE_DRIVER=postgres` 读 PG | 见 §10-1：默认组织视图仍空（PG 现有事件均为 `system` 范围） |
+| 审计 | `audit_events` 表在 PostgreSQL；控制台 `/audit` 走 `release-api`（`web/nginx.conf:91` → `api:8088`），api 已按 `DATABASE_DRIVER=postgres` 读 PG | 见 §10-1（含 2026-10-18 时点更正）：2026-10-17 修好前默认组织视图为空；2026-10-18 恢复后页面显示 **12/12** 条事件（§9.2） |
 | Prometheus / Grafana | **不存在**：`deploy/` 下无 `ServiceMonitor`、无 scrape 注解、无 dashboard、无告警规则 | `grep` 0 命中 |
 
 **建议（当前未做）**：补 Prometheus 抓取配置（至少 auth/orchestrator）、Grafana dashboard、告警规则，以及给 release-api 补 `/metrics` 或明确其不参与抓取。
@@ -872,7 +872,9 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 
 逐条都是实测或读码确认，**不是猜测**。排障时不要假设这些能力存在。
 
-1. **`release-api` 已接 PostgreSQL，但控制台 `/audit` 默认组织视图仍为空（数据范围问题，不是引擎问题）**：生产 overlay 已为 `api` 注入 `DATABASE_DRIVER=postgres` 与 `DATABASE_DSN`（Secret `release-manager-credentials`；`deploy/kustomize/production/kustomization.yaml`，TASK-338），`--db /data/api.db` 与 PVC 保留（审计归档目录 `/data/archives` 仍需持久卷）。实测（2026-10-17，TASK-338 会话，镜像 `release-api:3ecf69b`）：api 启动日志为 `{"msg":"store opened","driver":"postgres"}`；PG `audit_events` 仍 **2 行**且 `organization_id` 全部为 `system`（orchestrator GC），按控制台管理员所属组织过滤为 **0 行**；同一登录会话直连 `POST /audit.v1.AuditService/QueryAuditEvents` 时，`filter.organization_id="system"`（platform_admin 跨组织）返回 **2 条**（这 2 行由 orchestrator 直接写入 PG），证明 api 读的是 PG；空 filter 与显式登录组织均返回 **0 条**，浏览器 `/audit` 响应零事件并渲染「暂无审计事件」。结论：**引擎选择缺口已关闭**；`/audit` 仍空是因为 PG 里只有 `system` 范围的系统事件，而控制台按登录组织过滤（`web/src/pages/AuditPage.vue:29`）。要看到这些事件需要产品决策（给 platform_admin 提供全组织/系统范围查询，或把系统事件写入可查询的组织范围）；在此之前不要删 `release-manager-api-data` PVC，也不要把「/audit 空」再归因于 SQLite。
+1. **`release-api` 已接 PostgreSQL，但控制台 `/audit` 默认组织视图在 2026-10-17 时点为空（数据范围问题，不是引擎问题；2026-10-18 时点更正见本段末）**：生产 overlay 已为 `api` 注入 `DATABASE_DRIVER=postgres` 与 `DATABASE_DSN`（Secret `release-manager-credentials`；`deploy/kustomize/production/kustomization.yaml`，TASK-338），`--db /data/api.db` 与 PVC 保留（审计归档目录 `/data/archives` 仍需持久卷）。实测（2026-10-17，TASK-338 会话，演练时的 app 版本：当时 api 为 `release-api:3ecf69b`；当前为 `ceda261`，见 §1）：api 启动日志为 `{"msg":"store opened","driver":"postgres"}`；PG `audit_events` 仍 **2 行**且 `organization_id` 全部为 `system`（orchestrator GC），按控制台管理员所属组织过滤为 **0 行**；同一登录会话直连 `POST /audit.v1.AuditService/QueryAuditEvents` 时，`filter.organization_id="system"`（platform_admin 跨组织）返回 **2 条**（这 2 行由 orchestrator 直接写入 PG），证明 api 读的是 PG；空 filter 与显式登录组织均返回 **0 条**，浏览器 `/audit` 响应零事件并渲染「暂无审计事件」。结论：**引擎选择缺口已关闭**；`/audit` 仍空是因为 PG 里只有 `system` 范围的系统事件，而控制台按登录组织过滤（`web/src/pages/AuditPage.vue:29`）。要看到这些事件需要产品决策（给 platform_admin 提供全组织/系统范围查询，或把系统事件写入可查询的组织范围）；在此之前不要删 `release-manager-api-data` PVC，也不要把「/audit 空」再归因于 SQLite。
+
+   > 时点更正（2026-10-18）：TASK-338 修好 api→PG 后，TASK-349 演练期间已产生 12 条事件，platform_admin 在全组织视图可见（见 §9.2）；「默认组织视图为空」仅描述 2026-10-17 修好前/无事件时的状态。
 2. **探针放行依赖 k3s 版本与 Pod CIDR**：`allow-kubelet-probes` 解决了 issue #10030，但 k3s **< v1.28.9 / < v1.29.4** 仍会拦掉探针；换 CIDR 必须改 `production-settings.yaml` 的 `nodeCidr`。本集群 v1.31.5 实测无问题。（⚠️ 这条规则所在的那套策略在本集群是否被**真正执行**，见第 12 条——「探针能通」本身不能证明策略生效。）
 3. **授权策略热重载窗口约 5 s**：auth 的 `authorization.policy_reload_interval: 5s`（`deploy/kustomize/production/configs/auth.production.yaml`）。首次 `Initialize` 后 5 s 内，控制台可能被弹到 `/forbidden`——刷新即可，不是权限配错。
 4. **edge 单副本 + 自签证书**：浏览器需要一次性信任例外；edge 重启期间控制台不可用（后端仍在跑）。且 edge 的 `server_name _` 不区分主机名。
@@ -898,7 +900,7 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 | 入口 | `https://localhost:8443/` → 200；`GetInitStatus` → `{"initialized":true}` | §6 的两条 curl |
 | operator 网关 | 宿主 `127.0.0.1:8444` TCP 可达；TLSv1.3 握手且证书链校验 `Verification: OK`；无 client cert 时请求层 `401 {"code":"unauthenticated","message":"client certificate required"}` | §4-⑦ 的 `bash /dev/tcp`、`openssl s_client`、`curl` |
 | 登录 | `Set-Cookie` 三个（`rm_access`/`rm_refresh`/`rm_csrf`），登录后 **653 ms** 离开 `/login`，刷新保持会话 | 浏览器访问 `https://localhost:8443`，用 `Initialize` 时创建的管理员账号登录 |
-| 审计页 | `/audit` HTTP 200，列表 0 行（原因见 §10-1，**不是** 500/404） | 浏览器打开 Audit 页面；或按 `api/kulala/audit.http` 的 `QueryAuditEvents` 请求复验 |
+| 审计页 | `/audit` HTTP 200，列表 **12 行**（2026-10-18 恢复后复验，见 §9.2；2026-10-17 修好前为 0 行，见 §10-1 时点更正；**不是** 500/404） | 浏览器打开 Audit 页面；或按 `api/kulala/audit.http` 的 `QueryAuditEvents` 请求复验 |
 | 停机/重启 | `k3d cluster stop/start` 约 **57 s**，数据完好 | §8.3 |
 | 升级/回滚 | web `ceda261 → b96d964 → ceda261`；升级 **8 s**、回滚 **8 s**；三次都是 10/10 Pod、6 个 `/readyz` 200、登录 11/11（672/651/649 ms）、DB 行数 `12 / 2 / 58` 与 `schema 34` 不变 | §8.1.1、§8.2.1 |
 | 备份/恢复 | 手工：dump 93,201 B / 58 表；自动：133,173 B + 4,592 B → restore `rm_backup_check` → `34|false`、58 表/146 索引/关键表行数全部与源库一致 | §7.1–§7.4 |
