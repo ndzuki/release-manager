@@ -31,6 +31,12 @@ const installCommand = computed(() => {
   if (!result.value || !plaintext.value) return '';
   return result.value.installCommandTemplate.replace('${ENROLLMENT_TOKEN}', plaintext.value);
 });
+// UX-039: a dialog owes the keyboard an exit, but what is irreversible here is the
+// PLAINTEXT, not the modal. While a token is on screen — or still being generated,
+// where closing would orphan a pending token the user never saw — Escape stays
+// disabled and the two acknowledgement checkboxes remain the only way out. The
+// failure branch shows no secret, so Escape joins its Cancel button as an exit.
+const escapeClosable = computed(() => !generating.value && !plaintext.value);
 
 async function generate(): Promise<void> {
   generating.value = true;
@@ -78,13 +84,14 @@ onUnmounted(clearPlaintext);
 
 <template>
   <!-- One-time secret: the plaintext is removed on close, so neither a stray
-       backdrop click nor Escape may dismiss this dialog. Closing is an explicit
-       acknowledgement (see the two checkboxes). -->
+       backdrop click nor Escape may dismiss the dialog while a token is on screen.
+       Closing a failed generation is explicit in the same sense — nothing is at risk
+       there — and `escapeClosable` is what tells the two branches apart. -->
   <AppDialog
     :open="true"
     :title="title"
     :close-on-backdrop="false"
-    :close-on-escape="false"
+    :close-on-escape="escapeClosable"
     @close="emit('close')"
   >
     <LoadingState v-if="generating" :message="t('operator.token.generating')" />

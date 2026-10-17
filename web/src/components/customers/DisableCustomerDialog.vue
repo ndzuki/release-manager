@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, shallowRef } from 'vue';
+import { computed, shallowRef, watch } from 'vue';
 import AppDialog from '@/components/common/AppDialog.vue';
 
 const props = withDefaults(defineProps<{
@@ -18,6 +18,20 @@ const emit = defineEmits<{
 
 const confirmed = shallowRef(false);
 const canConfirm = computed(() => confirmed.value && !props.pending);
+
+// UX-021: the acknowledgement is per-OPEN, not per-mount. The owner
+// (CustomerDetailPage) keeps this component mounted and only flips `:open`, and its
+// `disable()` closes the dialog straight after a successful disable instead of
+// routing through `cancel()`. Resetting `confirmed` in `cancel()` alone therefore
+// left the box ticked for the next visit, one click away from a destructive
+// confirmation the user never re-read. Resetting on every closed→open edge covers
+// all close paths, cancel included.
+watch(
+  () => props.open,
+  (open) => {
+    if (open) confirmed.value = false;
+  },
+);
 
 function cancel() {
   if (props.pending) return;
