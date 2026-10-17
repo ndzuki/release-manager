@@ -124,6 +124,17 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
   `internal/operator/bootstrap/token.go:14-27`，用后删除 token 文件 `bootstrap.go:96-100`）；
   CA 证书 `data/gateway-ca.crt`（`configs/operator.dev.yaml:9-13`，校验 `main.go:158`）。
 - agent 模式的 `/readyz` 挂 `gateway_session` 检查（CommandStream 存活才 Ready，TASK-099，`main.go:382`）。
+- 控制台「生成 enrollment token」返回的部署命令模板（`install_command_template`，版本 `v2`，
+  `internal/orchestrator/operator.go:31-70`）与上表 flag 集合对齐：身份写进 `--config` 的
+  `agent.customer_id`/`agent.cluster_id`，一次性令牌只以环境变量 `ENROLLMENT_TOKEN` 出现，
+  `--orchestrator-addr` 保留 `<CONTROL_PLANE_OPERATOR_GATEWAY>` 占位符（客户集群视角的可达地址是部署事实，
+  不能复用管理面监听地址）。模板**不含** `--customer-id`/`--cluster-id`/`--enrollment-token`/`--operator-addr`：
+  这四个 flag 在二进制里没有注册（`cmd/operator/main.go:431-438`），照抄会以退出码 2 死在 flag 解析（TASK-346）。
+- ⚠️ 上面的模板里 `export ENROLLMENT_TOKEN=${ENROLLMENT_TOKEN}` 是**自引用占位**，两种使用路径不同：
+  从控制台弹窗复制时，UI 会把 `${ENROLLMENT_TOKEN}` 替换成一次性明文令牌
+  （`web/src/components/operators/EnrollmentTokenModal.vue:34-37`）；**直接使用服务端原始模板**（例如直接读
+  `CreateEnrollmentToken` 响应的 `install_command_template`）时没有任何替换，这一行会把令牌设成**空值**，
+  必须自行替换成真实令牌（`export ENROLLMENT_TOKEN=<token>`）后再执行。
 - gateway 模式额外起一个 mTLS listener（`main.go:168-245`）并周期吊销过期 operator session
   （`main.go:303-336`，30s 一次）。
 - 退出码：同公共服务。
