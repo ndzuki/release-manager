@@ -54,8 +54,13 @@ spec:
             - name: init
               mountPath: /docker-entrypoint-initdb.d/init.sql
               subPath: init.sql
-          # Single `$`: Kubernetes only expands $(VAR) in env.values, not in
-          # commands, so the shell performs this expansion at probe time.
+          # exec probes launch the command directly, with no shell, so the
+          # expansion is made explicit: `sh -c` starts a shell inside the
+          # container and the single `$` lets that shell expand the POSTGRES_*
+          # variables from envFrom at probe time. (The kubelet also expands
+          # `$(VAR)` in command/args; one `$` here keeps the shell -- not the
+          # kubelet -- as the expander, so the probe reads the container's
+          # environment instead of relying on substitution rules.)
           startupProbe:
             exec:
               command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]

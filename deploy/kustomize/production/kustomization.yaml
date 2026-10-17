@@ -106,10 +106,15 @@ patches:
   # credentials are provisioned out of band (batch 4); deleting the dev Secret
   # makes a missing production Secret fail closed instead of silently booting
   # on shared dev credentials.
-  # The selector is kind-only: narrow it before adding Secret resources to this
-  # overlay.
+  #
+  # The target MUST stay name-scoped. A bare `kind: Secret` deletes *every*
+  # Secret in the build: adding any Secret to this overlay (or to a base it
+  # includes) would then silently render zero Secrets while `kubectl kustomize`
+  # still exits 0, and the workloads only fail at admission. Keep one target
+  # per dev Secret listed by name; never widen this back to kind-only.
   - target:
       kind: Secret
+      name: release-manager-dev-credentials
     patch: |-
       apiVersion: v1
       kind: Secret
@@ -395,7 +400,12 @@ patches:
       - op: remove
         path: /spec/ports/0/nodePort
 
-# One knob for every PVC's storage class.
+# One knob for every PVC's storage class: the two StatefulSet claim templates and
+# the two standalone claims (release-api's new one and the orchestrator claim
+# inherited from base). The inherited claim ships without an explicit class, so
+# `create: true` is required to write the field into it -- otherwise it would
+# follow the cluster default while the other three follow production-settings,
+# i.e. one overlay silently using two storage classes.
 replacements:
   - source:
       kind: ConfigMap
@@ -417,3 +427,23 @@ replacements:
           name: release-manager-api-data
         fieldPaths:
           - spec.storageClassName
+      - select:
+          kind: PersistentVolumeClaim
+          name: release-manager-orchestrator-data
+        fieldPaths:
+          - spec.storageClassName
+        options:
+          create: true
+  # One knob for the kubelet-probe source range (see production-settings.yaml).
+  # Same mechanism as storageClassName: the cidr is written into the
+  # allow-kubelet-probes ipBlock so the range is never hard-coded in two places.
+  - source:
+      kind: ConfigMap
+      name: production-settings
+      fieldPath: data.nodeCidr
+    targets:
+      - select:
+          kind: NetworkPolicy
+          name: allow-kubelet-probes
+        fieldPaths:
+          - spec.ingress.0.from.0.ipBlock.cidr

@@ -4,7 +4,8 @@
 #   1. the ingress controller -> web/webhook,
 #   2. pods in this namespace -> the namespace's service ports,
 #   3. pods in this namespace -> PostgreSQL/Redis,
-#   4. customer-cluster agents -> the orchestrator mTLS gateway.
+#   4. customer-cluster agents -> the orchestrator mTLS gateway,
+#   5. the kubelet -> the application probe ports (nodeCidr).
 #
 # Egress is deliberately NOT restricted in this batch. The services need DNS,
 # PostgreSQL, Redis, the OIDC/JWT endpoints and customer webhook receivers; a
@@ -13,9 +14,11 @@
 # debug-friendly consequence: `kubectl exec` from a pod in this namespace can
 # still reach anything, which is intentional until the egress inventory exists.
 #
-# Verification note: kubelet probes and host-network ingress controllers can
-# bypass or be affected by these policies depending on the CNI. That part needs
-# a real cluster to verify (TASK-337 batch 3 wires the Ingress).
+# Verification note: kubelet probes are allowed explicitly below because k3s'
+# default kube-router evaluates NetworkPolicies in the filter INPUT chain, where
+# node -> pod packets are seen. A host-network ingress controller presents a
+# node address too; that path still needs a real cluster to verify (TASK-337
+# batch 3 wires the Ingress).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -26,6 +29,49 @@ spec:
   podSelector: {}
   policyTypes:
     - Ingress
+---
+# Kubelet probes. The kubelet dials the pod IP from the node, not from a pod, so
+# pod/namespace selectors cannot express it: this rule needs an ipBlock.
+# k3s' default kube-router installs NetworkPolicies into the filter INPUT chain,
+# where that node -> pod traffic is evaluated against the source address the
+# node path presents (the Pod CIDR); without this rule default-deny drops every
+# probe and no application pod ever becomes Ready (k3s issue #10030). The cidr
+# is the Pod CIDR (10.42.0.0/16 on k3s). It is replaced from
+# production-settings.nodeCidr by the replacement in kustomization.yaml; the
+# literal below only keeps this file renderable standalone.
+# A cluster with a different --cluster-cidr must set nodeCidr accordingly (the
+# replacement makes that a one-value change). A CNI that does not evaluate
+# policies on the node path may not need this rule; the real-cluster check is
+# still owed in TASK-337 batch 3.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kubelet-probes
+  labels:
+    app.kubernetes.io/part-of: release-manager
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.0/16
+      ports:
+        - protocol: TCP
+          port: 8082 # webhook
+        - protocol: TCP
+          port: 8083 # orchestrator management plane
+        - protocol: TCP
+          port: 8084 # orchestrator agent gateway
+        - protocol: TCP
+          port: 8085 # auth
+        - protocol: TCP
+          port: 8086 # notifier
+        - protocol: TCP
+          port: 8087 # web
+        - protocol: TCP
+          port: 8088 # api
 ---
 # The console/static SPA is the only public entry point in this batch. The
 # k3s Traefik ingress controller runs in kube-system; ingress-nginx is listed
