@@ -357,7 +357,7 @@ Audit 事件可跳回其 `resource_id` 对应对象（`AuditEvent.resource_type/
 | 间距与圆角 | `--space-1..6`、`--radius-sm/md/lg` | 现状 padding/gap/radius 取值分散 |
 
 **状态色必须成对定义（前景+背景+边框）**，因为状态徽章现在有 5 套实现、
-且 `ReleaseStatusBadge` 把未知状态显示为绿色 `Active`（UX-061）。
+且 `ReleaseStatusBadge` **曾**把未知状态显示为绿色 `Active`（UX-061；已于 2026-10-17 由 #406（merge `b53f679`）修正为中性「未知」态：`web/src/components/releases/ReleaseStatusBadge.vue:16-19` 的 `default` 走 catalog 中性文案 + `:46` 中性色，`web/src/stores/releaseInventory.ts:64-78` 的 `default` 返回 `'unknown'`）。
 
 ### 9.2 组件优先级（按「被重复实现次数 × 影响页面数」排序）
 
