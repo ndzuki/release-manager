@@ -44,6 +44,17 @@ const LOGIN_BUDGET_MS = 4000;
 const ROLLBACK_ROW = '[data-testid^="release-rollback-"]';
 const ROLLBACK_METHOD = 'RollbackRelease';
 
+// H3 asks whether Escape leaves NO RollbackRelease behind, and that is a negative
+// assertion — a negative assertion with no observation window is not evidence.
+// Reading the counter the instant the panel hides cannot see a request that leaves
+// a beat later, which is exactly the false-green direction the reviewer named
+// (a synthetic page proved it: the immediate read said 0 while the request left
+// 150ms afterwards). So the count is read across this bounded quiet window.
+// A fixed window is right here precisely because the claim must stay EXACTLY zero:
+// `expect.poll(() => count).toBe(0)` would return on its first check — the count is
+// already 0 — and prove nothing at all.
+const ROLLBACK_QUIET_MS = 500;
+
 // Assembled from two pieces on purpose: the locator-hygiene gate
 // (src/i18n/e2e-locator.usage.test.ts) reads any `/…/` span carrying ASCII as an
 // English locator, and a joined '**/service/Method' literal would be one.
@@ -226,6 +237,8 @@ test('H3 危险操作确认：回滚走自定义 alertdialog，Esc 取消且不�
 
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
+  // The quiet window: only a window can tell "no request" apart from "not yet".
+  await page.waitForTimeout(ROLLBACK_QUIET_MS);
   expect(rollbackRequests, 'Esc 取消后不得发出 RollbackRelease 请求').toBe(0);
 });
 

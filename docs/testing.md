@@ -453,7 +453,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | --- | --- | --- |
 | `web/e2e/rollback.spec.ts` | REQ-056 AC-056-08 浏览器回滚路径（TASK-240） | `e2e-prerequisite`：**push main / `workflow_dispatch`**，PR 不跑 |
 | `web/e2e/emergency-smoke.spec.ts` | REQ-058 紧急变更走查（`REQUIRE_PROMOTION` 成功路径）+ **跨角色审批**（AC-058-41） | 同上（TASK-270 起纳入） |
-| `web/e2e/delivery-criteria.spec.ts` | 交付判据 H1–H5 中可无人介入判定的部分：登录成败、关键页可达、危险操作 Esc 取消、失败原因 + `requestId`、焦点陷阱（TASK-325；判据定义见 H 组交付判据 §4.2） | 同上（TASK-325 起纳入） |
+| `web/e2e/delivery-criteria.spec.ts` | 交付判据 H1–H5 中可无人介入判定的部分：登录成败、关键页可达、危险操作 Esc 取消、失败原因 + `requestId`、焦点陷阱（H5 的「表单字段错误有 `aria-describedby` 关联」一半由 `web/src/components/releases/RollbackReleaseDialog.test.ts` 钉住）（TASK-325；判据定义见 `docs/delivery-evidence.md` §4.2） | 同上（TASK-325 起纳入） |
 | `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑 | **不在 CI 车道**；本地手工跑（需 `E2E_VIEWER_PASS`，见 spec 头注释） |
 
 - **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
