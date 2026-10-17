@@ -163,7 +163,7 @@
 | `gopkg.in/evanphx/json-patch.v4` | v4.13.0 | BSD-3-Clause |  |
 | `gopkg.in/inf.v0` | v0.9.1 | BSD-3-Clause |  |
 | `gopkg.in/yaml.v3` | v3.0.1 | Apache-2.0 |  |
-| `gorm.io/driver/postgres` | v1.6.0 | MIT |  |
+| `gorm.io/driver/postgres` | v1.6.3 | MIT |  |
 | `gorm.io/gorm` | v1.31.2 | MIT |  |
 | `helm.sh/helm/v3` | v3.22.0 | Apache-2.0 |  |
 | `k8s.io/api` | v0.37.1 | Apache-2.0 |  |
