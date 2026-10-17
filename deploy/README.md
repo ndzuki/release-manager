@@ -86,7 +86,7 @@ kustomize build deploy/kustomize/customer-agent/c1-direct   # 或 c2-cache / c3-
 go test ./deploy/dev/...
 ```
 
-`kustomize` 需在 PATH（CI 安装 v5.8.1，test.yml:351、419）。`kustomize build` 只渲染不 apply，安全；**不要**用 `kubectl apply` 验证——那会改动真实集群。
+`kustomize` 需在 PATH（CI 安装 v5.8.1，test.yml:454、576）。`kustomize build` 只渲染不 apply，安全；**不要**用 `kubectl apply` 验证——那会改动真实集群。
 
 ## 6. 生产部署
 

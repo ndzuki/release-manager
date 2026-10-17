@@ -4,10 +4,15 @@ import { create } from '@bufbuild/protobuf';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import {
   AddMemberRequestSchema,
+  CreateOrganizationRequestSchema,
+  DisableOrganizationRequestSchema,
+  GetOrganizationRequestSchema,
   ListMembersRequestSchema,
   RemoveMemberRequestSchema,
   UpdateMemberRoleRequestSchema,
+  UpdateOrganizationRequestSchema,
 } from '@/gen/auth/v1/auth_pb';
+import type { Organization } from '@/gen/auth/v1/auth_pb';
 import { organizationClient } from './client';
 
 /**
@@ -137,7 +142,7 @@ function mapMemberErrorLocal(error: unknown): MemberFailure {
 }
 
 /** Centralised copy for a known reason code overrides the local fallback wording. */
-function withSharedCopy(failure: MemberFailure, error: unknown): MemberFailure {
+function withSharedCopy<T extends { message: string; details: string }>(failure: T, error: unknown): T {
   const described = describeError(error);
   const shared = described.message;
   return {
@@ -145,4 +150,148 @@ function withSharedCopy(failure: MemberFailure, error: unknown): MemberFailure {
     message: shared ?? failure.message,
     details: correlationLine(described),
   };
+}
+
+/*
+ * Organization-level writes (REQ-026).
+ *
+ * The console could only manage MEMBERSHIP: the four member RPCs have wrappers,
+ * while creating, renaming and disabling an organization had none, so the console
+ * could not create an organization at all. Contract notes from
+ * api/proto/auth/v1/auth.proto that the UI must respect:
+ *  - CreateOrganization is platform_admin-only (the handler re-checks the role on
+ *    top of the policy) and adds the caller to the new organization as
+ *    platform_admin, but that membership write is BEST EFFORT: the organization
+ *    still exists when it fails and the call reports success, so the caller must
+ *    confirm membership afterwards and must not claim the user is an admin;
+ *  - it is NOT idempotent (no deduplication key, names are not unique), so a retry
+ *    after a lost response creates a SECOND organization;
+ *  - UpdateOrganization and DisableOrganization are versioned writes: the caller
+ *    must send the version it read, and a stale one is refused with ABORTED
+ *    (optimistic lock conflict). Organization names are not the console's only
+ *    source of a version — the session snapshot goes stale as soon as anyone
+ *    writes — which is why `getOrganization` is exported alongside them;
+ *  - a disabled organization cannot be updated (FAILED_PRECONDITION +
+ *    X-Reason-Code: organization_disabled), and disabling is TERMINAL: no
+ *    procedure reverses it.
+ */
+export interface OrganizationView {
+  id: string;
+  name: string;
+  /** 'active' | 'disabled'; disabling is terminal. */
+  status: string;
+  optimisticVersion: bigint;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** The wire status is a free string; anything that is not `disabled` reads as active. */
+function toOrganizationView(organization: Organization): OrganizationView {
+  return {
+    id: organization.id,
+    name: organization.name,
+    status: organization.status === 'disabled' ? 'disabled' : 'active',
+    optimisticVersion: organization.optimisticVersion,
+    createdAt: organization.createdAt ? timestampDate(organization.createdAt).toISOString() : null,
+    updatedAt: organization.updatedAt ? timestampDate(organization.updatedAt).toISOString() : null,
+  };
+}
+
+/**
+ * Reads one organization. The console needs this to obtain the CURRENT
+ * `optimisticVersion`: the version in the session snapshot is from login time, and
+ * both writes compare-and-swap on it, so a rename or disable that starts from the
+ * snapshot fails with ABORTED as soon as anyone else has written the row.
+ */
+export async function getOrganization(orgId: string): Promise<OrganizationView> {
+  const response = await organizationClient.getOrganization(create(GetOrganizationRequestSchema, { orgId }));
+  return toOrganizationView(response.organization!);
+}
+
+/** Creates an organization and (best effort) the caller's platform_admin membership. */
+export async function createOrganization(name: string): Promise<OrganizationView> {
+  const response = await organizationClient.createOrganization(
+    create(CreateOrganizationRequestSchema, { name: name.trim() }),
+  );
+  return toOrganizationView(response.organization!);
+}
+
+export async function updateOrganization(
+  orgId: string,
+  name: string,
+  expectedVersion: bigint,
+): Promise<OrganizationView> {
+  const response = await organizationClient.updateOrganization(
+    create(UpdateOrganizationRequestSchema, { orgId, name: name.trim(), expectedVersion }),
+  );
+  return toOrganizationView(response.organization!);
+}
+
+export async function disableOrganization(orgId: string, expectedVersion: bigint): Promise<OrganizationView> {
+  const response = await organizationClient.disableOrganization(
+    create(DisableOrganizationRequestSchema, { orgId, expectedVersion }),
+  );
+  return toOrganizationView(response.organization!);
+}
+
+export type OrganizationFailureCode =
+  | 'permission_denied'
+  | 'not_found'
+  | 'conflict'
+  | 'org_disabled'
+  | 'invalid_input'
+  | 'unavailable';
+
+export interface OrganizationFailure {
+  /** Stable correlation data for the technical-details line (never payload data). */
+  details: string;
+  code: OrganizationFailureCode;
+  message: string;
+  retryable: boolean;
+}
+
+const ORGANIZATION_MESSAGES: Record<OrganizationFailureCode, string> = {
+  permission_denied: '无权管理组织：创建组织需要 platform_admin，改名与停用需要 organization/write',
+  not_found: '组织不存在（可能已被删除）',
+  conflict: '组织信息已被其他人修改，已为你刷新最新数据，请重试',
+  // Same wording as the catalog's `reason.organization_disabled`: the reason code
+  // serves organization-level writes too, so the shared copy was widened from
+  // "cannot modify members" to the procedure-neutral sentence.
+  org_disabled: '该组织已停用，无法再执行该操作',
+  invalid_input: '输入不合法：请检查组织名称',
+  unavailable: '操作失败，请稍后重试',
+};
+
+/**
+ * Classifies an organization write by the carriers the repo trusts: the stable
+ * X-Reason-Code first, then the Connect status. The classification matches
+ * {@link mapMemberError} for the codes the two surfaces share (`conflict`,
+ * `permission_denied`, `not_found`, `org_disabled`, `unavailable`), so a reason
+ * code cannot mean two different things on the same feature.
+ */
+export function mapOrganizationError(error: unknown): OrganizationFailure {
+  return withSharedCopy(mapOrganizationErrorLocal(error), error);
+}
+
+function mapOrganizationErrorLocal(error: unknown): OrganizationFailure {
+  const connectError = ConnectError.from(error);
+  const reason = (connectError.metadata.get('X-Reason-Code') ?? '').toLowerCase();
+  const pick = (code: OrganizationFailureCode, retryable = false): OrganizationFailure => ({
+    code,
+    message: ORGANIZATION_MESSAGES[code],
+    retryable,
+    details: '',
+  });
+
+  // Aborted is the only carrier DisableOrganization sets for a lost race (its
+  // handler has no reason code there), so both carriers must be honoured.
+  if (reason.includes('optimistic_lock_conflict') || connectError.code === Code.Aborted) return pick('conflict', true);
+  if (reason.includes('organization_disabled')) return pick('org_disabled');
+  if (connectError.code === Code.PermissionDenied) return pick('permission_denied');
+  if (connectError.code === Code.NotFound) return pick('not_found');
+  // Reached on UpdateOrganization only: the handler refuses a disabled
+  // organization with FAILED_PRECONDITION + organization_disabled (matched above).
+  if (connectError.code === Code.FailedPrecondition) return pick('org_disabled');
+  if (connectError.code === Code.InvalidArgument) return pick('invalid_input');
+  return pick('unavailable', true);
 }

@@ -63,10 +63,10 @@ make e2e-prerequisite                               # AC-066-17 冒烟（依赖 
 
 | job | 命令 | 触发范围 |
 | --- | --- | --- |
-| `e2e-prerequisite`（test.yml:324） | `make e2e-prerequisite-ci`（:357），`if: always()` 上传 `e2e-results/`（:359-365） | **push main / 所有 PR / 手动**——是无 secret 的版本化合并门禁（job 注释 :320-323） |
-| `e2e`（test.yml:376） | `make dev-up`（:425）→ `make dev-seed`（:428）→ `make e2e-all`（:433）→ 上传 `e2e-results/`（:435-442）→ `make dev-purge CONFIRM=1`（:444-446） | **仅 push main，或 workflow_dispatch 且 `run-e2e=true`**（:377；输入默认 true :9-13）；**PR 不跑**（:367-369 注释） |
+| `e2e-prerequisite`（test.yml:420） | `make e2e-prerequisite-ci`（:485），`if: always()` 上传 `e2e-results/`（:487-493） | **仅 push main / 手动 `workflow_dispatch`；PR 不跑**（job `if:` :421）——是无 secret 的版本化 main 分支门禁（job 注释 :407-419） |
+| `e2e`（test.yml:519） | `make dev-up`（:582）→ `make dev-seed`（:585）→ `make e2e-all`（:590）→ 上传 `e2e-results/`（:592-599）→ `make dev-purge CONFIRM=1`（:601-603） | **仅 push main，或 workflow_dispatch 且 `run-e2e=true`**（:520；输入默认 true :9-13）；**PR 不跑**（:510-512 注释） |
 
-`e2e` job 需要 9 个 repository secret 并以 `DEV_PROFILE=ci`、`E2E_ENVIRONMENT=ci` 运行（:385-397），超时 30 分钟（:379），同仓并发互不取消（:382-384）。历史上曾因 secret 未配置收窄为仅手动（D-034），偏离已于 2026-09-14 解除（:371-375 注释）。除此之外没有任何 npm/浏览器 E2E job（§ web/README 已核实）。
+`e2e` job 需要 12 个 repository secret 并以 `DEV_PROFILE=ci`、`E2E_ENVIRONMENT=ci` 运行（:528-554），超时 30 分钟（:522），同仓并发互不取消（:525-527）。历史上曾因 secret 未配置收窄为仅手动（D-034），偏离已于 2026-09-14 解除（:514-518 注释）。除此之外没有任何 npm/浏览器 E2E job（§ web/README 已核实）。
 
 ## 5. 写新 E2E 阶段的约束
 

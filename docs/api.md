@@ -63,7 +63,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 
 ### 2.3 可运行的 curl 示例
 
-以下写法直接取自仓库内已跑通的冒烟脚本 `test/e2e/prerequisite/smoke.sh`（`:163`、`:174`、`:187`、`:234`、`:249`、`:287`）与 dev fixture（`internal/devfixture/bundle.go:259`），端口为 dev 默认。
+以下写法直接取自仓库内已跑通的冒烟脚本 `test/e2e/prerequisite/smoke.sh`（`:163`、`:174`、`:187`、`:234`、`:249`、`:287`）与 dev fixture（`internal/devfixture/bundle.go:277`），端口为 dev 默认。
 
 ```bash
 # 1) 登录取 access token（release-auth :8085）
@@ -355,7 +355,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 
 29 个 enum（`api/proto/*/*/*.proto` 逐个 `^enum ` 声明计数），全部有 `*_UNSPECIFIED = 0`；值名一律 `ENUM_NAME_VALUE` 前缀式 SCREAMING_SNAKE，仅 4 个值例外（见下文命名豁免）。JSON 线上枚举以 **NAME 字符串**序列化（`api/kulala/audit.http:53` 的 `"kind": "ACTOR_KIND_USER"` 即为证据）。proto3 enum 是开放的，越界值会直达 handler，因此 handler 必须做显式 `switch + default` 并映射为 `invalid_argument`（例如 `internal/orchestrator/operator.go:457-483`、`internal/orchestrator/inventory_query.go:196-209`）。UNSPECIFIED 是「按字段」而非全局拒绝：`ConvergenceStrategy`/`ArtifactType`/`ImageValueKind`/`ReleaseMode` 拒绝它，`ValuesStatus`/`ReleaseInventoryStatus` 把它当「不过滤」，`OperatorSessionStatus` 把它重载为「无会话」。已知两处未收敛：`internal/orchestrator/route.go:152-187` 把未知值映射为空 store 值，`internal/orchestrator/emergency.go:759-764` 把任何非 `REVERT` 值（含未知）当成 `REQUIRE_PROMOTION`。反向（store → proto）映射未知一律回落 `*_UNSPECIFIED`。
 
-命名豁免有 2 处：`ConvergenceStrategy` 的 `REVERT_ON_NEXT_RECONCILE`/`REQUIRE_PROMOTION` 带 `buf:lint:ignore ENUM_VALUE_PREFIX` 与理由注释（`api/proto/orchestrator/v1/orchestrator.proto:1749-1755`）；`ReleaseMode` 的 `NOT_APPLIED_PROVEN`、`AUDITED_OVERRIDE`（`api/proto/orchestrator/v1/orchestrator.proto:1871`、`:1876`）**没有** ignore 注释，`buf lint` 目前会因此报错。本仓库 CI 不跑 `buf lint`，属潜在破损；写文档时不要把当前契约描述成 lint-clean。
+命名豁免有 2 处：`ConvergenceStrategy` 的 `REVERT_ON_NEXT_RECONCILE`/`REQUIRE_PROMOTION` 带 `buf:lint:ignore ENUM_VALUE_PREFIX` 与理由注释（`api/proto/orchestrator/v1/orchestrator.proto:1749-1755`）；`ReleaseMode` 的 `NOT_APPLIED_PROVEN`、`AUDITED_OVERRIDE`（`api/proto/orchestrator/v1/orchestrator.proto:1871`、`:1876`）不带枚举名前缀，靠枚举上的 `// buf:lint:ignore ENUM_VALUE_PREFIX`（同文件 `:1857`）豁免；`buf lint` 已通过（实测 buf 1.72.0，rc=0），且 CI 的 `proto-check` job 会跑 `make lint-proto`（`.github/workflows/test.yml:645`），写文档时可以按 lint-clean 描述。
 
 ### 5.4 ID
 
@@ -381,7 +381,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 ## 6. 契约变更流程
 
-1. **只改 `api/proto/**`，然后 `make proto`。** `make proto` 是唯一生成入口，实际执行 `buf generate --template api/proto/buf.gen.yaml`（`Makefile:274-279`）；`api/gen/**` 与 `web/src/gen/**` 是生成物，禁止手改（`AGENTS.md:24`、`CONTRIBUTING.md:42`）。`Makefile` 里没有 `proto-check`、`buf lint`、`buf breaking` 之类的目标，CI 也只 setup buf 后跑 `make proto`（`.github/workflows/test.yml:130-138`、`:214-222`），不做兼容与 lint 门禁：改契约时若要跑 `buf lint`/`buf breaking` 必须手工执行，不能声称「CI 会挡」。注意 `buf lint` 当前因 `ReleaseMode` 两处命名失败（见 5.3）。
+1. **只改 `api/proto/**`，然后 `make proto`。** `make proto` 是唯一生成入口，实际执行 `buf generate --template api/proto/buf.gen.yaml`（`Makefile:274-279`）；`api/gen/**` 与 `web/src/gen/**` 是生成物，禁止手改（`AGENTS.md:24`、`CONTRIBUTING.md:42`）。`Makefile` 里没有 `proto-check`、`buf breaking` 之类的目标（`buf lint` 有：`lint-proto`，`Makefile:278-283`），CI 在生成前 setup buf 后跑 `make proto`（`.github/workflows/test.yml:139-147`、`:235-241`），**并另设 `proto-check` job 跑 `make lint-proto` 与「提交的生成物必须与 `api/proto` 一致」**（`:627-661`）；仍无 `buf breaking` 门禁：要跑兼容性检查必须手工执行，不能声称「CI 会挡」。`buf lint` 目前通过（实测 buf 1.72.0，rc=0；见 5.3）。
 2. **兼容演进规则**（`docs/decisions/ADR-002-connect-protobuf-single-port-contract.md:28-30`、`docs/architecture.md:106-107`）：新增字段/RPC 向后兼容；未知字段忽略、缺失字段 fail closed；删除必须做到 proto/生成代码/handler/测试/调用方**零匹配**后干净移除，禁止留兼容壳。
 3. **字段号纪律**（观察到的既有做法，无 ADR 成文）：移除的编号与名字一律 `reserved`，绝不复用（`api/proto/operator/v1/operator.proto:33-34`；`api/proto/orchestrator/v1/orchestrator.proto` 多处）；新增字段用高位号段分组（例如 `artifacts = 20`）。有意保留的 `[deprecated = true]` 字段不 reserved，作为拒绝探测点——`RollbackRelease` 会主动拒绝带 deprecated 字段的请求（`internal/orchestrator/rollback.go:38-42`）。
 4. **响应类型命名**：本仓库不要求 `<Method>Response` 唯一（`buf.yaml:6` 豁免了 `RPC_REQUEST_RESPONSE_UNIQUE` 与两个 STANDARD_NAME 规则），共享响应消息与直接返回 `common.v1.*` 实体是可接受的既有做法。
