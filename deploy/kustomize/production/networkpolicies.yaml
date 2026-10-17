@@ -4,7 +4,7 @@
 #   1. the ingress controller (where one exists) and the TLS edge -> web/webhook,
 #   2. pods in this namespace -> the namespace's service ports,
 #   3. pods in this namespace -> PostgreSQL/Redis,
-#   4. customer-cluster agents -> the orchestrator mTLS gateway,
+#   4. customer-cluster agents -> the orchestrator mTLS gateway (NodePort 30844),
 #   5. the kubelet -> the application probe ports (nodeCidr),
 #   6. the host -> the TLS edge's own 443 (NodePort 30443, edge.yaml).
 #
@@ -237,11 +237,17 @@ spec:
         - protocol: TCP
           port: 6379
 ---
-# Customer-cluster agents enroll and stream commands over mTLS on 8084. This
-# rule has no `from` clause, i.e. it admits every source: the agents live
-# outside this cluster and cannot be selected by namespace/pod labels. Batch 3
-# puts a load balancer/TLS terminator in front of this port; if the LB address
-# range is known, narrow this policy to that ipBlock then.
+# Customer-cluster agents enroll and stream commands over mTLS on pod port
+# 8084. They enter through Service operator's NodePort 30844 (mapped to host
+# 8444, kustomization.yaml), which DNATs to this pod port; NetworkPolicy
+# evaluates the post-DNAT port, so this rule names 8084 exactly as
+# allow-edge-nodeport names the edge pod's 443 and not its 30443.
+# The source is a node address (or the external client address, depending on
+# the CNI's masquerade) -- not a namespace or pod a selector could name -- so
+# this rule deliberately has no `from` clause: it opens TCP 8084 on the
+# orchestrator pod and nothing else. Agents live outside this cluster, so an
+# ipBlock allow-list would have to name every customer network; narrow this
+# rule here if that inventory ever exists.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
