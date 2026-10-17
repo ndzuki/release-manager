@@ -265,7 +265,7 @@ Bundle 与 Candidate Artifact 浏览/ChangePassword —— 35 项探测 **14 项
 | C1 | 13 篇 contracts 标 `last_verified: 2026-09-22@4f820b7`，该 SHA 在本地任何 ref 均不存在 | `git cat-file -t 4f820b7` → `Not a valid object name` |
 | C2 | `ReleaseSummary.emergency_conflict` proto 是 `bool`、`revert_status_summary` 是 `string`，契约要求结构化对象 | `api/proto/orchestrator/v1/orchestrator.proto:943,945` |
 | C3 | 幂等键位置三方不一致：`connect-surface.md`/`emergency-execution.md` 说 header-only；proto 与 `REQ-058` D14=A 说 body（`idempotency_key = 8`、`request_hash = 9`） | `api/proto/orchestrator/v1/orchestrator.proto`（ExecuteEmergencyChangeRequest）、`Requirements/REQ-058-web-emergency-change.md` |
-| C4 | `ListEmergencyTargetsResponse` 只有 `targets`，无契约要求的 availability/cursor | `api/proto/orchestrator/v1/orchestrator.proto:1528` |
+| C4 | `ListEmergencyTargetsResponse` 只有 `targets`，无契约要求的 availability/cursor | `api/proto/orchestrator/v1/orchestrator.proto:1629-1631` |
 | C5 | `docs/api.md` 关于审计查询字段的陈述与实现相反 | `docs/api.md`（审计章节）vs `internal/audit/audit_service_handler.go:228-259` |
 | C6 | 契约说「`QueryAuditEvents` 只回 4 字段」→ 据此会误判审计页不可用 | 同上 |
 | C7 | `contracts/convergence-flow.md` 仍写 cursor 分页，与 `REQ-058` D18=C「前端本地分页」相反 | 静态清单（`Requirements/REQ-058` 决策记录） |
@@ -292,7 +292,7 @@ Bundle 与 Candidate Artifact 浏览/ChangePassword —— 35 项探测 **14 项
 | A8 | ReleaseBundle / Candidate Artifact 浏览 | `docs/architecture.md:3`（四大发布输入之一） | 仅作为操作表单下拉项 |
 | A9 | ReleaseDefinition 管理与 Promotion Mapping 配置 | `REQ-040`、收敛前提（Promotion Mapping） | 无定义列表/编辑页；Only 展示 |
 | A10 | 紧急变更 stuck-lock 正式处置 | `REQ-087`（`ListStuckLocks`/`ReleaseEmergencyLock`；该文自陈 UI 归「后续 REQ」，该 REQ 不存在） | 0 命中 |
-| A11 | **操作历史 / 回滚点** | `REQ-056 AC-056-08`（ROLLBACK 必填 `target_revision`，走独立 `RollbackRelease`） | 无操作列表、无 rollback UI（`RollbackRelease` 非 gen 零命中） |
+| A11 | **操作历史 / 回滚点** | `REQ-056 AC-056-08`（ROLLBACK 必填 `target_revision`，走独立 `RollbackRelease`） | **已交付**（2026-10-17 校正：原写「无操作列表、无 rollback UI（`RollbackRelease` 非 gen 零命中）」已过期）。操作历史页 `web/src/pages/OperationListPage.vue`；回滚对话框 `web/src/components/releases/RollbackReleaseDialog.vue` + API 包装 `web/src/connect/rollback-api.ts`，行内入口在 `web/src/components/releases/ReleaseInventoryTable.vue:157`，由 `web/src/pages/ReleaseInventoryPage.vue:183` 挂载；浏览器路径已有 E2E `web/e2e/rollback.spec.ts`（真机运行只在 CI `e2e-prerequisite` 车道） |
 
 ### 6.2 缺失的共享基元（设计文档点名、从未交付）
 

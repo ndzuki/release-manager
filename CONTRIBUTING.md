@@ -8,7 +8,8 @@
 2. **原子任务（TASK）**：每份需求默认对应一个任务卡，卡内含计划、验收标准（AC）与验证记录。
 3. **分支**：`task/NNN-<slug>`（`NNN` 为任务号，`slug` 为短横线连接的英文摘要）。
 4. **PR**：一个任务一个 PR，标题用提交信息的单行形式，正文说明动机、变更点与**验证证据**。
-5. **合并**：仓库使用 **merge commit**（不 squash、不删分支）；合并后把 `merge_status`、`pr_url`、`checkpoint_commit` 回填到任务卡。
+5. **合并**：仓库使用 **merge commit**（不 squash、不删分支）；合并后把 `merge_status`、`pr_url`、`checkpoint_commit` 回填到任务卡。**`pr_url` 必须指向本仓库的 PR**：门禁把 URL 里的 `owner/repo` 与本仓库（由 `git remote get-url origin` 推导）逐条比对，**指向别的仓库一律 `foreign_repo` 违规**（`ALLOW_UNVERIFIED_TASKS=1` 也不能降级）—— 编号恰好撞上本仓某个已合并 PR 的其它仓库 URL 不是证据，不得借用或编造。
+6. **非仓库交付**：交付物在**别的仓库**、流程上**没有 PR** 的任务（例如本机 chezmoi 纳管的 dotfiles 与 DSH 插件），卡面改用 **`merge_status: direct`** + **`pr_url: direct:<40-hex-sha>@<repo-path>`** + **`evidence_paths: <仓库内相对路径>, …`**；`make check-tasks` 会在该仓库的本地对象库里核对 commit 可达且变更文件集覆盖 `evidence_paths`。**不要**为这类卡借用或编造 PR URL，也**不要**用 `ALLOW_UNVERIFIED_TASKS=1` 放宽（见 `docs/testing.md` 的 `make check-tasks` 行与知识库 `PROJECT-CONVENTIONS.md`）。
 
 ## 提交信息
 

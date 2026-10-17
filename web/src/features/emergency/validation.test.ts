@@ -9,6 +9,7 @@ import {
   validateConvergenceSelection,
   validateReason,
   validateReplicas,
+  validateReplicasChange,
   annotationMappingComplete,
   imageMappingComplete,
   replicasMappingComplete,
@@ -103,9 +104,13 @@ describe('UTF-8 byte validation', () => {
     const json = canonicalIntentJson({
       releaseDefinitionId: 'def1',
       workloadRef: 'deployments/ns1/api',
-      container: 'app',
+      actionKind: 'replicas',
+      container: '',
       operationVersion: 'v1',
-      artifactRef: 'a1',
+      artifactRef: '',
+      setReplicas: 3,
+      annotations: [],
+      annotationScope: '',
       convergenceStrategy: 'REQUIRE_PROMOTION',
       targetLocks: ['b', 'a'],
     });
@@ -113,13 +118,81 @@ describe('UTF-8 byte validation', () => {
     expect(parsed).toEqual({
       releaseDefinitionId: 'def1',
       workloadRef: 'deployments/ns1/api',
-      container: 'app',
+      actionKind: 'replicas',
+      container: '',
       operationVersion: 'v1',
-      artifactRef: 'a1',
+      artifactRef: '',
+      setReplicas: 3,
+      annotations: [],
+      annotationScope: '',
       convergenceStrategy: 'REQUIRE_PROMOTION',
       targetLocks: ['a', 'b'],
     });
     expect(json).not.toContain('idempotencyKey');
+  });
+
+  // The action and its payload are part of the fingerprint: switching action or
+  // editing the entries must change the frozen intent (AC-058-16/17).
+  it('folds the selected action payload into the canonical intent', () => {
+    const base = {
+      releaseDefinitionId: 'def1',
+      workloadRef: 'deployments/ns1/api',
+      operationVersion: 'v1',
+      convergenceStrategy: 'REVERT_ON_NEXT_RECONCILE',
+      targetLocks: [],
+    };
+    const image = canonicalIntentJson({ ...base, actionKind: 'image', container: 'app', artifactRef: 'a1', setReplicas: 0, annotations: [], annotationScope: '' });
+    const replicas = canonicalIntentJson({ ...base, actionKind: 'replicas', container: '', artifactRef: '', setReplicas: 3, annotations: [], annotationScope: '' });
+    const annotations = canonicalIntentJson({ ...base, actionKind: 'annotations', container: '', artifactRef: '', setReplicas: 0, annotations: [{ key: 'tier', value: 'web' }], annotationScope: 'WORKLOAD_METADATA' });
+    expect(new Set([image, replicas, annotations]).size).toBe(3);
+
+    const reordered = canonicalIntentJson({
+      ...base,
+      actionKind: 'annotations',
+      container: '',
+      artifactRef: '',
+      setReplicas: 0,
+      annotations: [{ key: 'zone', value: 'a' }, { key: 'tier', value: 'web' }],
+      annotationScope: 'WORKLOAD_METADATA',
+    });
+    const sameEntries = canonicalIntentJson({
+      ...base,
+      actionKind: 'annotations',
+      container: '',
+      artifactRef: '',
+      setReplicas: 0,
+      annotations: [{ key: 'tier', value: 'web' }, { key: 'zone', value: 'a' }],
+      annotationScope: 'WORKLOAD_METADATA',
+    });
+    expect(reordered).toBe(sameEntries);
+  });
+
+  // The submit-level rule differs from the server's accepted RANGE: the flat
+  // scalar has no presence, so 0 means "not requested" and must be refused as a
+  // replicas change (internal/orchestrator/emergency.go:1095-1099).
+  it('refuses replicas 0 / null as a replicas change while validateReplicas still reads it', () => {
+    expect(validateReplicas(0, 10, false)).toEqual({ valid: true });
+    expect(validateReplicasChange(0, 10, false)).toMatchObject({ valid: false, code: 'invalid_replicas' });
+    expect(validateReplicasChange(null, 10, false)).toMatchObject({ valid: false, code: 'invalid_replicas' });
+    expect(validateReplicasChange(1, 10, false)).toEqual({ valid: true });
+    expect(validateReplicasChange(10, 10, false)).toEqual({ valid: true });
+    expect(validateReplicasChange(11, 10, false)).toMatchObject({ valid: false, code: 'invalid_replicas' });
+    expect(validateReplicasChange(3, 10, true)).toMatchObject({ valid: false, code: 'hpa_managed' });
+  });
+
+  // A key + scope pair outside the definition's whitelist is refused locally
+  // with the code the server would emit (annotation_key_not_allowed).
+  it('refuses annotation keys outside the approved (key, scope) whitelist', () => {
+    const approved = [{ key: 'tier', scope: 'WORKLOAD_METADATA' }];
+    expect(
+      validateAnnotationEntries([{ localId: '1', key: 'tier', value: 'web', scope: 'WORKLOAD_METADATA' }], approved),
+    ).toEqual({ valid: true });
+    expect(
+      validateAnnotationEntries([{ localId: '1', key: 'zone', value: 'web', scope: 'WORKLOAD_METADATA' }], approved),
+    ).toMatchObject({ valid: false, code: 'annotation_key_not_allowed' });
+    expect(
+      validateAnnotationEntries([{ localId: '1', key: 'tier', value: 'web', scope: 'POD_TEMPLATE_METADATA' }], approved),
+    ).toMatchObject({ valid: false, code: 'annotation_key_not_allowed' });
   });
 });
 

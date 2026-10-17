@@ -19,8 +19,8 @@ import { computed, useId } from 'vue';
  * is the deliberate seam: pass them through and the three relations hold by
  * construction; ignore them and nothing here can save you. `FormField.test.ts`
  * therefore also mounts the real page that adopted this component, so the wiring the
- * one real caller passes is asserted and not assumed. (DataTable has no consumer yet,
- * so nothing asserts a caller of that one.)
+ * one real caller passes is asserted and not assumed. (DataTable's caller wiring is
+ * asserted the same way by OperationCenterPage.test.ts since TASK-277.)
  */
 interface Props {
   label: string;

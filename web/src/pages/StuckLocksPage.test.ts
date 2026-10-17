@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import StuckLocksPage from './StuckLocksPage.vue';
 import * as api from '@/connect/stuck-lock-api';
@@ -28,6 +28,72 @@ function lock(intentId: string): api.StuckLockView {
   };
 }
 
+const mounted: Array<{ unmount: () => void }> = [];
+
+afterEach(() => {
+  // Unmount before wiping the DOM: the focus trap keeps a module-level stack of open
+  // overlays, and a component that is never unmounted leaves a stale entry behind.
+  for (const wrapper of mounted.splice(0)) wrapper.unmount();
+  document.body.innerHTML = '';
+});
+
+/*
+ * TASK-296. The release confirmation is an AppDialog panel, which teleports to
+ * <body> (ADR-029), so a wrapper's scoped queries cannot see it; only page-level
+ * nodes stay on the wrapper. Dialog content is read from the document — the pattern
+ * the other page tests use (TrustPolicyPage.test.ts, BindingsPage.test.ts).
+ * @testing-library is not a dependency here, so getDialog mirrors getByRole's
+ * contract: the unique element carrying role dialog|alertdialog, and a throw when
+ * there is none.
+ */
+function getDialog(): HTMLElement {
+  const matches = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]'));
+  if (matches.length !== 1) throw new Error(`expected exactly one dialog role, found ${matches.length}`);
+  return matches[0]!;
+}
+
+/** The accessible name AppDialog gives its panel: aria-labelledby -> the heading. */
+function accessibleName(element: HTMLElement): string {
+  const id = element.getAttribute('aria-labelledby');
+  const labelled = id ? document.getElementById(id) : null;
+  return (labelled?.textContent ?? element.getAttribute('aria-label') ?? '').trim();
+}
+
+function byTestId<T extends HTMLElement = HTMLElement>(id: string): T {
+  const element = document.querySelector<T>(`[data-testid="${id}"]`);
+  if (!element) throw new Error(`missing data-testid=${id}`);
+  return element;
+}
+
+/** Drives a teleported v-model textarea through the real DOM (setValue only sees the wrapper). */
+function setField(name: string, value: string): void {
+  const input = document.querySelector<HTMLTextAreaElement>(`textarea[name="${name}"]`);
+  if (!input) throw new Error(`missing textarea ${name}`);
+  input.value = value;
+  input.dispatchEvent(new Event('input'));
+}
+
+function selectRadio(value: string): void {
+  const input = document.querySelector<HTMLInputElement>(`input[type="radio"][value="${value}"]`);
+  if (!input) throw new Error(`missing radio ${value}`);
+  input.checked = true;
+  input.dispatchEvent(new Event('change'));
+}
+
+function checkAcknowledged(): void {
+  const input = document.querySelector<HTMLInputElement>('input[name="acknowledged"]');
+  if (!input) throw new Error('missing acknowledged checkbox');
+  input.checked = true;
+  input.dispatchEvent(new Event('change'));
+}
+
+async function submitForm(): Promise<void> {
+  const form = document.querySelector<HTMLFormElement>('form.stuck__form');
+  if (!form) throw new Error('release form not rendered');
+  form.dispatchEvent(new Event('submit'));
+  await flushPromises();
+}
+
 async function mountPage() {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -35,7 +101,10 @@ async function mountPage() {
   });
   await router.push('/emergency/stuck-locks');
   await router.isReady();
-  const wrapper = mount(StuckLocksPage, { global: { plugins: [router] } });
+  // attachTo body (not the default detached div): the dialog contract includes returning
+  // focus to the trigger, and document.activeElement only resolves for attached elements.
+  const wrapper = mount(StuckLocksPage, { attachTo: document.body, global: { plugins: [router] } });
+  mounted.push(wrapper);
   await flushPromises();
   return wrapper;
 }
@@ -87,19 +156,16 @@ describe('StuckLocksPage', () => {
     const wrapper = await mountPage();
     await openDialog(wrapper);
 
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
-    expect(wrapper.get('[data-testid="stuck-validation"]').text()).toContain('必须填写释放原因');
+    await submitForm();
+    expect(byTestId('stuck-validation').textContent ?? '').toContain('必须填写释放原因');
 
-    await wrapper.get('textarea[name="reason"]').setValue('because');
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
-    expect(wrapper.get('[data-testid="stuck-validation"]').text()).toContain('必须选择释放模式');
+    setField('reason', 'because');
+    await submitForm();
+    expect(byTestId('stuck-validation').textContent ?? '').toContain('必须选择释放模式');
 
-    await wrapper.get('input[value="AUDITED_OVERRIDE"]').setValue();
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
-    expect(wrapper.get('[data-testid="stuck-validation"]').text()).toContain('请先确认已核实集群效果');
+    selectRadio('AUDITED_OVERRIDE');
+    await submitForm();
+    expect(byTestId('stuck-validation').textContent ?? '').toContain('请先确认已核实集群效果');
     expect(mockedRelease).not.toHaveBeenCalled();
   });
 
@@ -107,13 +173,12 @@ describe('StuckLocksPage', () => {
     const wrapper = await mountPage();
     await openDialog(wrapper);
 
-    await wrapper.get('textarea[name="reason"]').setValue('x'.repeat(1001));
-    await wrapper.get('input[value="NOT_APPLIED_PROVEN"]').setValue();
-    await wrapper.get('input[name="acknowledged"]').setValue();
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
+    setField('reason', 'x'.repeat(1001));
+    selectRadio('NOT_APPLIED_PROVEN');
+    checkAcknowledged();
+    await submitForm();
 
-    expect(wrapper.get('[data-testid="stuck-validation"]').text()).toContain('最多 1000');
+    expect(byTestId('stuck-validation').textContent ?? '').toContain('最多 1000');
     expect(mockedRelease).not.toHaveBeenCalled();
   });
 
@@ -121,14 +186,13 @@ describe('StuckLocksPage', () => {
     const wrapper = await mountPage();
     await openDialog(wrapper);
 
-    await wrapper.get('textarea[name="reason"]').setValue('ok');
-    await wrapper.get('textarea[name="evidence"]').setValue('y'.repeat(501));
-    await wrapper.get('input[value="NOT_APPLIED_PROVEN"]').setValue();
-    await wrapper.get('input[name="acknowledged"]').setValue();
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
+    setField('reason', 'ok');
+    setField('evidence', 'y'.repeat(501));
+    selectRadio('NOT_APPLIED_PROVEN');
+    checkAcknowledged();
+    await submitForm();
 
-    expect(wrapper.get('[data-testid="stuck-validation"]').text()).toContain('最多 500');
+    expect(byTestId('stuck-validation').textContent ?? '').toContain('最多 500');
     expect(mockedRelease).not.toHaveBeenCalled();
   });
 
@@ -136,12 +200,11 @@ describe('StuckLocksPage', () => {
     const wrapper = await mountPage();
     await openDialog(wrapper);
 
-    await wrapper.get('textarea[name="reason"]').setValue('cannot prove, taking over');
-    await wrapper.get('textarea[name="evidence"]').setValue('pods still old');
-    await wrapper.get('input[value="AUDITED_OVERRIDE"]').setValue();
-    await wrapper.get('input[name="acknowledged"]').setValue();
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
+    setField('reason', 'cannot prove, taking over');
+    setField('evidence', 'pods still old');
+    selectRadio('AUDITED_OVERRIDE');
+    checkAcknowledged();
+    await submitForm();
 
     expect(mockedRelease).toHaveBeenCalledWith({
       intentId: 'intent-1',
@@ -149,8 +212,8 @@ describe('StuckLocksPage', () => {
       mode: 'AUDITED_OVERRIDE',
       evidence: 'pods still old',
     });
-    expect(wrapper.find('[data-testid="stuck-validation"]').exists()).toBe(false);
-    expect(wrapper.text()).not.toContain('释放锁 Deployment');
+    expect(document.querySelector('[data-testid="stuck-validation"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
   });
 
   // W5: the operator must be able to hand the server-side correlation id to the logs.
@@ -164,11 +227,10 @@ describe('StuckLocksPage', () => {
     const wrapper = await mountPage();
     await openDialog(wrapper);
 
-    await wrapper.get('textarea[name="reason"]').setValue('because');
-    await wrapper.get('input[value="NOT_APPLIED_PROVEN"]').setValue();
-    await wrapper.get('input[name="acknowledged"]').setValue();
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
+    setField('reason', 'because');
+    selectRadio('NOT_APPLIED_PROVEN');
+    checkAcknowledged();
+    await submitForm();
 
     const details = wrapper.get('.error-state details').text();
     expect(details).toContain('requestId=req-det-7');
@@ -182,14 +244,91 @@ describe('StuckLocksPage', () => {
     const wrapper = await mountPage();
     await openDialog(wrapper);
 
-    await wrapper.get('textarea[name="reason"]').setValue('because');
-    await wrapper.get('input[value="NOT_APPLIED_PROVEN"]').setValue();
-    await wrapper.get('input[name="acknowledged"]').setValue();
-    await wrapper.get('.stuck__dialog form').trigger('submit');
-    await flushPromises();
+    setField('reason', 'because');
+    selectRadio('NOT_APPLIED_PROVEN');
+    checkAcknowledged();
+    await submitForm();
 
     expect(wrapper.get('.error-state').text()).toContain('已被释放');
-    expect(wrapper.text()).toContain('释放锁 Deployment');
+    expect(accessibleName(getDialog())).toContain('释放锁 Deployment');
+  });
+});
+
+/*
+ * TASK-296. The confirmation used to be a hand-rolled div that announced
+ * role=alertdialog with a name but omitted aria-modal, the Tab trap, Escape and
+ * focus return, and never associated its warning with the dialog. It now renders
+ * through AppDialog; these assertions pin the parts the primitive supplies.
+ */
+describe('release dialog semantics (TASK-296)', () => {
+  it('is a modal alertdialog named from the lock path', async () => {
+    const wrapper = await mountPage();
+    await openDialog(wrapper);
+
+    const dialog = getDialog();
+    expect(dialog.getAttribute('role')).toBe('alertdialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(accessibleName(dialog)).toBe('释放锁 Deployment/api, container=app');
+  });
+
+  it('associates the irreversibility warning through aria-describedby', async () => {
+    const wrapper = await mountPage();
+    await openDialog(wrapper);
+
+    const dialog = getDialog();
+    const describedBy = dialog.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent ?? '').toContain('没有撤销');
+  });
+
+  it('keeps the validation message inside the dialog', async () => {
+    const wrapper = await mountPage();
+    await openDialog(wrapper);
+
+    await submitForm();
+    const dialog = getDialog();
+    const validation = byTestId('stuck-validation');
+    expect(validation.textContent ?? '').toContain('必须填写释放原因');
+    expect(dialog.contains(validation)).toBe(true);
+  });
+
+  it('closes on Escape without releasing the lock', async () => {
+    const wrapper = await mountPage();
+    await openDialog(wrapper);
+    expect(getDialog()).toBeTruthy();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+
+    expect(mockedRelease).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
+  });
+
+  // A destructive confirm must stay open while its request is in flight; the owner
+  // passes `close-on-escape="!store.releasing"` and the primitive honours it.
+  it('keeps the dialog open on Escape while a release is in flight', async () => {
+    let resolveRelease: (value: api.ReleaseLockResult) => void = () => {};
+    mockedRelease.mockImplementation(
+      () =>
+        new Promise<api.ReleaseLockResult>((resolve) => {
+          resolveRelease = resolve;
+        }),
+    );
+    const wrapper = await mountPage();
+    await openDialog(wrapper);
+
+    setField('reason', 'because');
+    selectRadio('NOT_APPLIED_PROVEN');
+    checkAcknowledged();
+    await submitForm();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await flushPromises();
+    expect(getDialog()).toBeTruthy();
+
+    resolveRelease({ intentId: 'intent-1', lockReleased: true, effectStatus: 'NOT_APPLIED', auditEventId: 'audit-1' });
+    await flushPromises();
+    expect(document.querySelector('[role="dialog"], [role="alertdialog"]')).toBeNull();
   });
 });
 

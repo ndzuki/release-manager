@@ -4,6 +4,7 @@ import { computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
+import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import RouteRuleEditor from '@/components/clusters/RouteRuleEditor.vue';
 import { useClusterStore } from '@/stores/cluster';
@@ -17,6 +18,16 @@ const auth = useAuthStore();
 const customerId = String(route.params.customerId);
 const clusterId = route.params.clusterId ? String(route.params.clusterId) : undefined;
 const isCreate = computed(() => !clusterId);
+/*
+ * The per-field half of the save failure. The page-level alert above only carries
+ * `saveError.message`, so this violation was the one thing that had to reach the
+ * name control as a description (TASK-271). The server/`mapSaveError` and the local
+ * validator both emit at most one 'name' violation (the checks are mutually
+ * exclusive), so picking the first is lossless.
+ */
+const nameError = computed(
+  () => store.saveError?.fieldViolations?.find((item) => item.field === 'name')?.description ?? '',
+);
 const endpoints = {
   cacheEndpoint: import.meta.env.VITE_ARTIFACT_CACHE_ENDPOINT ?? 'cache.local',
   registryEndpoint: import.meta.env.VITE_ARTIFACT_REGISTRY_ENDPOINT ?? 'registry.local',
@@ -86,11 +97,17 @@ async function handleSave() {
       </div>
 
       <section class="cluster-fields">
-        <label>
-          {{ t('cluster.edit.name') }}
-          <input v-model="store.draft.name" maxlength="254" :aria-invalid="Boolean(store.saveError?.fieldViolations?.some((item) => item.field === 'name'))" />
-          <small v-for="error in store.saveError?.fieldViolations?.filter((item) => item.field === 'name')" :key="error.description" class="field-error">{{ error.description }}</small>
-        </label>
+        <FormField :label="t('cluster.edit.name')" :error="nameError">
+          <template #default="{ id, describedBy, invalid }">
+            <input
+              :id="id"
+              v-model="store.draft.name"
+              maxlength="254"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+            />
+          </template>
+        </FormField>
         <label class="checkbox">
           <input v-model="store.draft.enabled" type="checkbox" />
           {{ t('cluster.edit.enabled') }}
@@ -132,7 +149,6 @@ label { display: grid; gap: 0.375rem; font-weight: 600; }
 .checkbox { display: flex; align-items: center; }
 input { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 .save-error { display: grid; gap: 0.5rem; padding: 1rem; border: 1px solid var(--color-danger-border-bright); border-radius: 0.5rem; background: var(--color-danger-soft); color: var(--color-error-strong); }
-.field-error { color: var(--color-danger); }
 .actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
 .primary { background: var(--color-primary); color: var(--color-on-accent); border-color: var(--color-primary); }
 </style>

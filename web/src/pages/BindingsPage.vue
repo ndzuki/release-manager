@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref, shallowRef, useTemplateRef } from 'vue';
+import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -32,6 +33,29 @@ const activeOrgId = computed(() => auth.activeOrganization?.id ?? '');
 const activeOrgName = computed(() => auth.activeOrganization?.name ?? '');
 const activeBindings = computed(() => store.bindings.filter((binding) => binding.status === 'active'));
 
+/** Set by the row button; the revoke RPC waits for the dialog's confirmation. */
+const pendingRevoke = shallowRef<BindingView | null>(null);
+/*
+ * TASK-303: the panel renders the revoke's OWN failure, not the page-level
+ * `store.failure` that every operation writes. Opening the confirmation used to
+ * show — and `role="alert"` used to announce — whatever the previous operation had
+ * failed with (a grant refusal, say), so the user read an error about something
+ * they had not asked for. The page-level <ErrorState> below still reads
+ * `store.failure`; that copy is unchanged.
+ */
+const revokeFailure = shallowRef<string | null>(null);
+/*
+ * TASK-297: the row button is gone once the revocation lands, so the browser
+ * would drop focus on <body>; the success notice is where the confirm left the
+ * user, and `tabindex="-1"` is what lets us move focus there programmatically.
+ */
+const noticeRef = useTemplateRef<HTMLParagraphElement>('notice');
+const revokeDescription = computed(() =>
+  pendingRevoke.value
+    ? `确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。`
+    : '',
+);
+
 onMounted(() => {
   if (activeOrgId.value) void store.loadBindings(activeOrgId.value);
 });
@@ -62,6 +86,47 @@ async function submitGrant(): Promise<void> {
   if (await store.setCapability(target, action.value, desiredState.value === 'revoke')) subject.value = '';
 }
 
+/*
+ * TASK-303: arming and closing the confirmation drop the previous attempt's
+ * reason, so the panel can only ever render the revoke it belongs to.
+ */
+function armRevoke(binding: BindingView): void {
+  revokeFailure.value = null;
+  pendingRevoke.value = binding;
+}
+
+function closeRevoke(): void {
+  revokeFailure.value = null;
+  pendingRevoke.value = null;
+}
+
+/*
+ * TASK-295: the row button used to call the store directly, so one misclick
+ * revoked the binding and its capability grant with no confirmation. The
+ * destructive RPC now runs only here, from the dialog's confirm action.
+ *
+ * TASK-297: on failure the dialog stays open AND the reason is rendered inside
+ * its body (`revoke-failure`). The page-level <ErrorState> sits behind the
+ * fixed backdrop, so "stays open" alone showed the user an empty confirmation
+ * they had to cancel out of before they could read why the revoke failed.
+ * On success focus moves to the notice: the row button disappears with the
+ * revocation, and focus must not fall back to <body>.
+ */
+async function confirmRevoke(): Promise<void> {
+  const binding = pendingRevoke.value;
+  if (!binding) return;
+  revokeFailure.value = null;
+  if (!(await store.revoke(binding))) {
+    // The store has just recorded the reason for THIS attempt; copy it into the
+    // revoke's own slot instead of reading the shared ref from the template.
+    revokeFailure.value = store.failure?.message ?? null;
+    return;
+  }
+  pendingRevoke.value = null;
+  await nextTick();
+  noticeRef.value?.focus();
+}
+
 function formatTimestamp(value: string | null): string {
   return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
 }
@@ -87,7 +152,14 @@ function statusLabel(binding: BindingView): string {
       </button>
     </header>
 
-    <p v-if="store.notice" class="governance__notice" role="status" data-testid="governance-notice">
+    <p
+      v-if="store.notice"
+      ref="notice"
+      class="governance__notice"
+      role="status"
+      tabindex="-1"
+      data-testid="governance-notice"
+    >
       {{ store.notice }}
     </p>
 
@@ -131,7 +203,7 @@ function statusLabel(binding: BindingView): string {
               type="button"
               class="danger"
               :disabled="store.saving"
-              @click="store.revoke(binding)"
+              @click="armRevoke(binding)"
             >
               撤销
             </button>
@@ -140,6 +212,44 @@ function statusLabel(binding: BindingView): string {
         </tr>
       </tbody>
     </table>
+
+    <!-- Rendered only while armed (the reference RevokeOperatorDialog pattern):
+         `open` is always true and the owner decides when the dialog exists. -->
+    <AppDialog
+      v-if="pendingRevoke"
+      :open="true"
+      title="撤销绑定"
+      :description="revokeDescription"
+      danger
+      :close-on-backdrop="false"
+      :close-on-escape="!store.saving"
+      @close="closeRevoke"
+    >
+      <!-- Inside the panel, not only in the page-level <ErrorState> behind the
+           fixed backdrop: the whole point of keeping the dialog open on failure
+           is that the reason is readable where the user already is (TASK-297).
+           TASK-303: the copy comes from the revoke's own slot, so arming the
+           confirmation can never surface another operation's failure. -->
+      <p
+        v-if="revokeFailure"
+        class="governance__error"
+        role="alert"
+        data-testid="revoke-failure"
+      >
+        {{ revokeFailure }}
+      </p>
+      <template #footer>
+        <button type="button" :disabled="store.saving" @click="closeRevoke">取消</button>
+        <button
+          type="button"
+          class="governance__confirm-danger"
+          :disabled="store.saving"
+          @click="confirmRevoke"
+        >
+          {{ store.saving ? '撤销中…' : '确认撤销' }}
+        </button>
+      </template>
+    </AppDialog>
 
     <div class="governance__panels">
       <form class="governance__panel" @submit.prevent="submitBinding">
@@ -267,6 +377,14 @@ function statusLabel(binding: BindingView): string {
   background: var(--color-surface);
   color: var(--color-error);
   cursor: pointer;
+}
+
+/* The confirm button is slotted into AppDialog's footer, which only supplies a
+   baseline; the danger tone is the caller's rule (same split as
+   RevokeOperatorDialog). */
+.governance__confirm-danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
 }
 
 .governance__panels {

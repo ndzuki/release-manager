@@ -1,33 +1,102 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 // Annotation batch editor (plan v3 Step 4, AC-058-02/13): rows are bound to
-// the server-approved annotation keys only (whitelist), share one scope, use
+// the definition's approved annotation keys (whitelist), share one scope, use
 // stable local IDs, and validate through the pure rules in
-// features/emergency/validation.ts.
-//
-// Contract divergence (recorded): the canonical ExecuteEmergencyChange does
-// not carry annotation entries yet, so this editor validates and previews but
-// the page does not submit annotation intents until the upstream contract
-// extends (no frontend simulation of backend state).
-import { computed, ref, useId, watch } from 'vue';
-import { validateAnnotationEntries, type AnnotationEntryDraft } from '@/features/emergency/validation';
+// features/emergency/validation.ts. The whitelist is the definition's
+// `approved_annotation_keys`, so a key that is approved but NOT yet observed on
+// the workload is selectable too; `observedKeys` labels which keys the read
+// model has actually seen (TASK-274). The batch is submitted with the emergency
+// change (ExecuteEmergencyChangeRequest.annotations + annotation_scope) when
+// the page's action selector is on 'annotations'; the server re-validates every
+// (key, scope) pair against the definition's whitelist.
+import { computed, useId, watch } from 'vue';
+import {
+  ANNOTATION_MAX_ENTRIES,
+  validateAnnotationEntries,
+  type AnnotationEntryDraft,
+} from '@/features/emergency/validation';
 
-const props = defineProps<{
-  /** Server-approved annotation keys (whitelist from the target projection). */
-  approvedKeys: string[];
-  scope: string;
-  values: Array<{ localId: string; key: string; value: string; scope: string }>;
+const props = withDefaults(
+  defineProps<{
+    /** Server-approved annotation keys for `scope` (whitelist projection). */
+    approvedKeys: string[];
+    scope: string;
+    values: Array<{ localId: string; key: string; value: string; scope: string }>;
+    /** Scopes the target approves keys for; when empty the row scope is fixed. */
+    availableScopes?: string[];
+    /**
+     * Keys with a fresh observation on the workload. When supplied, a key
+     * outside it is labelled "approved, not yet observed" so the operator can
+     * tell the whitelist from the observation (TASK-274); null means the
+     * observation state is unknown and the bare key is shown.
+     */
+    observedKeys?: string[] | null;
+    /** Why the full whitelist is unavailable, when it is (TASK-274). */
+    whitelistNotice?: string | null;
+    /** Server-side rejection routed to this field (D7 double-track). */
+    error?: string | null;
+  }>(),
+  { availableScopes: () => [], observedKeys: null, whitelistNotice: null, error: null },
+);
+
+const emit = defineEmits<{
+  update: [entries: AnnotationEntryDraft[]];
+  'update:scope': [scope: string];
 }>();
 
-const emit = defineEmits<{ update: [entries: AnnotationEntryDraft[]] }>();
-
-const nextLocalId = ref(1);
+/*
+ * Next free row id. `localId` is a client-only row identity — the `v-for` key and
+ * the update/remove lookup key — and never reaches the wire. It is derived from
+ * the rows currently present instead of a per-mount counter, so an editor opened
+ * with seeded rows cannot mint a duplicate: start after the highest usable
+ * `local-N` suffix, then step to the first id not already present.
+ *
+ * A suffix is usable as a sequence base only while it can still be stepped past:
+ * a double stops advancing by one at 2^53, so a seed suffix that is not a safe
+ * integer, or whose successor is not, is skipped rather than used as the base.
+ * Such a seed id is not rewritten — the row keeps it — the search just never
+ * hands it out again.
+ */
+function nextFreeLocalId(entries: ReadonlyArray<{ localId: string }>): string {
+  const used = new Set(entries.map((entry) => entry.localId));
+  let candidate = 1;
+  for (const entry of entries) {
+    const match = /^local-(\d+)$/.exec(entry.localId);
+    if (!match) continue;
+    const suffix = Number(match[1]);
+    if (!Number.isSafeInteger(suffix) || !Number.isSafeInteger(suffix + 1)) continue;
+    candidate = Math.max(candidate, suffix + 1);
+  }
+  // A uniqueness guard, not a repair pass. It does NOT cover ids of other shapes
+  // or duplicated seed ids: those can never equal `candidate` (the highest usable
+  // suffix plus one, or 1), so for them the body never runs. It runs only when a
+  // suffix the scan skipped (at or above the 2^53 precision cliff) happens to sit
+  // exactly on `candidate`; the step count is bounded by the row count so a
+  // candidate that has stopped advancing exits instead of spinning.
+  for (let steps = 0; steps <= used.size; steps += 1) {
+    if (!used.has(`local-${candidate}`)) return `local-${candidate}`;
+    const next = candidate + 1;
+    if (next === candidate) break;
+    candidate = next;
+  }
+  // Restart from 1. This terminates: at most `used.size` rows have a local-N id,
+  // so one of the `used.size + 1` candidates 1..used.size+1 is necessarily free.
+  let fallback = 1;
+  while (used.has(`local-${fallback}`)) fallback += 1;
+  return `local-${fallback}`;
+}
 
 const drafts = computed<AnnotationEntryDraft[]>(() => props.values);
 
-const validation = computed(() => validateAnnotationEntries(drafts.value));
+const validation = computed(() =>
+  validateAnnotationEntries(
+    drafts.value,
+    props.approvedKeys.map((key) => ({ key, scope: props.scope })),
+  ),
+);
 
-const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.length < 50);
+const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.length < ANNOTATION_MAX_ENTRIES);
 
 /*
  * Ids for the per-row key/value controls. Prefix from useId() so two editors on one
@@ -36,16 +105,28 @@ const canAdd = computed(() => props.approvedKeys.length > 0 && drafts.value.leng
  * visually-hidden <label for> carrying the column name plus the row number.
  */
 const rowIdPrefix = useId();
+const errorId = computed(() => `${rowIdPrefix}-annotation-error`);
 
 function rowFieldId(localId: string, field: 'key' | 'value'): string {
   return `${rowIdPrefix}-annotation-${localId}-${field}`;
+}
+
+/**
+ * Option label for a whitelisted key. `observedKeys` (when supplied) comes from
+ * the read model, which projects approved ∩ OBSERVED; every other whitelist
+ * entry is approved but has not appeared on the workload yet, and the operator
+ * should see which is which before submitting (TASK-274).
+ */
+function keyOptionLabel(key: string): string {
+  if (!props.observedKeys) return key;
+  return props.observedKeys.includes(key) ? t('annotation.key.observed', { key }) : t('annotation.key.notObserved', { key });
 }
 
 function addRow(): void {
   if (!canAdd.value) return;
   const used = new Set(drafts.value.map((entry) => entry.key));
   const key = props.approvedKeys.find((candidate) => !used.has(candidate)) ?? props.approvedKeys[0];
-  emit('update', [...drafts.value, { localId: `local-${nextLocalId.value++}`, key, value: '', scope: props.scope }]);
+  emit('update', [...drafts.value, { localId: nextFreeLocalId(drafts.value), key, value: '', scope: props.scope }]);
 }
 
 function removeRow(localId: string): void {
@@ -73,7 +154,18 @@ watch(
 
 <template>
   <div class="annotation-editor">
-    <p class="hint">注解变更当前后端契约暂不支持提交，此处仅展示白名单与批量校验。</p>
+    <p class="hint">{{ t('annotation.hint') }}</p>
+    <p v-if="whitelistNotice" class="hint" role="status">{{ whitelistNotice }}</p>
+    <label v-if="availableScopes.length > 0" class="scope-field">
+      <span class="scope-label">{{ t('annotation.scope') }}</span>
+      <select
+        class="scope-select"
+        :value="scope"
+        @change="emit('update:scope', ($event.target as HTMLSelectElement).value)"
+      >
+        <option v-for="candidate in availableScopes" :key="candidate" :value="candidate">{{ candidate }}</option>
+      </select>
+    </label>
     <table class="annotation-table">
       <thead>
         <tr>
@@ -93,9 +185,11 @@ watch(
               :id="rowFieldId(entry.localId, 'key')"
               class="field-input"
               :value="entry.key"
+              :aria-invalid="validation.valid ? undefined : true"
+              :aria-describedby="validation.valid ? undefined : errorId"
               @change="updateRow(entry.localId, { key: ($event.target as HTMLSelectElement).value })"
             >
-              <option v-for="key in approvedKeys" :key="key" :value="key">{{ key }}</option>
+              <option v-for="key in approvedKeys" :key="key" :value="key">{{ keyOptionLabel(key) }}</option>
             </select>
           </td>
           <td>
@@ -106,30 +200,42 @@ watch(
               :id="rowFieldId(entry.localId, 'value')"
               class="field-input"
               :value="entry.value"
-              :placeholder="`1–2048 UTF-8 字节`"
+              :placeholder="t('annotation.valuePlaceholder')"
+              :aria-invalid="validation.valid ? undefined : true"
+              :aria-describedby="validation.valid ? undefined : errorId"
               @input="updateRow(entry.localId, { value: ($event.target as HTMLInputElement).value })"
             />
           </td>
           <td>{{ entry.scope }}</td>
           <td>
-            <button type="button" class="row-remove" :aria-label="`移除注解 ${entry.key}`" @click="removeRow(entry.localId)">
-              移除
+            <button
+              type="button"
+              class="row-remove"
+              :aria-label="t('annotation.removeRow', { key: entry.key })"
+              @click="removeRow(entry.localId)"
+            >
+              {{ t('annotation.remove') }}
             </button>
           </td>
         </tr>
       </tbody>
     </table>
     <button type="button" :disabled="!canAdd" @click="addRow">{{ t('annotation.add') }}</button>
-    <p v-if="!validation.valid" class="error-text">{{ validation.message }}</p>
+    <p v-if="!validation.valid" :id="errorId" class="error-text" role="alert">{{ validation.message }}</p>
+    <p v-if="error" class="error-text" role="alert">{{ error }}</p>
   </div>
 </template>
 
 <style scoped>
-.annotation-editor { display: grid; gap: 0.75rem; }
+.annotation-editor { display: grid; gap: var(--space-3); }
 .annotation-table { width: 100%; border-collapse: collapse; }
-.annotation-table th, .annotation-table td { padding: 0.4rem 0.5rem; border: 1px solid var(--color-border); text-align: left; }
-.field-input { width: 100%; padding: 0.4rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
+.annotation-table th, .annotation-table td { padding: var(--space-2); border: 1px solid var(--color-border); text-align: left; }
+.field-input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
+.field-input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; box-shadow: var(--focus-ring); }
+.scope-field { display: flex; gap: var(--space-2); align-items: center; }
+.scope-label { color: var(--color-muted-strong); font-size: var(--font-size-sm); }
+.scope-select { padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
 .row-remove { color: var(--color-error); }
-.hint { color: var(--color-muted); }
-.error-text { color: var(--color-error); }
+.hint { margin: 0; color: var(--color-muted); font-size: var(--font-size-sm); }
+.error-text { margin: 0; color: var(--color-error); font-size: var(--font-size-sm); }
 </style>

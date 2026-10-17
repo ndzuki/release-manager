@@ -119,7 +119,53 @@ describe('RouteRuleEditor branches the review found uncovered', () => {
     });
 
     expect(wrapper.text()).toContain('规则 1');
-    expect(wrapper.find('.field-error').exists()).toBe(true);
+    // TASK-271 moved the error into FormField's error element (role="alert"), which is
+    // a sibling of the label instead of a child of it.
+    expect(wrapper.find('.form-field__error').exists()).toBe(true);
+  });
+});
+
+/*
+ * TASK-271 (A11y subset ②): each of the three error-bearing rule fields renders its
+ * violation OUTSIDE the `label for`, referenced by aria-describedby. Inside the old
+ * wrapping <label> the same text was part of the control's accessible NAME, so a
+ * describedby pointing at it would have announced the message twice. Both halves are
+ * asserted per field: the name carries only the label copy, the description carries the
+ * error.
+ */
+describe('RouteRuleEditor field errors are described, not named', () => {
+  // FormField roots in DOM order: mode, provider, sourcePrefix, targetPrefix.
+  const cases = [
+    { field: 'mode', description: '模式不受支持', control: 'select', fieldIndex: 0 },
+    { field: 'sourcePrefix', description: '来源前缀与另一条规则冲突', control: 'input', fieldIndex: 2 },
+    { field: 'targetPrefix', description: '目标前缀不是合法的 URI', control: 'input', fieldIndex: 3 },
+  ] as const;
+
+  it.each(cases)('describes the $field control with its alert', ({ field, description, control, fieldIndex }) => {
+    const wrapper = mount(RouteRuleEditor, {
+      props: {
+        title: '镜像路由',
+        artifactType: 'image',
+        rules: [rule()],
+        endpoints,
+        violations: [{ field: `imageRules[0].${field}`, description }],
+      },
+    });
+
+    const fieldRoot = wrapper.findAll('.form-field')[fieldIndex]!;
+    const label = fieldRoot.get('label');
+    const controlElement = fieldRoot.get(control);
+    const describedBy = controlElement.attributes('aria-describedby');
+
+    // ① the accessible name is the label text only — the error is not in it ...
+    expect(label.attributes('for')).toBe(controlElement.attributes('id'));
+    expect(label.text()).not.toContain(description);
+    expect(label.find('.form-field__error').exists()).toBe(false);
+    // ② ... it is reachable as the control's description instead.
+    expect(describedBy).toBeTruthy();
+    expect(fieldRoot.get(`#${describedBy}`).text()).toContain(description);
+    expect(fieldRoot.get(`#${describedBy}`).attributes('role')).toBe('alert');
+    expect(controlElement.attributes('aria-invalid')).toBe('true');
   });
 });
 

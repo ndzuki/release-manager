@@ -3,6 +3,7 @@ import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
+import Pagination from '@/components/common/Pagination.vue';
 
 const props = defineProps<{
   events: AuditEvent[];
@@ -79,10 +80,20 @@ function actorLabel(event: AuditEvent): string {
         </tbody>
       </table>
     </div>
-    <div class="audit-results__pagination" :aria-label="t('audit.table.pagination')">
-      <button type="button" :disabled="!props.hasPrevious || props.loading" @click="emit('previous')">{{ t('audit.table.previous') }}</button>
-      <button type="button" :disabled="!props.hasMore || props.loading" @click="emit('next')">{{ t('audit.table.next') }}</button>
-    </div>
+    <!-- The shared pager owns the controls, the wording and the region's name
+         (TASK-300). Two things stay this table's: the reachability it computes in
+         props, and the event names its consumer binds. The pager cannot know a page
+         is in flight, so `loading` is folded into reachability here; and the
+         primitive emits `prev`/`next` while AuditPage listens for `previous`/`next`,
+         so both directions are bridged explicitly. -->
+    <Pagination
+      class="audit-results__pagination"
+      :has-prev="props.hasPrevious && !props.loading"
+      :has-next="props.hasMore && !props.loading"
+      :label="t('audit.table.pagination')"
+      @prev="emit('previous')"
+      @next="emit('next')"
+    />
   </section>
 </template>
 
@@ -164,23 +175,14 @@ td small {
   background: var(--color-border);
 }
 
+/*
+ * The pager's look — button padding, border, radius and the disabled colour — moved
+ * into the shared Pagination primitive (TASK-300). This rule keeps the one property
+ * the page still owns: the row was right-aligned before the switch and stays that
+ * way. The class reaches the primitive's root `<nav>` through attribute fallthrough,
+ * and scoped CSS applies to a child's root node, so no wrapper is needed.
+ */
 .audit-results__pagination {
-  display: flex;
   justify-content: flex-end;
-  gap: 0.5rem;
-}
-
-.audit-results__pagination button {
-  padding: 0.5rem 0.8rem;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 0.375rem;
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.audit-results__pagination button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 </style>

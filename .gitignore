@@ -78,5 +78,9 @@ release-*
 /sdkcheck
 /reqcheck
 core.*
-# Playwright's default output dir; the console gate writes under e2e-results/ instead
+# Playwright's default output dirs. The console gate (test/e2e/prerequisite/console.sh)
+# writes the failure screenshot/trace to web/test-results/ and the HTML report to
+# web/playwright-report/; both are uploaded as CI artifacts, never committed. The
+# machine-readable JSON report stays under the ignored e2e-results/ (see above).
 web/test-results/
+web/playwright-report/

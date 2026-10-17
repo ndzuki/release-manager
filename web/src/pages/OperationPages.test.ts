@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { mount, type VueWrapper } from '@vue/test-utils';
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -20,9 +20,39 @@ import {
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { BundleStatus } from '@/gen/common/v1/domain_pb';
 import { setOperationClientForTest } from '@/connect/operation-api';
+import * as valuesApi from '@/connect/values-revision';
 import OperationCreatePage from './OperationCreatePage.vue';
 import { useOperationTimelineStore } from '@/stores/operationTimeline';
 import OperationDetailPage from './OperationDetailPage.vue';
+import type { ValuesRevision } from '@/types/valuesRevision';
+
+/*
+ * The release-operation form binds to APPROVED revisions loaded through this wrapper
+ * (REQ-056 D10); it is a separate module-level client from operation-api's injectable
+ * one, so it is mocked here the same way the store test does.
+ */
+vi.mock('@/connect/values-revision', async (importOriginal) => {
+  const original = await importOriginal<typeof valuesApi>();
+  return { ...original, listApprovedValuesRevisions: vi.fn() };
+});
+
+function approvedRevision(id: string): ValuesRevision {
+  return {
+    id,
+    releaseDefinitionId: 'def-1',
+    revision: 1,
+    stateVersion: '3',
+    document: '{}',
+    valuesDigest: `sha256:${id}`,
+    status: 'approved',
+    parentRevisionId: null,
+    secretRefs: [],
+    createdByUserId: 'u-1',
+    createdAt: '2026-10-01T00:00:00Z',
+    convergenceTaskIds: [],
+    lockedPaths: [],
+  };
+}
 
 interface TestClients {
   operations: Client<typeof OrchestratorService>;
@@ -75,8 +105,9 @@ async function mountCreatePage(clients: TestClients) {
 }
 
 async function fillBundleAndValues(wrapper: VueWrapper): Promise<void> {
-  await wrapper.find('select').setValue('bundle-1');
-  await wrapper.find('input[aria-label="ValuesRevision 标识"]').setValue('vr-1');
+  await wrapper.find('[data-testid="operation-bundle"]').setValue('bundle-1');
+  // REQ-056 D10: the approved revision is chosen from the loaded list, not typed.
+  await wrapper.find('[data-testid="operation-values-revision"]').setValue('vr-1');
 }
 
 function emptyOptionsClients(): TestClients {
@@ -92,6 +123,9 @@ describe('operation pages', () => {
   beforeEach(() => {
     sessionStorage.clear();
     setActivePinia(createPinia());
+    vi.mocked(valuesApi.listApprovedValuesRevisions)
+      .mockReset()
+      .mockResolvedValue([approvedRevision('vr-1')]);
   });
 
   it('shows the correct fields for INSTALL, UPGRADE, and ROLLBACK', async () => {
@@ -110,7 +144,7 @@ describe('operation pages', () => {
     expect(wrapper.text()).toContain('当前 Revision');
     expect(wrapper.text()).toContain('回滚目标 Revision');
     expect(wrapper.text()).not.toContain('制品 Bundle');
-    expect(wrapper.text()).not.toContain('已审批 ValuesRevision ID');
+    expect(wrapper.text()).not.toContain('已审批 ValuesRevision');
     expect(wrapper.text()).not.toContain('Patch 覆盖');
     expect(wrapper.text()).not.toContain('回退目标 Operation');
   });
@@ -259,6 +293,62 @@ describe('operation pages', () => {
       component: { template: '<div />' },
     });
   }
+
+  /*
+   * TASK-277: the Operation centre can reach the detail through an UNSCOPED route, and
+   * this case registers only that pair — the deployment where the release inventory is
+   * off and the release-scoped routes do not exist. The aggregate row carries the
+   * cluster since TASK-279, so the centre prefers the canonical route where it is
+   * registered; on this entry the page must drop the release-scoped breadcrumbs instead
+   * of building links from params it does not have — those pushes would throw "Missing
+   * required param" rather than navigate.
+   */
+  it('TASK-277: renders the unscoped detail route with an Operation centre breadcrumb', async () => {
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-center',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/operations/:operationId', name: 'OperationCenterDetail', component: OperationDetailPage },
+        { path: '/operations', name: 'OperationCenter', component: { template: '<div />' } },
+      ],
+    });
+    await router.push('/operations/op-center?releaseName=checkout');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('op-center'));
+
+    const crumbs = wrapper.get('.operation-detail__breadcrumbs');
+    expect(crumbs.find('a[href="/operations"]').exists()).toBe(true);
+    expect(crumbs.text()).toContain('checkout');
+    // The release-scoped crumbs are absent, not broken.
+    expect(crumbs.text()).not.toContain('Releases');
+    expect(crumbs.find('a[href^="/customers/"]').exists()).toBe(false);
+  });
 
   it('AC-13: renders a disabled 取消中… button while the operation is cancelling', async () => {
     const clients: TestClients = {
@@ -548,6 +638,178 @@ describe('operation pages', () => {
     // click path resolves with fewer microtask turns than trigger() did, so wait
     // for the state instead of asserting on it immediately.
     await vi.waitFor(() => expect(timelineStore.operation?.state).toBe('cancelling'));
+    wrapper.unmount();
+  });
+
+  /*
+   * TASK-281: `loadPreflightResult()` used to swallow every read failure into
+   * `preflightResult = null`, which is exactly the "no preflight result yet" state —
+   * so a broken read was invisible. A failure now renders its own feedback (plus the
+   * correlation line's requestId for on-call) with a retry entry point, and stays
+   * distinguishable from the genuinely empty state.
+   */
+  it('surfaces a preflight read failure with its requestId and can retry', async () => {
+    const getOperation = vi.fn().mockRejectedValue(
+      new ConnectError('preflight read failed', Code.Internal, { 'X-Request-ID': 'req-preflight-1' }),
+    );
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-preflight',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-preflight');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(true));
+    const failure = wrapper.get('[data-testid="preflight-load-failure"]');
+    expect(failure.text()).toContain('预检结果加载失败');
+    // The correlation line carries the server-side requestId for on-call triage.
+    expect(failure.text()).toContain('requestId=req-preflight-1');
+
+    // Retry re-reads; the second read returns no result and the failure clears.
+    getOperation.mockResolvedValue(create(GetOperationResponseSchema, {
+      operation: create(OperationSchema, { operationId: 'op-preflight' }),
+    }));
+    await failure.findAll('button').find((button) => button.text() === '重试')?.trigger('click');
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(false));
+    expect(wrapper.find('.preflight-panel').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('treats a missing preflight result as an empty state, not a failure', async () => {
+    const getOperation = vi.fn().mockResolvedValue(create(GetOperationResponseSchema, {
+      operation: create(OperationSchema, {
+        operationId: 'op-empty-preflight',
+        operationType: 'INSTALL',
+        state: OperationStatus.RUNNING,
+        stateVersion: 1n,
+      }),
+    }));
+    const clients: TestClients = {
+      operations: {
+        watchOperation: vi.fn().mockResolvedValue((async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: 'op-empty-preflight',
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-empty-preflight');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(getOperation).toHaveBeenCalled());
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(false);
+    expect(wrapper.find('.preflight-panel').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  /*
+   * TASK-282: the scope watcher reset the store but left the previous operation's
+   * preflight failure in place, so an A(failed) -> B navigation rendered A's banner
+   * until B's read resolved. The read state must reset with the scope.
+   */
+  it('clears the previous preflight failure when the route scope changes', async () => {
+    // The first read rejects (A's banner); every later read stays in flight, so the
+    // assertion can only be observing the scope reset, not B's own outcome.
+    const getOperation = vi.fn().mockImplementation(() => new Promise<never>(() => undefined));
+    getOperation.mockRejectedValueOnce(
+      new ConnectError('preflight read failed', Code.Internal, { 'X-Request-ID': 'req-scope-a' }),
+    );
+    const clients: TestClients = {
+      operations: {
+        // The snapshot must carry the operation the store asked for: it drops a
+        // mismatched one (operationTimeline applySnapshot), and then store.operation
+        // never becomes truthy and the failure block never re-renders at all. The
+        // client receives the request message, not the bare id string.
+        watchOperation: vi.fn().mockImplementation((request: { operationId: string }) => (async function* () {
+          yield create(WatchOperationResponseSchema, {
+            payload: {
+              case: 'snapshot',
+              value: create(OperationSnapshotSchema, {
+                operation: create(OperationSchema, {
+                  operationId: request.operationId,
+                  operationType: 'INSTALL',
+                  state: OperationStatus.RUNNING,
+                  stateVersion: 1n,
+                }),
+                snapshotSequence: 1n,
+                retainedFromSequence: 1n,
+              }),
+            },
+          });
+          await new Promise<void>(() => undefined);
+        })()),
+        getOperation,
+      } as unknown as Client<typeof OrchestratorService>,
+      bundles: emptyOptionsClients().bundles,
+    };
+    setOperationClientForTest(clients.operations, clients.bundles);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const timelineStore = useOperationTimelineStore(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [] });
+    detailRoute(router);
+    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/op-scope-a');
+    await router.isReady();
+    const wrapper = mount(OperationDetailPage, { global: { plugins: [pinia, router] } });
+
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(true));
+    expect(wrapper.get('[data-testid="preflight-load-failure"]').text()).toContain('requestId=req-scope-a');
+
+    // Same page, new scope rendered and B's read still in flight: A's banner must
+    // not be what the re-rendered operation shows.
+    await router.push('/customers/cust-1/clusters/cluster-2/releases/def-2/operations/op-scope-b');
+    await vi.waitFor(() => expect(timelineStore.operation?.operationId).toBe('op-scope-b'));
+    await flushPromises();
+    expect(wrapper.find('[data-testid="preflight-load-failure"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });

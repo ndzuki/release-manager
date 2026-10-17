@@ -11,7 +11,9 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import EmergencyResultPanel from '@/components/emergency/EmergencyResultPanel.vue';
+import { getDefinition } from '@/connect/definition-api';
 import { getEmergencyResult } from '@/connect/emergency-api';
+import { correlationLine, describeError } from '@/connect/error-copy';
 import { getPreflightResult } from '@/connect/operation-api';
 import { useEmergencyEffectObservation } from '@/composables/useEmergencyEffectObservation';
 import { useAuthStore } from '@/stores/auth';
@@ -26,12 +28,93 @@ const store = useOperationTimelineStore();
 const authStore = useAuthStore();
 const operationId = computed(() => String(route.params.operationId ?? ''));
 const releaseName = computed(() => String(route.query.releaseName ?? route.params.releaseId ?? 'Release'));
+/*
+ * The release context this page addresses (TASK-279). The canonical nested route
+ * carries customer/cluster/release in the URL; the Operation centre's scope-less
+ * route (`/operations/:operationId`, TASK-277) carries only the operation id, and
+ * vue-router refuses a named route whose required params are empty. Instead of
+ * masking every release-scoped action there, the page recovers the context from the
+ * operation's own release definition — the same release:read the operation stream
+ * already needs. The operation itself renders while that read is in flight or
+ * refused; only the actions that need the context wait for it.
+ */
+type ReleaseScope = { customerId: string; clusterId: string; releaseId: string };
+
+// The release-scoped routes register together (router/index.ts). Where they are
+// absent (release inventory disabled) there is no scoped page to navigate into, so
+// a resolved definition must not flip this page into scoped rendering.
+const releaseScopedRoutes =
+  router.hasRoute('ReleaseInventory') && router.hasRoute('OperationList') && router.hasRoute('ConvergenceTasks');
+
+function routeReleaseScope(): ReleaseScope | null {
+  const customerId = String(route.params.customerId ?? '');
+  const clusterId = String(route.params.clusterId ?? '');
+  const releaseId = String(route.params.releaseId ?? '');
+  return customerId && clusterId && releaseId ? { customerId, clusterId, releaseId } : null;
+}
+
+const resolvedScope = ref<ReleaseScope | null>(null);
+const releaseScope = computed(() => routeReleaseScope() ?? resolvedScope.value);
+
 // Full route scope: a same operationId under a different customer/cluster/
 // release must reset the store and open a fresh stream (AC-057-15).
 const routeScope = computed(() =>
   [route.params.customerId, route.params.clusterId, route.params.releaseId, route.params.operationId]
     .map(String)
     .join('/'),
+);
+
+/**
+ * Recovers the release context from the operation's release definition when the URL
+ * does not carry it. Failures are deliberately silent here: the page's own error
+ * surface belongs to the operation stream, and a refused definition read must leave
+ * the operation readable rather than replace it with an error state.
+ */
+async function resolveReleaseScope(definitionId: string): Promise<void> {
+  if (!releaseScopedRoutes) return;
+  const requestedOperationId = operationId.value;
+  /*
+   * The route param alone is not "the operation on screen": across a same-id
+   * scope switch it stays the same while the store is reset (operationId null)
+   * and reloaded. The store's own identity is the authority for which operation
+   * this definition read belongs to; `routeReleaseScope()` still stops a route
+   * that has since gained its own scope from being overwritten. TASK-286.
+   */
+  const stillCurrent = (): boolean =>
+    operationId.value === requestedOperationId &&
+    !routeReleaseScope() &&
+    store.operationId === requestedOperationId &&
+    store.operation?.releaseDefinitionId === definitionId;
+  try {
+    const definition = await getDefinition(definitionId);
+    // A late response for a previous operation must not overwrite the context
+    // on screen.
+    if (!stillCurrent()) return;
+    resolvedScope.value =
+      definition.customerId && definition.clusterId
+        ? { customerId: definition.customerId, clusterId: definition.clusterId, releaseId: definitionId }
+        : null;
+  } catch {
+    if (!stillCurrent()) return;
+    resolvedScope.value = null;
+  }
+}
+
+watch(
+  () => [routeScope.value, store.operation?.releaseDefinitionId] as const,
+  () => {
+    if (routeReleaseScope()) {
+      resolvedScope.value = null;
+      return;
+    }
+    const definitionId = store.operation?.releaseDefinitionId ?? '';
+    if (!definitionId) {
+      resolvedScope.value = null;
+      return;
+    }
+    void resolveReleaseScope(definitionId);
+  },
+  { immediate: true },
 );
 
 const liveUpdatesEnabled = import.meta.env.VITE_OPERATION_LIVE_UPDATES !== 'false';
@@ -41,21 +124,39 @@ const liveUpdatesEnabled = import.meta.env.VITE_OPERATION_LIVE_UPDATES !== 'fals
 // it is fetched alongside the stream and re-fetched when the operation moves on
 // (the coordinator persists it as preflight concludes).
 const preflightResult = ref<PreflightResult | null>(null);
+/*
+ * TASK-281: a failed preflight read is NOT the same as "the operation returned no
+ * preflight result yet". Keeping the failure in its own state makes the two
+ * distinguishable, gives the operator a retry entry point, and carries the
+ * correlation line (code · requestId) so a failure can be handed to the server logs.
+ */
+const preflightFailure = ref<{ message: string; details: string } | null>(null);
 
 async function loadPreflightResult(): Promise<void> {
   const current = operationId.value;
   if (!current) {
     preflightResult.value = null;
+    preflightFailure.value = null;
     return;
   }
   try {
     const result = await getPreflightResult(current);
     // A late response for a previous operation must not overwrite the current
     // one (same guard the store applies to its own async reads).
-    if (operationId.value === current) preflightResult.value = result;
-  } catch {
-    // Best effort: the operation and its last_error still render.
-    if (operationId.value === current) preflightResult.value = null;
+    if (operationId.value === current) {
+      preflightResult.value = result;
+      preflightFailure.value = null;
+    }
+  } catch (error) {
+    // The operation and its last_error still render, but the read failure is
+    // surfaced rather than swallowed: message plus the correlation line.
+    if (operationId.value === current) {
+      preflightResult.value = null;
+      preflightFailure.value = {
+        message: t('operation.preflight.loadFailedHint'),
+        details: correlationLine(describeError(error)),
+      };
+    }
   }
 }
 
@@ -90,16 +191,28 @@ watch(
   () => [operationId.value, isEmergency.value],
   () => {
     emergencyResult.value = null;
-    const organizationId = authStore.activeOrganization?.id ?? '';
-    const customerId = String(route.params.customerId ?? '');
-    if (organizationId && customerId) {
-      void authorization.load(organizationId, customerId);
-    }
     if (isEmergency.value) {
       void loadEmergencyResult();
       effectObservation.start(operationId.value, () => liveUpdatesEnabled);
     } else {
       effectObservation.stop();
+    }
+  },
+  { immediate: true },
+);
+
+/*
+ * The authorization snapshot is scoped to a customer, not to an operation. The
+ * canonical route carries that customer in the URL; the scope-less route recovers
+ * it from the release definition (TASK-279), so this follows the RESOLVED scope
+ * rather than the raw route params — otherwise the snapshot would never load on
+ * the scope-less entry and the capability projection would stay fail-closed.
+ */
+watch(
+  () => [authStore.activeOrganization?.id ?? '', releaseScope.value?.customerId ?? ''] as const,
+  ([organizationId, customerId]) => {
+    if (organizationId && customerId) {
+      void authorization.load(organizationId, customerId);
     }
   },
   { immediate: true },
@@ -136,7 +249,22 @@ watch(routeScope, (current, previous) => {
     // Scope changed (possibly with the same operationId): reset first so the
     // load() early-return guard cannot absorb a same-id navigation
     // (AC-057-15: old stream/timers must stop before the new scope loads).
+    //
+    // TASK-286: tear the EMERGENCY effect observation down FIRST. stop() resets
+    // the timeline store (its own scope generation++), and doing that after the
+    // load() below discards the fresh stream — the page then hangs on
+    // "正在加载 Operation…". The isEmergency watcher would otherwise call this
+    // same stop() once the reset operation reads as non-EMERGENCY; after the
+    // explicit teardown that second call is a no-op (currentOperationId is null),
+    // so nothing invalidates the stream opened here.
+    effectObservation.stop();
     store.reset();
+    // The preflight read belongs to the scope being left. Clearing both halves
+    // synchronously stops the previous operation's failure banner (or result
+    // panel) from rendering while the new scope's read is still in flight;
+    // loadPreflightResult() below repopulates them from the new scope.
+    preflightResult.value = null;
+    preflightFailure.value = null;
   }
   void store.load(nextOperationId);
   void loadPreflightResult();
@@ -155,13 +283,14 @@ onBeforeUnmount(() => {
 });
 
 function openConvergence(): void {
+  // The canonical nested route (or a scope recovered from the operation's release
+  // definition, TASK-279) is what makes the convergence route resolvable. Without
+  // it there is nothing to push — vue-router would throw on the empty params.
+  const scope = releaseScope.value;
+  if (!scope) return;
   void router.push({
     name: 'ConvergenceTasks',
-    params: {
-      customerId: String(route.params.customerId ?? ''),
-      clusterId: String(route.params.clusterId ?? ''),
-      releaseId: String(route.params.releaseId ?? ''),
-    },
+    params: { customerId: scope.customerId, clusterId: scope.clusterId, releaseId: scope.releaseId },
   });
 }
 
@@ -173,28 +302,35 @@ function formatTimestamp(value: string | null): string {
 <template>
   <section class="operation-detail">
     <nav class="operation-detail__breadcrumbs" :aria-label="t('values.page.breadcrumb')">
-      <RouterLink
-        :to="{
-          name: 'ReleaseInventory',
-          params: { customerId: route.params.customerId, clusterId: route.params.clusterId },
-        }"
-      >
-        Releases
-      </RouterLink>
-      <span aria-hidden="true">/</span>
-      <RouterLink
-        :to="{
-          name: 'OperationList',
-          params: {
-            customerId: route.params.customerId,
-            clusterId: route.params.clusterId,
-            releaseId: route.params.releaseId,
-          },
-        }"
-      >
-        操作历史
-      </RouterLink>
-      <span aria-hidden="true">/</span><span>{{ releaseName }}</span><span aria-hidden="true">/</span>
+      <template v-if="releaseScope">
+        <RouterLink
+          :to="{
+            name: 'ReleaseInventory',
+            params: { customerId: releaseScope.customerId, clusterId: releaseScope.clusterId },
+          }"
+        >
+          Releases
+        </RouterLink>
+        <span aria-hidden="true">/</span>
+        <RouterLink
+          :to="{
+            name: 'OperationList',
+            params: {
+              customerId: releaseScope.customerId,
+              clusterId: releaseScope.clusterId,
+              releaseId: releaseScope.releaseId,
+            },
+          }"
+        >
+          操作历史
+        </RouterLink>
+        <span aria-hidden="true">/</span>
+      </template>
+      <template v-else>
+        <RouterLink :to="{ name: 'OperationCenter' }">{{ t('operationCenter.title') }}</RouterLink>
+        <span aria-hidden="true">/</span>
+      </template>
+      <span>{{ releaseName }}</span><span aria-hidden="true">/</span>
       <strong>{{ operationId }}</strong>
     </nav>
 
@@ -217,7 +353,16 @@ function formatTimestamp(value: string | null): string {
       @action="store.retryInitial"
     />
     <template v-else>
-      <PreflightResultPanel :result="preflightResult" />
+      <ErrorState
+        v-if="preflightFailure"
+        data-testid="preflight-load-failure"
+        :title="t('operation.preflight.loadFailed')"
+        :message="preflightFailure.message"
+        :details="preflightFailure.details"
+        :action-label="t('action.retry')"
+        @action="loadPreflightResult"
+      />
+      <PreflightResultPanel v-else :result="preflightResult" />
 
       <header class="operation-detail__header">
         <div>
@@ -289,7 +434,7 @@ function formatTimestamp(value: string | null): string {
         :operation-state="store.operation?.state ?? ''"
         :operation-effect-status="store.operation?.effectStatus ?? ''"
         :observation-status="effectObservation.status.value"
-        :can-create-values-revision="authorization.canCreateValuesRevision"
+        :can-create-values-revision="authorization.canCreateValuesRevision && releaseScope !== null"
         @open-convergence="openConvergence"
       />
 

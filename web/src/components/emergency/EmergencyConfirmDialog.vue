@@ -15,6 +15,9 @@ defineProps<{
   artifact: CandidateArtifactDisplay | null;
   reason: string;
   policy: string;
+  /** One-line rendering of the selected action's payload (replicas / entries).
+   * Null for the image action, whose container+artifact rows already carry it. */
+  actionSummary?: string | null;
   riskAccepted: boolean;
   submitting: boolean;
   error: { code: string; message: string } | null;
@@ -47,6 +50,10 @@ const emit = defineEmits<{
       <dd>{{ container || '—' }}</dd>
       <dt>{{ t('emergency.confirm.artifact') }}</dt>
       <dd>{{ artifact ? `${artifact.repository}（${artifact.digest}）` : '—' }}</dd>
+      <template v-if="actionSummary">
+        <dt>{{ t('emergency.confirm.action') }}</dt>
+        <dd class="emergency-confirm__reason">{{ actionSummary }}</dd>
+      </template>
       <dt>{{ t('emergency.confirm.policy') }}</dt>
       <dd>{{ policy }}</dd>
       <dt>{{ t('emergency.confirm.reason') }}</dt>

@@ -52,7 +52,7 @@ AGENTS.md 约束 4 要求「迁移写在 `migrations/` 且编号连续，SQLite 
 
 - **校验命令**（只读源码/测试即可跑）：
   - `go test ./internal/postgres/...`（`migrate_test.go` 覆盖文件名/连续性/pairing 校验；`migrate_integration_test.go` 需真库）；
-  - `go test -race ./internal/store/sqlite/...`（SQLite 侧；CI 里对应 `test-sqlite` **job**（`.github/workflows/test.yml:202`），本仓库**没有**同名 make 目标）；
+  - `go test -race ./internal/store/sqlite/...`（SQLite 侧；CI 里对应 `test-sqlite` **job**（`.github/workflows/test.yml:273-314`），本仓库**没有**同名 make 目标）；
   - 真 PostgreSQL 测试必须带 `//go:build integration` 且提供 `POSTGRES_TEST_DSN`，默认 skip（AGENTS.md「质量门禁」、docs/architecture.md:121）；
   - 服务启动即校验：任何不连续/缺 pair/重名都会以 `migration_failed` 中止启动（migrate.go:181-213）。
 - **历史编号复用坑**：000007/000008 曾承载过不同内容，`repairHistoricalMigrationVersion` 在版本 ≥7/8/9/10 且对应特征表缺失时把 `schema_migrations.version` 回退到最早安全重放点（migrate.go:92-155）；被重放的迁移刻意写成幂等——`ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS`（见 `000009_upgrade_result.up.sql:1-6`、`000010_operation_timeline_effect_status.up.sql`）。**新写重放段内的迁移请沿用该幂等风格**（重放文件清单：000009/000010/000016/000021/000022/000024/000025/000026 含 `IF NOT EXISTS`）。

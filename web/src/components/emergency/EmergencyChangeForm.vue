@@ -5,6 +5,7 @@
 // unique promotion mapping; otherwise it degrades to REVERT).
 // Field-level validation errors render inline (D7 double-track).
 import { computed } from 'vue';
+import FormField from '@/components/common/FormField.vue';
 import { REASON_MAX_BYTES, utf8ByteLength, validateReason } from '@/features/emergency/validation';
 import type { ConvergencePolicy } from '@/features/emergency/model';
 
@@ -24,6 +25,9 @@ const emit = defineEmits<{
 
 const reasonValidation = computed(() => validateReason(props.reason));
 const reasonBytes = computed(() => utf8ByteLength(props.reason.trim()));
+// TASK-275: the byte counter stays a description (it is a live hint, not the name);
+// FormField cannot render it because it carries the `over` state class.
+const byteCountId = 'emergency-reason-byte-count';
 
 const effectivePolicy = computed<ConvergencePolicy>(() =>
   props.requirePromotionAvailable ? props.convergencePolicy : 'REVERT_ON_NEXT_RECONCILE',
@@ -36,20 +40,33 @@ function setPolicy(policy: ConvergencePolicy): void {
 
 <template>
   <form class="change-form" @submit.prevent>
-    <label>
-      <span class="field-label">变更原因（事故 ID / 现象 / 影响范围）</span>
-      <textarea
-        class="field-input reason-input"
-        rows="4"
-        :value="reason"
-        placeholder="事故 ID / 现象 / 影响范围"
-        @input="emit('update:reason', ($event.target as HTMLTextAreaElement).value)"
-      />
-      <span class="byte-count" :class="{ over: !reasonValidation.valid }">
-        {{ reasonBytes }} / {{ REASON_MAX_BYTES }} 字节
-      </span>
-      <span v-if="!reasonValidation.valid" class="error-text">{{ reasonValidation.message }}</span>
-    </label>
+    <!--
+     TASK-275: the reason error used to render INSIDE the wrapping <label>, so it was part
+     of the textarea's accessible NAME and a describedby pointing at it would announce it
+     twice. FormField (TASK-268) owns the shape; the counter (a hint with its own `over`
+     state) rides in the slot and is appended to the control's description.
+    -->
+    <FormField
+      label="变更原因（事故 ID / 现象 / 影响范围）"
+      :error="reasonValidation.valid ? '' : reasonValidation.message"
+    >
+      <template #default="{ id, describedBy, invalid, disabled }">
+        <textarea
+          :id="id"
+          class="field-input reason-input"
+          rows="4"
+          :value="reason"
+          :aria-describedby="[describedBy, byteCountId].filter(Boolean).join(' ')"
+          :aria-invalid="invalid"
+          :disabled="disabled"
+          placeholder="事故 ID / 现象 / 影响范围"
+          @input="emit('update:reason', ($event.target as HTMLTextAreaElement).value)"
+        />
+        <span :id="byteCountId" class="byte-count" :class="{ over: !reasonValidation.valid }">
+          {{ reasonBytes }} / {{ REASON_MAX_BYTES }} 字节
+        </span>
+      </template>
+    </FormField>
 
     <fieldset class="policy-fieldset">
       <legend>收敛策略</legend>
@@ -86,7 +103,7 @@ function setPolicy(policy: ConvergencePolicy): void {
 
 <style scoped>
 .change-form { display: grid; gap: 1rem; }
-.field-label { display: block; margin-bottom: 0.25rem; color: var(--color-muted-strong); font-size: var(--font-size-sm); }
+/* TASK-275: `.field-label` and `.error-text` are gone — the label and the alert are FormField's. */
 .field-input { width: 100%; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
 .reason-input { resize: vertical; }
 .byte-count { font-size: var(--font-size-sm); color: var(--color-subtle); }
@@ -94,6 +111,5 @@ function setPolicy(policy: ConvergencePolicy): void {
 .policy-fieldset { display: grid; gap: 0.4rem; border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.75rem; }
 .policy-fieldset label.disabled { color: var(--color-subtle); }
 .hint { color: var(--color-muted); font-size: var(--font-size-sm); }
-.error-text { color: var(--color-error); font-size: var(--font-size-sm); }
 .summary-bar { padding: 0.6rem 0.75rem; border: 1px solid var(--color-danger-border-soft); border-radius: 0.375rem; background: var(--color-danger-soft); color: var(--color-error); }
 </style>

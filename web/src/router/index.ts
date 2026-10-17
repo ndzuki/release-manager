@@ -78,6 +78,29 @@ export function createAppRouter(
             meta: { requiresAuth: true, feature: 'releaseOperations' },
           }]
         : []),
+      ...(operationsEnabled
+        ? [{
+            // TASK-277 / REQ-100 H9: the cross-release non-terminal queue. It needs no
+            // release inventory (it is organization-scoped), only the operations switch.
+            path: '/operations',
+            name: 'OperationCenter',
+            component: () => import('@/pages/OperationCenterPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }, {
+            // Same detail component on an unscoped path, kept as its own route record:
+            // vue-router refuses a named route whose required params are empty, so the
+            // scope-less entry needs a distinct path. It stays the fallback where the
+            // release-scoped routes are not registered (release inventory off). The
+            // aggregate row carries the cluster since TASK-279, so the Operation centre
+            // prefers the canonical route; on this entry the page recovers the release
+            // context from the operation's release definition, and renders a single
+            // breadcrumb when it cannot.
+            path: '/operations/:operationId',
+            name: 'OperationCenterDetail',
+            component: () => import('@/pages/OperationDetailPage.vue'),
+            meta: { requiresAuth: true, feature: 'releaseOperations' },
+          }]
+        : []),
       {
         // A1 (UX plan §6.1): membership management had no console surface; the
         // four RPCs exist since REQ-026.

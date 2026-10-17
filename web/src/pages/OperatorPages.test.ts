@@ -1,13 +1,21 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import OperatorDetailPage from './OperatorDetailPage.vue';
 import OperatorEnrollPage from './OperatorEnrollPage.vue';
 import OperatorListPage from './OperatorListPage.vue';
-import { getEnrollmentTokenStatus, getOperator, listOperators } from '@/connect/operator-api';
+import {
+  createEnrollmentToken,
+  getEnrollmentTokenStatus,
+  getOperator,
+  listOperators,
+  revokePendingEnrollmentToken,
+} from '@/connect/operator-api';
 import type * as OperatorApi from '@/connect/operator-api';
+import { t } from '@/i18n/messages';
 import { useAuthStore } from '@/stores/auth';
+import { useOperatorStore } from '@/stores/operator';
 vi.mock('@/connect/operator-api', async (importOriginal) => {
   const original = await importOriginal<typeof OperatorApi>();
   return {
@@ -15,8 +23,37 @@ vi.mock('@/connect/operator-api', async (importOriginal) => {
     getEnrollmentTokenStatus: vi.fn(),
     getOperator: vi.fn(),
     listOperators: vi.fn(),
+    createEnrollmentToken: vi.fn(),
+    revokePendingEnrollmentToken: vi.fn(),
   };
 });
+
+function dialogPanel(): HTMLElement {
+  const panel = document.querySelector<HTMLElement>('.app-dialog__panel');
+  if (!panel) throw new Error('confirmation dialog not rendered');
+  return panel;
+}
+
+function clickDialogButton(root: HTMLElement, label: string): void {
+  const button = Array.from(root.querySelectorAll('button')).find((element) => element.textContent?.trim() === label);
+  if (!button) throw new Error(`dialog button not found: ${label}`);
+  button.click();
+}
+
+async function mountEnrollPage() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/customers/:customerId/clusters/:clusterId/operators', name: 'OperatorList', component: { template: '<div />' } },
+      { path: '/customers/:customerId/clusters/:clusterId/operators/new', name: 'OperatorEnroll', component: OperatorEnrollPage },
+    ],
+  });
+  await router.push('/customers/customer-1/clusters/cluster-1/operators/new');
+  await router.isReady();
+  const wrapper = mount(OperatorEnrollPage, { global: { plugins: [router] } });
+  await flushPromises();
+  return wrapper;
+}
 
 function authenticate(role: string): void {
   useAuthStore().$patch({
@@ -37,6 +74,17 @@ beforeEach(() => {
   vi.mocked(listOperators).mockReset();
   vi.mocked(getOperator).mockReset();
   vi.mocked(getEnrollmentTokenStatus).mockReset();
+  vi.mocked(createEnrollmentToken).mockReset().mockResolvedValue({
+    token: 'token-plaintext',
+    expiresAt: '2026-10-01T01:00:00.000Z',
+    customerId: 'customer-1',
+    clusterId: 'cluster-1',
+    clusterName: 'Staging',
+    operatorEndpoint: 'operator.example:443',
+    installCommandTemplateVersion: 'v1',
+    installCommandTemplate: 'helm install ${ENROLLMENT_TOKEN}',
+  });
+  vi.mocked(revokePendingEnrollmentToken).mockReset().mockResolvedValue(true);
 });
 
 describe('Operator pages', () => {
@@ -137,4 +185,141 @@ describe('Operator pages', () => {
     expect(wrapper.text()).not.toContain('撤销待用令牌');
     expect(wrapper.text()).not.toContain('生成注册令牌');
   });
+
+  // TASK-281: both pending-token confirmations moved from `window.confirm` to the
+  // shared AppDialog. Cancel must not run the original path; confirm must.
+  it('replaces a pending token only after the dialog is confirmed', async () => {
+    authenticate('release_admin');
+    vi.mocked(getEnrollmentTokenStatus).mockResolvedValue({
+      state: 'pending',
+      createdAt: '2026-07-27T01:00:00.000Z',
+      expiresAt: '2026-07-27T02:00:00.000Z',
+      createdByDisplayName: 'release-admin',
+    });
+    const wrapper = await mountEnrollPage();
+    // The generation path validates the form first, so make the name valid.
+    await wrapper.find('input[type="text"]').setValue('operator-one');
+
+    await wrapper.findAll('button').find((button) => button.text() === '替换令牌')?.trigger('click');
+    let panel = dialogPanel();
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent).toBe('替换待用令牌');
+    clickDialogButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
+    expect(createEnrollmentToken).not.toHaveBeenCalled();
+
+    // Destructive confirmation: a backdrop click does not dismiss it.
+    await wrapper.findAll('button').find((button) => button.text() === '替换令牌')?.trigger('click');
+    panel = dialogPanel();
+    document.querySelector<HTMLElement>('.app-dialog')!.click();
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).not.toBeNull();
+    expect(createEnrollmentToken).not.toHaveBeenCalled();
+    clickDialogButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
+
+    await wrapper.findAll('button').find((button) => button.text() === '替换令牌')?.trigger('click');
+    panel = dialogPanel();
+    clickDialogButton(panel, '确认替换');
+    await vi.waitFor(() => expect(createEnrollmentToken).toHaveBeenCalledTimes(1));
+    expect(createEnrollmentToken).toHaveBeenCalledWith(
+      'customer-1',
+      'cluster-1',
+      expect.objectContaining({ operatorName: 'operator-one' }),
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  it('revokes the pending token only after the dialog is confirmed', async () => {
+    authenticate('release_admin');
+    vi.mocked(getEnrollmentTokenStatus).mockResolvedValue({
+      state: 'pending',
+      createdAt: '2026-07-27T01:00:00.000Z',
+      expiresAt: '2026-07-27T02:00:00.000Z',
+      createdByDisplayName: 'release-admin',
+    });
+    const wrapper = await mountEnrollPage();
+
+    await wrapper.findAll('button').find((button) => button.text() === '撤销待用令牌')?.trigger('click');
+    let panel = dialogPanel();
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent).toBe('撤销待用令牌');
+    clickDialogButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
+    expect(revokePendingEnrollmentToken).not.toHaveBeenCalled();
+
+    // Destructive confirmation: a backdrop click does not dismiss it.
+    await wrapper.findAll('button').find((button) => button.text() === '撤销待用令牌')?.trigger('click');
+    panel = dialogPanel();
+    document.querySelector<HTMLElement>('.app-dialog')!.click();
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).not.toBeNull();
+    expect(revokePendingEnrollmentToken).not.toHaveBeenCalled();
+    clickDialogButton(panel, '取消');
+    await flushPromises();
+    expect(document.querySelector('.app-dialog__panel')).toBeNull();
+
+    await wrapper.findAll('button').find((button) => button.text() === '撤销待用令牌')?.trigger('click');
+    panel = dialogPanel();
+    clickDialogButton(panel, '确认撤销');
+    await flushPromises();
+    expect(revokePendingEnrollmentToken).toHaveBeenCalledWith('customer-1', 'cluster-1');
+    wrapper.unmount();
+  });
+
+  /*
+   * TASK-275 (A11y subset ②, continued). Both enrollment field errors used to render
+   * INSIDE the wrapping <label> (as `<span class="error">`, which TASK-269's <small>-based
+   * scan missed), so the sentence was part of the control's accessible NAME — and a
+   * describedby pointing at the same node would have announced it twice. FormField
+   * (TASK-268) owns the clean shape and the hint moved out of the label with it. Both
+   * halves are asserted per field.
+   */
+  it('describes the enrollment field errors instead of naming the controls with them', async () => {
+    authenticate('release_admin');
+    vi.mocked(getEnrollmentTokenStatus).mockResolvedValue({
+      state: 'none',
+      createdAt: null,
+      expiresAt: null,
+      createdByDisplayName: null,
+    });
+    const wrapper = await mountEnrollPage();
+
+    // Drive the real local validator (no server call): both fields are invalid.
+    const store = useOperatorStore();
+    store.enrollmentForm.operatorName = 'INVALID_NAME';
+    store.enrollmentForm.ttlMinutes = 2000;
+    await store.generateToken('customer-1', 'cluster-1');
+    await flushPromises();
+
+    expectFieldErrorIsDescription(wrapper, 'Operator 名称', t('operator.validation.name'));
+    expectFieldErrorIsDescription(wrapper, 'TTL 分钟', t('operator.validation.ttl'));
+  });
 });
+
+/*
+ * The name is what `label[for]` contributes; the error must be reachable as a
+ * DESCRIPTION instead. Asserting both halves separately means removing either relation
+ * fails here rather than silently changing what a screen reader says.
+ */
+function expectFieldErrorIsDescription(wrapper: VueWrapper, fieldLabel: string, description: string): void {
+  const label = wrapper.findAll('label').find((candidate) => candidate.text().includes(fieldLabel));
+  if (!label) throw new Error(`no label containing "${fieldLabel}"`);
+  const id = label.attributes('for');
+  expect(id, `label "${fieldLabel}" must point at its control with for`).toBeTruthy();
+  const control = wrapper.get(`[id="${id}"]`);
+
+  // ① the error is not inside the label, so it is not part of the accessible name ...
+  expect(label.text()).not.toContain(description);
+  expect(label.find('.form-field__error').exists()).toBe(false);
+  // ② ... it is referenced as the control's description, with alert semantics.
+  const describedBy = control.attributes('aria-describedby');
+  expect(describedBy).toBeTruthy();
+  expect(describedBy!.split(' ')).toContain(`${id}-error`);
+  const errorNode = wrapper.get(`[id="${id}-error"]`);
+  expect(errorNode.text()).toContain(description);
+  expect(errorNode.attributes('role')).toBe('alert');
+  expect(control.attributes('aria-invalid')).toBe('true');
+}

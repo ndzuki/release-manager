@@ -196,18 +196,27 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
   的调用只有这两处（`internal/audit/emitter.go:160`、`internal/audit/spool.go:71`）。
 - **状态：部分实现（存在绕过 emitter 的审计直写）**。Operator 管理与审计导出两条链路在写事务内用裸 SQL
   直接插入 `audit_events`，不经过 `Normalize`：
-  `internal/store/sqlite/operator_management.go:477-497`（同一文件另有 7 处调用点，如
-  `internal/store/sqlite/operator_management.go:104,134,161,187,393,440`）、
-  PostgreSQL 等价实现 `internal/store/postgres/operator_management.go:446`，
+  `internal/store/sqlite/operator_management.go:477-497`（同一文件另有 6 处调用点，如
+  `internal/store/sqlite/operator_management.go:104,134,161,187,394,441`）、
+  PostgreSQL 等价实现 `internal/store/postgres/operator_management.go:450`，
   以及导出事件 `internal/store/sqlite/audit_exports.go:57`（PG `internal/store/postgres/audit_exports.go:55`，
-  由 `internal/audit/audit_service_handler.go:142-153` 触发）。
+  由 `internal/audit/audit_service_handler.go:211` 触发，即 `ExportAuditEvents`，
+  `internal/audit/audit_service_handler.go:155-220`）。
   这违反 `AGENTS.md:27`（硬约束 6「不要绕过 emitter 直接写审计表」）。
   已核实的缓解：这些事件的 payload 由服务端固定 key 构造——`internal/orchestrator/operator.go:321-352`
   把 `ChangeSummary` 写成常量、`internal/orchestrator/operator.go:139-144` 只记录
   `reason_present`/`reason_length` 而不记录 reason 原文；导出事件的 `ActorKind` 恒为 system 且无 metadata。
   另外归档写盘前会**二次脱敏**（`internal/audit/archiver.go:80` →
-  `internal/audit/sanitize.go:29-42`），查询投影也不返回 `change_summary`/`metadata`
-  （`internal/audit/audit_service_handler.go:164-174`）。因此目前**未见明文泄露证据**，但「所有审计写入都过脱敏」
+  `internal/audit/sanitize.go:29-42`）。Operator 管理的裸写还有一道**插入前**控制：两个引擎的
+  `insertOperatorAuditEvent` 都无条件调用 `store.SanitizeAuditEvent(event)`
+  （`internal/store/sqlite/operator_management.go:469`、`internal/store/postgres/operator_management.go:441`），
+  它与 `Normalize` 共用 `internal/redact` 词表、脱敏强度等价（`ChangeSummary` 走内容扫描，`Metadata`
+  先按字段名再按内容两遍；差别只在 `Normalize` 另做 actor/必填字段校验）；但导出链路的裸写
+  （`internal/store/sqlite/audit_exports.go:56-77`）没有这一步。查询投影**会**把库里的 `change_summary`/`metadata` 原样回填到响应
+  （`internal/audit/audit_service_handler.go:228-256`，字段在 `:249`/`:250`）；查询侧唯一的掩码是 `actor`
+  ——非 `platform_admin`/`release_admin` 调用者看到 `actor.id` 被截断、`role` 清空（`:232-235`），
+  而非这两个字段缺失。所以目前**未见明文泄露证据**，其依据是上面三条（直写 payload 由服务端固定 key
+  构造 + 归档二次脱敏 + operator 裸写插入前的 `SanitizeAuditEvent`），**不是**查询不返回这两个字段；但「所有审计写入都过脱敏」
   并非结构性保证。**建议**：把直写改为经过 `Normalize`，或在 store 层再兜一道。
 - **状态：已实现（审计租户边界与角色判定由服务端强制；TASK-095 组织域 + TASK-103/ADR-021 角色判定）**。
   release-api 不内嵌 Casbin、不读 release-auth 的库；它把调用方自己的 Bearer 透传给 release-auth 的
@@ -222,7 +231,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - **状态：未见实现（应用日志面）**。`slog` handler 为裸 JSON，无 `ReplaceAttr`：
   `internal/app/app.go:123`。因此 `logger.Info(...)` 直接打印的字段、以及上面那句「细节只写服务端日志」
   的内容**不经过脱敏管道**。CI 侧的 `kubectl logs` 抓取也是原文：
-  `test/e2e/prerequisite/capture-logs.sh:30`，产物上传见 `.github/workflows/test.yml:359-365,435-442`。
+  `test/e2e/prerequisite/capture-logs.sh:30`，产物上传见 `.github/workflows/test.yml:487-493,592-599`。
 - 设计依据：`docs/decisions/ADR-010-independent-sanitized-audit-pipeline.md:16-18,29`。
 
 ### 3.7 SDK-only 执行边界与静态门禁（已实现）
@@ -232,7 +241,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - 例外必须带 owner/reason/expires_at/path/rule：`internal/quality/sdkcheck/analyzer.go:51-58`；
   当前 `sdkcheck.exceptions.yaml` 共 **2 条**（`deploy/dev/dev_test.go`、`cmd/e2e/main_test.go`，
   均为 `os_exec_import`，`expires_at: 2099-12-31`）。
-- 门禁命令与 CI：`Makefile:440`（`make sdk-check`）、`.github/workflows/test.yml:37-49`（`sdk-check` job），
+- 门禁命令与 CI：`Makefile:440`（`make sdk-check`）、`.github/workflows/test.yml:37-48`（`sdk-check` job），
   规则说明 `docs/testing.md:154`。
 - 运行镜像侧二次校验：operator 镜像必须以 distroless 摘要基底、入口点固定、不得含
   `helm/kubectl/helmsman/kubectl-plugin`，且 **`/bin/sh` 必须不存在**：
@@ -404,7 +413,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | 单条 procedure 被塞进非法输入 | 契约生成物唯一入口 `api/gen/**`、`web/src/gen/**`（禁止手改，`AGENTS.md:24`）；错误码泛化（§3.6） | 剩余：SQL 拼接只出现在编译期列名/占位符白名单，值全部参数化（`internal/store/postgres/commands.go:116-124`、`internal/store/sqlite/inventory.go:230-245`、`internal/store/postgres/inventory.go:239-245`、审计 where 构造 `internal/store/sqlite/audit.go:210-236`）；迁移工具的标识符插值带引号转义（`internal/migration/copy.go:470-480`）。**已实现** |
 | 能访问 web 同源入口的任何调用方 | 入口把七个 proto 包前缀反向代理到集群内服务（`web/nginx.conf:17,44,55,66,77,91,107`），auth/orchestrator/trust 面各有 JWT+Casbin（§3.8） | 剩余：**`/notifier.v1.` 与 `/operator.v1.` 两条前缀后面没有 JWT/Casbin**（`cmd/notifier/main.go:71-78`、`cmd/operator/main.go:259-266`）；`/notifier.v1./Send` 可把控制面变成任意 URL 的 HTTP 出站源（§3.11）。**未见实现（该面的认证）** |
 | 数据库快照（离线读到 audit / values / 令牌） | audit 文本入库前脱敏（§3.6）、口令 bcrypt（`internal/auth/password.go:9-19`）、令牌只存摘要（§3.2）、Values 无机密字面（§3.5） | 剩余：应用日志面不过脱敏（§3.6），CI artifact 含原始容器日志（`test/e2e/prerequisite/capture-logs.sh:30`）。**未见实现（日志面）** |
-| CI 凭据（ Actions runner / 镜像同步） | 全 workflow `permissions` 审计见 `.github/SECRETS.md` 第 8 节；runner 通过 `vars.RUNS_ON` 间接化（`.github/workflows/test.yml:24-34`）；kind/k3d 下载都校 sha256/checksum（`.github/workflows/test.yml:295-309,345-348,413-416`） | 剩余：actions 全部按 tag 引用、**0 处 SHA 固定**；`sync-to-gitcode.yaml` 无 `permissions:` 块（`run-name`→job `:11` 直接 `git push --mirror`，`:25`）。**建议**收紧 |
+| CI 凭据（ Actions runner / 镜像同步） | 全 workflow `permissions` 审计见 `.github/SECRETS.md` 第 8 节；runner 通过 `vars.RUNS_ON` 间接化（`.github/workflows/test.yml:24-34`）；kind/k3d 下载都校 sha256/checksum（`.github/workflows/test.yml:382-387,448-451,570-573`） | 剩余：官方 `actions/*` 与 `github/codeql-action` 仍按 major tag 引用，两个非官方 action 已固定到 40 位 SHA（共 **5** 处，见下节「Actions 提交固定（SHA pin）」）；`sync-to-gitcode.yaml` 已有 workflow 级 `permissions: contents: read`（`.github/workflows/sync-to-gitcode.yaml:9-10`）。**建议**给官方 action 也加固定 |
 | 恶意/失序依赖（Go module、npm、基础镜像） | 许可门禁（§6）+ distroless 摘要基底（`deploy/docker/Dockerfile.operator:10`）+ 镜像内容门禁（`imagecheck.operator.yaml:14,18-23`） | 剩余：无漏洞扫描、无 SBOM 生成、无签名/attestation（§6）。**未见实现** |
 | 运维在事故期绕过流程 | 紧急变更 kill switch（关闭时最高优先级拒绝，配置缺失 fail closed 到 false）+ 客户停用拒绝 + workload 身份先校验后落库 + 授权快照缺失即 `authorization_snapshot_stale`：`internal/orchestrator/emergency.go:111-170`（kill switch `internal/orchestrator/emergency.go:116-130`、客户停用 `internal/orchestrator/emergency.go:141-143`、身份 `internal/orchestrator/emergency.go:157-165`、快照 `internal/orchestrator/emergency.go:166-170`） | 剩余：紧急变更仍需真实操作者身份与审计，但**它天然绕开 Values 审批**；卡死锁由后台扫描器发现（`cmd/orchestrator/main.go:879-896`、过期任务 `internal/orchestrator/emergency.go:297`）。**已实现** |
 
@@ -419,7 +428,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | `install-sdk.quarantine.yaml` / `upgrade-sdk.quarantine.yaml` | **0**（各 `exceptions: []`） | 两文件 | 隔离策略有时限（`cmd/installgate` 用途见 `docs/architecture.md:73`） |
 | `//nolint` 抑制 | **320 处 / 131 个文件**（非测试 292/114；测试 28/17） | 统计命令：`grep -rn "//nolint" --include='*.go' .`；按 linter：errcheck 127、gocyclo 74、**gosec 65**、dupl 30、unparam 9、contextcheck 6、staticcheck 4、revive 3、nilerr 1、forbidigo 1 | 每条 `//nolint` 都带解释性注释（评审要求见 `CONTRIBUTING.md:73-79`）；另有 1 处 `#nosec G202`：`internal/store/sqlite/inventory_query.go:99` |
 | golangci-lint 规则面 | **20** 个 linter（`enable:` 列表 `8-28` 行），含 `gosec`（`.golangci.yml:15`） | `.golangci.yml:8-28` | gosec 只排除 `G104`（`.golangci.yml:44-46`）；`_test.go` 豁免 dupl/gocyclo/gosec（`:65-69`）；生成码整体豁免（`:70-72`）；无 `issues.exclude` 白名单 |
-| CI 增量 lint | `--new-from-rev` | `.github/workflows/test.yml:196-200` | 存量问题不阻塞 PR（**建议**：安全类 linter 走全量） |
+| CI 增量 lint | `--new-from-rev` | `.github/workflows/test.yml:196-211` | 存量问题不阻塞 PR（**建议**：安全类 linter 走全量） |
 
 其他**明确接受**的现状（不是缺陷，是范围选择）：
 
@@ -455,7 +464,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | `npm audit` / `dependency-review-action` / OpenSSF Scorecard | **无** | workflow 与 package scripts 中均无 |
 | `vendor/` 锁定源码 | **无**（依赖 proxy/网络拉取） | 仓库无 `vendor/` 目录 |
 | 二进制版本注入（`-ldflags` version/commit） | **无** version stamp | `Makefile:54-76` 的 6 个 `build-*` target 与 `grep -c ldflags Makefile`（=0）；镜像构建只传 `-s -w`（`deploy/docker/Dockerfile.operator:8`） |
-| Actions 提交固定（SHA pin） | **部分**：两个非官方 action 固定到完整 commit SHA —— `bufbuild/buf-setup-action` ×4、`golangci/golangci-lint-action` ×1（共 **5** 处 40 位 SHA，且两者分别等于各自最新 tag `v1.50.0` / `v9.3.0`）；官方 `actions/*` 与 `github/codeql-action` 仍按 major tag（`checkout@v7` ×17、`setup-go@v7` ×13、`upload-artifact@v7` ×2、`cache/restore@v6` ×2、`cache@v6` ×1、`codeql-action@v4` ×2；工作树另有**尚未提交**的 `setup-node@v7` ×1） | `git show HEAD:.github/workflows/test.yml \| grep -c '@[0-9a-f]\{40\}'`（=5）、`grep -rhoE "uses: [^ ]+" .github/workflows/*.yml` |
+| Actions 提交固定（SHA pin） | **部分**：两个非官方 action 固定到完整 commit SHA —— `bufbuild/buf-setup-action` ×4、`golangci/golangci-lint-action` ×1（共 **5** 处 40 位 SHA，且两者分别等于各自最新 tag `v1.50.0` / `v9.3.0`）；官方 `actions/*` 与 `github/codeql-action` 仍按 major tag（口径＝同行给出的 `grep -rhoE "uses: [^ ]+" .github/workflows/*.yml`，即 `test.yml` 与 `codeql.yml`，**不含** `sync-to-gitcode.yaml`：`checkout@v7` ×19、`setup-go@v7` ×15、`upload-artifact@v7` ×3、`cache/restore@v6` ×2、`cache@v6` ×1、`codeql-action@v4` ×2、`setup-node@v7` ×2；该 grep 还会数到 `codeql.yml` 注释里的 `setup-example@v1` 1 处，非真实使用） | `git show HEAD:.github/workflows/test.yml \| grep -c '@[0-9a-f]\{40\}'`（=5）、`grep -rhoE "uses: [^ ]+" .github/workflows/*.yml` |
 | 基础镜像按 digest 固定 | **1 / 16**：仅 `deploy/docker/Dockerfile.operator:10`；其余 `FROM` 仅 tag | 各 `deploy/docker/Dockerfile.*` |
 | 产品侧漏洞扫描适配器 | 只有 `NoopScanner`（恒 0 findings）且未挂载 | §3.9 末条 |
 
@@ -466,13 +475,13 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
    `error`、`detail`、`request body` 类字段贴进工单前，**建议**先人工过一遍
    `internal/redact/sanitize.go:19-34` 覆盖不到的形状（例如 Chart 内部字段名）。
 2. **CI 产物含原始容器日志**：`test/e2e/prerequisite/capture-logs.sh:30` 直接 `kubectl logs`，
-   上传为 artifact（`.github/workflows/test.yml:359-365,435-442`）。公开仓库的 artifact 对任何
+   上传为 artifact（`.github/workflows/test.yml:487-493,592-599`）。公开仓库的 artifact 对任何
    GitHub 用户可见（下载需登录但可下载）；**建议**给 e2e artifact 设更短保留期或在上传前过滤。
 3. **本地 dev 机密只住在 gitignored 的 `data/` 下**：`dev-credentials.env`、`dev-jwt/`、
    `dev-service-tokens/`、`dev-ca/`、`dev-trust-root/`、`dev-enrollment-tokens/`
    （忽略规则 `.gitignore:35`，清单 `deploy/dev/dev.sh:42`）。诊断目录先 `umask 077` 再 `chmod 700`（目录 0700、其内文件 0600）：
    `deploy/dev/dev.sh:123-127`。销毁用 `make dev-purge CONFIRM=1`
-   （`.github/workflows/test.yml:444-446` 是 CI 侧收尾；ci profile 的临时机密由
+   （`.github/workflows/test.yml:601-603` 是 CI 侧收尾；ci profile 的临时机密由
    `deploy/dev/dev.sh:323-326,371-374,422-425,1122-1124` 负责清理）。
 4. **轮换/吊销的实际能力**（不要假设仓库里有脚本）：
    - JWT / webhook service token 支持双键并存（`WEBHOOK_SERVICE_TOKEN_PREVIOUS` 以
@@ -506,7 +515,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | 12 | `release-api` 审计面按 ADR-021 接入 release-auth 的角色判定与窗口策略（TASK-103）：不内嵌 Casbin、不复制策略，判定不可用时 fail closed；release-api 仍不本地校验会话撤销（由 release-auth 的裁决覆盖） | 已实现 | `cmd/api/main.go:69-90`；`internal/audit/decision.go:44-76`；`internal/audit/authorization.go:29-93`；`internal/auth/authorization_decision.go:43-137` |
 | 13 | 客户集群内 operator 用 ClusterRole 且可读写全集群 Secret（Helm release 存储模型的必然结果，未用 `resourceNames` 收窄） | 事实/建议 | §3.3 |
 | 14 | 审计直写路径已收敛（TASK-097）：`internal/store/{sqlite,postgres}/operator_management.go` 的事务内写入改为经 `store.SanitizeAuditEvent` 兜底脱敏（比异步 emitter 更严：字段名 + 内容双扫描），结构门禁 `internal/store/audit_write_gate_test.go` 限定 `INSERT ... INTO audit_events` 只能出现在登记的 6 个 store 文件、且事务写入者必须调用该兜底 | 已实现 | `internal/store/audit_sanitize.go`、`internal/store/audit_write_gate_test.go`、§3.6 第 3 条 |
-| 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-36`；`internal/audit/audit_service_handler.go:42-56,97,142`；回归 `internal/audit/authorization_test.go:21-128` |
+| 15 | 审计查询/导出的组织过滤取自请求，可为空；principal 未被使用（TASK-095 已修：principal 组织成为唯一可读写范围，跨组织 `permission_denied`） | 已实现 | `internal/audit/authorization.go:22-36`；`internal/audit/audit_service_handler.go:105,162`；回归 `internal/audit/authorization_test.go:21-128` |
 | 16 | `NotifierService` 无认证拦截器 + 投递目标无白名单 → 控制面可被当作任意 URL 的 HTTP 出站源，metadata 原文外发 | 未见实现 | §3.11 |
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |
 | 18 | 「一个活跃标准 Operation」的数据库级唯一索引只在 PostgreSQL，SQLite 侧仅应用层计数（双引擎强度不等价） | 部分实现 | `migrations/000001_legacy_baseline.up.sql:62-63` ↔ `internal/store/sqlite/uow.go:89-100` |

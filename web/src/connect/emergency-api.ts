@@ -66,17 +66,59 @@ export interface EmergencyConflictDisplay {
   } | null;
 }
 
-export interface ExecuteEmergencyInput {
+/*
+ * ExecuteEmergencyChange carries exactly ONE action per request
+ * (internal/orchestrator/emergency.go:1065-1083): set_replicas is mutually
+ * exclusive with container/artifact_ref, and the annotations payload is
+ * mutually exclusive with both. The payload shape selects the server-side
+ * branch, so a request that carries two actions is refused with
+ * `conflicting_change` rather than resolved by precedence.
+ *
+ * The input is therefore a discriminated union keyed on `action`, not a bag of
+ * optional fields: the invalid combination is unrepresentable in the type
+ * system, and the mapper below sends the branch's own fields while leaving the
+ * other branches at their proto3 zero values (this is what makes the request
+ * unambiguous on the wire).
+ */
+interface ExecuteEmergencyBaseInput {
   releaseDefinitionId: string;
   /** Canonical "<gvr.resource>/<namespace>/<name>" string form. */
   workloadRef: string;
-  container: string;
   operationVersion: string;
-  artifactRef: string;
   convergenceStrategy: 'REQUIRE_PROMOTION' | 'REVERT_ON_NEXT_RECONCILE';
   targetLocks: string[];
   idempotencyKey: string;
 }
+
+export interface ExecuteEmergencyImageInput extends ExecuteEmergencyBaseInput {
+  action: 'image';
+  container: string;
+  /** Candidate artifact id from ListCandidateArtifacts (D14). */
+  artifactRef: string;
+}
+
+export interface ExecuteEmergencyReplicasInput extends ExecuteEmergencyBaseInput {
+  action: 'replicas';
+  /**
+   * 1..max_emergency_replicas. The flat scalar has no presence, so 0 means
+   * "replicas not requested" and would select the image branch server-side
+   * (internal/orchestrator/emergency.go:1095-1099) — never send 0 here.
+   */
+  setReplicas: number;
+}
+
+export interface ExecuteEmergencyAnnotationsInput extends ExecuteEmergencyBaseInput {
+  action: 'annotations';
+  /** Server-approved (key, scope) entries; 1..50 with 1..2048-byte values. */
+  annotations: Array<{ key: string; value: string }>;
+  /** The scope every key was approved for (REQ-058 / TASK-126). */
+  annotationScope: string;
+}
+
+export type ExecuteEmergencyInput =
+  | ExecuteEmergencyImageInput
+  | ExecuteEmergencyReplicasInput
+  | ExecuteEmergencyAnnotationsInput;
 
 export interface ExecuteEmergencyOutput {
   operationId: string;
@@ -218,19 +260,29 @@ export async function getEmergencyResult(
 export async function executeEmergencyChange(
   input: ExecuteEmergencyInput,
   signal?: AbortSignal,
-): Promise<ExecuteEmergencyOutput> {  const response = await orchestratorEmergencyClient.executeEmergencyChange(
+): Promise<ExecuteEmergencyOutput> {
+  const response = await orchestratorEmergencyClient.executeEmergencyChange(
     create(ExecuteEmergencyChangeRequestSchema, {
       releaseDefinitionId: input.releaseDefinitionId,
       workloadRef: input.workloadRef,
-      container: input.container,
       operationVersion: input.operationVersion,
-      artifactRef: input.artifactRef,
       convergenceStrategy:
         input.convergenceStrategy === 'REQUIRE_PROMOTION'
           ? ConvergenceStrategy.REQUIRE_PROMOTION
           : ConvergenceStrategy.REVERT_ON_NEXT_RECONCILE,
       targetLocks: input.targetLocks,
       idempotencyKey: input.idempotencyKey,
+      // Only the selected branch carries values; the others stay at their
+      // proto3 zero values so the server cannot read two actions out of one
+      // request.
+      container: input.action === 'image' ? input.container : '',
+      artifactRef: input.action === 'image' ? input.artifactRef : '',
+      setReplicas: input.action === 'replicas' ? input.setReplicas : 0,
+      annotations:
+        input.action === 'annotations'
+          ? input.annotations.map((entry) => ({ key: entry.key, value: entry.value }))
+          : [],
+      annotationScope: input.action === 'annotations' ? input.annotationScope : '',
     }),
     { signal },
   );

@@ -7,11 +7,13 @@ import {
   rollbackRelease,
   type OperationAPIError,
 } from '@/connect/operation-api';
+import { listApprovedValuesRevisions } from '@/connect/values-revision';
 import type {
   BundleSummary,
   OperationType,
   PatchOverride,
 } from '@/types/operation';
+import type { ValuesRevision } from '@/types/valuesRevision';
 
 interface DraftPayload {
   operationType: OperationType;
@@ -54,6 +56,12 @@ export const useOperationFormStore = defineStore('operationForm', () => {
   const availableBundles = ref<BundleSummary[]>([]);
   const optionsLoading = ref(false);
   const optionsError = ref<string | null>(null);
+  // REQ-056 D10: the approved ValuesRevisions the operation may bind to. It used to
+  // be a free-text id, so the form could carry an id the server would refuse
+  // (values_not_approved) with no way to see what was actually approved.
+  const approvedRevisions = ref<ValuesRevision[]>([]);
+  const revisionsLoading = ref(false);
+  const revisionsError = ref<string | null>(null);
   const step = ref<'form' | 'confirm'>('form');
   const submitting = ref(false);
   const submitError = ref<OperationAPIError | null>(null);
@@ -122,6 +130,63 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     } finally {
       optionsLoading.value = false;
     }
+    // The revision list loads independently: a failure there must not hide the
+    // bundles, and the empty selector still tells the operator why it is empty.
+    await loadApprovedRevisions();
+  }
+
+  // TASK-280: one monotonic token per approved-revision request. Two loads overlap
+  // whenever the route scope changes (or loadOptions is re-called) before the first
+  // response lands, so a response is only allowed to touch state while it is still the
+  // newest request for the scope it was issued for.
+  let revisionsRequestSeq = 0;
+
+  async function loadApprovedRevisions(): Promise<void> {
+    const scope = releaseDefinitionId.value;
+    if (!scope) return;
+    const requestSeq = ++revisionsRequestSeq;
+    // Both halves are needed: the token rejects an older response of a same-scope race,
+    // while the scope snapshot rejects a response whose scope changed during the await
+    // without a newer load (releaseDefinitionId is an exposed, writable ref).
+    const isCurrentRequest = (): boolean => requestSeq === revisionsRequestSeq && scope === releaseDefinitionId.value;
+    revisionsLoading.value = true;
+    revisionsError.value = null;
+    try {
+      const revisions = await listApprovedValuesRevisions(scope);
+      // A superseded or out-of-scope response must neither overwrite this scope's list
+      // nor reconcile this scope's draft against the other scope's approved ids, which
+      // would silently destroy a legitimate restored selection.
+      if (!isCurrentRequest()) return;
+      approvedRevisions.value = revisions;
+      // Reconcile only once the real list is in hand. `approvedRevisions` is empty
+      // while this await is in flight -- and stays empty after a failed load -- so
+      // reconciling any earlier would throw away a legitimate restored draft on every
+      // scope entry. The failure path deliberately keeps the draft value: the list is
+      // unknown, not empty, and validate() already refuses to submit without a match.
+      reconcileValuesRevision();
+    } catch (error) {
+      if (!isCurrentRequest()) return;
+      approvedRevisions.value = [];
+      revisionsError.value = mapOperationError(error).message;
+    } finally {
+      if (isCurrentRequest()) revisionsLoading.value = false;
+    }
+  }
+
+  /*
+   * REQ-056 D10 invariant: the pending ValuesRevision id must belong to the approved
+   * list. A draft written by the old free-text form, or a revision that was
+   * superseded after it was selected, used to survive the selector (which renders
+   * blank/disabled for it) and reach CreateOperation, earning a server-side
+   * revision_not_approved round trip. Clearing it here keeps the form's own state
+   * consistent with what the selector shows; validate() is the second, always-on
+   * guard that also covers ids written straight into the field.
+   */
+  function reconcileValuesRevision(): void {
+    const revisionId = fields.valuesRevisionId;
+    if (!revisionId) return;
+    if (approvedRevisions.value.some((revision) => revision.id === revisionId)) return;
+    fields.valuesRevisionId = null;
   }
 
   function setOperationType(operationType: OperationType): void {
@@ -145,8 +210,14 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     if (fields.operationType !== 'ROLLBACK') {
       if (!fields.bundleId) errors.bundleId = '请选择制品';
       else if (!selectedBundle.value) errors.bundleId = '所选制品未通过验证';
-      if (!fields.valuesRevisionId || fields.valuesRevisionId.trim() === '') {
-        errors.valuesRevisionId = '请填写已审批的配置版本 ID';
+      // Membership, not just non-emptiness (REQ-056 D10): the selector only offers
+      // approved ids, so an id outside the list means a stale draft or a field write
+      // and must fail here rather than at the server.
+      const revisionId = fields.valuesRevisionId;
+      if (!revisionId || revisionId.trim() === '') {
+        errors.valuesRevisionId = '请选择已审批的配置版本';
+      } else if (!approvedRevisions.value.some((revision) => revision.id === revisionId)) {
+        errors.valuesRevisionId = '请选择已审批的配置版本';
       }
     }
     if (fields.operationType !== 'INSTALL' && (!fields.expectedCurrentRevision || fields.expectedCurrentRevision < 1)) {
@@ -282,6 +353,8 @@ export const useOperationFormStore = defineStore('operationForm', () => {
   function resetTransient(): void {
     availableBundles.value = [];
     optionsError.value = null;
+    approvedRevisions.value = [];
+    revisionsError.value = null;
     step.value = 'form';
     submitting.value = false;
     submitError.value = null;
@@ -301,6 +374,9 @@ export const useOperationFormStore = defineStore('operationForm', () => {
     availableBundles,
     optionsLoading,
     optionsError,
+    approvedRevisions,
+    revisionsLoading,
+    revisionsError,
     step,
     submitting,
     submitError,

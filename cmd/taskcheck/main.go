@@ -3,12 +3,19 @@
 //
 // Usage:
 //
-//	taskcheck -git-log <file> [-gh-prs <file>] [-allow-unverified] <TASK-*.md>...
+//	taskcheck -git-log <file> -repo-url <origin-url> [-gh-prs <file>] [-direct-evidence <file>] [-allow-unverified] <TASK-*.md>...
+//	taskcheck -print-direct-refs <TASK-*.md>...
 //
 // The Makefile collects the evidence because this tool must not import
 // os/exec (the SDK-only gate scans cmd/ and internal/): `git log --all
-// --format=%H%x09%s` feeds -git-log, and `gh pr list --state all --limit <n>
-// --json number,state,mergeCommit` feeds -gh-prs when gh is available.
+// --format=%H%x09%s` feeds -git-log, `git remote get-url origin` feeds
+// -repo-url (the repository a card's pr_url has to name), `gh pr list
+// --state all --limit <n> --json number,url,state,mergeCommit` feeds -gh-prs
+// when gh is available, and scripts/collect-direct-evidence.sh feeds
+// -direct-evidence for the non-PR (merge_status: direct) cards.
+// -print-direct-refs prints the repositories those cards name so that script
+// knows where to look; it exists so the card format is parsed in exactly one
+// place.
 package main
 
 import (
@@ -26,25 +33,45 @@ func main() {
 	var (
 		gitLog          string
 		ghPRs           string
+		repoURL         string
+		directEvidence  string
+		printDirectRefs bool
 		requirements    string
 		allowUnverified bool
 	)
 	flag.StringVar(&gitLog, "git-log", "", "path to `git log --all --format=%H%x09%s` output")
-	flag.StringVar(&ghPRs, "gh-prs", "", "path to `gh pr list --json number,state,mergeCommit` output (optional)")
+	flag.StringVar(&ghPRs, "gh-prs", "", "path to `gh pr list --json number,url,state,mergeCommit` output (optional)")
+	flag.StringVar(&repoURL, "repo-url", "", "this repository's origin URL (`git remote get-url origin`); a card's pr_url must name the same owner/repo")
+	flag.StringVar(&directEvidence, "direct-evidence", "", "path to scripts/collect-direct-evidence.sh output (optional)")
+	flag.BoolVar(&printDirectRefs, "print-direct-refs", false, "print the `direct:` repository/sha pairs the cards cite, one per line, and exit")
 	flag.StringVar(&requirements, "requirements", "", "vault Requirements directory or REQ-*.md file list (optional: enables the REQ delivery-ledger check)")
 	flag.BoolVar(&allowUnverified, "allow-unverified", false, "report UNVERIFIED cards without failing (ALLOW_UNVERIFIED_TASKS=1)")
 	flag.Parse()
 
 	paths := flag.Args()
 	if len(paths) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: taskcheck -git-log <file> [-gh-prs <file>] [-allow-unverified] <TASK-*.md>...")
+		fmt.Fprintln(os.Stderr, "usage: taskcheck -git-log <file> -repo-url <origin-url> [-gh-prs <file>] [-direct-evidence <file>] [-allow-unverified] <TASK-*.md>...")
 		os.Exit(2)
 	}
 
-	evidence, err := loadEvidence(gitLog, ghPRs)
+	if printDirectRefs {
+		printDirectRefList(paths)
+		return
+	}
+
+	evidence, err := loadEvidence(gitLog, ghPRs, directEvidence)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "taskcheck: %v\n", err)
 		os.Exit(2)
+	}
+	// The repository identity is not optional: without it a PR URL cannot be
+	// attributed to a repository, and reporting its cards unverified is the only
+	// honest answer (never a silent pass). Say so once, loudly, so the cause of a
+	// whole ledger turning unverified is visible in the run output.
+	if slug, ok := taskcheck.ParseRepoSlug(repoURL); ok {
+		evidence.SetRepoSlug(slug)
+	} else {
+		fmt.Fprintf(os.Stderr, "taskcheck: warning: cannot derive this repository's owner/repo from %q; pull request evidence will be reported unverified\n", repoURL)
 	}
 	cards, err := loadCards(paths)
 	if err != nil {
@@ -114,9 +141,12 @@ func summaryLine(result taskcheck.Result, violations, unverified int) string {
 		checked, result.Verified, violations, unverified)
 }
 
-// loadEvidence reads the git and gh evidence files. gh evidence is best-effort:
-// a missing or malformed file degrades to local git evidence.
-func loadEvidence(gitLog, ghPRs string) (*taskcheck.Evidence, error) {
+// loadEvidence reads the git, gh and direct-commit evidence files. gh evidence is
+// best-effort: a missing or malformed file degrades to local git evidence. The
+// direct evidence file is not optional in the same sense -- the collector is
+// this project's own script, so a file it cannot parse means the collection step
+// is broken and must be reported rather than silently treated as "no evidence".
+func loadEvidence(gitLog, ghPRs, directEvidence string) (*taskcheck.Evidence, error) {
 	evidence := taskcheck.NewEvidence()
 	if gitLog != "" {
 		if err := withFile(gitLog, evidence.ParseGitLog); err != nil {
@@ -128,7 +158,27 @@ func loadEvidence(gitLog, ghPRs string) (*taskcheck.Evidence, error) {
 			fmt.Fprintf(os.Stderr, "taskcheck: warning: ignoring gh PR data: %v\n", err)
 		}
 	}
+	if directEvidence != "" {
+		if err := withFile(directEvidence, evidence.ParseDirectEvidence); err != nil {
+			return nil, err
+		}
+	}
 	return evidence, nil
+}
+
+// printDirectRefList writes `<repo>\t<sha>` for every `direct:` ref the cards
+// cite, so the evidence collector can resolve them. It goes through the same
+// ParseCard the gate uses: one parser, no second card-format implementation in
+// shell.
+func printDirectRefList(paths []string) {
+	cards, err := loadCards(paths)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "taskcheck: %v\n", err)
+		os.Exit(2)
+	}
+	for _, ref := range taskcheck.DirectRefs(cards) {
+		fmt.Printf("%s\t%s\n", ref.Repo, ref.SHA)
+	}
 }
 
 func loadCards(paths []string) ([]taskcheck.Card, error) {

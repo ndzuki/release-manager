@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 import { computed } from 'vue';
+import FormField from '@/components/common/FormField.vue';
 import type { CustomerFormInput, FieldViolation } from '@/types/customer';
 
 const props = withDefaults(defineProps<{
@@ -32,33 +33,44 @@ function updateField(field: 'name' | 'slug', value: string) {
 
 <template>
   <form class="customer-form" @submit.prevent="emit('submit')">
-    <label class="customer-form__field">
-      <span>{{ t('customer.form.name') }}</span>
-      <input
-        :value="modelValue.name"
-        type="text"
-        autocomplete="organization"
-        maxlength="253"
-        :disabled="readonly || submitting"
-        :aria-invalid="Boolean(nameError)"
-        @input="updateField('name', ($event.target as HTMLInputElement).value)"
-      >
-      <small v-if="nameError" class="customer-form__error">{{ nameError }}</small>
-    </label>
+    <!--
+     TASK-271: the errors used to live INSIDE an implicitly wrapping <label>, so the
+     text was part of the control's accessible NAME and an aria-describedby pointing at
+     the same node would announce it twice. FormField (TASK-268) owns the clean shape
+     instead: `label for` + slotted control + `aria-describedby` on the rendered
+     message + `role="alert"` on the error + `aria-invalid` only while there is one.
+    -->
+    <FormField :label="t('customer.form.name')" :error="nameError" :disabled="readonly || submitting">
+      <template #default="{ id, describedBy, invalid, disabled }">
+        <input
+          :id="id"
+          :value="modelValue.name"
+          type="text"
+          autocomplete="organization"
+          maxlength="253"
+          :disabled="disabled"
+          :aria-describedby="describedBy"
+          :aria-invalid="invalid"
+          @input="updateField('name', ($event.target as HTMLInputElement).value)"
+        >
+      </template>
+    </FormField>
 
-    <label class="customer-form__field">
-      <span>{{ t('customer.form.slug') }}</span>
-      <input
-        :value="modelValue.slug"
-        type="text"
-        autocomplete="off"
-        maxlength="253"
-        :disabled="readonly || submitting"
-        :aria-invalid="Boolean(slugError)"
-        @input="updateField('slug', ($event.target as HTMLInputElement).value)"
-      >
-      <small v-if="slugError" class="customer-form__error">{{ slugError }}</small>
-    </label>
+    <FormField :label="t('customer.form.slug')" :error="slugError" :disabled="readonly || submitting">
+      <template #default="{ id, describedBy, invalid, disabled }">
+        <input
+          :id="id"
+          :value="modelValue.slug"
+          type="text"
+          autocomplete="off"
+          maxlength="253"
+          :disabled="disabled"
+          :aria-describedby="describedBy"
+          :aria-invalid="invalid"
+          @input="updateField('slug', ($event.target as HTMLInputElement).value)"
+        >
+      </template>
+    </FormField>
 
     <p v-if="readonly" class="customer-form__readonly">{{ t('customer.form.readonly') }}</p>
     <button v-else class="customer-form__submit" type="submit" :disabled="!canSubmit">
@@ -69,10 +81,13 @@ function updateField(field: 'name' | 'slug', value: string) {
 
 <style scoped>
 .customer-form { display: grid; gap: 1rem; }
-.customer-form__field { display: grid; gap: 0.375rem; font-weight: 600; }
-.customer-form__field input { padding: 0.625rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
-.customer-form__field input:disabled { background: var(--color-surface-muted); color: var(--color-muted-strong); }
-.customer-form__error { color: var(--color-error); font-weight: 500; }
+/*
+ * The controls are slotted into FormField, and slot content is compiled in THIS
+ * component's scope, so a scoped `input` rule still reaches them. The field
+ * chrome (label / error / spacing) belongs to FormField now.
+ */
+.customer-form input { padding: 0.625rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
+.customer-form input:disabled { background: var(--color-surface-muted); color: var(--color-muted-strong); }
 .customer-form__readonly { margin: 0; color: var(--color-muted); }
 .customer-form__submit { justify-self: start; padding: 0.625rem 0.875rem; border: 0; border-radius: 0.375rem; background: var(--color-primary); color: var(--color-on-accent); font-weight: 700; cursor: pointer; }
 .customer-form__submit:disabled { opacity: 0.55; cursor: not-allowed; }

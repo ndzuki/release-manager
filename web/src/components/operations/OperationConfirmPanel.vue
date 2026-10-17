@@ -32,7 +32,7 @@ defineEmits<{
       <div><dt>{{ t('operation.confirm.cluster') }}</dt><dd>{{ customerName }} / {{ clusterName }}</dd></div>
       <div v-if="bundle"><dt>{{ t('operation.confirm.artifact') }}</dt><dd>{{ bundle.name }} v{{ bundle.chartVersion }}，{{ bundle.images.length }} 个镜像</dd></div>
       <div><dt>{{ t('operation.confirm.version') }}</dt><dd>{{ valuesRevisionId || '—' }}</dd></div>
-      <div><dt>{{ t('operation.confirm.patch') }}</dt><dd>{{ patch.length > 0 ? `${patch.length} 项` : '无' }}</dd></div>
+      <div><dt>{{ t('operation.confirm.patch') }}</dt><dd>{{ patch.length > 0 ? `${patch.length} 项` : t('operation.confirm.noPatch') }}</dd></div>
       <div v-if="operationType !== 'INSTALL'"><dt>{{ t('operation.confirm.currentRevision') }}</dt><dd>{{ currentRevision ?? '—' }}</dd></div>
     </dl>
     <div class="confirm-panel__actions">

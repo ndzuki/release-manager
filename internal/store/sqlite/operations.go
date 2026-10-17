@@ -914,6 +914,109 @@ func (s *operationStore) ListNonTerminal(ctx context.Context) ([]*store.Operatio
 	return ops, rows.Err()
 }
 
+// nonTerminalOperationColumns is the joined page shape: the standard operation
+// columns plus the release definition and customer identity the console renders.
+// The customer name is coalesced because the join is a LEFT JOIN: a definition
+// whose customer row is missing still belongs in an operations queue (the scope
+// key is release_definitions.customer_id, which is always present).
+// release_definitions.cluster_id carries the cluster the operation targets
+// (TASK-279) so the console can build the release-scoped detail route; the
+// column is selected from the definition already joined for the scope
+// predicate, so it adds no join and leaves the plan regression's shape alone.
+const nonTerminalOperationColumns = operationColumns + `,
+    release_definitions.name, release_definitions.customer_id, COALESCE(customers.name, ''), release_definitions.cluster_id`
+
+// nonTerminalScopedIndex is the ordered partial index behind the cross-release
+// non-terminal feed (migrations/000034_operations_non_terminal_index.up.sql; the
+// SQLite DDL lives at the end of migrationStatements in
+// internal/store/sqlite/db.go). The feed query deliberately does NOT pin it with
+// INDEXED BY: the pin ignored scope selectivity and forced a full walk of the
+// global non-terminal index for narrow scopes, so a narrow page regressed
+// against the planner's own choice by a factor set by the non-terminal share of
+// the table. That share is the controlling variable and was not recorded for the
+// fixture that produced the previous timings here, so they are gone rather than
+// repeated without it: the measured factors and their harness are recorded with
+// optimizePlannerStatistics (db.go) and in the migration note. Qualitatively, a
+// wide page needs the migration's PRAGMA optimize (optimizePlannerStatistics,
+// db.go) to publish sqlite_stat1 before the planner chooses this index. Column
+// order and predicate are still load-bearing:
+// TestListNonTerminalScopedPlanUsesOrderedPartialIndex requires the wide feed to
+// read this index with no TEMP B-TREE, and
+// TestNonTerminalScopedSQLDoesNotPinTheIndex guards against reintroducing the
+// pin. SQLite-only; the PostgreSQL feed query is unmodified and PostgreSQL
+// selects the index through its own planner.
+const nonTerminalScopedIndex = "idx_operations_non_terminal_created"
+
+// nonTerminalScopedSQL builds the page query for one scope size. It is a named
+// function so the plan regression test can EXPLAIN the exact shipping SQL
+// (TestListNonTerminalScopedPlanUsesOrderedPartialIndex) instead of a copy that
+// can drift.
+func nonTerminalScopedSQL(customerCount int, hasCursor bool) string {
+	// The keyset predicate cannot use contracts.KeysetPredicate here: it emits
+	// unqualified created_at/id and this query joins release_definitions, which
+	// has both columns, so the reference would be ambiguous.
+	where := `operations.status NOT IN ('succeeded','failed','cancelled','timeout')
+	  AND release_definitions.customer_id IN (` + placeholders(customerCount) + `)`
+	if hasCursor {
+		where += ` AND (operations.created_at > ? OR (operations.created_at = ? AND operations.id > ?))`
+	}
+	//nolint:gosec // only static column lists and generated "?" placeholders are concatenated; every value stays a bound parameter
+	return `
+		SELECT ` + nonTerminalOperationColumns + `
+		FROM operations` + operationJoin + `
+		JOIN release_definitions ON release_definitions.id = operations.release_definition_id
+		LEFT JOIN customers ON customers.id = release_definitions.customer_id
+		WHERE ` + where + `
+		ORDER BY operations.created_at ASC, operations.id ASC
+		LIMIT ?`
+}
+
+// ListNonTerminalScoped is the page-safe cross-release feed (TASK-276): the same
+// non-terminal predicate as ListNonTerminal, but closed over an explicit customer
+// scope and keyset-paginated on (created_at, id) ascending. It deliberately does
+// not accept an empty scope as "all" -- an empty CustomerIDs returns no rows.
+func (s *operationStore) ListNonTerminalScoped(
+	ctx context.Context,
+	query store.NonTerminalOperationQuery,
+) (*store.NonTerminalOperationPage, error) {
+	if len(query.CustomerIDs) == 0 {
+		return &store.NonTerminalOperationPage{}, nil
+	}
+	args := make([]any, 0, len(query.CustomerIDs)+4)
+	for _, customerID := range query.CustomerIDs {
+		args = append(args, customerID)
+	}
+	if query.HasCursor {
+		// SQLite stores created_at as RFC3339 TEXT (createOperation), so the
+		// cursor must be bound in the same text form; a time.Time argument would
+		// serialize to a format whose lexicographic order does not match.
+		cursorTime := query.CursorTime.UTC().Format(time.RFC3339Nano)
+		args = append(args, cursorTime, cursorTime, query.CursorID)
+	}
+	// Fetch one extra row to learn whether a next page exists without an extra
+	// round trip, then trim it off.
+	args = append(args, query.PageSize+1)
+	rows, err := s.db.QueryContext(ctx, nonTerminalScopedSQL(len(query.CustomerIDs), query.HasCursor), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list scoped non-terminal operations: %w", err)
+	}
+	defer rows.Close()
+
+	page := &store.NonTerminalOperationPage{}
+	for rows.Next() {
+		row, err := scanNonTerminalOperationRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Rows) == query.PageSize {
+			page.HasMore = true
+			break
+		}
+		page.Rows = append(page.Rows, row)
+	}
+	return page, rows.Err()
+}
+
 type operationQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -923,47 +1026,80 @@ func getOperation(ctx context.Context, queryer operationQueryer, id string) (*st
 	return scanOperation(row)
 }
 
+// operationRowScan holds the scan destinations for one operations row, in the
+// exact order of operationColumns. scanOperation and the joined
+// non-terminal page share it so a column can never be added in one place only
+// (the 16-vs-30 mismatch the Postgres store documents).
+type operationRowScan struct {
+	id, opType, status, defID, idemKey, idemScope, reqHash string
+	stateVer, expectedRev, targetRev                       int
+	bundleID, bundleChartRef, bundleChartDigest            string
+	imageRefsJSON, imageDigestsJSON                        []byte
+	policyVersion, valuesRevID, targetOperationID          string
+	valuesPatch                                            []byte
+	patchDigest, effectiveDigest, reason                   string
+	actorJSON                                              string
+	createdAt, updatedAt                                   string
+	terminalAt, deadline                                   *string
+	lastError                                              string
+	deliveryStatus, effectStatus                           sql.NullString
+}
+
+func (r *operationRowScan) dests() []any {
+	return []any{
+		&r.id, &r.opType, &r.status, &r.defID,
+		&r.idemKey, &r.idemScope, &r.reqHash, &r.stateVer,
+		&r.bundleID, &r.bundleChartRef, &r.bundleChartDigest, &r.imageRefsJSON, &r.imageDigestsJSON, &r.policyVersion,
+		&r.valuesRevID, &r.expectedRev, &r.targetRev, &r.targetOperationID, &r.valuesPatch, &r.patchDigest, &r.effectiveDigest, &r.reason,
+		&r.actorJSON, &r.createdAt, &r.updatedAt, &r.terminalAt, &r.deadline, &r.lastError,
+		&r.deliveryStatus, &r.effectStatus,
+	}
+}
+
+func (r *operationRowScan) operation() (*store.Operation, error) {
+	return buildOperation(r.id, r.opType, r.status, r.defID, r.idemKey, r.idemScope, r.reqHash,
+		r.stateVer, r.bundleID, r.bundleChartRef, r.bundleChartDigest, r.imageRefsJSON, r.imageDigestsJSON, r.policyVersion,
+		r.valuesRevID, r.expectedRev, r.targetRev, r.targetOperationID, r.valuesPatch, r.patchDigest, r.effectiveDigest, r.reason,
+		r.actorJSON, r.createdAt, r.updatedAt, r.terminalAt, r.deadline, r.lastError,
+		r.deliveryStatus, r.effectStatus)
+}
+
 func scanOperation(row interface{ Scan(...interface{}) error }) (*store.Operation, error) {
-	var (
-		id, opType, status, defID, idemKey, idemScope, reqHash string
-		stateVer, expectedRev, targetRev                       int
-		bundleID, bundleChartRef, bundleChartDigest            string
-		imageRefsJSON, imageDigestsJSON                        []byte
-		policyVersion, valuesRevID, targetOperationID          string
-		valuesPatch                                            []byte
-		patchDigest, effectiveDigest, reason                   string
-		actorJSON                                              string
-		createdAt, updatedAt                                   string
-		terminalAt, deadline                                   *string
-		lastError                                              string
-		deliveryStatus, effectStatus                           sql.NullString
-	)
-
-	err := row.Scan(
-		&id, &opType, &status, &defID,
-		&idemKey, &idemScope, &reqHash, &stateVer,
-		&bundleID, &bundleChartRef, &bundleChartDigest, &imageRefsJSON, &imageDigestsJSON, &policyVersion,
-		&valuesRevID, &expectedRev, &targetRev, &targetOperationID, &valuesPatch, &patchDigest, &effectiveDigest, &reason,
-		&actorJSON, &createdAt, &updatedAt, &terminalAt, &deadline, &lastError,
-		&deliveryStatus, &effectStatus,
-	)
-
-	if err != nil {
+	scan := &operationRowScan{}
+	if err := row.Scan(scan.dests()...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, store.ErrNotFound
 		}
 		return nil, fmt.Errorf("scan operation: %w", err)
 	}
-
-	return buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash,
-		stateVer, bundleID, bundleChartRef, bundleChartDigest, imageRefsJSON, imageDigestsJSON, policyVersion,
-		valuesRevID, expectedRev, targetRev, targetOperationID, valuesPatch, patchDigest, effectiveDigest, reason,
-		actorJSON, createdAt, updatedAt, terminalAt, deadline, lastError,
-		deliveryStatus, effectStatus)
+	return scan.operation()
 }
 
 func scanOperationFromRows(rows *sql.Rows) (*store.Operation, error) {
 	return scanOperation(rows)
+}
+
+// scanNonTerminalOperationRow scans the joined shape of ListNonTerminalScoped:
+// operationColumns followed by the release definition name, customer id,
+// customer name and the definition's cluster id.
+func scanNonTerminalOperationRow(row interface{ Scan(...interface{}) error }) (*store.NonTerminalOperationRow, error) {
+	scan := &operationRowScan{}
+	var definitionName, customerID, customerName, clusterID string
+	dests := append(scan.dests(), &definitionName, &customerID, &customerName, &clusterID)
+	if err := row.Scan(dests...); err != nil {
+		return nil, fmt.Errorf("scan non-terminal operation row: %w", err)
+	}
+	operation, err := scan.operation()
+	if err != nil {
+		return nil, err
+	}
+	return &store.NonTerminalOperationRow{
+		Operation:      operation,
+		DefinitionName: definitionName,
+		CustomerID:     customerID,
+		CustomerName:   customerName,
+		ClusterID:      clusterID,
+	}, nil
 }
 
 func buildOperation(id, opType, status, defID, idemKey, idemScope, reqHash string,

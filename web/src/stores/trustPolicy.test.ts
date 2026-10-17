@@ -10,6 +10,8 @@ vi.mock('@/connect/trust-api', async (importOriginal) => {
   return {
     ...original,
     getTrustPolicy: vi.fn(),
+    createTrustRoot: vi.fn(),
+    rotateTrustRoot: vi.fn(),
     endGrace: vi.fn(),
     retireTrustRoot: vi.fn(),
     revokeTrustRoot: vi.fn(),
@@ -17,8 +19,12 @@ vi.mock('@/connect/trust-api', async (importOriginal) => {
 });
 
 const mockedPolicy = vi.mocked(api.getTrustPolicy);
+const mockedCreate = vi.mocked(api.createTrustRoot);
+const mockedRotate = vi.mocked(api.rotateTrustRoot);
 const mockedRetire = vi.mocked(api.retireTrustRoot);
 const mockedRevoke = vi.mocked(api.revokeTrustRoot);
+
+const PUBLIC_PEM = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n-----END PUBLIC KEY-----';
 
 function root(keyId: string, state: api.TrustRootStateName, id = `root-${keyId}`): api.TrustRootView {
   return {
@@ -46,6 +52,8 @@ beforeEach(() => {
   mockedPolicy.mockReset().mockResolvedValue(policy([root('key-new', 'active'), root('key-old', 'grace')]));
   mockedRetire.mockReset().mockResolvedValue(undefined);
   mockedRevoke.mockReset().mockResolvedValue(undefined);
+  mockedCreate.mockReset().mockResolvedValue(root('key-3', 'active'));
+  mockedRotate.mockReset().mockResolvedValue({ oldRoot: root('key-new', 'grace'), newRoot: root('key-3', 'active') });
 });
 
 describe('trust policy store', () => {
@@ -144,6 +152,62 @@ describe('trust policy store', () => {
     await store.apply(root('key-new', 'active'), 'retire');
 
     expect(store.failure?.code).toBe('state_conflict');
+    expect(mockedPolicy).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * TASK-280 D11: create and rotate through the store. Environment and operator come
+ * from the store's own state (the environment selector and the session), so the
+ * caller cannot pass a mismatched pair.
+ */
+describe('trust policy create and rotate', () => {
+  const draft = { keyId: 'key-3', issuer: 'CN=next', subjectPattern: '', publicKeyPem: PUBLIC_PEM };
+
+  it('creates in the selected environment with the session operator and reloads', async () => {
+    const store = useTrustPolicyStore();
+    await store.load('production');
+    mockedPolicy.mockClear();
+
+    const ok = await store.createRoot(draft);
+
+    expect(ok).toBe(true);
+    expect(mockedCreate).toHaveBeenCalledWith({ ...draft, environment: 'production', operator: 'dev-admin' });
+    expect(mockedPolicy).toHaveBeenCalledWith('production');
+    expect(store.notice).toContain('key-3');
+    expect(store.failure).toBeNull();
+  });
+
+  it('rotates the given old root and reports the new key', async () => {
+    const store = useTrustPolicyStore();
+    await store.load('staging');
+    const graceUntil = new Date('2026-10-12T08:00:00Z');
+
+    const ok = await store.rotateRoot({ ...draft, oldRootId: 'root-key-new', graceUntil });
+
+    expect(ok).toBe(true);
+    expect(mockedRotate).toHaveBeenCalledWith({
+      ...draft,
+      oldRootId: 'root-key-new',
+      graceUntil,
+      environment: 'staging',
+      operator: 'dev-admin',
+    });
+    expect(store.notice).toContain('key-3');
+  });
+
+  it('reloads and reports the refusal when create is denied', async () => {
+    const store = useTrustPolicyStore();
+    await store.load('staging');
+    mockedPolicy.mockClear();
+    mockedCreate.mockRejectedValue(new ConnectError('forbidden', Code.PermissionDenied));
+
+    const ok = await store.createRoot(draft);
+
+    expect(ok).toBe(false);
+    expect(store.failure?.code).toBe('permission_denied');
+    expect(store.failure?.message).toContain('trust_root/write');
+    // The operator must see the policy the refusal was about.
     expect(mockedPolicy).toHaveBeenCalledTimes(1);
   });
 });

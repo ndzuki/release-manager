@@ -29,6 +29,8 @@ function definition(overrides: Partial<api.DefinitionView> = {}): api.Definition
     updatedAt: null,
     promotionMappings: [],
     promotionMappingsViolation: null,
+    approvedAnnotationKeys: [],
+    approvedAnnotationKeysViolation: null,
     ...overrides,
   };
 }

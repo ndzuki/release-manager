@@ -58,6 +58,25 @@ export async function listValuesRevisions(releaseDefinitionId: string, statusFil
   return response.items.map(mapValuesRevision);
 }
 
+/*
+ * The set a release operation may bind to: APPROVED revisions only (REQ-056 D10).
+ *
+ * The server-side filter is the contract (ValuesStatus.APPROVED), and the caller
+ * re-checks the mapped status so a server that ignores the filter cannot leak a
+ * draft or a superseded revision into a release operation. The operation form used
+ * to take a free-text id, which let an operator bind a revision the server would
+ * later refuse (values_not_approved).
+ *
+ * Bounded by listValuesRevisions' own page size (50, no cursor loop): a definition
+ * with more approved revisions than that would need paging the selector does not do
+ * yet — accepted because an approved revision is one value change, not a high-volume
+ * record.
+ */
+export async function listApprovedValuesRevisions(releaseDefinitionId: string): Promise<ValuesRevision[]> {
+  const revisions = await listValuesRevisions(releaseDefinitionId, ValuesStatus.APPROVED);
+  return revisions.filter((revision) => revision.status === 'approved');
+}
+
 export async function getValuesRevision(revisionId: string): Promise<ValuesRevision> {
   const response = await orchestratorClient.getValuesRevision({ revisionId });
   return mapValuesRevision(response);
