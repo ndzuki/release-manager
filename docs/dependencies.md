@@ -53,7 +53,7 @@
 | `github.com/go-errors/errors` | v1.4.2 | MIT |  |
 | `github.com/go-gorp/gorp/v3` | v3.1.0 | MIT |  |
 | `github.com/go-jose/go-jose/v4` | v4.1.4 | Apache-2.0 |  |
-| `github.com/go-ldap/ldap/v3` | v3.4.14 | MIT |  |
+| `github.com/go-ldap/ldap/v3` | v3.4.15 | MIT |  |
 | `github.com/go-logr/logr` | v1.4.4 | Apache-2.0 |  |
 | `github.com/go-logr/stdr` | v1.2.2 | Apache-2.0 |  |
 | `github.com/go-openapi/jsonpointer` | v1.0.0 | Apache-2.0 |  |
