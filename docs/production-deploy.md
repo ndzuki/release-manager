@@ -16,6 +16,7 @@
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
 | 镜像 tag | `a6707b6`（`git rev-parse --short HEAD`） | `kubectl get pods -o jsonpath=…image`、`crictl images` |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
+| operator 网关 | `https://<宿主地址>:8444`（mTLS，客户端必须带控制面 CA 签发的证书） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
 | schema | `schema_migrations` = `34`, `dirty=f` | 只读 SQL，见 §11 |
 
 ## 1. 现状与拓扑
@@ -26,11 +27,11 @@
 | --- | --- | --- | --- | --- | --- |
 | `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:3ecf69b` | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图仍空，见 §10-1 |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
-| `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`） |
+| `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`），经 `operator` Service 的 NodePort 30844 暴露给客户集群 |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
 | `webhook` | Deployment | 1 | 8082 | `release-webhook` | CI/Harbor 回调入口，服务令牌鉴权 |
 | `web` | Deployment | **2** | 8087 | `release-web` | nginx：SPA + 按 Connect 前缀反代；同源路由的唯一实现 |
-| `edge` | Deployment | 1 | 443 | `nginx:1.27-alpine` | TLS 终止 → `web:8087`；唯一的 NodePort |
+| `edge` | Deployment | 1 | 443 | `nginx:1.27-alpine` | TLS 终止 → `web:8087`；两个 NodePort 之一（30443） |
 | `postgres` | StatefulSet | 1 | 5432 | `postgres:16`（服务端 **16.15**） | 数据权威（ADR-014） |
 | `redis` | StatefulSet | 1 | 6379 | `redis:7-alpine`（**7.4.11**） | 仅 auth 会话缓存 + refresh 黑名单；无 AUTH |
 | `release-manager-backup` | CronJob | — | — | `postgres:16` | 每日 `02:00 UTC` 逻辑备份（`release_manager` + `release_notifier` → PVC `release-manager-backups`），见 §7.4 |
@@ -42,16 +43,25 @@
 ```
 浏览器 ── https://localhost:8443
       → k3d serverlb：宿主 8443/tcp → 容器 30443/tcp
-      → Service edge（NodePort 30443，本 overlay 唯一的 NodePort）
+      → Service edge（NodePort 30443，两个 NodePort 之一）
       → edge pod：nginx 终止 TLS（自签证书），proxy_pass http://web:8087
       → Service web:8087：nginx 托管 SPA，并按 /auth.v1. /orchestrator.v1. /webhook.v1.
         /operator.v1. /notifier.v1. /audit.v1. /trust.v1. 等前缀反代到各 ClusterIP 服务
       → auth:8085 / orchestrator:8083 / webhook:8082 / notifier:8086 / api:8088
 ```
 
+客户集群的 operator 走另一条**独立的 TCP 通路**，不经过 edge：
+
+```
+客户集群 operator ── https://<宿主地址>:8444
+      → k3d serverlb：宿主 8444/tcp → 容器 30844/tcp
+      → Service operator（NodePort 30844，ClusterIP 10.43.196.238）
+      → orchestrator pod:8084：进程内终止 mTLS，按 client cert 校验请求身份
+```
+
 要点：
 
-- 除 `edge` 外所有 Service 都是 `ClusterIP`；`NodePort 30443` 是有记录的唯一例外（`deploy/kustomize/production/edge.yaml:167`）。
+- 只有两个 Service 暴露 NodePort：`edge` 的 30443 与 `operator` 的 30844（客户集群 operator 的 mTLS 通路）；其余都是 `ClusterIP`（`deploy/kustomize/production/edge.yaml:167` 与 `kustomization.yaml` 的 operator patch）。
 - 浏览器只面对**一个 origin**（`https://localhost:8443`）。这不是审美选择：`secure_cookies` 默认 `true` 且 `SameSite=Strict`，跨 origin 或纯 HTTP 会**静默丢 cookie**，登录看起来"成功"但刷新即掉线（§6）。
 - 集群内没有可用的 Ingress：k3s 自带 Traefik 的 `svclb-traefik` 依赖 klipper-lb 镜像，该镜像不在离线镜像集里，Traefik Pod 停在 `ImagePullBackOff`。因此用自带 nginx edge 顶替（理由与取舍见 overlay README）。
 
@@ -309,6 +319,59 @@ docker port k3d-rm-prod-serverlb
 ```
 
 这一步只改 k3d 负载均衡节点，**不重建集群、不动 PVC 与 Secret**。实测映射同时出现在 IPv4 与 IPv6（`[::]:8443`）。
+
+### ⑦ 把宿主 8444 映射到 operator NodePort 30844
+
+客户集群的 operator 走控制面 mTLS 网关（`orchestrator:8084`）。该监听器在 orchestrator **进程内**终止 TLS，并按 client cert 校验每个请求的身份（`ClientAuth: VerifyClientCertIfGiven` + `ClientCAs`），因此**不能**经 edge 反代：`web/nginx.conf` 对 `/operator.v1.` 是明文 HTTP，客户端证书在那一跳就丢了。客户集群又无法访问本 namespace 的 ClusterIP，所以 overlay 给 `operator` Service 单独保留 NodePort `30844`（`deploy/kustomize/production/kustomization.yaml` 的 operator patch），再把宿主端口映射进来：
+
+```bash
+k3d node edit k3d-rm-prod-serverlb --port-add "8444:30844"
+docker port k3d-rm-prod-serverlb
+# 30844/tcp -> 0.0.0.0:8444
+# 30844/tcp -> [::]:8444
+```
+
+这一步与 ⑥ 一样只改 k3d 负载均衡节点，**不重建集群、不动 PVC 与 Secret**。
+
+客户集群侧把 `--orchestrator-addr` 指向宿主：
+
+```bash
+release-operator --orchestrator-addr https://<宿主地址>:8444 ...
+```
+
+⚠️ `<宿主地址>` 必须通过**网关服务端证书的主机名校验**：当前证书 SAN 固定为 `operator-gateway.dev.release-manager.local` 与 `localhost`（`cmd/orchestrator/main.go:173-176`），**不含节点 IP**。实测（2026-10-18）：
+
+```bash
+openssl s_client -connect 127.0.0.1:8444 -CAfile ca.crt -verify_hostname 127.0.0.1
+# Verify return code: 62 (hostname mismatch)
+openssl s_client -connect 127.0.0.1:8444 -CAfile ca.crt -verify_hostname localhost
+# Verify return code: 0 (ok)
+```
+
+因此客户集群要么把 SAN 名（`operator-gateway.dev.release-manager.local`）解析到宿主（DNS 或 Pod `hostAliases`，形态与 `deploy/kustomize/customer-agent/base/deployment.yaml` 一致），要么扩展服务端证书的 SAN 列表（`cmd/orchestrator/main.go` 的代码改动，不在本 overlay 范围）。
+
+从宿主验证（2026-10-18 实测）：
+
+```bash
+# CA 取自控制面 Secret（只用于校验服务端证书，不要留在宿主）
+kubectl -n release-manager get secret release-manager-mtls-ca \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/rm-ca.crt
+
+timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/8444' && echo "tcp ok"   # tcp ok
+openssl s_client -connect 127.0.0.1:8444 -CAfile /tmp/rm-ca.crt -brief </dev/null
+# CONNECTION ESTABLISHED / Protocol version: TLSv1.3 / Verification: OK
+
+# 不带 client cert 的请求在请求层被拒（TLS 握手仍然完成）
+curl -sk -X POST https://127.0.0.1:8444/orchestrator.v1.OrchestratorService/SyncInventory \
+  -H 'Content-Type: application/json' -d '{"requestId":"task-347"}'
+# HTTP 401 {"code":"unauthenticated","message":"client certificate required"}
+
+rm -f /tmp/rm-ca.crt
+```
+
+这证明「路通了、认证仍由 CA 把关」：TCP/TLS 到达 orchestrator，但没有控制面 CA 签发的 client cert 就进不了业务面。
+
+⚠️ **安全面**：映射绑定 `0.0.0.0`（`[::]` 同），宿主所有网卡可达。只给本机/本网段用时改成 `127.0.0.1:8444:30844`，或在宿主防火墙限制来源；网关自身的 mTLS 仍是最终门槛。
 
 ## 5. kubeconfig 坑（实测）
 
@@ -600,13 +663,13 @@ spec:
 2. **探针放行依赖 k3s 版本与 Pod CIDR**：`allow-kubelet-probes` 解决了 issue #10030，但 k3s **< v1.28.9 / < v1.29.4** 仍会拦掉探针；换 CIDR 必须改 `production-settings.yaml` 的 `nodeCidr`。本集群 v1.31.5 实测无问题。
 3. **授权策略热重载窗口约 5 s**：auth 的 `authorization.policy_reload_interval: 5s`（`deploy/kustomize/production/configs/auth.production.yaml`）。首次 `Initialize` 后 5 s 内，控制台可能被弹到 `/forbidden`——刷新即可，不是权限配错。
 4. **edge 单副本 + 自签证书**：浏览器需要一次性信任例外；edge 重启期间控制台不可用（后端仍在跑）。且 edge 的 `server_name _` 不区分主机名。
-5. **宿主 8443 绑定 `0.0.0.0`**：实测 `docker port` 同时出现 `0.0.0.0:8443` 与 `[::]:8443`，同网段任何人都能访问。只给本机用时把映射改成 `127.0.0.1:8443:30443`。
+5. **宿主 8443 与 8444 都绑定 `0.0.0.0`**：实测 `docker port` 同时出现 `0.0.0.0:8443`/`[::]:8443` 与 `0.0.0.0:8444`/`[::]:8444`，同网段任何人都能访问。只给本机用时把映射改成 `127.0.0.1:8443:30443` / `127.0.0.1:8444:30844`。8444 是 mTLS 网关：网络可达不等于通过认证，没有控制面 CA 签发的 client cert 时请求层返回 `401 client certificate required`（§4-⑦）。
 6. **无 Vault CA 供给**：ADR-017/ADR-020 的 Vault 路径未接线，CA 与令牌都是静态 Secret（notifier 的 `vault.enabled: false`）。轮换靠手工替换 Secret。
 7. **无 HA / 多副本**：只有 `web` 是 2 副本；api/auth/orchestrator/notifier/webhook 单副本且 PDB `minAvailable: 1` ⇒ `kubectl drain` 会在这些 Pod 上**永久阻塞**（这是刻意设计，别删 PDB 绕过）。也没有多节点/反亲和/跨可用区。
 8. **无镜像签名、无 CI 推送镜像**：`.github/workflows/` 里没有 build/push 这 6 个镜像的 job（`sync-to-gitcode.yaml` 只镜像 git 仓库），镜像靠本机构建 + `k3d image import`；`make docker-push-all` 只在你已运行的 registry 上手工执行。没有 cosign/attestation。
 9. **无 schema 降级通道、无 Prometheus/Grafana；自动备份已做但不异地**：自动逻辑备份见 §7.4（每日一次、保留 7 天），但没有 WAL 归档 ⇒ RPO ≤ 24 h，且备份与库同节点同盘 ⇒ 节点丢失会一起丢；异地拷贝仍需操作者补。Prometheus/Grafana 仍不存在，抓取示例见 §9.1（未部署）。schema 仍只能前滚（§8.1）。
 10. **Redis 无 AUTH**：只靠 NetworkPolicy 限制为同 namespace 可达（`allow-redis`）。Redis 一旦离开这个边界就必须补 AUTH。
-11. **客户集群 operator 未接入**：本环境没有 customer cluster/agent，因此「rollback / 已安装 Release / operator 在线状态」这类旅程**没有数据可测**；`sessions` 表为空是预期，不是故障。
+11. **客户集群 operator 的端到端接入仍未验证**：TASK-347 已把宿主机 `8444 → Service operator NodePort 30844 → orchestrator:8084` 的 TCP 通路打通（TLS 握手与请求层 401 实测见 §4-⑦），但本环境没有 customer cluster/agent，所以 enroll、CommandStream、rollback / 已安装 Release / operator 在线状态这类旅程**仍没有数据可测**；`sessions` 表为空是预期，不是故障。另见 §4-⑦ 的证书 SAN 约束：`--orchestrator-addr` 用节点 IP 会 `hostname mismatch`，需用 SAN 名解析或扩展服务端证书。
 
 ## 11. 验收清单（本次实测结果）
 
@@ -619,6 +682,7 @@ spec:
 | 自动备份 | `CronJob/release-manager-backup` 存在且立即触发成功：5 s 完成，`release_manager` **133,173 B** + `release_notifier` **4,592 B** | §7.4 的三条命令；`kubectl -n release-manager get cronjob,pvc` |
 | schema | `34`，`dirty=f` | `kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release_manager -Atc "select version,dirty from schema_migrations"` |
 | 入口 | `https://localhost:8443/` → 200；`GetInitStatus` → `{"initialized":true}` | §6 的两条 curl |
+| operator 网关 | 宿主 `127.0.0.1:8444` TCP 可达；TLSv1.3 握手且证书链校验 `Verification: OK`；无 client cert 时请求层 `401 {"code":"unauthenticated","message":"client certificate required"}` | §4-⑦ 的 `bash /dev/tcp`、`openssl s_client`、`curl` |
 | 登录 | `Set-Cookie` 三个（`rm_access`/`rm_refresh`/`rm_csrf`），登录后 **653 ms** 离开 `/login`，刷新保持会话 | 浏览器访问 `https://localhost:8443`，用 `Initialize` 时创建的管理员账号登录 |
 | 审计页 | `/audit` HTTP 200，列表 0 行（原因见 §10-1，**不是** 500/404） | 浏览器打开 Audit 页面；或按 `api/kulala/audit.http` 的 `QueryAuditEvents` 请求复验 |
 | 停机/重启 | `k3d cluster stop/start` 约 **57 s**，数据完好 | §8.3 |

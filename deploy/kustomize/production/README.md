@@ -25,7 +25,8 @@ The render is 45 objects: 1 Namespace, 8 ConfigMaps, 7 Deployments, 2
 StatefulSets, 4 PodDisruptionBudgets, 10 Services, 3 PVCs, 2 StatefulSet claim
 templates (part of the StatefulSet specs, not separate objects), 9
 NetworkPolicies — the default-deny one
-plus 8 allow rules, including `allow-kubelet-probes` and `allow-edge-nodeport` —
+plus 8 allow rules, including `allow-kubelet-probes`, `allow-edge-nodeport` and
+`allow-agent-gateway` —
 and 1 CronJob (the nightly backup, see [Automatic backups](#automatic-backups)).
 The TLS edge contributes one ConfigMap, one Deployment, one Service and one
 NetworkPolicy on top of batch 1's 39 objects.
@@ -124,9 +125,10 @@ docker port k3d-rm-prod-serverlb
 ```
 
 k3d rewrites the load balancer's nginx config to forward `30443` to
-`k3d-rm-prod-server-0:30443`, so the host reaches the NodePort. The `edge`
-Service is the only NodePort in this overlay; `edge.yaml` records why that
-exception exists.
+`k3d-rm-prod-server-0:30443`, so the host reaches the NodePort. `edge` is one
+of two NodePorts in this overlay; the other is the operator mTLS gateway
+described in the next section. `edge.yaml` records why the edge exception
+exists.
 
 NetworkPolicy: `allow-edge-nodeport` opens TCP 443 on the edge pod only. The
 NodePort source is a node address, not a namespace or pod, so the rule
@@ -148,6 +150,49 @@ The certificate is self-signed, so browsers need a one-time trust exception
 (and an automated run needs `ignoreHTTPSErrors: true`). Replace it with a
 CA-issued certificate, or put a real Ingress in front, before anything but a
 throwaway cluster uses this overlay.
+
+## Operator gateway and host access (mTLS passthrough)
+
+Customer-cluster operators reach the control plane through the orchestrator's
+mTLS gateway on `:8084` (`gateway.enabled: true`). That listener is plain TCP
+whose TLS is terminated inside the orchestrator (`ClientAuth:
+VerifyClientCertIfGiven`, `ClientCAs` loaded from `release-manager-mtls-ca`),
+so it must not go through the nginx edge: `web/nginx.conf` proxies
+`/operator.v1.` as plain HTTP and the client certificate is lost in that hop.
+
+Off-cluster agents also have no route to a ClusterIP, so `operator` is the
+second Service in this overlay that keeps a NodePort (30844, see
+`kustomization.yaml`), and the k3d load balancer maps it onto the host:
+
+```bash
+k3d node edit k3d-rm-prod-serverlb --port-add "8444:30844"
+docker port k3d-rm-prod-serverlb
+# 30844/tcp -> 0.0.0.0:8444
+# 30844/tcp -> [::]:8444
+```
+
+A customer-cluster operator then points at the host:
+
+```bash
+release-operator --orchestrator-addr https://<host>:8444 ...
+```
+
+What the path does and does not guarantee:
+
+- It is a TCP passthrough, not an HTTP proxy: NodePort DNAT delivers the TLS
+  bytes to the orchestrator pod on 8084, so the handshake and the client
+  certificate identity check still happen in the control plane. Without a
+  certificate signed by the control-plane CA the handshake may complete
+  (`VerifyClientCertIfGiven`) but every request is rejected by the identity
+  interceptor. The network path being open is not authentication.
+- The mapping binds `0.0.0.0` (and `[::]`), so every host interface can reach
+  it. Restrict it to loopback with
+  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8444:30844"` when
+  only local operators need it.
+- NetworkPolicy: `allow-agent-gateway` opens TCP 8084 on the orchestrator pod
+  only. NetworkPolicy matches the post-DNAT pod port, so the rule names 8084,
+  not 30844 — the same shape as `allow-edge-nodeport` naming the edge pod's
+  443 rather than its 30443. `default-deny-ingress` is unchanged.
 
 ## Image tags
 
@@ -312,10 +357,11 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   the overlay and the notifier ships an empty egress allowlist.
 - The dev service configs (debug logging, SQLite, disabled Secure cookies,
   raised login rate limit) are replaced by `configs/*.production.yaml`.
-- NodePorts 30082-30088 are removed; every application Service is ClusterIP and
-  only the Ingress controller (where one exists) or the TLS edge may enter the
-  namespace. The edge's own NodePort 30443 (mapped to host 8443) is the single
-  documented exception.
+- NodePorts 30082-30088 are removed; only the Ingress controller (where one
+  exists), the TLS edge and the operator gateway may enter the namespace. Two
+  NodePorts are documented exceptions: the edge's 30443 (mapped to host 8443)
+  and the operator gateway's 30844 (mapped to host 8444, mTLS passthrough).
+  Every other application Service stays ClusterIP.
 - The inherited orchestrator PVC remains 1Gi. Growing it is a storage-class
   and capacity decision for a later batch.
 
@@ -354,12 +400,14 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   It is a stopgap for a cluster without a working Ingress controller, not a
   production TLS story: replace it with an Ingress controller and a CA-issued
   certificate before real traffic.
-- The host port mapping `8443:30443` binds `0.0.0.0`, so the edge is reachable
-  from every host interface, not just loopback. If the cluster runs on a
-  networked host, restrict the mapping with
-  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"` (edit
-  the existing mapping; the bind address is part of the port spec) or keep the
-  host behind a firewall.
+- The host port mappings `8443:30443` and `8444:30844` bind `0.0.0.0`, so both
+  are reachable from every host interface, not just loopback. If the cluster
+  runs on a networked host, restrict them with
+  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"` and
+  `--port-add "127.0.0.1:8444:30844"` (edit the existing mappings; the bind
+  address is part of the port spec) or keep the host behind a firewall. The
+  operator gateway additionally requires a CA-issued client certificate on
+  every request, so network reachability alone does not grant access.
 - **Backups are nightly but not off-site.** The CronJob and its PVC live on the
   same node as PostgreSQL; a node loss takes both. Add a copy step to remote
   storage (and back up the three private keys) before relying on this for
