@@ -21,11 +21,12 @@ current kubeconfig for API discovery, so point `KUBECONFIG` at the target
 cluster (or at any cluster that knows the built-in API groups) before running
 it.
 
-The render is 43 objects: 1 Namespace, 8 ConfigMaps, 7 Deployments, 2
-StatefulSets, 4 PodDisruptionBudgets, 10 Services, 2 PVCs, 2 StatefulSet claim
-templates (part of the StatefulSet specs, not separate objects) and 9
+The render is 45 objects: 1 Namespace, 8 ConfigMaps, 7 Deployments, 2
+StatefulSets, 4 PodDisruptionBudgets, 10 Services, 3 PVCs, 2 StatefulSet claim
+templates (part of the StatefulSet specs, not separate objects), 9
 NetworkPolicies — the default-deny one
-plus 8 allow rules, including `allow-kubelet-probes` and `allow-edge-nodeport`.
+plus 8 allow rules, including `allow-kubelet-probes` and `allow-edge-nodeport` —
+and 1 CronJob (the nightly backup, see [Automatic backups](#automatic-backups)).
 The TLS edge contributes one ConfigMap, one Deployment, one Service and one
 NetworkPolicy on top of batch 1's 39 objects.
 
@@ -176,8 +177,9 @@ if any `image:` value still ends in `:dev`. It passes only after
 ## Storage class
 
 `production-settings.yaml` holds the single `storageClassName` value used by
-all four claims: the PostgreSQL 10Gi and Redis 5Gi volume claim templates, the
-release-api 1Gi PVC and the orchestrator 1Gi PVC inherited from `base`. Change
+all five claims: the PostgreSQL 10Gi and Redis 5Gi volume claim templates, the
+release-api 1Gi PVC, the backup CronJob's 5Gi PVC and the orchestrator 1Gi PVC
+inherited from `base`. Change
 that one value before rendering for a cluster whose provisioner is not
 `local-path` (editing the applied ConfigMap does not resize or rebind an
 existing PVC). The inherited orchestrator claim ships without a class, so the
@@ -186,6 +188,77 @@ one claim on the cluster default — one overlay must not span two storage
 classes. `local-path` volumes are node-bound: this overlay targets the
 single-node k3d production cluster; a multi-node cluster needs a network volume
 class.
+
+## Automatic backups
+
+`backup-cronjob.yaml` runs a nightly logical backup and is part of this overlay
+(the CronJob is not created by any other manifest):
+
+| Property | Value |
+| --- | --- |
+| Schedule | `0 2 * * *` (02:00 UTC), `concurrencyPolicy: Forbid` |
+| Databases | `release_manager` (required) and `release_notifier` (only when the probe proves it exists and has at least one base table; a failed probe fails the Job instead of skipping) |
+| Format | `pg_dump -Fc` (PostgreSQL custom format), one file per database per run |
+| Location | PVC `release-manager-backups` (5Gi, same storage class), mounted at `/backups` |
+| File names | `release_manager-<UTC stamp>.dump`, `release_notifier-<UTC stamp>.dump` (`YYYYmmddTHHMMSSZ`) |
+| Retention | files older than 7 days are deleted in the same run (`find … -mtime +7 -delete`) |
+| History | 3 successful + 3 failed Jobs kept; `backoffLimit: 2`, `activeDeadlineSeconds: 1800` |
+| Credentials | `release-manager-credentials` → `POSTGRES_USER` / `POSTGRES_PASSWORD` (`PGPASSWORD`) / `POSTGRES_DB`; no password in the manifest |
+| Runtime | `postgres:16` (client matches the server major), non-root uid/gid 999 |
+
+The client version is deliberate: the `postgres:16` image produces a dump that
+PostgreSQL 16.15 can restore directly. A host-side `pg_dump` 18.6 dump is not
+directly restorable (see
+[`docs/production-deploy.md`](../../../docs/production-deploy.md) §7.2).
+
+Trigger a run immediately (this also exercises the manifest):
+
+```bash
+kubectl -n release-manager create job --from=cronjob/release-manager-backup backup-manual
+kubectl -n release-manager wait --for=condition=complete job/backup-manual --timeout=600s
+kubectl -n release-manager logs job/backup-manual
+```
+
+`concurrencyPolicy: Forbid` only serialises runs the CronJob controller
+schedules. A Job created with `create job --from=cronjob/...` is a separate
+object the controller does not track, so a manual run can overlap the
+automatic one; trigger it away from the 02:00 UTC slot. Both runs share the
+PVC and both execute the 7-day retention pass, so overlapping is not
+recommended even though each run uses its own timestamped file names.
+
+The dump directory is only mounted in the backup Pod; inspect it from a
+throwaway Pod that mounts the same claim:
+
+```bash
+kubectl -n release-manager run backup-ls --rm -it --restart=Never \
+  --image=postgres:16 --overrides='{"spec":{"containers":[{"name":"backup-ls",
+  "image":"postgres:16","command":["ls","-l","/backups"],
+  "volumeMounts":[{"name":"backups","mountPath":"/backups"}]}],
+  "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"release-manager-backups"}}]}}'
+```
+
+Restore a dump into a scratch database. The dump lives on the backup PVC, which
+`postgres-0` does not mount, so the restore runs in a throwaway Pod that mounts
+the same claim:
+
+```bash
+kubectl -n release-manager run backup-restore --rm -it --restart=Never \
+  --image=postgres:16 --overrides='{"spec":{"containers":[{"name":"backup-restore",
+  "image":"postgres:16","command":["/bin/sh","-c"],
+  "args":["set -eu; psql -d postgres -c \"CREATE DATABASE restore_check\"; pg_restore -d restore_check --no-owner --no-privileges /backups/<file>.dump; psql -d restore_check -Atc \"select version, dirty from schema_migrations\""],
+  "env":[{"name":"PGHOST","value":"postgres"},
+  {"name":"PGUSER","valueFrom":{"secretKeyRef":{"name":"release-manager-credentials","key":"POSTGRES_USER"}}},
+  {"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"release-manager-credentials","key":"POSTGRES_PASSWORD"}}}],
+  "volumeMounts":[{"name":"backups","mountPath":"/backups"}]}],
+  "volumes":[{"name":"backups","persistentVolumeClaim":{"claimName":"release-manager-backups"}}]}}'
+```
+
+The full drill (row counts, index count, dropping the scratch database) is in
+[`docs/production-deploy.md`](../../../docs/production-deploy.md) §7.3.
+
+This is **not** a backup of the three private keys (§3.2 of the deployment
+manual) and it stays on the same node: copy dumps and keys off the host for a
+real disaster-recovery story.
 
 ## Database migrations
 
@@ -268,5 +341,13 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"` (edit
   the existing mapping; the bind address is part of the port spec) or keep the
   host behind a firewall.
-- No backup/restore CronJob and no Prometheus scrape configuration yet
-  (TASK-337 batch 4).
+- **Backups are nightly but not off-site.** The CronJob and its PVC live on the
+  same node as PostgreSQL; a node loss takes both. Add a copy step to remote
+  storage (and back up the three private keys) before relying on this for
+  disaster recovery. There is no WAL archiving, so the recovery point objective
+  is up to 24 hours.
+- **No Prometheus scrape configuration is committed** (no ServiceMonitor, no
+  `prometheus.io/scrape` annotations). Only auth and orchestrator expose
+  `/metrics`; api/webhook/notifier return 404 and web returns the SPA HTML with
+  a misleading 200. A scrape example is in
+  [`docs/production-deploy.md`](../../../docs/production-deploy.md) §9.1.

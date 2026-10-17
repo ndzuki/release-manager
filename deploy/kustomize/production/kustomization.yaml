@@ -37,6 +37,7 @@ resources:
   - postgres-statefulset.yaml
   - redis-statefulset.yaml
   - api-pvc.yaml
+  - backup-cronjob.yaml
   - pdb.yaml
   - networkpolicies.yaml
   - edge.yaml
@@ -430,11 +431,12 @@ patches:
         path: /spec/ports/0/nodePort
 
 # One knob for every PVC's storage class: the two StatefulSet claim templates and
-# the two standalone claims (release-api's new one and the orchestrator claim
-# inherited from base). The inherited claim ships without an explicit class, so
-# `create: true` is required to write the field into it -- otherwise it would
-# follow the cluster default while the other three follow production-settings,
-# i.e. one overlay silently using two storage classes.
+# the three standalone claims (release-api's new one, the backup CronJob's claim
+# and the orchestrator claim inherited from base). The inherited claim ships
+# without an explicit class, so `create: true` is required to write the field
+# into it -- otherwise it would follow the cluster default while the other four
+# follow production-settings, i.e. one overlay silently using two storage
+# classes.
 replacements:
   - source:
       kind: ConfigMap
@@ -454,6 +456,11 @@ replacements:
       - select:
           kind: PersistentVolumeClaim
           name: release-manager-api-data
+        fieldPaths:
+          - spec.storageClassName
+      - select:
+          kind: PersistentVolumeClaim
+          name: release-manager-backups
         fieldPaths:
           - spec.storageClassName
       - select:

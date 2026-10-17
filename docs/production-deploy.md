@@ -11,8 +11,9 @@
 | 集群 | 单节点 k3d `rm-prod`，k3s `v1.31.5+k3s1` | `k3d cluster list`、`kubectl get nodes` |
 | namespace | `release-manager` | `kubectl -n release-manager get pods` |
 | Pod | 10 个，**10/10 Ready** | 2026-10-17 19:0x 快照 |
-| PVC | **4 个全部 `Bound`** | 同上 |
-| 渲染对象 | **43 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 2 PVC / 9 NetworkPolicy） | `kubectl kustomize`，纯本地渲染，不接触集群 |
+| PVC | **5 个全部 `Bound`**（含自动备份卷 `release-manager-backups`） | 同上 + `kubectl -n release-manager get pvc` |
+| 渲染对象 | **45 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 3 PVC / 9 NetworkPolicy / 1 CronJob） | `kubectl kustomize`，纯本地渲染，不接触集群 |
+| 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
 | 镜像 tag | `a6707b6`（`git rev-parse --short HEAD`） | `kubectl get pods -o jsonpath=…image`、`crictl images` |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
 | schema | `schema_migrations` = `34`, `dirty=f` | 只读 SQL，见 §11 |
@@ -32,6 +33,7 @@
 | `edge` | Deployment | 1 | 443 | `nginx:1.27-alpine` | TLS 终止 → `web:8087`；唯一的 NodePort |
 | `postgres` | StatefulSet | 1 | 5432 | `postgres:16`（服务端 **16.15**） | 数据权威（ADR-014） |
 | `redis` | StatefulSet | 1 | 6379 | `redis:7-alpine`（**7.4.11**） | 仅 auth 会话缓存 + refresh 黑名单；无 AUTH |
+| `release-manager-backup` | CronJob | — | — | `postgres:16` | 每日 `02:00 UTC` 逻辑备份（`release_manager` + `release_notifier` → PVC `release-manager-backups`），见 §7.4 |
 
 七个 Deployment 里只有 `edge` 不是 Go 进程；`api`/`auth`/`orchestrator`/`notifier`/`webhook` 各自暴露 `/health` 与 `/readyz`，`web` 的 `/health`、`/readyz` 由 nginx **反代到 orchestrator**（`web/nginx.conf`），`edge` 只有 `tcpSocket` 探针。
 
@@ -61,6 +63,7 @@
 | `data-redis-0` | 5Gi | `local-path` | 同上 | Redis AOF/RDB |
 | `release-manager-api-data` | 1Gi | `local-path` | overlay `api-pvc.yaml` | `release-api` 的审计归档 `/data/archives`；`--db` 的 SQLite 文件仅在未选 PG 时使用 |
 | `release-manager-orchestrator-data` | 1Gi | `local-path` | 继承自 `deploy/kustomize/base` | agent 网关 CA、审计 spool |
+| `release-manager-backups` | 5Gi | `local-path` | overlay `backup-cronjob.yaml` | 每日 PostgreSQL 逻辑备份（`release_manager` / `release_notifier`），见 §7.4 |
 
 `local-path` 是 k3d/k3s 默认 provisioner，卷**绑定节点**：这套 overlay 只适合单节点集群，多节点需要网络卷类（改 `deploy/kustomize/production/production-settings.yaml:14` 的 `storageClassName` 一处即可，见 overlay README 的「Storage class」）。
 
@@ -371,6 +374,12 @@ curl -k -s -X POST https://localhost:8443/auth.v1.AuthService/GetInitStatus \
 
 ### 7.1 备份
 
+**自动备份已存在**（TASK-340）：`CronJob/release-manager-backup` 每日 `02:00 UTC` 对
+`release_manager`（必需）与 `release_notifier`（确证存在且有基表时）各做一次 `pg_dump -Fc`，
+写入 PVC `release-manager-backups`（5Gi），保留 7 天。schedule/保留/位置/手动触发见 §7.4。
+
+手工 dump 仍可用于临时取样（在宿主执行）：
+
 ```bash
 kubectl -n release-manager port-forward --address 127.0.0.1 svc/postgres 15432:5432 &
 export PGPASSWORD="$(kubectl -n release-manager get secret release-manager-credentials \
@@ -380,11 +389,12 @@ pg_dump -h 127.0.0.1 -p 15432 -U release_manager -d release_manager \
 ```
 
 - 同时要备份 `release_notifier` 库（`-d release_notifier`），以及 §3.2 的三份私钥。
-- 演练实测：dump **93,201 B / 58 张表**；同日复核同一库为 **101,630 B / 58 张表**（体积随数据增长，**不要把字节数当断言**，判据用表数与迁移版本）。
+- 手工演练实测：dump **93,201 B / 58 张表**；同日复核同一库为 **101,630 B / 58 张表**（体积随数据增长，**不要把字节数当断言**，判据用表数与迁移版本）。
+- ⚠️ 宿主 `pg_dump` 是 **18.6**，与集群 PostgreSQL **16.15** 跨大版本；自动备份在 `postgres:16` 镜像内执行，客户端/服务端同大版本，不受 §7.2 的坑影响。
 
 ### 7.2 恢复（版本坑）
 
-本机 `pg_dump` 是 **18.6**，集群里是 PostgreSQL **16.15**。PG17+ 的客户端会在 dump 头部写 `SET transaction_timeout = 0;`，**PG 16 不认识这个 GUC，直接报错中断 restore**。恢复前必须剔除该行：
+本机 `pg_dump` 是 **18.6**，集群里是 PostgreSQL **16.15**。PG17+ 的客户端会在 dump 头部写 `SET transaction_timeout = 0;`，**PG 16 不认识这个 GUC，直接报错中断 restore**。恢复前必须剔除该行（**只适用于 plain SQL、且由宿主 18.x 客户端生成的 dump**；自动备份的 `-Fc` 归档由 16.15 生成，不包含该行）：
 
 ```bash
 grep -v '^SET transaction_timeout' /tmp/release_manager-YYYYMMDDTHHMMSS.dump \
@@ -396,7 +406,14 @@ psql -h 127.0.0.1 -p 15432 -U release_manager -d release_manager_restore_check \
   -v ON_ERROR_STOP=1 -f /tmp/release_manager-restore.sql
 ```
 
-### 7.3 恢复后必须校验三件事
+自动备份是 custom format，用 `pg_restore` 恢复，不做上面的文本替换：
+
+```bash
+pg_restore -h 127.0.0.1 -p 15432 -U release_manager -d release_manager_restore_check \
+  --no-owner --no-privileges /tmp/release_manager-YYYYMMDDTHHMMSS.dump
+```
+
+### 7.3 恢复后必须校验
 
 ```bash
 PSQL="psql -h 127.0.0.1 -p 15432 -U release_manager -d release_manager_restore_check -Atc"
@@ -406,13 +423,65 @@ $PSQL "select count(*) from information_schema.tables where table_schema='public
 $PSQL "select count(*) from pg_indexes where schemaname='public'"           # 期望 146
 ```
 
-演练结果：dump 93,201 B / 58 表 → restore 到临时库 → `schema_migrations` = `34|f`，与源库一致；索引数、关键表行数一致。校验完删掉临时库。
+手工演练结果：dump 93,201 B / 58 表 → restore 到临时库 → `schema_migrations` = `34|f`，与源库一致；索引数、关键表行数一致。校验完删掉临时库。
+
+**自动备份演练（2026-10-17 实测，TASK-340）**：`postgres-0` 不挂备份 PVC，先立即触发一次 CronJob，再用一个挂载同一 PVC 的临时 Job 做 restore（示例见 [production overlay README](../deploy/kustomize/production/README.md) 的 restore 片段）：
+
+```bash
+kubectl -n release-manager create job --from=cronjob/release-manager-backup backup-drill
+kubectl -n release-manager wait --for=condition=complete job/backup-drill --timeout=600s
+kubectl -n release-manager logs job/backup-drill
+# 实测 5 s 完成：release_manager dump 133,173 B；release_notifier dump 4,592 B
+```
+
+restore 作业输出（逐项与源库对比，不一致即失败）：
+
+```text
+schema_migrations    source=34|false     restored=34|false     OK
+users                source=1            restored=1            OK
+audit_events         source=2            restored=2            OK
+casbin_rule          source=6            restored=6            OK
+auth_sessions        source=14           restored=14           OK
+tables               source=58           restored=58           OK
+indexes              source=146          restored=146          OK
+all checks passed
+```
+
+演练全过程只读源库：结束后 `audit_events` 仍 **2 行**。校验完 `DROP DATABASE rm_backup_check`、删演练 Job；**保留 CronJob 与备份 PVC**。
 
 ⚠️ **恢复到已有历史的库之后**，先让服务启动一次（跑 `repairHistoricalMigrationVersion`）再考虑 `make migrate`，理由见 §4-③。
 
-### 7.4 当前没有自动备份（待办）
+### 7.4 自动备份（已存在）
 
-仓库里**没有** `CronJob`、没有 pgBackRest/WAL 归档、没有备份保留策略（`grep 'kind: CronJob' deploy/` 为 0 命中）。上面的 dump 是手工操作。上生产前需要补：定时 dump（或 WAL 归档）+ 异地存放 + 恢复演练制度化。
+`deploy/kustomize/production/backup-cronjob.yaml` 定义 `CronJob/release-manager-backup` 与 PVC `release-manager-backups`：
+
+| 项 | 值 |
+| --- | --- |
+| 调度 | `0 2 * * *`（02:00 UTC），`concurrencyPolicy: Forbid`，`startingDeadlineSeconds: 600` |
+| 库 | `release_manager`（必需）+ `release_notifier`（探针确证存在且有基表时；空库跳过；**探针或 dump 失败一律 Job 红**，不再把连接失败误记成“库不存在”） |
+| 格式/位置 | `pg_dump -Fc`，PVC `release-manager-backups`（5Gi，与 PG 同一 `storageClassName` 旋钮），容器内 `/backups` |
+| 文件名 | `release_manager-<UTC 时间戳>.dump` / `release_notifier-<UTC 时间戳>.dump`（`YYYYmmddTHHMMSSZ`） |
+| 保留 | 同一次运行内 `find … -mtime +7 -delete`：删除 **7 天前**的文件（不是“保留 7 个文件”，漏跑一次不会把最后一份好 dump 删掉） |
+| 失败处理 | `backoffLimit: 2`、`activeDeadlineSeconds: 1800`；保留 3 成功 + 3 失败 Job |
+| 凭据 | 从 `release-manager-credentials` 取 `POSTGRES_USER`/`POSTGRES_PASSWORD`（`PGPASSWORD`）/`POSTGRES_DB`；清单与日志中没有口令 |
+| 运行身份 | `postgres:16`，`runAsNonRoot` uid/gid **999**，`fsGroup: 999`，drop ALL caps，只读 rootfs |
+
+**手动触发**：
+
+```bash
+kubectl -n release-manager create job --from=cronjob/release-manager-backup backup-manual
+kubectl -n release-manager wait --for=condition=complete job/backup-manual --timeout=600s
+kubectl -n release-manager logs job/backup-manual
+```
+
+**恢复**：见 §7.2–§7.3；从 PVC 恢复要点是临时 Pod/Job 必须挂载 `release-manager-backups`。
+
+**运维注意**：
+
+- `concurrencyPolicy: Forbid` 只约束 CronJob 控制器**自动调度**的运行：`create job --from=cronjob/...` 生成的是独立 Job，控制器不追踪它 ⇒ **手动触发不受防重约束**。请避开 02:00 UTC 的自动场次（两者共用同一 PVC，且都会执行 7 天清理）。
+- Job Pod 启动瞬间，新 Pod IP 可能尚未被节点 NetworkPolicy 放行（k3s kube-router 实测约 **2 s**）。脚本先 `pg_isready` 有界等待（60 × 2 s）再 dump；这不是多余的重试，去掉会在 02:00 偶发 `connection refused`。
+- 备份与 PostgreSQL **同节点同盘**（`local-path`）：节点丢失会同时丢库和备份；且没有 WAL 归档，RPO 最长为 24 h。生产使用前必须加异地拷贝，并单独备份 §3.2 的三份私钥。
+- 镜像 `postgres:16` 必须已在节点本地（本集群无 docker.io 出口），否则 CronJob 会 `ImagePullBackOff`。
 
 ## 8. 升级与回滚
 
@@ -468,6 +537,53 @@ kubectl -n release-manager get pods
 
 **建议（当前未做）**：补 Prometheus 抓取配置（至少 auth/orchestrator）、Grafana dashboard、告警规则，以及给 release-api 补 `/metrics` 或明确其不参与抓取。
 
+### 9.1 Prometheus scrape 示例（仅文档，仓库未部署）
+
+**只有 `auth`(8085) 与 `orchestrator`(8083) 暴露 `/metrics`。** 不要给 `api`(8088)、`webhook`(8082)、`notifier`(8086) 加抓取：它们返回 **404**；`web`(8087) 的 `/metrics` 返回 **200 + SPA HTML**（`Content-Type: text/html`），抓了也只会得到解析失败或空指标。这是已记录的坑，不是待修配置。
+
+最小 `scrape_configs`（Prometheus 与这两个 Service 在同一集群内）：
+
+```yaml
+scrape_configs:
+  - job_name: release-manager
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - auth.release-manager.svc.cluster.local:8085
+          - orchestrator.release-manager.svc.cluster.local:8083
+```
+
+用 Pod 注解做服务发现时，只给这两个 Deployment 的 Pod template 加注解（示例为 auth；orchestrator 把端口改成 8083）：
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8085"
+```
+
+```yaml
+# Prometheus 侧（Kubernetes SD）
+- job_name: release-manager-pods
+  kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names: [release-manager]
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: "true"
+    - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+      action: replace
+      target_label: __address__
+      regex: (.+);(.+)
+      replacement: ${1}:${2}
+```
+
+⚠️ **NetworkPolicy**：`allow-namespace-service-ports` 只放行同 namespace 且带 `app.kubernetes.io/part-of=release-manager` 标签的 Pod 访问 8083/8085。Prometheus 若在别的 namespace，现有策略会拦截；需要单独加一条 ingress 规则（按 Prometheus namespace 或 Pod 选择），再验证 `curl -sS http://auth:8085/metrics | head`。这些注解/策略都**没有**写进 overlay——上面的片段是操作者接线时的起点。
+
 ## 10. 已知限制
 
 逐条都是实测或读码确认，**不是猜测**。排障时不要假设这些能力存在。
@@ -480,7 +596,7 @@ kubectl -n release-manager get pods
 6. **无 Vault CA 供给**：ADR-017/ADR-020 的 Vault 路径未接线，CA 与令牌都是静态 Secret（notifier 的 `vault.enabled: false`）。轮换靠手工替换 Secret。
 7. **无 HA / 多副本**：只有 `web` 是 2 副本；api/auth/orchestrator/notifier/webhook 单副本且 PDB `minAvailable: 1` ⇒ `kubectl drain` 会在这些 Pod 上**永久阻塞**（这是刻意设计，别删 PDB 绕过）。也没有多节点/反亲和/跨可用区。
 8. **无镜像签名、无 CI 推送镜像**：`.github/workflows/` 里没有 build/push 这 6 个镜像的 job（`sync-to-gitcode.yaml` 只镜像 git 仓库），镜像靠本机构建 + `k3d image import`；`make docker-push-all` 只在你已运行的 registry 上手工执行。没有 cosign/attestation。
-9. **无 schema 降级通道、无自动备份、无 Prometheus/Grafana**：见 §7.4、§8.1、§9。
+9. **无 schema 降级通道、无 Prometheus/Grafana；自动备份已做但不异地**：自动逻辑备份见 §7.4（每日一次、保留 7 天），但没有 WAL 归档 ⇒ RPO ≤ 24 h，且备份与库同节点同盘 ⇒ 节点丢失会一起丢；异地拷贝仍需操作者补。Prometheus/Grafana 仍不存在，抓取示例见 §9.1（未部署）。schema 仍只能前滚（§8.1）。
 10. **Redis 无 AUTH**：只靠 NetworkPolicy 限制为同 namespace 可达（`allow-redis`）。Redis 一旦离开这个边界就必须补 AUTH。
 11. **客户集群 operator 未接入**：本环境没有 customer cluster/agent，因此「rollback / 已安装 Release / operator 在线状态」这类旅程**没有数据可测**；`sessions` 表为空是预期，不是故障。
 
@@ -491,13 +607,14 @@ kubectl -n release-manager get pods
 | 检查 | 实测结果 | 复验命令 |
 | --- | --- | --- |
 | Pod 就绪 | **10/10 Ready**（api/auth/orchestrator/notifier/webhook ×1、web ×2、edge ×1、postgres-0、redis-0） | `kubectl -n release-manager get pods` |
-| PVC | **4/4 `Bound`**，容量 10Gi/5Gi/1Gi/1Gi，`local-path` | `kubectl -n release-manager get pvc` |
+| PVC | **5/5 `Bound`**，容量 10Gi/5Gi/1Gi/1Gi/5Gi，`local-path` | `kubectl -n release-manager get pvc` |
+| 自动备份 | `CronJob/release-manager-backup` 存在且立即触发成功：5 s 完成，`release_manager` **133,173 B** + `release_notifier` **4,592 B** | §7.4 的三条命令；`kubectl -n release-manager get cronjob,pvc` |
 | schema | `34`，`dirty=f` | `kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release_manager -Atc "select version,dirty from schema_migrations"` |
 | 入口 | `https://localhost:8443/` → 200；`GetInitStatus` → `{"initialized":true}` | §6 的两条 curl |
 | 登录 | `Set-Cookie` 三个（`rm_access`/`rm_refresh`/`rm_csrf`），登录后 **653 ms** 离开 `/login`，刷新保持会话 | 浏览器访问 `https://localhost:8443`，用 `Initialize` 时创建的管理员账号登录 |
 | 审计页 | `/audit` HTTP 200，列表 0 行（原因见 §10-1，**不是** 500/404） | 浏览器打开 Audit 页面；或按 `api/kulala/audit.http` 的 `QueryAuditEvents` 请求复验 |
 | 停机/重启 | `k3d cluster stop/start` 约 **57 s**，数据完好 | §8.3 |
-| 备份/恢复 | dump 93,201 B / 58 表 → restore → `34|f`、表数/索引数/行数一致 | §7.1–§7.3 |
+| 备份/恢复 | 手工：dump 93,201 B / 58 表；自动：133,173 B + 4,592 B → restore `rm_backup_check` → `34|false`、58 表/146 索引/关键表行数全部与源库一致 | §7.1–§7.4 |
 | 镜像门禁 | 未改 tag 时 `make check-production-images` FAIL 并打印 6 行 `:dev`；改后 PASS | §2.3 |
 
 ## 事实源
