@@ -28,9 +28,43 @@ const (
 	minimumEnrollmentTTLMinutes      int32 = 5
 	maximumEnrollmentTTLMinutes      int32 = 1440
 	operatorHeartbeatIntervalSeconds       = 30
-	installTemplateVersion                 = "v1"
-	installTemplate                        = "release-operator --orchestrator-addr http://orchestrator:8083 --operator-addr http://operator:8084 --customer-id ${CUSTOMER_ID} --cluster-id ${CLUSTER_ID} --enrollment-token ${ENROLLMENT_TOKEN}"
+	installTemplateVersion                 = "v2"
+	// installTemplate is the console-facing operator install command. It must
+	// stay executable against cmd/operator: the agent identity travels through
+	// --config (agent.customer_id / agent.cluster_id) and the one-time token
+	// through the ENROLLMENT_TOKEN environment variable, because the binary
+	// defines no identity, token, or operator-address flags (TASK-346). The
+	// gateway address stays a placeholder: whether the management-plane
+	// listener is reachable from a customer cluster is a deployment fact the
+	// control plane cannot know.
+	installTemplate = `# release-operator reads its agent identity from --config (agent.customer_id,
+# agent.cluster_id) and its enrollment token from ENROLLMENT_TOKEN; neither is a
+# command-line flag.
+cat > operator.yaml <<'EOF'
+agent:
+  mode: agent
+  customer_id: ${CUSTOMER_ID}
+  cluster_id: ${CLUSTER_ID}
+ca:
+  # Gateway CA bundle (Secret operator-gateway-ca) mounted into the agent.
+  cert_path: /data/gateway-ca.crt
+EOF
+export ENROLLMENT_TOKEN=${ENROLLMENT_TOKEN}
+# Replace <CONTROL_PLANE_OPERATOR_GATEWAY> with the address this customer cluster
+# can reach (TLS; e.g. an ingress or nodePort in front of the operator Service).
+# The management-plane listener address is not reusable here.
+release-operator --config operator.yaml --orchestrator-addr '<CONTROL_PLANE_OPERATOR_GATEWAY>'`
 )
+
+// renderInstallTemplate embeds the server-known agent identity into the install
+// command. The gateway address and the token stay placeholders: the first is a
+// deployment fact, the second is a one-time secret the caller substitutes.
+func renderInstallTemplate(customerID, clusterID string) string {
+	return strings.NewReplacer(
+		"${CUSTOMER_ID}", customerID,
+		"${CLUSTER_ID}", clusterID,
+	).Replace(installTemplate)
+}
 
 type operatorCursorPayload struct {
 	Version         int    `json:"v"`
