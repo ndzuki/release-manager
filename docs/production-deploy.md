@@ -606,7 +606,7 @@ spec:
 8. **无镜像签名、无 CI 推送镜像**：`.github/workflows/` 里没有 build/push 这 6 个镜像的 job（`sync-to-gitcode.yaml` 只镜像 git 仓库），镜像靠本机构建 + `k3d image import`；`make docker-push-all` 只在你已运行的 registry 上手工执行。没有 cosign/attestation。
 9. **无 schema 降级通道、无 Prometheus/Grafana；自动备份已做但不异地**：自动逻辑备份见 §7.4（每日一次、保留 7 天），但没有 WAL 归档 ⇒ RPO ≤ 24 h，且备份与库同节点同盘 ⇒ 节点丢失会一起丢；异地拷贝仍需操作者补。Prometheus/Grafana 仍不存在，抓取示例见 §9.1（未部署）。schema 仍只能前滚（§8.1）。
 10. **Redis 无 AUTH**：只靠 NetworkPolicy 限制为同 namespace 可达（`allow-redis`）。Redis 一旦离开这个边界就必须补 AUTH。
-11. **客户集群 operator 未接入**：本环境没有 customer cluster/agent，因此「rollback / 已安装 Release / operator 在线状态」这类旅程**没有数据可测**；`sessions` 表为空是预期，不是故障。
+11. **交付的 `rm-prod` 里没有客户集群**：因此「rollback / 已安装 Release / operator 在线状态」这类旅程**默认没有数据可测**，`sessions` 表为空是预期，不是故障。接入一个客户集群的完整路径（网关可达性、SAN/`hostAliases` 约束、2 个 Secret、plan→apply 实测）见 §12；演示集群是一次性的，删除后控制面**保留**它的 customer/cluster/operator/inventory 行（没有删除 RPC），会话转 `offline`、inventory 停止更新。
 
 ## 11. 验收清单（本次实测结果）
 
@@ -624,6 +624,189 @@ spec:
 | 停机/重启 | `k3d cluster stop/start` 约 **57 s**，数据完好 | §8.3 |
 | 备份/恢复 | 手工：dump 93,201 B / 58 表；自动：133,173 B + 4,592 B → restore `rm_backup_check` → `34|false`、58 表/146 索引/关键表行数全部与源库一致 | §7.1–§7.4 |
 | 镜像门禁 | 未改 tag 时 `make check-production-images` FAIL 并打印 6 行 `:dev`；改后 PASS | §2.3 |
+
+## 12. 客户集群接入（operator enroll）
+
+本节是**拿第二个 k3d 集群当客户集群**接入 `rm-prod` 的最小可行路径，2026-10-18 在本机实测走通：
+enroll → 会话 → `release_inventory`（含 000024 身份四列 + 000030 观测投影）→ plan（预检）→ apply → observe。
+命令里的 `<...>` 是要替换的占位符。
+
+### 12.1 网关必须先「到得了」
+
+operator agent 是**主动出站**拨号：`--orchestrator-addr https://<网关 SAN 名>:<端口>`，控制面侧是 `svc/operator`
+的 8084 mTLS 网关（`cmd/orchestrator/main.go:219-221`：`ClientAuth: tls.VerifyClientCertIfGiven`、
+`ClientCAs: caInst.CertPool()`、`MinVersion: tls.VersionTLS13`）。两件事必须同时成立：
+
+1. **客户集群能路由到 8084**：网关 Service **默认**只有集群内入口，客户集群无法直达，必须显式开一条：
+   要么给它一个 NodePort（TASK-347 的做法：`svc/operator` → NodePort 30844，再由 k3d `--port` 映射到宿主端口），
+   要么调试期用 `kubectl -n release-manager port-forward --address 0.0.0.0 svc/operator 8084:8084`
+   （这会把 mTLS 网关暴露到宿主**所有**网卡，收尾立刻 kill）。
+2. **不能走明文反代**：`VerifyClientCertIfGiven` 只在握手层「有证书就验」，所以 `Enroll` 经 web nginx 的
+   明文 `/operator.v1.` 反代也能过；但 `CommandStream` / `SyncInventory` 的按请求身份校验必须拿到**已验证证书**
+   （`cmd/orchestrator/main.go:193` 的 `gatewayTLSStateMiddleware` + `internal/orchestrator/sync_inventory_auth.go:30`
+   的证书拦截器）⇒ 明文反代必然在第二步失败。
+
+### 12.2 SAN 约束：必须用 `hostAliases`（本节唯一的坑）
+
+网关服务端证书的 SAN 是**硬编码**的，没有配置项、也不含任何 IP（`cmd/orchestrator/main.go:173-176`）：
+
+```go
+serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
+    "operator-gateway.dev.release-manager.local",
+    "localhost",
+})
+```
+
+⇒ `--orchestrator-addr https://<宿主 IP>:<端口>` 一定 `hostname mismatch`，只能用 SAN 名访问。
+客户集群里没有这条 DNS 记录，用 **`hostAliases`** 把 SAN 名指到宿主网关（k3d 里是 `host.k3d.internal`）：
+
+```yaml
+      hostAliases:
+        - ip: 172.24.0.1        # 实测：k3d 容器网络里 host.k3d.internal 的地址
+          hostnames:
+            - operator-gateway.dev.release-manager.local
+```
+
+- **方案 A（`hostAliases`，本任务采用）**：零代码改动、保留证书主机名校验；代价是每个客户集群写一条
+  hostAliases，且控制面地址被钉死在这个 SAN 名上。`deploy/kustomize/customer-agent/base/deployment.yaml:33-43`
+  已有同形状的占位块（dev 用 `172.18.0.2/3`），改 IP 行即可。
+- **方案 B（扩展 SAN）**：给 `SignServerCert` 的 hostname 列表加配置项 / 加节点 IP。需要改代码 + 重签服务端
+  证书 + 所有客户集群改地址。**本任务没有做**。
+
+前置校验（**在客户集群里**发起，不要从宿主）：
+
+```bash
+kubectl -n release-manager-customer run nettest --image=busybox:1.36.1 --restart=Never --command \
+  -- sh -c 'nc -zv -w3 host.k3d.internal 8444; sleep 3600'
+kubectl -n release-manager-customer logs nettest   # 期望 "host.k3d.internal (172.24.0.1:8444) open"
+```
+
+控制面证书链校验：
+
+```bash
+kubectl --context k3d-rm-prod -n release-manager get secret release-manager-mtls-ca \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/gateway-ca.crt
+openssl x509 -in /tmp/gateway-ca.crt -noout -subject -dates   # 期望 CN=release-manager-agent-ca
+echo | openssl s_client -CAfile /tmp/gateway-ca.crt \
+  -verify_hostname operator-gateway.dev.release-manager.local -connect 127.0.0.1:8444 2>&1 \
+  | grep 'Verify return code'                                 # 期望 0 (ok)
+```
+
+### 12.3 最小 Demo 步骤
+
+**1) 控制面：客户 + 集群 + 一次性 token。** UI 路径是「客户 → 新建客户 / 新建集群 → 集群 Operator 页 → 生成令牌」；
+RPC 等价（Connect JSON + `Authorization: Bearer`，写操作还要 `Idempotency-Key`）：
+
+```bash
+curl -k -sS -X POST https://localhost:8443/orchestrator.v1.OrchestratorService/CreateCustomer \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"RM Cust Demo","slug":"rm-cust-demo"}'
+curl -k -sS -X POST https://localhost:8443/orchestrator.v1.OrchestratorService/CreateCluster \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"id":"rm-cust","name":"rm-cust","customerId":"<CUSTOMER_ID>"}'
+curl -k -sS -X POST https://localhost:8443/orchestrator.v1.OrchestratorService/CreateEnrollmentToken \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"customerId":"<CUSTOMER_ID>","clusterId":"rm-cust","operatorName":"rm-cust","ttlMinutes":120}'
+```
+
+`CreateEnrollmentToken` 只存 SHA-256（`internal/orchestrator/enrollment.go`），明文 token **只返回一次**。
+响应里的 `installCommandTemplate` 目前与该二进制的 flag 不一致，**不要照抄**（TASK-346 在修）；身份走 config 文件、
+token 走 `ENROLLMENT_TOKEN` env。
+
+**2) 客户集群：只要 2 个 Secret。**
+
+```bash
+kubectl --kubeconfig <cust> create namespace release-manager-customer
+kubectl --kubeconfig <cust> -n release-manager-customer create secret generic operator-enrollment \
+  --from-literal=token='<一次性 token>'
+kubectl --kubeconfig <cust> -n release-manager-customer create secret generic operator-gateway-ca \
+  --from-file=gateway-ca.crt=/tmp/gateway-ca.crt
+```
+
+**不需要** client cert / client key / registry 凭据 / kubeconfig Secret：agent 自己生成 Ed25519 私钥并用 CSR
+换 clientAuth 证书，身份落 bbolt（`/data/operator-commands.db`），token 消费后从环境里消失。
+
+**3) operator Deployment**：复用 `deploy/kustomize/customer-agent/` 的 base + 一个 overlay，只改四处：
+
+- `--orchestrator-addr` 换成 SAN 名 + **宿主映射端口**（base 预置的是 dev 的 `:30084`，
+  `deploy/kustomize/customer-agent/base/deployment.yaml:53-54`）；
+- config（`deploy/kustomize/customer-agent/c1-direct/configs/operator.dev.yaml:5-7`）的
+  `agent.customer_id / cluster_id / operator_name` 必须与 token 的 scope **完全一致**——CSR 的 SAN 由它们派生为
+  `<cluster>.<customer>.rm`（`internal/operator/bootstrap/csr.go:37`），控制面按同一规则校验
+  （`internal/operator/service.go:1684-1697`，不匹配是 `csr_san_mismatch`）；
+- `ca.cert_path` 指向挂进来的 CA（同上 `:14`）；
+- `hostAliases` 换成 12.2 的宿主地址。
+
+`strategy: Recreate` **不能改**：bbolt 是单写者，RollingUpdate 会让新 Pod 卡在 store 锁上、旧 Pod 永不替换
+（`deploy/kustomize/customer-agent/base/deployment.yaml:19-20` 的注释即此）。
+
+期望日志（实测）：
+
+```json
+{"msg":"operator enrolled","operator_id":"<UUID>","customer_id":"<CUSTOMER_ID>","cluster_id":"rm-cust"}
+{"msg":"inventory sync completed","accepted":1,"missing":0,"status":"applied"}
+```
+
+重启 Pod 后应出现 `{"msg":"operator identity found; skipping enrollment"}`——token 只消费一次，身份在 PVC 里。
+
+**4) 客户集群里必须有一个真实 Helm release。** `release_inventory` 的唯一键是
+`(customer_id, cluster_id, namespace, release_name)`，且只能由 `SyncInventory` 的全量快照写入
+（`internal/orchestrator/inventory.go`）⇒ 没有真 release 就没有 inventory 行、也没有可操作的「已安装 Release」：
+
+```bash
+helm --kubeconfig <cust> install release-fixture ./deploy/fixtures/chart -n e2e-release --create-namespace
+```
+
+**5) plan → apply → observe。** `CreateReleaseDefinition`（`actor.organization` **必须**带上，否则后续
+ValuesRevision 批准会被 `release_definition_owner_unresolved` 拒绝）→ `CreateValuesRevision` →
+`SubmitValuesRevision` → 由**另一个用户** `ApproveValuesRevision`（创建者不能批准自己的 revision）→
+`CreateOperation`（`INSTALL`）→ `GetOperation` 读 `preflightResult`。
+
+- `PublishRelease` 仍是骨架（返回 `not_implemented`），流程里不要等它。
+- `CreateOperation` 返回 `state=preflight`；预检四段 `artifact → render → cluster → runtime_pull` 全 `passed`
+  后**自动**进 `queued → running → succeeded`，没有「人工点 apply」这一步 ⇒ **「plan」就是 `preflightResult`**；
+  想只到 plan、不落 apply，只能在预检阶段用 `CancelOperation` 拦住。
+- chart 必须写成 `oci://` 且 `chart_digest` 是 chart 归档的 sha256（`internal/orchestrator/bundle_service.go`），
+  由**客户集群**去拉。本机 demo 在客户集群里跑了一个 `registry:3` + `helm push --plain-http`；生产应指向客户可达的
+  chart 仓库。
+
+### 12.4 离线客户集群的三个硬约束（本机 demo 踩过）
+
+1. **`k3d image import` 会假成功**：节点导入失败也打印 `Successfully imported`，判据是输出里有没有 `ERRO`
+   （照 `make docker-import-all` 的守卫写法）。多平台镜像先 `docker save --platform linux/amd64` 再导 tar。
+2. **k3s 基础镜像必须一起导**：客户集群没有 docker.io 出口时，`pause` / `coredns` / `local-path-provisioner` /
+   `metrics-server` 拉不到会让**所有** Pod 卡在 `ContainerCreating`；local-path 动态供给还要它自己的 helper
+   `rancher/mirrored-library-busybox:1.36.1`，否则 PVC 永远 `Pending`，operator 连调度都过不去。
+   本机做法：把本地的 `localhost:5001/rancher/*` 重新 tag 成 `docker.io` 的同一名字后导入。
+3. **bundle 的图像覆盖是 `<ref>@<sha256>`**：operator 会把 bundle `images[].values_path` 覆盖成 `ref@digest`
+   （`internal/operator/agent/agent.go` 的 `applyBundleImageOverrides`）。离线节点必须让这个 digest 引用
+   **在本地 containerd 可解析**（`ctr -n k8s.io images tag <repo:tag> '<repo@sha256:...>'`），否则 Pod 会
+   `ImagePullBackOff` 并反复去 pull 一个不存在的 registry。生产里应从客户可达的镜像仓库拉，不要把这条 hack 带进去。
+
+### 12.5 实测结果与未做
+
+实测（2026-10-18，客户集群 = 单节点 k3d `rm-cust`，operator 镜像 `localhost:5001/release-operator:a6707b6`）：
+
+| 验证 | 结果 |
+| --- | --- |
+| enroll | 成功，`operator_id` 落库；重启 Pod 后 `identity found; skipping enrollment` |
+| `operators` / `sessions` | 1 行 active（`cert_serial`、`certificate_expires_at` 非空）/ 1 行 `online` |
+| `release_inventory` | 2 行（手工 helm 的 `e2e-release` + operator 安装的 `e2e-plan`），000024 的 `workload_kind/name/namespace/uid` 全非空 |
+| 000030 观测投影 | `observed_containers` / `observed_image_refs` / `observed_replicas` / `observed_at` 全非空；**周期 5 分钟**（`defaultObservationInterval`）才有第一次上报，操作完成那次上报若早于 inventory 行建立会被丢弃（观测不缓冲） |
+| plan（预检） | `artifact` / `render` / `cluster` 全 passed，`runtime_pull` skipped（`runtime_pull_disabled`） |
+| apply | 成功：`pending → preflight → queued → running → succeeded`，rollout `1/1` 就绪 |
+| UI | 客户列表、集群 Operator 在线、发布清单、操作详情（预检四段 + 状态时间线）都能看到该集群 |
+
+**未做**（如实）：
+
+- 只到 INSTALL；**没做** upgrade / rollback / 紧急变更（image 路径）旅程；
+- 未接 VKE 或任何真实客户集群；未做生产 CA 轮换；
+- 未改 SAN 生成逻辑（`cmd/orchestrator/main.go:173-176` 仍是 2 个固定 DNS 名），也没加配置项；
+- 未修 `installCommandTemplate` 与二进制 flag 的漂移（TASK-346 负责）；
+- `PublishRelease` 未实现 ⇒ definition 没有「当前 bundle」；UI 发布清单里手工 helm 装的那条显示「生效中」但
+  「未绑定 Definition」，operator 装的那条绑定 Definition 并显示「不同步」（同时提供「创建操作 / 紧急变更」）；
+- `sessions` 的 `customer_id` / `cluster_id` 只有 enroll 时创建的那一行有值，`CommandStream` 新建的行是空串
+  （按集群过滤会话要 join `operators`）。
 
 ## 事实源
 
