@@ -23,14 +23,14 @@ import (
 	contractsinterceptor "github.com/ndzuki/release-manager/internal/contracts/interceptor"
 
 	"github.com/ndzuki/release-manager/internal/jwtauth"
-	sqlitestore "github.com/ndzuki/release-manager/internal/store/sqlite"
+	"github.com/ndzuki/release-manager/internal/store"
 )
 
 type apiSvc struct {
 	dbPath        string
 	jwtPublicKey  string
 	configPath    string
-	store         *sqlitestore.Store
+	store         store.Store
 	emitter       *audit.Emitter
 	archiveWorker *audit.ArchiveWorker
 	closeOnce     sync.Once
@@ -56,22 +56,22 @@ var (
 )
 
 func (s *apiSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
-	st, err := sqlitestore.Open(s.dbPath)
-	if err != nil {
-		return err
+	svcCfg, loadErr := config.LoadService(s.configPath)
+	if loadErr != nil {
+		logger.Warn("cannot load service config, using defaults", "error", loadErr)
 	}
-	logger.Info("store opened", "db", s.dbPath)
-
 	jwtPublicKey, err := jwtauth.ParseEd25519PublicKeyPEM(s.jwtPublicKey)
 	if err != nil {
 		return fmt.Errorf("jwt verification key: %w", err)
 	}
 	jwtMgr := jwtauth.New(jwtPublicKey, 15*time.Minute)
-	s.store = st
-	svcCfg, loadErr := config.LoadService(s.configPath)
-	if loadErr != nil {
-		logger.Warn("cannot load service config, using defaults", "error", loadErr)
+	dbCfg := databaseConfigFromService(svcCfg)
+	st, err := openStore(s.dbPath, dbCfg)
+	if err != nil {
+		return err
 	}
+	logger.Info("store opened", storeLogAttrs(dbCfg, s.dbPath)...)
+	s.store = st
 	emitterCfg := audit.DefaultConfig()
 	if s.auditFlushInterval > 0 {
 		emitterCfg.FlushInterval = s.auditFlushInterval

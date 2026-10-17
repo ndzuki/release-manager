@@ -126,7 +126,7 @@ curl -sS http://127.0.0.1:8083/environment
 
 | 挂载点 | 拦截器（外 → 内） | 定义位置 |
 | --- | --- | --- |
-| `AuditService` @8087 | `RequestID`, `ErrorSanitize`, `audit.NewJWTInterceptor` | `cmd/api/main.go:65-72` |
+| `AuditService` @8087 | `RequestID`, `ErrorSanitize`, `audit.NewJWTInterceptor` | `cmd/api/main.go:96-108` |
 | 4 个 `auth.v1` service @8085 | `RequestID`, `ErrorSanitize`, `TraceInterceptor`, `MaintenanceInterceptor`, `auth.NewAuthInterceptor` | `cmd/auth/main.go:181-187` |
 | `NotifierService` @8086 | `RequestID`, `ErrorSanitize` | `cmd/notifier/main.go:179-186` |
 | `WebhookService` @8082 | `RequestID`, `ErrorSanitize` | `cmd/webhook/main.go:57-64` |

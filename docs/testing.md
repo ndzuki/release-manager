@@ -17,9 +17,10 @@
 
 - 文件首行打 `//go:build integration`，用 `-tags=integration` 激活。归档位置：
   `internal/store/postgres/*_test.go`（12 个文件）、`internal/migration/migrate_integration_test.go`、
-  `internal/postgres/migrate_integration_test.go`、`test/integration/{install,upgrade,rollback,rollout_watch}_sdk_test.go`。
+  `internal/postgres/migrate_integration_test.go`、`cmd/api/main_integration_test.go`、
+  `test/integration/{install,upgrade,rollback,rollout_watch}_sdk_test.go`。
 - 需要真实 PostgreSQL 的用例读 `POSTGRES_TEST_DSN`，**未设置时 `t.Skip`**（不是失败）；
-  `internal/store/postgres` 的用例会在该 DSN 上按测试建独立 schema 并跑 migrations。
+  `internal/store/postgres` 与 `cmd/api` 的用例会在该 DSN 上按测试建独立 schema 并跑 migrations。
 - **易混点**：`cmd/auth/main_test.go` 与 `cmd/orchestrator/main_test.go` 同样读 `POSTGRES_TEST_DSN`
   并在缺失时 skip，但它们**没有 `integration` build tag**——会随 `make test` 一起编译执行。
   给 live-DB 测试加标签时不要漏掉这类文件的既有约定。
@@ -216,7 +217,7 @@ helm/kubectl 子进程。
 e2e（含 `make e2e-prerequisite`）覆盖 `deploy/kustomize/services/kustomization.yaml` 部署的**全部**服务：
 webhook / orchestrator / auth / notifier / notification-sink / web **以及 `cmd/api`**（release-api，
 `deploy/kustomize/services/api.yaml`）。api 是除 orchestrator 之外唯一的管理面**验签方**，纳入后它的
-Ed25519 公钥验签（`cmd/api/main.go:64` 的 `jwtauth.ParseEd25519PublicKeyPEM`，以及 `-jwt-public-key`
+Ed25519 公钥验签（`cmd/api/main.go:63` 的 `jwtauth.ParseEd25519PublicKeyPEM`，以及 `-jwt-public-key`
 缺失或非 Ed25519 时的启动 fail-closed）由 e2e 真实执行：`make dev-up` 等待它的 rollout 并探它的
 `/readyz`，冒烟再带 e2e-runner 的 bearer 调 `QueryAuditEvents`（并断言无 bearer 时 401）。
 
@@ -355,7 +356,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `upgrade-sdk` | `make test-upgrade-sdk` | 全部触发 |
 | `operator-image-sdk-only` | `make test-operator-image-sdk-only` | 全部触发 |
 | `test` | 全仓（排除 sqlite/sdkcheck 两包）`go test -race` + coverage + 变更行 lint | 全部触发 |
-| `test-postgres-integration` | 起 `postgres:16-alpine`（端口 55432）后跑 `go test -tags integration -count=1`，覆盖 `./internal/store/postgres/...`、`./internal/postgres/...`、`./internal/migration/...`、`./internal/orchestrator/...`（25 分钟超时；`if: always()` 收尾 `docker rm -f ci-postgres`） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
+| `test-postgres-integration` | 起 `postgres:16-alpine`（端口 55432）后跑 `go test -tags integration -count=1`，覆盖 `./internal/store/postgres/...`、`./internal/postgres/...`、`./internal/migration/...`、`./internal/orchestrator/...`、`./cmd/api/...`（25 分钟超时；`if: always()` 收尾 `docker rm -f ci-postgres`） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
 | `test-sqlite` | `go test -race ./internal/store/sqlite/...` | 全部触发 |
 | `test-sdkcheck` | `go test -race ./internal/quality/sdkcheck/...` | 全部触发 |
 | `rollout-watch` | `make test-rollout-watch` | 全部触发 |

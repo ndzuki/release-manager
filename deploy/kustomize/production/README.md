@@ -229,9 +229,16 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
 
 ## Known gaps (not fixed in batch 1)
 
-- `release-api` still opens a SQLite store (`cmd/api`), so its audit reads do
-  not see the PostgreSQL data written by auth/orchestrator. The PVC only keeps
-  that SQLite file durable. Fixing the engine split needs a code change.
+- `release-api` now reads PostgreSQL: this overlay injects
+  `DATABASE_DRIVER=postgres` and the `DATABASE_DSN` from the credentials Secret
+  (TASK-338). Measured 2026-10-17 with `release-api:3ecf69b`: the startup log
+  says `driver=postgres`, and a platform_admin cross-organization query for
+  `organization_id=system` returns the 2 GC events that the orchestrator
+  writes to PostgreSQL. The console's own `/audit` list stays empty because it queries the
+  caller's organization and every current row is `system`-scoped; closing that
+  needs a product decision (a system/all-organization scope), not more engine
+  wiring. `--db` and the api PVC stay: the audit archive worker still writes
+  `/data/archives`.
 - Only `web` has two replicas. api/auth/orchestrator keep one replica, so their
   `minAvailable: 1` PDB blocks voluntary eviction until multi-replica safety is
   proven (startup migrations, gateway CA, background workers).
