@@ -646,7 +646,7 @@ operator agent 是**主动出站**拨号：`--orchestrator-addr https://<网关 
    （`cmd/orchestrator/main.go:193` 的 `gatewayTLSStateMiddleware` + `internal/orchestrator/sync_inventory_auth.go:30`
    的证书拦截器）⇒ 明文反代必然在第二步失败。
 
-### 12.2 SAN 约束：必须用 `hostAliases`（本节唯一的坑）
+### 12.2 SAN 约束：必须用 `hostAliases`（最容易踩的坑）
 
 网关服务端证书的 SAN 是**硬编码**的，没有配置项、也不含任何 IP（`cmd/orchestrator/main.go:173-176`）：
 
