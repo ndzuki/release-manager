@@ -75,6 +75,12 @@ function mountAuditPage(): ReturnType<typeof mount> {
   return mount(AuditPage, { global: { plugins: [router] } });
 }
 
+function pagerButton(wrapper: ReturnType<typeof mount>, label: '上一页' | '下一页') {
+  const button = wrapper.findAll('nav.pagination button').find((candidate) => candidate.text() === label);
+  if (!button) throw new Error(`pager button ${label} not found`);
+  return button;
+}
+
 describe('AuditPage', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -189,6 +195,80 @@ describe('AuditPage', () => {
     const request = queryAuditEvents.mock.calls[1][0];
     expect(request.filter).toMatchObject({ organizationId: 'system' });
     expect(request.filter).not.toHaveProperty('allOrganizations');
+  });
+
+  // TASK-339 review P1: paging is a new request, so it must reuse the scope the
+  // page on screen was queried with. Calling query() without the third argument
+  // sent the next page as the active organization while the table still said
+  // "all organizations" — wrong data, no error.
+  it('keeps the all-organizations scope when paging in both directions', async () => {
+    signInAs('org-1');
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse([auditEvent('a')], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('b')], 'cursor-3'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('a')]));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    await pagerButton(wrapper, '下一页').trigger('click');
+    await flushPromises();
+
+    expect(queryAuditEvents).toHaveBeenCalledTimes(2);
+    const nextRequest = queryAuditEvents.mock.calls[1][0];
+    expect(nextRequest.pagination?.pageToken).toBe('cursor-2');
+    expect(nextRequest.filter).toMatchObject({ allOrganizations: true, organizationId: '' });
+
+    await pagerButton(wrapper, '上一页').trigger('click');
+    await flushPromises();
+
+    expect(queryAuditEvents).toHaveBeenCalledTimes(3);
+    const previousRequest = queryAuditEvents.mock.calls[2][0];
+    expect(previousRequest.pagination?.pageToken).toBe('');
+    expect(previousRequest.filter).toMatchObject({ allOrganizations: true, organizationId: '' });
+  });
+
+  // TASK-339 review P1: the static "system" scope must survive paging too.
+  it('keeps the system scope when paging forward', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockResolvedValue(queryResponse([auditEvent('a')], 'cursor-2'));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    await wrapper.get('select[name="organization"]').setValue('system');
+    await flushPromises();
+    expect(queryAuditEvents).toHaveBeenCalledTimes(2);
+
+    await pagerButton(wrapper, '下一页').trigger('click');
+    await flushPromises();
+
+    expect(queryAuditEvents).toHaveBeenCalledTimes(3);
+    const request = queryAuditEvents.mock.calls[2][0];
+    expect(request.pagination?.pageToken).toBe('cursor-2');
+    expect(request.filter).toMatchObject({ organizationId: 'system' });
+    expect(request.filter).not.toHaveProperty('allOrganizations');
+  });
+
+  // TASK-339 review P2: an export row carries exactly one organization, so the
+  // server refuses all_organizations. The console disables the action up front
+  // and explains why, instead of letting the click fail with an English message.
+  it('disables export with a hint while the scope is every organization', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockResolvedValue(queryResponse([auditEvent('a')]));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    const exportButton = wrapper.get('header button');
+    expect(exportButton.attributes('disabled')).toBeDefined();
+    expect(exportButton.attributes('title')).toContain('选择一个具体组织');
+    expect(wrapper.text()).toContain('导出只支持单个组织');
+
+    await wrapper.get('select[name="organization"]').setValue('org-2');
+    await flushPromises();
+
+    expect(wrapper.get('header button').attributes('disabled')).toBeUndefined();
   });
 
   // B5 regression: a failed request used to be rendered *next to* the empty

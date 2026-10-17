@@ -63,6 +63,7 @@ export type AuditFailureReason =
   | 'range_too_large'
   | 'invalid_cursor'
   | 'invalid_argument'
+  | 'all_organizations_not_supported'
   | 'export_unavailable'
   | 'deadline_exceeded'
   | 'internal'
@@ -192,6 +193,15 @@ function failureFrom(error: unknown): AuditFailure {
   }
   if (reason === 'invalid_cursor') {
     return { reason: 'invalid_cursor', message: t('audit.error.expired') };
+  }
+  // TASK-339 review: the server explicitly refuses an all-organizations export
+  // (an export row carries one organization). The reason code has its own copy;
+  // without this branch the raw English server message was shown to the user.
+  if (reason === 'all_organizations_not_supported') {
+    return {
+      reason: 'all_organizations_not_supported',
+      message: t('audit.error.allOrganizationsExport'),
+    };
   }
   if (reason === 'export_unavailable' || connectError.code === Code.Unavailable) {
     return { reason: 'export_unavailable', message: t('audit.error.exportUnavailable') };

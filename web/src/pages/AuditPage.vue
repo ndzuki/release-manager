@@ -77,6 +77,18 @@ async function createExport(): Promise<void> {
   await audit.exportEvents(queryOrganizationId.value, queryAllOrganizations.value);
 }
 
+// TASK-339 review: paging is a new request, so it must reuse the scope the
+// current page was queried with. Calling query() without the third argument
+// pins the request to the active organization, which silently turns an
+// "all organizations" or "system" page into a single-organization read.
+async function pagePrevious(): Promise<void> {
+  await audit.query(queryOrganizationId.value, 'previous', queryAllOrganizations.value);
+}
+
+async function pageNext(): Promise<void> {
+  await audit.query(queryOrganizationId.value, 'next', queryAllOrganizations.value);
+}
+
 
 onMounted(async () => {
   const filters = filtersFromQuery(route.query);
@@ -120,9 +132,22 @@ watch(organizationId, (next, previous) => {
         <h1>{{ t('audit.page.subtitle') }}</h1>
         <p>{{ t('audit.page.description') }} {{ scopeLabel }}.</p>
       </div>
-      <button type="button" :disabled="!canQuery || audit.exporting" @click="createExport">
-        {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
-      </button>
+      <div class="audit-page__actions">
+        <button
+          type="button"
+          :disabled="!canQuery || audit.exporting || queryAllOrganizations"
+          :title="queryAllOrganizations ? t('audit.page.exportScopeHint') : undefined"
+          @click="createExport"
+        >
+          {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
+        </button>
+        <!-- TASK-339 review: an export row carries exactly one organization, so
+             the server rejects all_organizations with INVALID_ARGUMENT. Disable
+             the action and say why, instead of letting the click fail. -->
+        <small v-if="queryAllOrganizations" class="audit-page__export-hint">
+          {{ t('audit.page.exportScopeHint') }}
+        </small>
+      </div>
     </header>
 
 
@@ -171,8 +196,8 @@ watch(organizationId, (next, previous) => {
         :has-previous="audit.hasPrevious"
         :has-more="audit.hasMore"
         @select="audit.selectEvent"
-        @previous="audit.query(organizationId, 'previous')"
-        @next="audit.query(organizationId, 'next')"
+        @previous="pagePrevious"
+        @next="pageNext"
       />
     </template>
     <AuditEventDetail v-if="audit.selectedEvent" :event="audit.selectedEvent" @close="audit.selectEvent(null)" />
@@ -222,6 +247,19 @@ watch(organizationId, (next, previous) => {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.audit-page__actions {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: end;
+}
+
+.audit-page__export-hint {
+  max-width: 16rem;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+  text-align: right;
 }
 
 .audit-page__heading button {

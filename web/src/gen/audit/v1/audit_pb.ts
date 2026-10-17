@@ -237,8 +237,8 @@ export type AuditQueryFilter = Message<"audit.v1.AuditQueryFilter"> & {
    * including platform-level events recorded under the "system" scope (cleanup,
    * operator bootstrap). It is honored only for platform_admin: any other caller
    * is refused with PERMISSION_DENIED and the reason code
-   * cross_organization_denied, before the store is touched. It is mutually
-   * exclusive with organization_id; when set, organization_id is ignored. The
+   * cross_organization_denied, before the store is touched. When set,
+   * organization_id is ignored rather than rejected. The
    * empty organization_id semantics above are unchanged, so this field is the
    * only way to ask for every organization. ExportAuditEvents does not support
    * it and rejects it with INVALID_ARGUMENT.
