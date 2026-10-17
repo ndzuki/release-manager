@@ -1148,6 +1148,78 @@ ValuesRevision 批准会被 `release_definition_owner_unresolved` 拒绝）→ `
 - `sessions` 的 `customer_id` / `cluster_id` 只有 enroll 时创建的那一行有值，`CommandStream` 新建的行是空串
   （按集群过滤会话要 join `operators`）。
 
+> **2026-10-18 后续实测（TASK-353）**：upgrade / rollback 已在上面的客户集群上真实走通，
+> 紧急变更（image 路径）被可信门禁拒绝；细节与证据见 §12.6。上面的「未做」保留为 §12.5 时点的记录。
+
+### 12.6 客户集群 release 的 upgrade / rollback（TASK-353 实测）
+
+§12.5 的 INSTALL 之后，又用同一个客户集群（TASK-348 的 definition `release-fixture`、namespace `e2e-plan`）
+把 **INSTALL → UPGRADE → ROLLBACK** 走完，并用真实资源变化验证。本节只写**做过的**与**没做的**，
+不重复 §12.3 的接入步骤。
+
+#### 12.6.1 入口与语义（先取证，再实测）
+
+| 动作 | 入口 | 语义 |
+| --- | --- | --- |
+| UPGRADE | `CreateOperation`，`operation_type=UPGRADE` | 只接受 `INSTALL` / `UPGRADE`（`internal/orchestrator/service.go:203-207`）。没有独立的 upgrade 变更接口，`PublishRelease` 仍是 `not_implemented`。**对同一 release 再发一次 operation 是被支持的**：换 `Idempotency-Key` 即新操作；重复 key + 同 hash 重放首次结果，同 key 异 hash 返回 `AlreadyExists`（`internal/orchestrator/service.go:263-280`）。`expected_current_revision` 必须等于 inventory 里的 revision，否则 `revision_conflict`；inventory 不是 `active` 时是 `release_not_found`（`internal/orchestrator/service.go:1649-1684`）。 |
+| ROLLBACK | `RollbackRelease`（proto `api/proto/orchestrator/v1/orchestrator.proto:1115`，实现 `internal/orchestrator/rollback.go:24`） | **产品有 rollback 入口**，不是「只能手工 helm rollback」：它新建一条 `ROLLBACK` operation（不是原地改失败的那条），要求 `reason`、`target_revision`、`expected_current_revision`（target 必须 < expected），拒绝携带 values（`rollback_values_not_allowed`），并与 upgrade 共用 inventory / 并发 / 客户禁用门禁。控制台入口见 `web/src/components/releases/RollbackReleaseDialog.vue:115`（发布清单在 `revision > 1` 时给按钮）。 |
+
+UPGRADE 走**完整 preflight**（artifact → render → cluster；`runtime_pull` 未启用时 `skipped`），
+dispatch 分支在 `internal/orchestrator/preflight/coordinator.go:221`。`internal/orchestrator/service.go:506-512`
+那段注释里「UPGRADE never runs preflight stages」一句是 TASK-082 的旧结论，已被 ADR-027 取代
+（该段其余关于首行 dispatch 的说明不受影响）；本次时间线证明确实跑完了三段。
+
+#### 12.6.2 一次真实升级（chart 与 values 都变）
+
+基线：definition `973456b9…`、已批准 values revision `b679c855…`（内容 `{"replicaCount":1}`）、
+客户集群内跑 chart registry（`registry:3`，`rm353-registry…:5000`，plain HTTP，operator 配
+`agent.registry_plain_http: true`）。bundle 的 `chart_digest` 取 **`.tgz` 的 sha256**（`sha256sum`），
+不是 `helm push` 打印的 manifest digest——两者不同（本次 `a60734…` vs `5bfa6b…`），写错会在 artifact
+阶段报 chart archive digest mismatch。
+
+| 步骤 | 请求 | 结果 |
+| --- | --- | --- |
+| INSTALL | 新 bundle `8963d3ea…`（chart 0.1.0，digest `a60734…`）+ operation | `preflight → queued → running → succeeded`，24 s；三段 passed、`runtime_pull` skipped；客户集群 Helm release **v1**、Deployment `replicas=1`、Pod 1/1 |
+| UPGRADE | 新 bundle `f1722029…`（chart **0.2.0**：Deployment 加 annotation `task353.demo/revision=upgrade-0.2.0`，digest `0e31c1…`）+ `values_patch={"replicaCount":2}` + `expected_current_revision=1` | `succeeded`，33 s；三段 passed；Helm release **v2**、`replicas=2`、annotation 出现、Pod 2/2；inventory 变 `revision=2 / chart 0.2.0 / observed_replicas=2` |
+| ROLLBACK | `RollbackRelease{target_revision:1, expected_current_revision:2, reason:…}` | `preflight → queued → running → succeeded`，5 s；Helm release **v3**（内容复用 v1）、`replicas=1`、annotation 消失、Pod 1/1；inventory 变 `revision=3 / chart release-fixture-0.1.0` |
+
+三个容易误判的点：
+
+- **`values_patch` 是必要的**：已批准 revision 里钉了 `replicaCount:1`，只改 chart 的 `values.yaml` 不会生效。
+  本次同时改 chart 内容（annotation）并用 `values_patch` 改副本数，两个变化都可从集群对象上直接看到。
+- **rollback 不是把 Helm revision 号退回去**：它**追加**一个新 revision（v1,v2 → v3），v3 的内容等于 v1。
+  所以回滚后 inventory 的 `revision` 是 **3** 而不是 1，`deployment.kubernetes.io/revision` 也是 3。
+  判断「回滚到升级前」要看**内容**（副本数 / 镜像 / annotation），不能看 revision 号。
+- **`RollbackRelease` 响应的 `to_revision` 是错的**：本次请求 `target_revision=1`，响应却是
+  `{fromRevision:2, toRevision:3}`。原因是 `rollbackResponse` 用了 `ExpectedRevision+1` 而不是
+  `TargetRevision`（`internal/orchestrator/rollback.go:238-244`）；数据库 `operations.target_revision` 实查是 `1`，
+  所以是**响应投影错**，执行目标没错（本条只记录，未在本次修）。
+
+#### 12.6.3 紧急变更（image 路径）：入口有，本环境不可达
+
+`ExecuteEmergencyChange` 存在，kill switch `emergency.enabled=true`（`app_settings` 实查）。image 分支的
+解析在 `internal/orchestrator/emergency.go:871`：`artifact_ref` 必须是**已校验**的 candidate image，
+且必须有 **trusted** 的 verification verdict。实测用已校验的 image candidate `7621986b…` 对
+`deployments/e2e-plan/release-fixture` / container `release-fixture` 发起，被拒：
+
+```json
+{"code":"failed_precondition","message":"candidate artifact is not trusted"}
+```
+
+这不是入口缺失，而是**本环境没有可信签名**：`verification_records` 只有 `signature_missing`，没有 `trusted`
+（本次没有伪造 verdict 去「跑通」）。⇒ 要在真实环境做 image 紧急变更，需要先完成签名与信任根接线
+（REQ-043 / REQ-079），不在本演示范围。
+
+#### 12.6.4 未做与残留
+
+- 未在 UI 里实际点一遍 rollback 按钮（只取证了 RPC、代码接线与列表按钮条件；UI 行为未实测）；
+- 未验证 upgrade 的**失败/回退**路径，也未验证「新建 values revision + 另一用户批准」后的升级
+  （本次复用已批准 revision + `values_patch`）；
+- **控制面残留**（客户集群删除后没有删除 RPC）：本次新增 `operators` 1 行（`rm-cust353`，active）、
+  `sessions` 3 行、`operations` 3 行（INSTALL / UPGRADE / ROLLBACK 各一）、`release_bundles` 2 行、
+  candidate artifacts 若干；`release_inventory` 的 `e2e-plan` 行停在 `revision=3 / active`，集群删除后
+  不会再更新。`rm-prod` 未动（10/10 Pod、edge 200、网关 TLS `Verify return code: 0`）。
+
 ## 事实源
 
 - 清单与设计理由：`deploy/kustomize/production/README.md`、`deploy/kustomize/production/kustomization.yaml`、`edge.yaml`、`networkpolicies.yaml`、`production-settings.yaml`、`deploy/kustomize/production/configs/*.production.yaml`、`deploy/kustomize/postgres/init.sql`
