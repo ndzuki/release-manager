@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import OperatorPollingNotice from '@/components/operators/OperatorPollingNotice.vue';
 import OperatorStatusBadge from '@/components/operators/OperatorStatusBadge.vue';
 import RevokeOperatorDialog from '@/components/operators/RevokeOperatorDialog.vue';
 import { useOperatorPolling } from '@/composables/useOperatorPolling';
@@ -38,11 +39,14 @@ watch([customerId, clusterId, operatorId], async () => {
   store.resetDetailState();
   await refresh();
 }, { immediate: true });
-useOperatorPolling({ heartbeatIntervalSeconds, refresh });
+// TASK-325: the poll's stop state must reach the page, not just the timer.
+const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ heartbeatIntervalSeconds, refresh });
 </script>
 
 <template>
   <section class="page">
+    <OperatorPollingNotice :stopped="pollingStopped" @resume="resumePolling" />
+
     <LoadingState v-if="store.loading && !store.current" :message="t('operator.detail.loading')" />
     <ForbiddenState v-else-if="store.forbidden" />
     <ErrorState

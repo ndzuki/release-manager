@@ -9,13 +9,20 @@ import {
   useOperatorPolling,
 } from './useOperatorPolling';
 
-function withPolling(refresh: () => Promise<boolean>, heartbeat = 15): App {
+type PollingHandle = ReturnType<typeof useOperatorPolling>;
+
+function withPolling(
+  refresh: () => Promise<boolean>,
+  heartbeat = 15,
+  onReady?: (handle: PollingHandle) => void,
+): App {
   const app = createApp({
     setup() {
-      useOperatorPolling({
+      const handle = useOperatorPolling({
         heartbeatIntervalSeconds: shallowRef(heartbeat),
         refresh,
       });
+      onReady?.(handle);
       return () => null;
     },
   });
@@ -188,5 +195,103 @@ describe('operator polling', () => {
 
     expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  /*
+   * TASK-325 (AC-325-05): the stop is a contract with the UI. `stopped` must become true
+   * exactly when the chain is spent, and must stay false for the deliberate pauses —
+   * reporting a background tab or an unfocused window as "stopped" would tell every
+   * screen-reader user that the data froze whenever they switch tabs.
+   */
+  async function exhaustRetryBudget(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(30_000); // attempt 1, failures=1
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 2);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 4);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 8);
+  }
+
+  it('exposes the stopped state only once the retry budget is spent', async () => {
+    const refresh = vi.fn().mockResolvedValue(false);
+    let handle: PollingHandle | undefined;
+    app = withPolling(refresh, 15, (next) => { handle = next; });
+
+    expect(handle?.stopped.value).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(30_000); // failures=1
+    expect(handle?.stopped.value).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 2);
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 4);
+    expect(handle?.stopped.value).toBe(false);
+
+    // The fifth failure spends the budget; the chain is spent and the page must say so.
+    await vi.advanceTimersByTimeAsync(OPERATOR_POLLING_RETRY_BASE_MS * 8);
+    expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES);
+    expect(handle?.stopped.value).toBe(true);
+  });
+
+  it('keeps a hidden tab and a blurred window out of the stopped state', async () => {
+    const refresh = vi.fn().mockResolvedValue(true);
+    let handle: PollingHandle | undefined;
+    app = withPolling(refresh, 15, (next) => { handle = next; });
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(handle?.stopped.value).toBe(false);
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event('blur'));
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    // The pause really paused — and it is still not a stop.
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(handle?.stopped.value).toBe(false);
+  });
+
+  it('clears the stopped state and restores the automatic chain when resumed', async () => {
+    const refresh = vi.fn().mockResolvedValue(false);
+    let handle: PollingHandle | undefined;
+    app = withPolling(refresh, 15, (next) => { handle = next; });
+
+    await exhaustRetryBudget();
+    expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES);
+    expect(handle?.stopped.value).toBe(true);
+
+    refresh.mockResolvedValue(true);
+    handle?.resume();
+    // The budget is dropped before the attempt resolves, so the notice disappears as
+    // soon as the user asks rather than after a round trip.
+    expect(handle?.stopped.value).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES + 1);
+
+    // Genuinely restored, not merely re-labelled: the steady interval polls again.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES + 2);
+    expect(handle?.stopped.value).toBe(false);
+  });
+
+  it('clears the stopped state when a user-driven focus refresh succeeds', async () => {
+    const refresh = vi.fn().mockResolvedValue(false);
+    let handle: PollingHandle | undefined;
+    app = withPolling(refresh, 15, (next) => { handle = next; });
+
+    await exhaustRetryBudget();
+    expect(handle?.stopped.value).toBe(true);
+
+    // The pre-existing restart path (TASK-281: focus/visibility still triggers one
+    // attempt after the budget is spent) must also clear the visible stop.
+    refresh.mockResolvedValue(true);
+    window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refresh).toHaveBeenCalledTimes(MAX_CONSECUTIVE_REFRESH_FAILURES + 1);
+    expect(handle?.stopped.value).toBe(false);
   });
 });

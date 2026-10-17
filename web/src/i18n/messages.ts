@@ -257,6 +257,8 @@ const zhCN = {
   'operator.validation.ttl': 'TTL 必须为 0，或介于 5 与 1440 分钟之间。',
   'operator.validation.reason': '撤销原因必须为 5–500 个字符。',
   'operator.status.unknown': '未知',
+  'operator.polling.stopped': '自动刷新已停止：连续多次刷新失败。当前显示的数据可能已过期。',
+  'operator.polling.resume': '恢复自动刷新',
   // Wave 5: operator detail/enrollment + audit
   'operator.enroll.eyebrow': 'Operator 注册',
   'operator.enroll.title': '生成一次性令牌',
