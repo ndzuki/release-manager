@@ -700,18 +700,8 @@ enroll → 会话 → `release_inventory`（含 000024 身份四列 + 000030 观
 
 ### 12.1 网关必须先「到得了」
 
-operator agent 是**主动出站**拨号：`--orchestrator-addr https://<网关 SAN 名>:<端口>`，控制面侧是 `svc/operator`
-的 8084 mTLS 网关（`cmd/orchestrator/main.go:219-221`：`ClientAuth: tls.VerifyClientCertIfGiven`、
-`ClientCAs: caInst.CertPool()`、`MinVersion: tls.VersionTLS13`）。两件事必须同时成立：
-
-1. **客户集群能路由到 8084**：网关 Service **默认**只有集群内入口，客户集群无法直达，必须显式开一条：
-   要么给它一个 NodePort（TASK-347 的做法：`svc/operator` → NodePort 30844，再由 k3d `--port` 映射到宿主端口），
-   要么调试期用 `kubectl -n release-manager port-forward --address 0.0.0.0 svc/operator 8084:8084`
-   （这会把 mTLS 网关暴露到宿主**所有**网卡，收尾立刻 kill）。
-2. **不能走明文反代**：`VerifyClientCertIfGiven` 只在握手层「有证书就验」，所以 `Enroll` 经 web nginx 的
-   明文 `/operator.v1.` 反代也能过；但 `CommandStream` / `SyncInventory` 的按请求身份校验必须拿到**已验证证书**
-   （`cmd/orchestrator/main.go:193` 的 `gatewayTLSStateMiddleware` + `internal/orchestrator/sync_inventory_auth.go:30`
-   的证书拦截器）⇒ 明文反代必然在第二步失败。
+入口（宿主 `8444` → NodePort `30844` → `orchestrator:8084` 的 mTLS 网关、为什么不能走明文反代）见 §4-⑦；
+客户集群侧需用 `hostAliases` 把 SAN 名指到宿主，见 §12.2。
 
 ### 12.2 SAN 约束：必须用 `hostAliases`（最容易踩的坑）
 
@@ -733,6 +723,9 @@ serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
           hostnames:
             - operator-gateway.dev.release-manager.local
 ```
+
+`172.24.0.1` 是**本机** k3d 容器网络里 `host.k3d.internal` 的地址；换环境（不同的 docker 网络/网段）必须
+按自己的 docker 网络替换这一行，不要照抄这个 IP。
 
 - **方案 A（`hostAliases`，本任务采用）**：零代码改动、保留证书主机名校验；代价是每个客户集群写一条
   hostAliases，且控制面地址被钉死在这个 SAN 名上。`deploy/kustomize/customer-agent/base/deployment.yaml:33-43`
@@ -777,8 +770,12 @@ curl -k -sS -X POST https://localhost:8443/orchestrator.v1.OrchestratorService/C
 ```
 
 `CreateEnrollmentToken` 只存 SHA-256（`internal/orchestrator/enrollment.go`），明文 token **只返回一次**。
-响应里的 `installCommandTemplate` 目前与该二进制的 flag 不一致，**不要照抄**（TASK-346 在修）；身份走 config 文件、
-token 走 `ENROLLMENT_TOKEN` env。
+响应里的 `installCommandTemplate` 是 **v2**（TASK-346，`#421` 已合入 main；`internal/orchestrator/operator.go:43-59`），与 `cmd/operator` 的 flag
+集合对齐：身份写进 `--config` 的 `agent.customer_id` / `agent.cluster_id`，一次性 token 走 **`ENROLLMENT_TOKEN`**
+环境变量，网关地址保留 `<CONTROL_PLANE_OPERATOR_GATEWAY>` 占位符——客户集群视角的可达地址是部署事实，
+**必须由部署方替换**（控制面监听地址不能复用）。控制台弹窗复制时会自动把 `${ENROLLMENT_TOKEN}` 替换成
+一次性明文 token（`web/src/components/operators/EnrollmentTokenModal.vue:34-37`）；**直接用 RPC 原始响应**
+（不经控制台）时没有任何替换，必须自己替换成真实 token 再执行。
 
 **2) 客户集群：只要 2 个 Secret。**
 
@@ -861,7 +858,7 @@ ValuesRevision 批准会被 `release_definition_owner_unresolved` 拒绝）→ `
 | enroll | 成功，`operator_id` 落库；重启 Pod 后 `identity found; skipping enrollment` |
 | `operators` / `sessions` | 1 行 active（`cert_serial`、`certificate_expires_at` 非空）/ 1 行 `online` |
 | `release_inventory` | 2 行（手工 helm 的 `e2e-release` + operator 安装的 `e2e-plan`），000024 的 `workload_kind/name/namespace/uid` 全非空 |
-| 000030 观测投影 | `observed_containers` / `observed_image_refs` / `observed_replicas` / `observed_at` 全非空；**周期 5 分钟**（`defaultObservationInterval`）才有第一次上报，操作完成那次上报若早于 inventory 行建立会被丢弃（观测不缓冲） |
+| 000024 身份四元组 / 000030 观测投影 | 两组的终态都非空（`workload_kind/name/namespace/uid`；`observed_containers` / `observed_image_refs` / `observed_replicas` / `observed_at`）。**但排序语义不同**：身份四元组（000024）若早于 `release_inventory` 行到达，会缓冲进 `pending_workload_identity`（`migrations/000025_pending_workload_identity.up.sql`，D5=A），并在 `SyncInventory` 的 Upsert 建行时回放（`internal/orchestrator/inventory.go:135` 的 `applyInventoryItems`，回放在 `:194`）；**000030 的 observed 投影不缓冲**，只在行已存在时写入（`internal/operator/workload_identity.go:332-335` 行在则应用、行不在只缓冲身份；`:397` 的 `applyWorkloadObservation` 只走行存在那条路径）⇒ 操作完成那次上报若早于行建立会被丢弃，之后只能等周期扫描：`defaultObservationInterval` = **5 分钟**（`internal/operator/agent/agent.go:380`），`startWorkloadObservation` 只在 ticker 上跑、没有首轮立即上报（重连时的 startup scan 会立刻补一次） |
 | plan（预检） | `artifact` / `render` / `cluster` 全 passed，`runtime_pull` skipped（`runtime_pull_disabled`） |
 | apply | 成功：`pending → preflight → queued → running → succeeded`，rollout `1/1` 就绪 |
 | UI | 客户列表、集群 Operator 在线、发布清单、操作详情（预检四段 + 状态时间线）都能看到该集群 |
@@ -871,7 +868,6 @@ ValuesRevision 批准会被 `release_definition_owner_unresolved` 拒绝）→ `
 - 只到 INSTALL；**没做** upgrade / rollback / 紧急变更（image 路径）旅程；
 - 未接 VKE 或任何真实客户集群；未做生产 CA 轮换；
 - 未改 SAN 生成逻辑（`cmd/orchestrator/main.go:173-176` 仍是 2 个固定 DNS 名），也没加配置项；
-- 未修 `installCommandTemplate` 与二进制 flag 的漂移（TASK-346 负责）；
 - `PublishRelease` 未实现 ⇒ definition 没有「当前 bundle」；UI 发布清单里手工 helm 装的那条显示「生效中」但
   「未绑定 Definition」，operator 装的那条绑定 Definition 并显示「不同步」（同时提供「创建操作 / 紧急变更」）；
 - `sessions` 的 `customer_id` / `cluster_id` 只有 enroll 时创建的那一行有值，`CommandStream` 新建的行是空串
