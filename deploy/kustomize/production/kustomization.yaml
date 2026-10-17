@@ -257,10 +257,11 @@ patches:
           name: config
           mountPath: /configs/webhook.production.yaml
           subPath: webhook.production.yaml
-  # release-api still defaults to SQLite (cmd/api --db) and this overlay injects
-  # no DATABASE_DRIVER/DATABASE_DSN, so keep that data on a PVC instead of the
-  # dev emptyDir. TASK-338 added the PostgreSQL engine selection in code; wiring
-  # the env and dropping this volume is the next step (README.md known gap).
+  # release-api keeps --db and a persistent /data even though production now
+  # selects PostgreSQL: the audit archive worker writes to /data/archives
+  # (configs/api.production.yaml) and that path must outlive the Pod. With
+  # DATABASE_DRIVER=postgres the --db file itself is unused, but removing the
+  # claim would move archives onto the container's writable layer.
   - target:
       kind: Deployment
       name: api
@@ -334,6 +335,33 @@ patches:
                       secretKeyRef:
                         name: release-manager-credentials
                         key: NOTIFIER_DATABASE_DSN
+  # release-api reads and writes the same audit tables auth/orchestrator use.
+  # DATABASE_DRIVER selects the engine at startup (cmd/api/store.go) and this
+  # overlay is the only manifest that sets it to postgres: the shared
+  # ../services/api.yaml therefore stays on its SQLite default for the dev
+  # overlay. The DSN comes from the credentials Secret, never from a config
+  # file, a log line or an audit event.
+  - target:
+      kind: Deployment
+      name: api
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api
+                env:
+                  - name: DATABASE_DRIVER
+                    value: postgres
+                  - name: DATABASE_DSN
+                    valueFrom:
+                      secretKeyRef:
+                        name: release-manager-credentials
+                        key: DATABASE_DSN
   # NodePorts are a dev-only entry mechanism: they bypass the Ingress/TLS
   # boundary batch 3 introduces. In production every Service is ClusterIP and
   # only the Ingress controller may enter the namespace.

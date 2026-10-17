@@ -81,9 +81,11 @@ spec:
               mountPath: /configs/api.dev.yaml
               subPath: api.dev.yaml
             # cmd/api still defaults to SQLite (--db); TASK-338 lets
-            # DATABASE_DRIVER=postgres override that engine. An emptyDir keeps
-            # the default dev file ephemeral, matching the PostgreSQL/Redis
-            # no-persistent-volume rule (批次5 D6).
+            # DATABASE_DRIVER=postgres override that engine. This dev file must
+            # stay SQLite: the production overlay is the only place that injects
+            # DATABASE_DRIVER/DATABASE_DSN. An emptyDir keeps the default dev
+            # file ephemeral, matching the PostgreSQL/Redis no-persistent-volume
+            # rule (批次5 D6).
             - name: data
               mountPath: /data
       volumes:
