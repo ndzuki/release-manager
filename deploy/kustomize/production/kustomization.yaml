@@ -363,9 +363,12 @@ patches:
                       secretKeyRef:
                         name: release-manager-credentials
                         key: DATABASE_DSN
-  # NodePorts are a dev-only entry mechanism: they bypass the Ingress/TLS
-  # boundary batch 3 introduces. In production every Service is ClusterIP and
-  # only the Ingress controller may enter the namespace.
+  # NodePorts are not the normal production entry mechanism: they bypass the
+  # Ingress/TLS boundary batch 3 introduces. Every application Service is
+  # ClusterIP except two documented exceptions: the TLS edge (edge.yaml) and
+  # the operator mTLS gateway (below). The gateway is not a browser entry
+  # point: customer-cluster operators live outside this cluster and need a
+  # TCP passthrough, which no HTTP Ingress can provide.
   - target:
       kind: Service
       name: web
@@ -393,15 +396,25 @@ patches:
         value: ClusterIP
       - op: remove
         path: /spec/ports/0/nodePort
+  # The operator gateway keeps a NodePort (30844) on purpose: it is the only
+  # path a customer cluster can take. Off-cluster agents have no route to this
+  # namespace's ClusterIPs, and the gateway terminates mTLS inside the
+  # orchestrator (tls.VerifyClientCertIfGiven + ClientCAs), so the manifest
+  # must not route it through the nginx edge: web/nginx.conf proxies
+  # /operator.v1. as plain HTTP and would strip the client certificate.
+  # NodePort -> pod DNAT is TCP-passthrough, so the TLS handshake still ends in
+  # the orchestrator and the request-level cert check still applies.
+  # Host 8444 -> NodePort 30844 (k3d node edit --port-add "8444:30844").
   - target:
       kind: Service
       name: operator
     patch: |-
       - op: replace
         path: /spec/type
-        value: ClusterIP
-      - op: remove
+        value: NodePort
+      - op: replace
         path: /spec/ports/0/nodePort
+        value: 30844
   - target:
       kind: Service
       name: auth

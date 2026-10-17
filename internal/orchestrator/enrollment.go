@@ -97,11 +97,7 @@ func (s *Service) CreateEnrollmentToken(
 		ClusterName:                   cluster.Name,
 		OperatorEndpoint:              s.operatorEndpoint,
 		InstallCommandTemplateVersion: installTemplateVersion,
-		InstallCommandTemplate: strings.NewReplacer(
-			"http://operator:8084", s.operatorEndpoint,
-			"${CUSTOMER_ID}", token.CustomerID,
-			"${CLUSTER_ID}", token.ClusterID,
-		).Replace(installTemplate),
+		InstallCommandTemplate:        renderInstallTemplate(token.CustomerID, token.ClusterID),
 	}), nil
 }
 
