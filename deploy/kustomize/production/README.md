@@ -192,7 +192,9 @@ What the path does and does not guarantee:
 - NetworkPolicy: `allow-agent-gateway` opens TCP 8084 on the orchestrator pod
   only. NetworkPolicy matches the post-DNAT pod port, so the rule names 8084,
   not 30844 — the same shape as `allow-edge-nodeport` naming the edge pod's
-  443 rather than its 30443. `default-deny-ingress` is unchanged.
+  443 rather than its 30443. `default-deny-ingress` is unchanged. Whether this
+  cluster enforces any of these policies at all is a separate open question —
+  nothing here proves it; see the NetworkPolicy item under Known gaps.
 
 ## Image tags
 
@@ -394,6 +396,21 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   cluster's Pod CIDR when it is not `10.42.0.0/16`. A real cluster still has to
   confirm the rule for a host-network ingress controller or a non-k3s CNI that
   does not evaluate policies on the node path.
+- **NetworkPolicy enforcement is unverified on this cluster.** The overlay ships
+  9 NetworkPolicies (default-deny plus 8 allow rules), but none of them has been
+  shown to be enforced here. `kubectl get ds -A` lists only `svclb-traefik-*`
+  and no CNI DaemonSet (2026-10-18 01:16 +08): k3s ships embedded flannel and
+  compiles the network-policy controller into the `k3s server` process, so there
+  is no separate DaemonSet to inspect, and from outside the node there is no way
+  to tell whether that controller is enabled and programming the data plane.
+  The only observation we have — kubelet probes still reaching pods under
+  `default-deny-ingress` — fits both readings: an in-process kube-router plus
+  the k3s issue #10030 fix, or policies that are simply not evaluated; the two
+  cannot be told apart with the current evidence. Treat the policies as
+  **declarations, not proven protection**. Before calling this a boundary, run
+  the overlay on a CNI that provably enforces NetworkPolicy (Calico, Cilium, …)
+  and do a negative test: open a connection from a source that should be denied
+  and confirm it is denied. Do not claim this cluster is isolated.
 - Redis has no AUTH; it is reachable only from pods in this namespace by
   NetworkPolicy. Add AUTH in the hardening batch if Redis leaves that boundary.
 - The TLS edge terminates TLS with a self-signed certificate and one replica.
