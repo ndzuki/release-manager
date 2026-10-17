@@ -21,6 +21,24 @@
 // fails the gate unless the caller sets AllowUnverified (the explicit
 // ALLOW_UNVERIFIED_TASKS=1 escape hatch), so an offline checkout cannot pass by
 // having no evidence at all.
+//
+// Not every delivery can be a pull request, though: the dotfiles/plugins this
+// machine manages with chezmoi live in a different repository, whose watcher
+// commits and pushes straight to main (TASK-314/319/322). Sending those cards
+// down the PR path would mean either a fabricated PR URL or a permanent
+// "ready" card, so they get a third value instead -- merge_status: direct, with
+//
+//	pr_url: direct:<40-hex-sha>@<repo-path>
+//	evidence_paths: <repo-relative path>, <repo-relative path>, ...
+//
+// The direct channel is verified against the named repository's OWN object
+// database: the commit must be reachable from a ref there, and EVERY declared
+// evidence_paths entry must be among the files that commit changed. That is
+// strictly more than "the sha exists": a sha that resolves but does not touch
+// the delivered paths is a contradiction, not evidence (the negation of the
+// scratch-work failure the 2026-09 audit found). The existing PR rules are not
+// relaxed by its presence -- merge_status selects exactly one channel, and the
+// pointer's scheme must match it.
 package taskcheck
 
 import (
@@ -29,6 +47,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -46,6 +65,18 @@ const (
 	KindPRNotMerged = "pr_not_merged"
 	// KindPRUnverified: no evidence the PR was merged (offline or unknown PR).
 	KindPRUnverified = "pr_unverified"
+	// KindEvidenceChannelMismatch: pr_url claims the direct-commit scheme while
+	// merge_status does not declare merge_status=direct.
+	KindEvidenceChannelMismatch = "evidence_channel_mismatch"
+	// KindDirectEvidenceInvalid: merge_status=direct, but the direct evidence
+	// itself is malformed (bad sha or repo, or no usable evidence_paths).
+	KindDirectEvidenceInvalid = "direct_evidence_invalid"
+	// KindDirectPathsMismatch: the cited commit is reachable, but it does not
+	// change every path the card declares in evidence_paths.
+	KindDirectPathsMismatch = "direct_paths_mismatch"
+	// KindDirectEvidenceUnverified: the cited commit is not reachable in the
+	// local object database of the repository the card names.
+	KindDirectEvidenceUnverified = "direct_evidence_unverified"
 )
 
 // Severity separates ledger contradictions (always fatal) from missing evidence
@@ -73,6 +104,10 @@ type Card struct {
 	MergeStatus   string
 	PRURL         string
 	ClosureReason string
+	// EvidencePaths is the direct channel's declaration: the repository-relative
+	// paths this card claims to have delivered, matched against the cited
+	// commit's changed files. It is only read when merge_status is direct.
+	EvidencePaths []string
 }
 
 // NonPRClosureReasons are documented closures that do not imply a merge, so the
@@ -113,6 +148,12 @@ type Evidence struct {
 	// from the "Merge pull request #N from ..." subject shape.
 	prFromSubject map[int]string
 	prs           map[int]PREvidence
+	// directCommits/directFiles hold what the collector found in each repository
+	// a `direct:` ref names, keyed by the repo string exactly as the card wrote
+	// it (so the card's own value is the lookup key -- never a local absolute
+	// path, which would not survive to another machine).
+	directCommits map[DirectRef]struct{}
+	directFiles   map[DirectRef]map[string]struct{}
 }
 
 // NewEvidence returns an empty evidence set.
@@ -121,6 +162,8 @@ func NewEvidence() *Evidence {
 		commits:       make(map[string]struct{}),
 		prFromSubject: make(map[int]string),
 		prs:           make(map[int]PREvidence),
+		directCommits: make(map[DirectRef]struct{}),
+		directFiles:   make(map[DirectRef]map[string]struct{}),
 	}
 }
 
@@ -162,6 +205,133 @@ func (e *Evidence) HasCommit(oid string) bool {
 	}
 	_, ok := e.commits[oid]
 	return ok
+}
+
+// DirectRef is a non-PR delivery pointer: a commit in a repository other than
+// this one, written as `direct:<40-hex-sha>@<repo-path>`. The repo is a path
+// (`/abs/...` or `~/...`) because the ledger gate is a local, offline gate --
+// resolving a remote repository identity would need the network, and the
+// existing PR channel already degrades to UNVERIFIED when it is offline.
+type DirectRef struct {
+	Repo string
+	SHA  string
+}
+
+// String renders the ref the way a card writes it.
+func (r DirectRef) String() string {
+	return "direct:" + r.SHA + "@" + r.Repo
+}
+
+var directRefRe = regexp.MustCompile(`^direct:([0-9a-fA-F]{40})@(\S+)$`)
+
+// ParseDirectRef parses the direct-commit pointer. It is strict on purpose: a
+// malformed pointer must be reported, never quietly ignored (an unparsed value
+// that still "looked like evidence" is how a card would smuggle a bogus sha past
+// the gate).
+func ParseDirectRef(raw string) (DirectRef, bool) {
+	m := directRefRe.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil {
+		return DirectRef{}, false
+	}
+	repo := m[2]
+	if !strings.HasPrefix(repo, "/") && !strings.HasPrefix(repo, "~/") {
+		return DirectRef{}, false
+	}
+	return DirectRef{Repo: repo, SHA: strings.ToLower(m[1])}, true
+}
+
+// isDirectRef reports whether a pr_url claims the direct-commit scheme at all,
+// including a malformed one. The distinction matters: a malformed `direct:`
+// pointer must be diagnosed as such instead of being handed to the pull-request
+// path, which would report the failure for the wrong reason.
+func isDirectRef(raw string) bool {
+	return strings.HasPrefix(strings.TrimSpace(raw), "direct:")
+}
+
+// AddDirectCommit records that a `direct:` ref resolved to a commit reachable
+// from a ref in that repository.
+func (e *Evidence) AddDirectCommit(repo, sha string) {
+	if repo == "" || sha == "" {
+		return
+	}
+	e.directCommits[DirectRef{Repo: repo, SHA: strings.ToLower(sha)}] = struct{}{}
+}
+
+// AddDirectFile records one path the cited commit changed.
+func (e *Evidence) AddDirectFile(repo, sha, file string) {
+	if repo == "" || sha == "" || file == "" {
+		return
+	}
+	ref := DirectRef{Repo: repo, SHA: strings.ToLower(sha)}
+	if e.directFiles[ref] == nil {
+		e.directFiles[ref] = make(map[string]struct{})
+	}
+	e.directFiles[ref][file] = struct{}{}
+}
+
+// HasDirectCommit reports whether the ref's commit was found reachable in the
+// named repository's local object database.
+func (e *Evidence) HasDirectCommit(ref DirectRef) bool {
+	_, ok := e.directCommits[ref]
+	return ok
+}
+
+// DirectFiles returns the set of paths the ref's commit changed. A verified ref
+// always has this populated by the collector; an empty set means the commit
+// changed nothing, which cannot cover a non-empty evidence_paths declaration.
+func (e *Evidence) DirectFiles(ref DirectRef) map[string]struct{} {
+	return e.directFiles[ref]
+}
+
+// ParseDirectEvidence reads the collector's output (scripts/collect-direct-evidence.sh):
+// tab-separated records, one per line.
+//
+//	commit\t<repo>\t<full-sha>
+//	file\t<repo>\t<full-sha>\t<path>
+//
+// A malformed line is an error rather than a skipped record: the file is
+// generated by this project's own collector, so a line it cannot parse means the
+// collector is broken, and silently dropping it would weaken the gate.
+func (e *Evidence) ParseDirectEvidence(r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		switch {
+		case len(fields) == 3 && fields[0] == "commit":
+			e.AddDirectCommit(fields[1], fields[2])
+		case len(fields) == 4 && fields[0] == "file":
+			e.AddDirectFile(fields[1], fields[2], fields[3])
+		default:
+			return fmt.Errorf("malformed direct evidence line %q", line)
+		}
+	}
+	return scanner.Err()
+}
+
+// DirectRefs lists the unique direct-commit refs a card set cites, in
+// first-seen order. Malformed values are skipped here on purpose: the collector
+// cannot gather evidence for them, and Check reports them as invalid -- this
+// function only says which repositories to look in.
+func DirectRefs(cards []Card) []DirectRef {
+	seen := make(map[DirectRef]struct{})
+	refs := make([]DirectRef, 0, len(cards))
+	for _, card := range cards {
+		ref, ok := ParseDirectRef(card.PRURL)
+		if !ok {
+			continue
+		}
+		if _, dup := seen[ref]; dup {
+			continue
+		}
+		seen[ref] = struct{}{}
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
 // ParseGitLog reads `git log --all --format=%H%x09%s` output.
@@ -262,15 +432,8 @@ func Check(cards []Card, ev *Evidence) *Result {
 		}
 
 		var findings []Finding
-		if card.MergeStatus != "merged" {
-			findings = append(findings, Finding{
-				Path:     card.Path,
-				Kind:     KindMergeStatusMismatch,
-				Severity: SeverityViolation,
-				Message: fmt.Sprintf("status=%s requires merge_status=merged, got %q",
-					card.Status, card.MergeStatus),
-			})
-		}
+		direct, claimsDirect := ParseDirectRef(card.PRURL)
+		findings = append(findings, channelFindings(card, claimsDirect)...)
 		if card.PRURL == "" {
 			findings = append(findings, Finding{
 				Path:     card.Path,
@@ -278,6 +441,20 @@ func Check(cards []Card, ev *Evidence) *Result {
 				Severity: SeverityViolation,
 				Message:  fmt.Sprintf("status=%s requires a non-empty pr_url", card.Status),
 			})
+			result.Findings = append(result.Findings, findings...)
+			continue
+		}
+
+		// The direct channel. Entered whenever either the pointer or the declared
+		// merge_status is direct, so a mismatch can never fall through to the PR
+		// channel and collect a second, misleading finding.
+		if isDirectRef(card.PRURL) || card.MergeStatus == "direct" {
+			if card.MergeStatus == "direct" && claimsDirect {
+				findings = append(findings, verifyDirectPaths(card, direct, ev)...)
+			}
+			if len(findings) == 0 && claimsDirect {
+				result.Verified++
+			}
 			result.Findings = append(result.Findings, findings...)
 			continue
 		}
@@ -294,9 +471,49 @@ func Check(cards []Card, ev *Evidence) *Result {
 	return result
 }
 
+// channelFindings reports the problems in the (merge_status, pr_url) pair itself,
+// before any evidence is consulted: the two fields select the SAME evidence
+// channel, so a card that declares one and cites the other is contradicting
+// itself. Letting such a card fall through would have the PR path report it as
+// merely unverified, which understates the problem.
+func channelFindings(card Card, claimsDirect bool) []Finding {
+	switch card.MergeStatus {
+	case "merged":
+		if isDirectRef(card.PRURL) {
+			return []Finding{{
+				Path:     card.Path,
+				Kind:     KindEvidenceChannelMismatch,
+				Severity: SeverityViolation,
+				Message: fmt.Sprintf("merge_status=merged cites a direct-commit pr_url %q; a direct delivery requires merge_status=direct",
+					card.PRURL),
+			}}
+		}
+	case "direct":
+		// An empty pr_url is reported by KindMissingPRURL, exactly as it is for a
+		// merged card; saying it twice would imply two problems.
+		if !claimsDirect && card.PRURL != "" {
+			return []Finding{{
+				Path:     card.Path,
+				Kind:     KindDirectEvidenceInvalid,
+				Severity: SeverityViolation,
+				Message: fmt.Sprintf("merge_status=direct requires pr_url of the form direct:<40-hex-sha>@<repo-path>, got %q",
+					card.PRURL),
+			}}
+		}
+	default:
+		return []Finding{{
+			Path:     card.Path,
+			Kind:     KindMergeStatusMismatch,
+			Severity: SeverityViolation,
+			Message: fmt.Sprintf("status=%s requires merge_status=merged or merge_status=direct, got %q",
+				card.Status, card.MergeStatus),
+		}}
+	}
+	return nil
+}
+
 // verifyPR checks that every pull request the card names is merged with a merge commit
-// present in the local history.
-//
+// present in the local history.//
 // A delivery can genuinely land in more than one pull request (TASK-227: the server half and
 // the console half of one task shipped separately), so pr_url may list several URLs separated
 // by commas, semicolons or whitespace. The rule is not relaxed by that: EACH PR needs its own
@@ -368,6 +585,64 @@ func verifyOnePR(card Card, ev *Evidence, n int) *Finding {
 	}
 }
 
+// verifyDirectPaths validates a direct (non-PR) delivery's own declarations and
+// then checks them against the named repository's object database: the commit
+// must be reachable there, and every path the card declares in evidence_paths
+// must be among the files that commit changed.
+//
+// The comparison is a superset check on purpose. The automated channel these
+// deliveries ride on (the chezmoi watcher) commits in batches -- "auto(dotfiles):
+// sync N file(s)" -- so one delivery can share its commit with unrelated files; a
+// batch can only ever mean the commit touched MORE than this card. Requiring set
+// equality would make an honest card fail for someone else's file, while
+// requiring every declared path to be present still refuses an unrelated commit.
+func verifyDirectPaths(card Card, ref DirectRef, ev *Evidence) []Finding {
+	clean, invalid := normalizeEvidencePaths(card.EvidencePaths)
+	switch {
+	case len(clean) == 0:
+		return []Finding{{
+			Path:     card.Path,
+			Kind:     KindDirectEvidenceInvalid,
+			Severity: SeverityViolation,
+			Message:  "merge_status=direct requires a non-empty evidence_paths list of repository-relative paths",
+		}}
+	case len(invalid) > 0:
+		return []Finding{{
+			Path:     card.Path,
+			Kind:     KindDirectEvidenceInvalid,
+			Severity: SeverityViolation,
+			Message: fmt.Sprintf("evidence_paths entries must be repository-relative paths (no absolute, ~ or ../ entries), got %s",
+				strings.Join(invalid, ", ")),
+		}}
+	}
+	if !ev.HasDirectCommit(ref) {
+		return []Finding{{
+			Path:     card.Path,
+			Kind:     KindDirectEvidenceUnverified,
+			Severity: SeverityUnverified,
+			Message: fmt.Sprintf("%s is not reachable in the local git history of %s; cannot verify the direct delivery",
+				ref, ref.Repo),
+		}}
+	}
+	changed := ev.DirectFiles(ref)
+	var missing []string
+	for _, p := range clean {
+		if _, ok := changed[p]; !ok {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		return []Finding{{
+			Path:     card.Path,
+			Kind:     KindDirectPathsMismatch,
+			Severity: SeverityViolation,
+			Message: fmt.Sprintf("%s changed %d file(s) in %s, not including the declared evidence_paths: %s",
+				ref, len(changed), ref.Repo, strings.Join(missing, ", ")),
+		}}
+	}
+	return nil
+}
+
 var githubPRRe = regexp.MustCompile(`^https?://github\.com/[^/]+/[^/]+/pull/(\d+)(?:[/?#].*)?$`)
 
 func githubPRNumber(url string) (int, bool) {
@@ -404,17 +679,60 @@ func githubPRNumbers(raw string) ([]int, bool) {
 	return numbers, true
 }
 
+// normalizeEvidencePaths separates usable declarations from unusable ones. An
+// unusable entry is not dropped silently: dropping it would let one checked path
+// cover for an unchecked one, the same way a bad segment invalidates a whole
+// multi-PR pr_url.
+func normalizeEvidencePaths(paths []string) (clean, invalid []string) {
+	for _, p := range paths {
+		if c, ok := cleanEvidencePath(p); ok {
+			clean = append(clean, c)
+		} else {
+			invalid = append(invalid, p)
+		}
+	}
+	return clean, invalid
+}
+
+// cleanEvidencePath reports whether a declared delivery path can be matched
+// against `git show --name-only` output. Absolute paths, home paths and parent
+// escapes are rejected: they can never match a repository-relative path, so
+// accepting them would let a card declare something that is never checked.
+func cleanEvidencePath(p string) (string, bool) {
+	p = strings.TrimSpace(p)
+	if p == "" || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "~") {
+		return "", false
+	}
+	clean := path.Clean(p)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
+}
+
+// splitEvidencePaths splits the comma-separated evidence_paths value. Empty
+// segments are ignored, matching the multi-PR pr_url convention.
+func splitEvidencePaths(value string) []string {
+	var paths []string
+	for _, segment := range strings.Split(value, ",") {
+		if segment = strings.TrimSpace(segment); segment != "" {
+			paths = append(paths, segment)
+		}
+	}
+	return paths
+}
+
 // ParseCard reads the frontmatter subset the gate needs. The frontmatter is the
 // leading YAML block delimited by "---" lines; values are unquoted so a card may
 // write either `status: done` or `status: "done"`.
-func ParseCard(path string) (Card, error) {
-	f, err := os.Open(path)
+func ParseCard(cardPath string) (Card, error) {
+	f, err := os.Open(cardPath)
 	if err != nil {
-		return Card{}, fmt.Errorf("open %s: %w", path, err)
+		return Card{}, fmt.Errorf("open %s: %w", cardPath, err)
 	}
 	defer f.Close()
 
-	card := Card{Path: path}
+	card := Card{Path: cardPath}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	inFrontmatter := false
@@ -446,13 +764,15 @@ func ParseCard(path string) (Card, error) {
 			card.PRURL = value
 		case "closure_reason":
 			card.ClosureReason = value
+		case "evidence_paths":
+			card.EvidencePaths = splitEvidencePaths(value)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return Card{}, fmt.Errorf("read %s: %w", path, err)
+		return Card{}, fmt.Errorf("read %s: %w", cardPath, err)
 	}
 	if !inFrontmatter || !closed {
-		return Card{}, fmt.Errorf("%s: no frontmatter block found", path)
+		return Card{}, fmt.Errorf("%s: no frontmatter block found", cardPath)
 	}
 	return card, nil
 }
