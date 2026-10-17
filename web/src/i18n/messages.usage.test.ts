@@ -82,6 +82,13 @@ describe('message catalog usage', () => {
  * EXPRESSION (`{{ saving ? '提交中…' : '保存' }}`, `:action-label="retryable ? '重试' : ''"`)
  * carried no capital and no space, so the template rule could not see it. Those literals are
  * registered the same way — a file that is NOT listed here still fails on them.
+ *
+ * TASK-318 closed two more: a static attribute value (above all `action-label`, a component
+ * prop the three state components render as `{{ actionLabel }}`) and the single-Han
+ * quantifier/conjunction fragments of a text node or a backtick literal (`共 个`, `与`, `个`,
+ * `条`, `（ 条）`, `${patch.length} 项`). Both classes are registered here with the same
+ * standing as the entries above: an unlisted file still fails, and the stale-entry rule
+ * retires each one as the Chinese wave moves it to the catalog.
  */
 const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   {
@@ -128,9 +135,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationConfirmPanel.vue',
-    allowed: ['v ， 个镜像', '创建中…', '确认创建'],
+    allowed: ['v ， 个镜像', '创建中…', '确认创建', '${patch.length} 项'],
     reason:
-      'the fragments around the interpolations (version prefix plus the image-count unit); the sentence itself is Chinese',
+      'the fragments around the interpolations (version prefix plus the image-count unit); the sentence itself is Chinese. TASK-318 registered `${patch.length} 项`: the backtick literal carries one Han character, so the two-or-more rule could not see it until then',
   },
   {
     file: 'src/components/operations/OperationForm.vue',
@@ -285,8 +292,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/DefinitionsPage.vue',
-    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '名称', '状态', '版本', '操作', '无法解析', '编辑', '提交时会带上读到的版本号；若期间被他人修改，服务端会拒绝（乐观锁），页面会刷新后提示重试。', '删除', '新增映射', '取消', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '第 ${index + 1} 行映射缺少必填项（workload kind/name、field、values path）', '刷新中…', '刷新', '提交中…', '保存'],
-    reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281)',
+    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '名称', '状态', '版本', '操作', '无法解析', '编辑', '提交时会带上读到的版本号；若期间被他人修改，服务端会拒绝（乐观锁），页面会刷新后提示重试。', '删除', '新增映射', '取消', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '第 ${index + 1} 行映射缺少必填项（workload kind/name、field、values path）', '刷新中…', '刷新', '提交中…', '保存', '刷新列表', '条', '（ 条）'],
+    reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281). TASK-318 registered `刷新列表` (a rendered action-label with no capital and no space) and the single-Han cell fragments `条` / `（ 条）`',
   },
   {
     file: 'src/pages/NotFoundPage.vue',
@@ -371,23 +378,23 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/BundlesPage.vue',
-    allowed: ['发布 Bundle', 'Bundle 是不可变输入：内容摘要、Chart 引用与镜像绑定，以及签名/SBOM/来源证明的引用。', '状态', '全部', '请先填写 Release Definition ID：服务端把它同时作为', '查询范围', '授权对象', '，缺少它会被拒绝 （不是「没有数据」），因此页面在填写前不会发起请求。', '名称', '状态', '摘要', 'Chart', '镜像绑定', '接收时间', '操作', '明细', '正在追加下一页…', 'Bundle 明细', '名称', '摘要', '状态', '证据引用', '签名', '来源证明', '镜像绑定（ ）', '引用', '摘要', 'Values 路径', '关闭明细', 'definition id', 'chart name', '加载未成功', '正在读取 Bundle…', '没有 Bundle', '当前过滤条件下没有 Bundle；清空过滤可查看全部（注意：无权限时服务端会返回拒绝而不是空列表）。', '正在读取明细…', '明细加载失败', '查询中…', '查询', '加载中…', '加载更多'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['发布 Bundle', 'Bundle 是不可变输入：内容摘要、Chart 引用与镜像绑定，以及签名/SBOM/来源证明的引用。', '状态', '全部', '请先填写 Release Definition ID：服务端把它同时作为', '查询范围', '授权对象', '，缺少它会被拒绝 （不是「没有数据」），因此页面在填写前不会发起请求。', '名称', '状态', '摘要', 'Chart', '镜像绑定', '接收时间', '操作', '明细', '正在追加下一页…', 'Bundle 明细', '名称', '摘要', '状态', '证据引用', '签名', '来源证明', '镜像绑定（ ）', '引用', '摘要', 'Values 路径', '关闭明细', 'definition id', 'chart name', '加载未成功', '正在读取 Bundle…', '没有 Bundle', '当前过滤条件下没有 Bundle；清空过滤可查看全部（注意：无权限时服务端会返回拒绝而不是空列表）。', '正在读取明细…', '明细加载失败', '查询中…', '查询', '加载中…', '加载更多', '共 个', '与', '个', '回到第一页'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `回到第一页` and the single-Han fragments `共 个` / `与` / `个`',
   },
   {
     file: 'src/pages/StuckLocksPage.vue',
-    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符', '必须填写释放原因', '必须选择释放模式', '请先确认已核实集群效果', '刷新中…', '刷新', '提交中…', '确认释放'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符', '必须填写释放原因', '必须选择释放模式', '请先确认已核实集群效果', '刷新中…', '刷新', '提交中…', '确认释放', '刷新列表'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `刷新列表`',
   },
   {
     file: 'src/pages/TrustPolicyPage.vue',
-    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。', '结束宽限', '退休', '吊销', '该环境只剩一个可用信任根，不能移除', '刷新中…', '刷新', '提交中…', '确认吊销'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。', '结束宽限', '退休', '吊销', '该环境只剩一个可用信任根，不能移除', '刷新中…', '刷新', '提交中…', '确认吊销', '刷新策略'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `刷新策略`',
   },
   {
     file: 'src/pages/OperationCreatePage.vue',
-    allowed: ['创建发布操作', '选择制品和已审批配置，确认完整目标后启动 Preflight。', '返回 Releases', '查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。', '操作创建失败'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['创建发布操作', '选择制品和已审批配置，确认完整目标后启动 Preflight。', '返回 Releases', '查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。', '操作创建失败', '重新加载'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `重新加载`',
   },
   {
     file: 'src/pages/OperationListPage.vue',
@@ -416,8 +423,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ChangePasswordPage.vue',
-    allowed: ['修改密码', '修改成功后所有会话都会被撤销，需要重新登录。', '密码已修改，正在跳转到登录页…', '当前密码', '新密码', '确认新密码', '密码只做非空与一致性校验；上限 字节（bcrypt 限制），不设复杂度要求。', '返回', '修改密码失败', '新密码过长（上限 ${PASSWORD_MAX_BYTES} 字节）', '请填写全部三项', '两次输入的新密码不一致', '新密码不能与当前密码相同', '提交中…'],
-    reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
+    allowed: ['修改密码', '修改成功后所有会话都会被撤销，需要重新登录。', '密码已修改，正在跳转到登录页…', '当前密码', '新密码', '确认新密码', '密码只做非空与一致性校验；上限 字节（bcrypt 限制），不设复杂度要求。', '返回', '修改密码失败', '新密码过长（上限 ${PASSWORD_MAX_BYTES} 字节）', '请填写全部三项', '两次输入的新密码不一致', '新密码不能与当前密码相同', '提交中…', '重试'],
+    reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `重试`',
   },
   {
     file: 'src/pages/BindingsPage.vue',

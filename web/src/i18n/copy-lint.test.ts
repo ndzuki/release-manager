@@ -52,6 +52,39 @@ describe('attributeLiterals', () => {
     expect(literals).toContain('Search releases');
     expect(literals).toHaveLength(2);
   });
+
+  // TASK-318: `action-label` is a component prop, not a native attribute — ErrorState,
+  // EmptyState and ForbiddenState declare `actionLabel` and render it as `{{ actionLabel }}`,
+  // and every static `action-label="…"` in this repo sits on one of those three. Its Chinese
+  // labels have no capital, no sentence punctuation and no space, so the shape rule could not
+  // see them and the name was not on the list: 12 rendered values were invisible.
+  it('sees a rendered alias prop whose value is Chinese', () => {
+    const file = '<template><ErrorState title="加载未成功" action-label="刷新列表" /><EmptyState action-label="重试" /></template>';
+
+    expect(attributeLiterals(file)).toEqual(['加载未成功', '刷新列表', '重试']);
+  });
+
+  it('checks a rendered prop even when its value carries no shape at all', () => {
+    // Only the name list accepts this value: no capital, no space, no sentence punctuation.
+    expect(attributeLiterals('<template><EmptyState action-label="hi" /></template>')).toEqual(['hi']);
+  });
+
+  // The Han rule is name-independent, which is what keeps a future alias prop from reopening
+  // the hole. It must still not reach machine values or bound expressions.
+  it('still ignores a Han value on a technical attribute and inside a bound prop', () => {
+    const file = `<template><div class="卡片" name="中文" :action-label="retryable ? '重试' : ''"></div></template>`;
+
+    expect(attributeLiterals(file)).toEqual([]);
+  });
+
+  // Vue accepts single quotes around an attribute value, and that is also the string syntax
+  // inside an expression — so the scan removes double-quoted values first, and an assignment
+  // inside a handler does not read as an attribute named `mode`.
+  it('sees a single-quoted attribute and not an expression inside a handler', () => {
+    const file = `<template><span title='中文标题'>x</span><button @click="mode = 'edit'">y</button></template>`;
+
+    expect(attributeLiterals(file)).toEqual(['中文标题']);
+  });
 });
 
 describe('scriptSentences', () => {
@@ -392,6 +425,42 @@ const msg = '操作已切换';
     expect(
       templateExpressionLiterals("<template><span>{{ /'过报探针'/u.test(value) ? '通过' : '失败' }}</span></template>"),
     ).toEqual(['通过', '失败']);
+  });
+});
+
+describe('single-Han fragments on rendering surfaces (TASK-318)', () => {
+  // A text node renders by construction, so one Han character in it is copy. The old rule
+  // asked for `\p{L}{2,}`, which a lone `与`/`个`/`条` and the collapsed `共 个` both fail:
+  // the repo carried 5 such fragments, rendered to the user, with the gate green.
+  it('sees quantifier and conjunction fragments in text nodes', () => {
+    const file = `<template>
+  <span>共 {{ store.totalSize }} 个</span>
+  <b>查询范围</b>与<b>授权对象</b>
+  <i>{{ n }} 条</i>
+  <h3>{{ t('definitions.promotionMapping') }}（{{ n }} 条）</h3>
+</template>`;
+
+    expect(templateLiterals(file)).toEqual(['共 个', '查询范围', '与', '授权对象', '条', '（ 条）']);
+  });
+
+  // The rule is a HAN run, not "any short node": punctuation-only nodes stay out, the same way
+  // HAN_COPY keeps the `'：'` separator of the code-literal surface out.
+  it('does not treat a punctuation-only text node as copy', () => {
+    expect(templateLiterals('<template><span>：</span><b>/</b><i>·</i></template>')).toEqual([]);
+  });
+
+  // A backtick template literal is a composed, rendered string, so one Han character is
+  // enough there too: OperationConfirmPanel rendered `${patch.length} 项` invisibly.
+  it('sees a single Han count unit in a backtick literal', () => {
+    const file = "<template><dd>{{ patch.length > 0 ? `${patch.length} 项` : t('operation.confirm.noPatch') }}</dd></template>";
+
+    expect(templateExpressionLiterals(file)).toEqual(['${patch.length} 项']);
+  });
+
+  // …while the quoted form keeps HAN_COPY: TASK-313 pinned `'无'` as out of scope, and the
+  // repo has no lone-Han quoted literal in a template expression (measured, TASK-318).
+  it('keeps a lone Han quoted literal out, as TASK-313 pinned', () => {
+    expect(templateExpressionLiterals("<template><dd>{{ n > 0 ? '有' : '无' }}</dd></template>")).toEqual([]);
   });
 });
 
