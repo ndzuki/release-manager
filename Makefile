@@ -528,7 +528,7 @@ TASKS_RESOLVE = if [ -n "$$TASKS_DIR" ]; then \
 # ALLOW_UNVERIFIED_TASKS=1 downgrades check-tasks' UNVERIFIED findings (a PR
 # whose merge cannot be proven because gh is unavailable and the local git
 # history does not name it) from fatal to advisory. It never downgrades a ledger
-# contradiction.
+# contradiction, including a pr_url that names a repository other than this one.
 ALLOW_UNVERIFIED_TASKS ?=
 
 .PHONY: check-reqs
@@ -609,7 +609,7 @@ check-schema-parity: ## Dual-engine parity gate: SQLite inline DDL vs PostgreSQL
 	$(GO) run ./cmd/schemaparity/ -migrations migrations -exceptions schema-parity.exceptions.yaml
 
 .PHONY: check-tasks
-check-tasks: ## Ledger↔git gate: every done/closed card must cite PR(s) that provably exist merged in git — every one it cites (D-η/η-1; pr_url may list several, TASK-227)
+check-tasks: ## Ledger↔git gate: every done/closed card must cite evidence that provably exists — merged PR(s) in THIS repository, or a `direct:` commit covering the card's evidence_paths (D-η/η-1; pr_url may list several, TASK-227; direct channel TASK-321)
 	@$(TASKS_RESOLVE); \
 	if [ -z "$$TASKS" ]; then \
 		if [ "$${ALLOW_NO_REQS:-}" = "1" ]; then \
@@ -618,14 +618,17 @@ check-tasks: ## Ledger↔git gate: every done/closed card must cite PR(s) that p
 			printf "$(RED)FAIL check-tasks: no TASK documents found — set TASKS_DIR (or REQS_DIR) to the vault project directory, or ALLOW_NO_REQS=1 to skip explicitly$(NC)\n"; exit 1; \
 		fi; \
 	else \
-		gitlog="$$(mktemp)"; ghprs="$$(mktemp)"; \
-		trap 'rm -f "$$gitlog" "$$ghprs"' EXIT INT TERM; \
+		gitlog="$$(mktemp)"; ghprs="$$(mktemp)"; refs="$$(mktemp)"; direct="$$(mktemp)"; \
+		trap 'rm -f "$$gitlog" "$$ghprs" "$$refs" "$$direct"' EXIT INT TERM; \
 		git log --all --format='%H%x09%s' > "$$gitlog"; \
 		if command -v gh >/dev/null 2>&1; then \
-			gh pr list --state all --limit 1000 --json number,state,mergeCommit > "$$ghprs" 2>/dev/null || : > "$$ghprs"; \
+			gh pr list --state all --limit 1000 --json number,url,state,mergeCommit > "$$ghprs" 2>/dev/null || : > "$$ghprs"; \
 		fi; \
+		repo_url="$$(git remote get-url origin 2>/dev/null || true)"; \
 		$(REQS_RESOLVE); \
-		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) -requirements "$$REQS" $$TASKS; \
+		$(GO) run ./cmd/taskcheck/ -print-direct-refs $$TASKS > "$$refs" || { printf "$(RED)FAIL check-tasks: cannot extract the direct evidence refs (cmd/taskcheck -print-direct-refs)$(NC)\n"; exit 1; }; \
+		bash scripts/collect-direct-evidence.sh "$$refs" > "$$direct" || { printf "$(RED)FAIL check-tasks: direct evidence collection failed (scripts/collect-direct-evidence.sh)$(NC)\n"; exit 1; }; \
+		$(GO) run ./cmd/taskcheck/ -git-log "$$gitlog" -gh-prs "$$ghprs" -repo-url "$$repo_url" -direct-evidence "$$direct" $(if $(filter 1,$(ALLOW_UNVERIFIED_TASKS)),-allow-unverified,) -requirements "$$REQS" $$TASKS; \
 	fi
 
 .PHONY: pr-merge-check
@@ -647,6 +650,16 @@ check-licenses: ## Check every shipped dependency's license against the project 
 .PHONY: check-docs
 check-docs: ## Check that documented make targets and repository paths still exist
 	bash scripts/check-docs.sh
+
+# NOT part of `quality`: this is the semantic spot check for `test.yml:<line>`
+# citations (TASK-309). check-docs only proves the cited line exists; this target
+# also checks that the cited range still looks like what the sentence claims, so
+# it has to be revisited whenever test.yml gains or loses lines. Deliberately
+# opt-in for that reason -- run it when you touch test.yml or a document that
+# cites it: `make check-citations`.
+.PHONY: check-citations
+check-citations: ## Check that test.yml line citations still match the content they claim (TASK-309)
+	bash scripts/check-citations.sh --check
 
 .PHONY: check-config-keys
 check-config-keys: ## Gate config-key truthfulness: every service config leaf decodes to a real reader (REQ-094)

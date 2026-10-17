@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,18 +53,14 @@ type defaultChartPackager struct {
 func (p defaultChartPackager) Package(ctx context.Context) (string, error) {
 	if _, err := os.Stat(filepath.Join(p.cfg.ChartDir, "Chart.yaml")); err != nil {
 		p.cfg.log().Info("fixture chart not present, using deterministic fallback digest", "chart_dir", p.cfg.ChartDir)
-		return fallbackChartDigest(), nil
+		return fallbackChartDigest(), nil //nolint:nilerr // a missing fixture chart is a valid state, not an error
 	}
-	tgz, err := packageChartArchive(p.cfg.ChartDir)
+	archive, err := packageChartArchive(p.cfg.ChartDir)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tgz) //nolint:errcheck // temp archive cleanup is best-effort
-	digest, err := archiveDigest(tgz)
-	if err != nil {
-		return "", err
-	}
-	if err := pushChartArchive(ctx, tgz); err != nil {
+	digest := archiveDigest(archive)
+	if err := pushChartArchive(ctx, archive); err != nil {
 		return "", err
 	}
 	p.cfg.log().Info("fixture chart packaged and pushed", "digest", digest)
@@ -72,40 +69,69 @@ func (p defaultChartPackager) Package(ctx context.Context) (string, error) {
 
 func (p defaultChartPackager) Digest() (string, error) {
 	if _, err := os.Stat(filepath.Join(p.cfg.ChartDir, "Chart.yaml")); err != nil {
-		return fallbackChartDigest(), nil
+		return fallbackChartDigest(), nil //nolint:nilerr // a missing fixture chart is a valid state, not an error
 	}
-	tgz, err := packageChartArchive(p.cfg.ChartDir)
+	archive, err := packageChartArchive(p.cfg.ChartDir)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tgz) //nolint:errcheck // temp archive cleanup is best-effort
-	return archiveDigest(tgz)
+	return archiveDigest(archive), nil
 }
 
-// packageChartArchive loads the chart directory and saves it as a tgz,
-// returning the archive path (helm SDK only — no helm CLI). The archive is
+// withChartTempDir creates the temp directory helm's chartutil.Save writes
+// into, invokes write with its path, and removes the whole directory on every
+// exit path — early return, error, or panic. A removal failure is joined into
+// the returned error instead of being swallowed. The directory never escapes
+// this function, so no caller can forget to clean it up (TASK-311: callers
+// used to remove only the .tgz file, leaving one empty
+// /tmp/devfixture-chart-* directory behind per packaging).
+func withChartTempDir(write func(dir string) error) (err error) {
+	dir, err := os.MkdirTemp("", "devfixture-chart-*")
+	if err != nil {
+		return fmt.Errorf("create chart temp dir: %w", err)
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove chart temp dir %q: %w", dir, rmErr))
+		}
+	}()
+	return write(dir)
+}
+
+// packageChartArchive loads the chart directory and returns the packaged tgz
+// bytes (helm SDK only — no helm CLI). helm's chartutil.Save insists on
+// writing into a directory, so packaging runs inside withChartTempDir and the
+// temp directory never leaves this function: both callers only need the bytes,
+// so there is no path-based cleanup for a caller to forget. The archive is
 // timestamp-normalized before returning so the tgz bytes are content
 // addressed: helm's chartutil.Save stamps every tar entry with time.Now()
 // (save.go writeToTar), which would make each packaging produce a different
 // digest — the resume's bundle drift check would then never match the
 // submitted digest (real smoke 2026-08-27: "bundle identity mismatch").
-func packageChartArchive(chartDir string) (string, error) {
+func packageChartArchive(chartDir string) ([]byte, error) {
 	chart, err := loader.LoadDir(chartDir)
 	if err != nil {
-		return "", fmt.Errorf("load fixture chart: %w", err)
+		return nil, fmt.Errorf("load fixture chart: %w", err)
 	}
-	dir, err := os.MkdirTemp("", "devfixture-chart-*")
-	if err != nil {
-		return "", fmt.Errorf("create chart temp dir: %w", err)
+	var archive []byte
+	if err := withChartTempDir(func(dir string) error {
+		path, err := chartutil.Save(chart, dir)
+		if err != nil {
+			return fmt.Errorf("package fixture chart: %w", err)
+		}
+		if err := normalizeChartTgz(path); err != nil {
+			return fmt.Errorf("normalize fixture chart archive: %w", err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read fixture chart archive: %w", err)
+		}
+		archive = raw
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	path, err := chartutil.Save(chart, dir)
-	if err != nil {
-		return "", fmt.Errorf("package fixture chart: %w", err)
-	}
-	if err := normalizeChartTgz(path); err != nil {
-		return "", fmt.Errorf("normalize fixture chart archive: %w", err)
-	}
-	return path, nil
+	return archive, nil
 }
 
 // normalizeChartTgz rewrites a helm chart tgz with deterministic tar and
@@ -166,13 +192,9 @@ func normalizeChartTgz(tgzPath string) error {
 }
 
 // archiveDigest returns the content sha256 digest of a chart archive.
-func archiveDigest(path string) (string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read chart archive: %w", err)
-	}
+func archiveDigest(raw []byte) string {
 	sum := sha256.Sum256(raw)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // pushChartArchive pushes the packaged chart to the local k3d registry as an
@@ -181,11 +203,7 @@ func archiveDigest(path string) (string, error) {
 // registry is published at localhost:5001 on the dev host, while the bundle's
 // canonical chart ref (bundleChartRef) is the cluster-reachable
 // registry.dev.release-manager.local alias the operator pulls from.
-func pushChartArchive(_ context.Context, tgzPath string) error {
-	raw, err := os.ReadFile(tgzPath)
-	if err != nil {
-		return fmt.Errorf("read chart archive for push: %w", err)
-	}
+func pushChartArchive(_ context.Context, raw []byte) error {
 	client, err := registry.NewClient(registry.ClientOptPlainHTTP())
 	if err != nil {
 		return fmt.Errorf("create helm registry client: %w", err)

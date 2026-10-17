@@ -292,7 +292,7 @@ Bundle 与 Candidate Artifact 浏览/ChangePassword —— 35 项探测 **14 项
 | A8 | ReleaseBundle / Candidate Artifact 浏览 | `docs/architecture.md:3`（四大发布输入之一） | 仅作为操作表单下拉项 |
 | A9 | ReleaseDefinition 管理与 Promotion Mapping 配置 | `REQ-040`、收敛前提（Promotion Mapping） | 无定义列表/编辑页；Only 展示 |
 | A10 | 紧急变更 stuck-lock 正式处置 | `REQ-087`（`ListStuckLocks`/`ReleaseEmergencyLock`；该文自陈 UI 归「后续 REQ」，该 REQ 不存在） | 0 命中 |
-| A11 | **操作历史 / 回滚点** | `REQ-056 AC-056-08`（ROLLBACK 必填 `target_revision`，走独立 `RollbackRelease`） | 无操作列表、无 rollback UI（`RollbackRelease` 非 gen 零命中） |
+| A11 | **操作历史 / 回滚点** | `REQ-056 AC-056-08`（ROLLBACK 必填 `target_revision`，走独立 `RollbackRelease`） | **已交付**（2026-10-17 校正：原写「无操作列表、无 rollback UI（`RollbackRelease` 非 gen 零命中）」已过期）。操作历史页 `web/src/pages/OperationListPage.vue`；回滚对话框 `web/src/components/releases/RollbackReleaseDialog.vue` + API 包装 `web/src/connect/rollback-api.ts`，行内入口在 `web/src/components/releases/ReleaseInventoryTable.vue:157`，由 `web/src/pages/ReleaseInventoryPage.vue:183` 挂载；浏览器路径已有 E2E `web/e2e/rollback.spec.ts`（真机运行只在 CI `e2e-prerequisite` 车道） |
 
 ### 6.2 缺失的共享基元（设计文档点名、从未交付）
 

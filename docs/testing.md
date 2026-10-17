@@ -93,12 +93,15 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
   缺 `/auth.v1.AuthorizationService` ⇒ `GetAuthorizationSnapshot` **未被代理（POST 得 404，不是落 SPA）**
   ⇒ `writeBlocked` 为真、回滚入口不渲染。
 - **URL 别写错**：Vite 默认 `host=localhost` 在 Node 26 下只监听 `[::1]:5173`，`http://127.0.0.1:5173`
-  会被拒连；本仓库已在 `vite.config.ts` 显式 `host: '127.0.0.1'` 固定为 IPv4（`playwright.config.ts:17`
+  会被拒连；本仓库已在 `vite.config.ts` 显式 `host: '127.0.0.1'` 固定为 IPv4（`playwright.config.ts:25`
   的默认 baseURL 恰是该地址）。
 - **本 spec 现在由 `e2e-prerequisite` / CI 运行（TASK-250）**：`make e2e-prerequisite`（本地）与
   `make e2e-prerequisite-ci`（CI 的 `e2e-prerequisite` job；push main 或手动触发）在 `smoke.sh` **之后**
-  调用 `test/e2e/prerequisite/console.sh`，对**容器内控制台** `http://127.0.0.1:8087` 跑本 spec；
-  失败时的 trace 落在被忽略的 `e2e-results/console/`，随既有 artifact 一并上传。
+  调用 `test/e2e/prerequisite/console.sh`，对**容器内控制台** `http://127.0.0.1:8087` 跑本 spec。
+  机器可读的 JSON 报告固定在（被忽略的）`e2e-results/console/results.json`，随
+  `e2e-prerequisite-diagnostics` 上传；失败截图/保留的 trace 与 HTML 报告分别落在
+  `web/test-results/` 与 `web/playwright-report/`，随 `e2e-console-playwright-artifacts` 上传（TASK-307；<!-- check-docs:ignore web/test-results/ web/playwright-report/ Playwright 运行时产物目录，gitignore 掉，干净检出中本就不存在（本行在说明它们随 artifact 上传） -->
+  两个目录均被根 `.gitignore` 覆盖）。
 - **前置：目标 release 的 revision 必须 > 1**（否则发布清单不渲染回滚入口）。`smoke.sh` 以 UPGRADE + ROLLBACK
   结束，正好满足；单独对 fresh `dev-seed` 跑本 spec 会以「`max revision=1`」**硬失败**——那是前置不满足，
   不是控制台故障。
@@ -160,7 +163,7 @@ E2E_BACKEND=true E2E_CHANNEL=chrome \
 | `make vulncheck` | 对模块跑 govulncheck（REQ-008 §8-8），只对**代码实际调用**的漏洞失败；无上游修复的公告在 `vulncheck.exceptions.yaml` 登记（owner + 补偿控制 + 复审日期，过期即失败），CI 另跑 `vulncheck` job | `govulncheck`（`make vulncheck` 自动安装 `GOVULNCHECK_VERSION`）+ 漏洞库网络 | 本地 + CI `vulncheck` job（`scripts/vulncheck.sh`） |
 | `make check-migrations` | 静态门禁：`migrations/` 两个内嵌集合（release_manager、release_notifier）编号连续、每个版本 up/down 成对、文件名合规（REQ-008 §8-19）；负控制在 `migrations/continuity_test.go` 内 | 无（读 `//go:embed` 的文件系统） | 本地 + `make quality` + CI `test` job 的全量 `go test` |
 | `make check-schema-parity` | 双引擎 schema parity 门禁（D-ε/ε-1，兑现 `AGENTS.md` 硬约束 4）：生成两侧「表 + 列 + 存储类 + **可空性**」规范化快照并 diff。**SQLite 侧**执行 `internal/store/sqlite` 的真实迁移路径到**进程内 in-memory 库**再读 `pragma_table_info`（不落盘、不联网、只读 schema 元数据；比解析 `db.go` 文本更忠实，能看到增量 `ALTER`），并从 `notnull`/`pk` 推出有效可空性（**PRIMARY KEY 隐含非空**，与 PG 一致）；**PG 侧**只解析 `migrations/*.up.sql`，**不连库**，且**按文件名顺序逐条应用** `CREATE TABLE`、`ALTER TABLE`（`ADD/DROP/RENAME COLUMN`、`SET/DROP NOT NULL`、`SET/DROP DEFAULT`）、`RENAME TO`、`DROP TABLE` —— **按序应用是硬要求**：`values_revisions.parent_revision_id`（`DROP NOT NULL`）与 `candidate_artifacts.last_seen_at`（只经 `ADD COLUMN` 加入、PostgreSQL 侧为 `NOT NULL`）都靠后续迁移决定可空性，只读 `CREATE TABLE` 会分别**假报**与**漏报**（Lead 首测即因此假阴性）。注意：当前 `migrations/*.up.sql` 里**没有任何 `SET NOT NULL`**（`DROP NOT NULL` 只有 `values_revisions` 一处）⇒ 该解析能力目前由**合成用例**钉住，真实数据无覆盖。类型按「SQLite 存储类 vs PG 类型应有的存储类」归一化（`TIMESTAMPTZ`/`TEXT`→text、`BIGINT`/`BOOLEAN`→integer、`BYTEA`→blob、`JSONB`→text 或 blob），因此不会因两引擎类型词汇不同而误报。可空性判定只看 `NOT NULL` 与 PK：**`CHECK` 不蕴含全局非空**（`CHECK (parent_revision_id IS NOT NULL OR version = 1)` 就是反例），单引号字面量会被屏蔽（`DEFAULT 'NOT NULL'` 不是约束）。**同名表**的列缺失/类型不一致/**可空性不一致** → 失败；**仅存在于一侧的表** → 只报告不失败（两引擎表集合本就不同）。**范围外（不承诺）**：默认值**文本**（只比「有无默认」的布尔，两引擎的默认表达式写法本就不同）、`CHECK`/`UNIQUE`/`FOREIGN KEY` 等约束、索引。负控制：`TestDiffNegativeControlTypeMutation`（改一个列类型即变红）与 `TestSnapshotPostgresAppliesNullabilityInMigrationOrder`（不按序应用 `DROP NOT NULL` 即变红，实测变异过）+ 测试内其它变异用例。实现：`internal/quality/schemaparity` + `cmd/schemaparity` | 无 | 本地；`make quality` 已含（CI 未接入） |
-| `make check-tasks` | 台账↔git 一致性门禁（D-η/η-1，兑现 `PROJECT-CONVENTIONS.md` 的「应由门禁校验」承诺）：vault `Tasks/*.md` 中 `status: done|closed` 的卡片必须 `merge_status: merged`、`pr_url` 非空，且它引用的**每一个** PR 在 git 中**真实合并**（一卡可列多个 PR，TASK-227）。证据两路：`gh pr list --json number,state,mergeCommit` 的 mergeCommit OID 必须存在于本地 `git log`；无 `gh` 时降级为本地 `git log` 的 `Merge pull request #N from` 匹配。拿不到证据 → `UNVERIFIED` 且**失败**，`ALLOW_UNVERIFIED_TASKS=1` 才降级为报告（**不会**放过台账矛盾）。缺 TASK 文档时与 `check-reqs` 同策略失败（`ALLOW_NO_REQS=1` 显式跳过）；`TASKS_DIR` 指向 vault `Tasks/`，未设时从 `REQS_DIR` 的兄弟目录推导。实现：`cmd/taskcheck` + `internal/quality/taskcheck`；负控制 `TestCheckNegativeControlDoneButUnmerged`（`done` + `unmerged` 必须报违规） | 无（git；`gh` 可选） | 本地；`make quality` 已含（CI 未接入） |
+| `make check-tasks` | 台账↔git 一致性门禁（D-η/η-1，兑现 `PROJECT-CONVENTIONS.md` 的「应由门禁校验」承诺）：vault `Tasks/*.md` 中 `status: done|closed` 的卡片必须 `merge_status ∈ {merged, direct}`、`pr_url` 非空，且它引用的证据**可验证**。**PR 通道**（`merge_status: merged`）：引用的**每一个** PR 在 git 中**真实合并**（一卡可列多个 PR，TASK-227），且**每一个 URL 必须指向本仓库** —— 逐条比对 URL 里的 `owner/repo` 与由 `git remote get-url origin` 推导的本仓库身份（大小写、`.git`、`www.`、末尾斜杠、`?query`/`#fragment` 归一化，但**不做前缀匹配**：`release-manager-evil` 不是 `release-manager`），并用同一口径核对 `gh` 返回体里的 `url`；指向别的仓库 ⇒ `foreign_repo` **违规**（编号恰好撞上本仓已合并 PR 也不行，`ALLOW_UNVERIFIED_TASKS=1` 不可降级），本仓库身份取不到（例如没有 `origin`）⇒ 引用 PR 的卡一律 `UNVERIFIED`（**不静默通过**）。**direct 通道**（`merge_status: direct`，TASK-321）：用于交付物在**其它仓库**、流程上**没有 PR** 的卡（本机 chezmoi 纳管的 dotfiles/插件即如此：watcher 直接提交并推送，见 TASK-314/319/322）；此时 `pr_url` 必须写成 `direct:<40-hex-sha>@<repo-path>`（**恰好一个** direct ref：repo 段不得含逗号或第二个 `direct:`，`direct:a@/x,direct:b@/x` 是格式错而非「查不到的仓库」），且 `evidence_paths` 非空、逐条为**仓库内相对路径** —— 门禁在该仓库的本地对象库里要求该 commit **可达于某个 ref**，并核对其变更文件集**覆盖每一条** `evidence_paths`（「sha 存在」本身不算证据）。写法与通道必须一致：`merged` 配 `direct:`、或 `direct` 配 PR URL ⇒ `evidence_channel_mismatch`/`direct_evidence_invalid`（**违规**，不可降级）。证据两路（PR 通道）：`gh pr list --json number,url,state,mergeCommit` 的 mergeCommit OID 必须存在于本地 `git log`；无 `gh` 时降级为本地 `git log` 的 `Merge pull request #N from` 匹配。direct 通道的证据由 `scripts/collect-direct-evidence.sh` 采集（`taskcheck -print-direct-refs` 给出要查的仓库/commit）。拿不到证据 → `UNVERIFIED` 且**失败**，`ALLOW_UNVERIFIED_TASKS=1` 才降级为报告（**不会**放过台账矛盾：格式错、变更文件集不符、PR 未合并仍是 `VIOLATION`）。缺 TASK 文档时与 `check-reqs` 同策略失败（`ALLOW_NO_REQS=1` 显式跳过）；`TASKS_DIR` 指向 vault `Tasks/`，未设时从 `REQS_DIR` 的兄弟目录推导。实现：`cmd/taskcheck` + `internal/quality/taskcheck`；负控制 `TestCheckNegativeControlDoneButUnmerged`（`done` + `unmerged` 必须报违规）与 `TestCheckNegativeControlDirectPathsMismatch`（可达 sha 但变更文件集不符必须报违规） | 无（git；`gh` 可选） | 本地；`make quality` 已含（CI 未接入） |
 | 审计写入结构门禁 | `go test ./internal/store/` 的 `TestAuditWritesStayOnSanctionedPaths`：除登记的 6 个 store 文件外，任何 `INSERT [OR IGNORE] INTO audit_events` 都失败；事务写入者必须调用 `store.SanitizeAuditEvent` 兜底脱敏（负控制在同文件） | 无 | CI `test` job 的全量 `go test` |
 | `make web-install` | 按 `web/package-lock.json` 安装前端依赖（`npm ci`）：锁文件即契约，避免 `node_modules` 漂移 | Node（`web/package.json` 的 `engines`: ^20 \|\| ^22 \|\| >=24）+ 网络 | 本地；CI 的 `web` job 用同一 `npm ci`（`.github/workflows/test.yml`，`pull_request` 触发） |
 | `make web-check` | 前端三关：`npm run lint`（eslint）+ `npm test`（vitest）+ `npm run build`（`vue-tsc -b && vite build`）。缺 `web/node_modules` 时**明确报错并指向 `make web-install`**，不以其它失败形式掩盖 <!-- check-docs:ignore web/node_modules npm 本地安装产物，gitignore 掉，干净检出中本就不存在 --> | 同上（需先 `make web-install`） | 本地 + `make quality` 已含；CI 的 `web` job 跑等价的三步（15 分钟超时，`pull_request` 触发） |
@@ -352,13 +355,20 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `upgrade-sdk` | `make test-upgrade-sdk` | 全部触发 |
 | `operator-image-sdk-only` | `make test-operator-image-sdk-only` | 全部触发 |
 | `test` | 全仓（排除 sqlite/sdkcheck 两包）`go test -race` + coverage + 变更行 lint | 全部触发 |
+| `test-postgres-integration` | 起 `postgres:16-alpine`（端口 55432）后跑 `go test -tags integration -count=1`，覆盖 `./internal/store/postgres/...`、`./internal/postgres/...`、`./internal/migration/...`、`./internal/orchestrator/...`（25 分钟超时；`if: always()` 收尾 `docker rm -f ci-postgres`） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
 | `test-sqlite` | `go test -race ./internal/store/sqlite/...` | 全部触发 |
 | `test-sdkcheck` | `go test -race ./internal/quality/sdkcheck/...` | 全部触发 |
 | `rollout-watch` | `make test-rollout-watch` | 全部触发 |
-| `e2e-prerequisite` | `make e2e-prerequisite-ci`（45 分钟超时，`if: always()` 上传 artifact） | 全部触发（不需要任何 secret） |
+| `e2e-prerequisite` | `make e2e-prerequisite-ci`（45 分钟超时，`if: always()` 上传 artifact） | **push main + 手动触发；PR 不跑**（不需要任何 secret） |
 | `e2e` | `make dev-up` → `make dev-seed` → `make e2e-all` → `if: always()` 上传 `e2e-results/` → `make dev-purge CONFIRM=1` | **push main + 手动触发；PR 不跑** |
 | `docs-check` | `make check-docs`（5 分钟超时；文档写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须为真） | 全部触发（只需 bash/grep/git，不需要 Go 与任何 secret） |
 | `proto-check` | `make lint-proto` + `make proto` 后要求 `api/gen`、`web/src/gen` 与提交内容一致（10 分钟超时） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
+| `web` | `npm ci` → `npm run lint` → `npm test` → `npm run build`（`vue-tsc -b` 类型门禁 + `vite build`；15 分钟超时；`working-directory: web`） | 全部触发 |
+| `store-surface` | `make check-store-surface`（5 分钟超时） | 全部触发 |
+| `dead-methods` | `make check-dead-methods`（5 分钟超时；**不在 required 清单**，见「死代码盲区」节） | 全部触发 |
+
+表里 18 行与 `test.yml` 的 job 名集合一致、`if:` 触发口径逐条对齐，这两条由 `make check-citations`
+的集合/触发判据强制（TASK-315）：**没有 job 级 `if:` 的 job 写「全部触发」，带 `if:` 的必须写「PR 不跑」**。
 
 `proto-check` 存在的原因不是「多跑一次生成」，而是补齐一个真实的检查缺口：`test` 与
 `test-sqlite` 都会在测试前执行 `make proto`，于是**忘提交生成物**时它们测的是新生成的代码，
@@ -437,12 +447,13 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 
 ## 控制台（浏览器）E2E：CI 车道与 spec 归属（TASK-270）
 
-`web/e2e/` 下三个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
+`web/e2e/` 下四个 spec 都要真实后端栈，但**车道不同**——读证据前先确认是哪个 job/哪条命令：
 
 | spec | 覆盖 | 车道 |
 | --- | --- | --- |
 | `web/e2e/rollback.spec.ts` | REQ-056 AC-056-08 浏览器回滚路径（TASK-240） | `e2e-prerequisite`：**push main / `workflow_dispatch`**，PR 不跑 |
 | `web/e2e/emergency-smoke.spec.ts` | REQ-058 紧急变更走查（`REQUIRE_PROMOTION` 成功路径）+ **跨角色审批**（AC-058-41） | 同上（TASK-270 起纳入） |
+| `web/e2e/delivery-criteria.spec.ts` | 交付判据 H1–H5 中可无人介入判定的部分：登录成败、关键页可达、危险操作 Esc 取消、失败原因 + `requestId`、焦点陷阱（H5 的「表单字段错误有 `aria-describedby` 关联」一半由 `web/src/components/releases/RollbackReleaseDialog.test.ts` 钉住）（TASK-325；判据定义见 `docs/delivery-evidence.md` §4.2） | 同上（TASK-325 起纳入） |
 | `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑 | **不在 CI 车道**；本地手工跑（需 `E2E_VIEWER_PASS`，见 spec 头注释） |
 
 - **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
@@ -456,13 +467,15 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   gh run list --repo ndzuki/release-manager --workflow test.yml --limit 5 # 取 run id
   gh run view <run-id> --repo ndzuki/release-manager --log                # 读 console-e2e / smoke 结果
   gh run download <run-id> -n e2e-prerequisite-diagnostics                # 失败 trace 与 smoke-result.json
+  gh run download <run-id> -n e2e-console-playwright-artifacts            # HTML 报告 + 失败截图/trace（TASK-307）
   ```
 
   本地等价入口 `make e2e-prerequisite`（`dev-up dev-seed dev-status` + `smoke.sh` + `console.sh`；
   需要 k3d/kustomize 与 Chrome，结束不自动 purge）。
 - **跑哪些 spec 由 `console.sh` 决定**：默认
-  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts'`，并显式 `--workers=1`（两个 spec
-  共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>` 可临时收窄。
+  `E2E_CONSOLE_SPECS='e2e/rollback.spec.ts e2e/emergency-smoke.spec.ts e2e/delivery-criteria.spec.ts'`，并显式
+  `--workers=1`（三个 spec 共用一个后端并改共享夹具状态，跨文件并行会互相打架）；`E2E_CONSOLE_SPEC=<单个 spec>`
+  可临时收窄。
 - **跨角色审批的第二审批人**：`console.sh` 把 `E2E_ADMIN_B_USER=e2e-runner` 与
   `E2E_ADMIN_B_PASS=$E2E_RUNNER_PASSWORD` 传给 spec。口令来自 `data/dev-credentials.env`（`e2e-prerequisite`
   job 没有 `DEV_PROFILE`，走 local profile 由 `dev-seed` 生成；CI 的同名 Secret 只注入 `e2e` job）。
@@ -499,26 +512,40 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   `make dev-up` 报 unchanged、Deployment 不更新、pod 继续服务**旧 bundle**：本地
   `make e2e-prerequisite` 可能在你从未改过的控制台上"通过"。修法 = 把 `web/src`、`web/index.html`、
   `web/vite.config.ts`、`web/nginx.conf`、`web/tsconfig*.json`、`web/env.d.ts` 纳入哈希。
-- **skip 不等于通过**：`E2E_BACKEND` 未设时三个 spec 整体以显式原因 skip；声明栈已起后，`rollback`
+- **skip 不等于通过**：`E2E_BACKEND` 未设时四个 spec 整体以显式原因 skip；声明栈已起后，`rollback`
   的入口/凭据缺失是**硬失败**，`emergency-smoke` 的两个前置（绑定 ReleaseDefinition 的 release、
-  `pending_promotion` 任务）各自 **skip 并写明原因**。
-- **车道级「目标用例必须真跑」守卫（TASK-270，PR #343 复核阻断项③）**：Playwright 对 **skip 的退出码
-  是 0**（实测 run `37970098364`：`4 passed` + `1 skipped` ⇒ exit 0），所以只转发 Playwright 退出码的
-  车道可能**全绿却零执行**。`console.sh` 因此额外产出机器可读报告（`--reporter=list,json` +
-  `PLAYWRIGHT_JSON_OUTPUT_NAME`，落在 `e2e-results/console/results.json` 并随 artifact 上传），由
-  `test/e2e/prerequisite/console-target-guard.sh` 断言跨角色用例
-  `Convergence: Prepare → ValuesEditor draft → Submit → cross-actor Approve` 的**最终结果状态是
-  `passed`**：`skipped` / `failed` / **未被收集**（改名或换了 spec）都**打印原因并 exit 非零**。报告本身
-  先过**结构门禁**（必须是带 `suites` 数组的 JSON 对象）：**0 字节 / 纯空白 / `{}` / `null` / 非 JSON**
-  都失败，绝不因空输入而落到成功分支（`jq` 对空输入**无输出且 rc=0**，早期版本曾据此 fail-open 打印
-  "target case passed"）。判据是
-  **具名用例的状态**，不是 `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。
-  **武装判据是两步、都在代码里**：`console.sh` 对本次 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开出的每个 spec
-  路径做**后缀 glob**（`case "$spec_path" in *"emergency-smoke.spec.ts"`，`console.sh:152-156`）——路径**以**该
-  文件名结尾即武装；`console-target-guard.sh` 随后按**basename** 判定：取报告的 `spec.file` 最后一个 `/` 段
-  （`basename` / `split("/") | last`，`console-target-guard.sh:55-60`）与武装 spec 的 basename 比对，因此
-  `not-emergency-smoke.spec.ts` 既不能武装、也不能满足守卫。spec 内其它两个
-  用例的诚实地雷（kill-switch 专用栈、绑定 release 前置）**保持不变**，不被误判为失败。
+  `pending_promotion` 任务）各自 **skip 并写明原因**。注意这只描述 spec 自身的层级；在 CI 车道里清单把
+  这两个用例声明为**必须 `passed`**（`smoke.sh` 已备好上述前置），所以前置缺失而真的 skip 时守卫会**红**，
+  不会静默通过。
+- **车道级「用例清单必须逐条真跑」守卫（TASK-270 立、TASK-307 扩面 —— PR #343 复核阻断项③）**：
+  Playwright 对 **skip 的退出码是 0**（实测 run `37970098364`：`4 passed` + `1 skipped` ⇒ exit 0），
+  所以只转发 Playwright 退出码的车道可能**全绿却零执行**。`console.sh` 因此额外产出机器可读报告
+  （`--reporter=list,json,html` + `PLAYWRIGHT_JSON_OUTPUT_NAME`，落在 `e2e-results/console/results.json`
+  并随 artifact 上传），由 `test/e2e/prerequisite/console-target-guard.sh` 按**期望用例清单**
+  `test/e2e/prerequisite/console-expected-cases.json` **逐条**判定。清单来源＝该车道实跑的 spec
+  （`console.sh` 的 `SPECS`，即 `E2E_CONSOLE_SPECS`/`E2E_CONSOLE_SPEC` 展开，见 `console.sh:67-68`）内
+  **实际收集到的用例**，当前 = `rollback.spec.ts` 两例 + `emergency-smoke.spec.ts` 三例 +
+  `delivery-criteria.spec.ts` 六例（H1–H5，TASK-325）。声明
+  `expect: passed` 的用例必须**最终结果状态恰为 `passed`**（取最后一次 result，即重试后的终态）；
+  kill-switch 一例声明为**带原因的期望 skip**（`skipReasonContains: E2E_EMERGENCY_DISABLED`——该门只在
+  `emergencyChangeEnabled=false` 的栈上存在，本车道不建这种栈），**理由写在清单里**，因此它是有据的
+  声明而非静默 skip；声明为 skip 的用例若 `failed`/`timedOut`/interrupted 或按**未声明的原因** skip，
+  同样红。**fail-closed**：任一用例 `skip`（未声明原因）/ `failed` / `timedOut` / **未被收集**（改名或
+  换 spec）/ 同名被收集多次 / 收集到但无 result，以及**报告缺失**、**报告为空/纯空白/非 JSON**、报告
+  结构不达标（须是带 `suites` 数组的 JSON 对象；`jq` 对空输入**无输出且 rc=0**，早期版本曾据此
+  fail-open 打印 "target case passed"）⇒ **一律打印原因并 exit 非零**。判据是**具名用例的状态**，不是
+  `N passed` 计数（计数随用例增删与 runner 漂移，且 skipped 计入 `ok`）。
+  **双向校验（TASK-307 新增）**：① **报告收集到清单未声明的用例**（车道悄悄长出新用例）⇒ 红——否则
+  它的 skip 与 pass 无法区分；② **`console.sh` 被要求跑的 spec 在清单里没有任何条目** ⇒ **启动前即拒绝**
+  （`console.sh:175-178` 的 pre-flight 循环），而不是跑完 16 分钟才红。守卫与清单比较 spec 时都取
+  **basename**（`console-target-guard.sh:86` 取调用方 spec；`:124` 取报告里 `spec.file` 最后一个 `/` 段），
+  所以传 `e2e/rollback.spec.ts` 还是 `rollback.spec.ts` 不影响判定，`not-rollback.spec.ts` 也不会误匹配。
+- **失败诊断产物（TASK-307）**：`playwright.config.ts` 加 `html` reporter（`outputFolder:
+  'playwright-report'`）与 `screenshot: 'only-on-failure'`（trace 保持 `retain-on-failure`）；`console.sh`
+  以 `--reporter=list,json,html` + `--output=<repo>/web/test-results` 落地；`e2e-prerequisite` job 用
+  `if: always()` 把 `web/playwright-report/` 与 `web/test-results/`（失败截图与保留的 trace）上传为<!-- check-docs:ignore web/playwright-report/ web/test-results/ Playwright 运行时产物目录，gitignore 掉，干净检出中本就不存在（本行在说明它们被 CI 上传） -->
+  artifact **`e2e-console-playwright-artifacts`**（`test.yml:500-508`）。
+  机器可读的 `e2e-results/console/results.json` 仍随 `e2e-prerequisite-diagnostics` 上传（`test.yml:487-493`）。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
 > `.github/workflows/test.yml`（18 个 job 与触发条件）、

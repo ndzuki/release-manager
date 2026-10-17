@@ -58,9 +58,106 @@ function mappingFieldId(index: number, field: string): string {
 
 const BLANK_MAPPING: PromotionMappingView = { workloadKind: '', workloadName: '', container: '', field: '', valuesPath: '' };
 
+/*
+ * TASK-301: the console could list and edit a definition but had no way to CREATE one,
+ * and a definition could only be disabled outside the console, although
+ * CreateReleaseDefinition / DisableReleaseDefinition exist (orchestrator/v1:1257/:1283).
+ *
+ * The create form is a plain `dialog`; the disable confirmation is a `danger`
+ * alertdialog and the destructive RPC runs only from its confirm action.
+ */
+const creating = ref(false);
+const createValidation = ref('');
+/*
+ * The failure is kept in its own slot and rendered INSIDE the dialog: the page-level
+ * <ErrorState> sits behind the fixed backdrop, so reading the reason there meant
+ * cancelling out of a confirmation the user had not yet completed (TASK-297/TASK-303).
+ */
+const createFailure = ref<string | null>(null);
+const createForm = ref({
+  customerId: '',
+  clusterId: '',
+  namespace: '',
+  releaseName: '',
+  chartName: '',
+  enabled: true,
+});
+// The create form's ids come from useId() for the same reason the editor's do: a
+// second mounted instance must not collide with this one's labels.
+const createIdPrefix = useId();
+
+function createFieldId(field: string): string {
+  return `${createIdPrefix}-create-${field}`;
+}
+
+/** Set by the row button; the disable RPC waits for the dialog's confirmation. */
+const pendingDisable = ref<DefinitionView | null>(null);
+const disableFailure = ref<string | null>(null);
+const disableDescription = computed(() =>
+  pendingDisable.value ? t('definitions.disable.description', { name: pendingDisable.value.name }) : '',
+);
+
 onMounted(() => {
   void store.load();
 });
+
+function startCreate(): void {
+  createValidation.value = '';
+  createFailure.value = null;
+  createForm.value = { customerId: '', clusterId: '', namespace: '', releaseName: '', chartName: '', enabled: true };
+  creating.value = true;
+}
+
+async function submitCreate(): Promise<void> {
+  createValidation.value = '';
+  createFailure.value = null;
+  const form = createForm.value;
+  // The server refuses a missing customer/cluster with INVALID_ARGUMENT and derives
+  // the definition's NAME from release_name, so an empty one would create a nameless
+  // row: all three are required here instead of spending a request.
+  if (!form.customerId.trim() || !form.clusterId.trim() || !form.releaseName.trim()) {
+    createValidation.value = t('definitions.create.required');
+    return;
+  }
+  const ok = await store.create({
+    customerId: form.customerId.trim(),
+    clusterId: form.clusterId.trim(),
+    namespace: form.namespace.trim(),
+    releaseName: form.releaseName.trim(),
+    chartName: form.chartName.trim(),
+    enabled: form.enabled,
+  });
+  if (ok) {
+    creating.value = false;
+    return;
+  }
+  createFailure.value = store.failure?.message ?? null;
+}
+
+function armDisable(definition: DefinitionView): void {
+  disableFailure.value = null;
+  pendingDisable.value = definition;
+}
+
+function closeDisable(): void {
+  disableFailure.value = null;
+  pendingDisable.value = null;
+}
+
+async function confirmDisable(): Promise<void> {
+  const target = pendingDisable.value;
+  if (!target) return;
+  disableFailure.value = null;
+  if (!(await store.disable(target))) {
+    disableFailure.value = store.failure?.message ?? null;
+    // A lost race reloaded the list: adopt the version the server now holds, otherwise
+    // the hinted retry would carry the same stale version and fail forever.
+    const fresh = store.definitions.find((definition) => definition.id === target.id);
+    if (fresh && fresh.version !== target.version) pendingDisable.value = fresh;
+    return;
+  }
+  pendingDisable.value = null;
+}
 
 function applyFilters(): void {
   void store.load({ customerId: customerId.value.trim(), clusterId: clusterId.value.trim(), includeDisabled: includeDisabled.value });
@@ -147,9 +244,14 @@ function formatTimestamp(value: string | null): string {
           决定收敛后的紧急变更如何提升为标准 ValuesRevision。
         </p>
       </div>
-      <button type="button" :disabled="store.loading" @click="applyFilters">
-        {{ store.loading ? '刷新中…' : '刷新' }}
-      </button>
+      <div class="definitions__header-actions">
+        <button v-if="auth.canWrite" type="button" data-testid="definitions-create-open" @click="startCreate">
+          {{ t('definitions.create.open') }}
+        </button>
+        <button type="button" :disabled="store.loading" @click="applyFilters">
+          {{ store.loading ? '刷新中…' : '刷新' }}
+        </button>
+      </div>
     </header>
 
     <form class="definitions__filters" @submit.prevent="applyFilters">
@@ -236,15 +338,29 @@ function formatTimestamp(value: string | null): string {
             <span v-else>{{ definition.promotionMappings.length }} 条</span>
           </td>
           <td>
-            <button
-              v-if="auth.canWrite"
-              type="button"
-              :disabled="Boolean(definition.promotionMappingsViolation)"
-              :data-testid="`definition-edit-${definition.id}`"
-              @click="startEdit(definition)"
-            >
-              编辑
-            </button>
+            <div class="definitions__row-actions">
+              <button
+                v-if="auth.canWrite"
+                type="button"
+                :disabled="Boolean(definition.promotionMappingsViolation)"
+                :data-testid="`definition-edit-${definition.id}`"
+                @click="startEdit(definition)"
+              >
+                编辑
+              </button>
+              <!-- Only an active definition can be disabled; a disabled one is terminal
+                   (the server has no re-enable procedure). -->
+              <button
+                v-if="auth.canWrite && definition.status === 'active'"
+                type="button"
+                class="danger"
+                :disabled="store.saving"
+                :data-testid="`definition-disable-${definition.id}`"
+                @click="armDisable(definition)"
+              >
+                {{ t('definitions.disable.open') }}
+              </button>
+            </div>
           </td>
         </tr>
       </tbody>
@@ -355,6 +471,102 @@ function formatTimestamp(value: string | null): string {
         </form>
       </div>
     </AppDialog>
+
+    <!--
+      TASK-301: create a definition. A plain `dialog` (creating is not destructive);
+      `close-on-backdrop` stays off so an accidental click cannot lose the form, and a
+      submission in flight also blocks Escape.
+    -->
+    <AppDialog
+      :open="creating"
+      :title="t('definitions.create.title')"
+      :close-on-backdrop="false"
+      :close-on-escape="!store.saving"
+      @close="creating = false"
+    >
+      <div class="definitions__create">
+        <p class="definitions__hint">{{ t('definitions.create.hint') }}</p>
+        <form @submit.prevent="submitCreate">
+          <div class="definitions__basics">
+            <div class="definitions__field">
+              <label :for="createFieldId('customer')">{{ t('definitions.create.customerId') }}</label>
+              <input :id="createFieldId('customer')" v-model="createForm.customerId" name="create-customerId" />
+            </div>
+            <div class="definitions__field">
+              <label :for="createFieldId('cluster')">{{ t('definitions.create.clusterId') }}</label>
+              <input :id="createFieldId('cluster')" v-model="createForm.clusterId" name="create-clusterId" />
+            </div>
+            <div class="definitions__field">
+              <label :for="createFieldId('namespace')">{{ t('definitions.create.namespace') }}</label>
+              <input :id="createFieldId('namespace')" v-model="createForm.namespace" name="create-namespace" />
+            </div>
+            <div class="definitions__field">
+              <label :for="createFieldId('release')">{{ t('definitions.create.releaseName') }}</label>
+              <input :id="createFieldId('release')" v-model="createForm.releaseName" name="create-releaseName" />
+            </div>
+            <div class="definitions__field">
+              <label :for="createFieldId('chart')">{{ t('definitions.create.chartName') }}</label>
+              <input :id="createFieldId('chart')" v-model="createForm.chartName" name="create-chartName" />
+            </div>
+          </div>
+
+          <label class="definitions__checkbox">
+            <input v-model="createForm.enabled" name="create-enabled" type="checkbox" />
+            {{ t('definitions.create.enabled') }}
+          </label>
+
+          <p v-if="createValidation" class="definitions__error" role="alert" data-testid="definitions-create-validation">
+            {{ createValidation }}
+          </p>
+          <p v-if="createFailure" class="definitions__error" role="alert" data-testid="definitions-create-error">
+            {{ createFailure }}
+          </p>
+
+          <div class="definitions__actions">
+            <button type="button" :disabled="store.saving" @click="creating = false">
+              {{ t('action.cancel') }}
+            </button>
+            <button type="submit" :disabled="store.saving" data-testid="definitions-create-submit">
+              {{ store.saving ? t('definitions.create.submitting') : t('definitions.create.submit') }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </AppDialog>
+
+    <!--
+      TASK-301: disable a definition. Destructive and terminal, so the confirmation is
+      a `danger` alertdialog; it is rendered only while armed, and the destructive RPC
+      runs from `confirmDisable` — never from the row button.
+    -->
+    <AppDialog
+      v-if="pendingDisable"
+      :open="true"
+      :title="t('definitions.disable.title')"
+      :description="disableDescription"
+      danger
+      :close-on-backdrop="false"
+      :close-on-escape="!store.saving"
+      @close="closeDisable"
+    >
+      <p v-if="disableFailure" class="definitions__error" role="alert" data-testid="definitions-disable-error">
+        {{ disableFailure }}
+      </p>
+      <template #footer>
+        <button type="button" :disabled="store.saving" @click="closeDisable">
+          {{ t('action.cancel') }}
+        </button>
+        <button
+          type="button"
+          class="definitions__confirm-danger"
+          :disabled="store.saving"
+          data-testid="definitions-disable-confirm"
+          @click="confirmDisable"
+        >
+          {{ store.saving ? t('definitions.disable.submitting') : t('definitions.disable.confirm') }}
+        </button>
+      </template>
+    </AppDialog>
   </section>
 </template>
 
@@ -409,6 +621,47 @@ function formatTimestamp(value: string | null): string {
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
+}
+
+/* TASK-301: the create form stacks each label over its input explicitly, so the
+   label still has to be associated by `for` (the filter row keeps wrapping labels). */
+.definitions__field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.definitions__field label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+}
+
+.definitions__header-actions,
+.definitions__row-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.definitions__row-actions button.danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
+}
+
+/* AppDialog's footer supplies a baseline for slotted buttons; the danger tone is the
+   caller's rule (same split as BindingsPage's confirm). */
+.definitions__confirm-danger {
+  border-color: var(--color-danger-border);
+  color: var(--color-error);
+}
+
+.definitions__create {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.definitions__create form {
+  display: grid;
+  gap: var(--space-3);
 }
 
 .definitions__checkbox {
