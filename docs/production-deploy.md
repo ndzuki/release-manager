@@ -1222,7 +1222,7 @@ dispatch 分支在 `internal/orchestrator/preflight/coordinator.go:221`。`inter
   candidate artifacts 若干；`release_inventory` 的 `e2e-plan` 行停在 `revision=3 / active`，集群删除后
   不会再更新。`rm-prod` 未动（10/10 Pod、edge 200、网关 TLS `Verify return code: 0`）。
 
-### 12.7 紧急变更的信任门禁与合法路径（TASK-355 实测）
+### 12.7 紧急变更的信任门禁与合法路径（TASK-355 验证，示例为推导）
 
 §12.6.3 的 `candidate artifact is not trusted` 是**信任门禁**拒绝，不是入口缺失。TASK-355 用产品路径
 （无手工改库）把 image 紧急变更走通了一次；本节写清门禁判什么、合法路径怎么走、以及它**不**证明什么。
@@ -1242,7 +1242,8 @@ dispatch 分支在 `internal/orchestrator/preflight/coordinator.go:221`。`inter
 | 6 | ref 规范化：已是 `ref@sha256:…` 直接用，否则拼成 `ref@digest` | `:919-923` |
 
 `targetEnv` 是 orchestrator 的 `--target-env`，默认 `staging`（`cmd/orchestrator/main.go:977`）；**生产 overlay
-只替换了 args 里的 `--config`**（`deploy/kustomize/production/kustomization.yaml:216-228`），没有覆盖这个
+只替换了 args 里的 `--config`**（`deploy/kustomize/production/kustomization.yaml:214-228`；`- target:` 起于
+`:214`，args 替换块在 `:219-222`，其中 `--config` 与配置路径在 `:221-222`），没有覆盖这个
 flag ⇒ 现网生产 orchestrator 的信任环境也是 `staging`。登记信任根时 `environment` 必须与它逐字一致，
 否则查的是另一个环境的 policy。
 
@@ -1261,7 +1262,7 @@ flag ⇒ 现网生产 orchestrator 的信任环境也是 `staging`。登记信�
 - 原因是产品里唯一的 trusted 写入者签的是 **bundle** digest（见 12.7.3），而 `common.v1.BundleImage`
   没有自己的签名。
 
-#### 12.7.3 最小合法步骤（命令级）
+#### 12.7.3 最小合法步骤（命令级；示例为读码推导，见 12.7.5）
 
 前置：`platform_admin` 的 bearer token（`TrustService` 写 RPC 要 `trust_root/write`），以及一个**在线**的
 operator（离线会留失败操作，见 12.7.5）。管理面用 port-forward 打通（生产 overlay 只有 ClusterIP）：
@@ -1332,14 +1333,16 @@ curl -sS -X POST http://127.0.0.1:8083/orchestrator.v1.OrchestratorService/Creat
 ```
 
 `verificationResult` 应为 `TRUSTED`。`Ed25519Verifier`（`internal/trust/ed25519.go:58-79`，装配在
-`cmd/orchestrator/main.go:366-376`）按当前 policy 现算并 `persist` 一行（`:173-189`；`signature_identity`
+`cmd/orchestrator/main.go:372-377`）按当前 policy 现算并 `persist` 一行（`:173-189`；`signature_identity`
 是 digest|signature|issuer|subject 的 sha256）。两个必须知道的点：
 
 - **没有独立的 verify/sign RPC**：要让 verdict 落库就必须建一条真操作（INSTALL/UPGRADE），它不是 dry-run，
   预检通过后会继续走到 apply。不要为了「试一下」对生产 definition 发它。
-- **顺序不能反**：任何 root mutation 都会 bump policy version，而 policy version 是 verdict 的查询键
-  （`internal/orchestrator/emergency.go:890-897` 与 `:898-901`）⇒ 先签后建根（或中途 rotate）会让那条
-  trusted 行查不到，必须重新走一次本步。
+- **顺序不能反**：`create`/`rotate`/`retire` 会 bump **policy version**（verdict 的查询键），`revoke` 只 bump
+  **revocation epoch**（`internal/trust/service.go:281`）——**两者都使旧 verdict 失效**：前者让行查不到
+  （`internal/orchestrator/emergency.go:890-897` 与 `:898-901` 按 version 查），后者被 `:902-904` 的 epoch
+  门拦下。结论不变：任何 root mutation 之后（先签后建根、或中途 rotate/revoke）都要重签/重发，必须重新走
+  一次本步。
 
 **⑤ 发起紧急变更**（`artifactRef` 用 `ListCandidateArtifacts` 返回的 candidate id）：
 
@@ -1374,6 +1377,10 @@ curl -sS -X POST http://127.0.0.1:8083/orchestrator.v1.OrchestratorService/Execu
    cosign/attestation/SBOM）仍然成立。
 
 #### 12.7.5 实测边界与 operator 离线注意
+
+> 注意：本节 12.7.3 的 curl 示例使用 port-forward 到 8083（ClusterIP 明文端口）——该通路是读码推导，未对
+> 活的 orchestrator 实跑；TASK-355 的实测走的是宿主 `https://localhost:8443` 网关（edge 的 NodePort
+> 30443；web 侧则以 `http://orchestrator:8083` 反代，见 `web/nginx.conf:33`）。
 
 实测（2026-10-18，TASK-355）：建根 `42616b42…`（staging / keyId `task355-demo-key`，`audit_events` 有
 `create_root|succeeded`）→ 用它的私钥对 bundle `1483e50f…` 的 canonical digest `sha256:170a4a42…` 签名 →
