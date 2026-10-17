@@ -68,6 +68,10 @@ type Exception struct {
 	Method    string `yaml:"method"`
 	Reason    string `yaml:"reason"`
 	ReviewBy  string `yaml:"review_by"`
+	// Citations are the machine-checked evidence pointers the reason's prose refers to
+	// (TASK-328, see citations.go). Optional: an entry whose reason cites no repository
+	// file:line needs none.
+	Citations []Citation `yaml:"citations"`
 }
 
 // Analysis is what the loader found.
@@ -91,6 +95,7 @@ type Report struct {
 	Declared    int
 	Dead        []Method
 	Exceptions  int
+	Citations   int
 	Findings    []string
 	ReviewDates map[string]string
 }
@@ -114,9 +119,11 @@ func Run(opts Options) (*Report, error) {
 		Declared:    analysis.Declared,
 		Dead:        analysis.Dead,
 		Exceptions:  len(exceptions),
+		Citations:   citationCount(exceptions),
 		ReviewDates: map[string]string{},
 	}
 	report.Findings = append(report.Findings, Validate(analysis.Dead, exceptions, opts.Now, report.ReviewDates)...)
+	report.Findings = append(report.Findings, validateCitations(exceptions, opts.Root)...)
 	sort.Strings(report.Findings)
 	return report, nil
 }

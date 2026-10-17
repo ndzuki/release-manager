@@ -1,7 +1,8 @@
 // Command storesurface runs the store-interface surface gate (see
 // internal/quality/storesurface). It exits 1 with the findings when a method has no caller
-// and no registered exception, when a registry entry no longer describes a dead method, or
-// when an entry has expired.
+// and no registered exception, when a registry entry no longer describes a dead method, when
+// an entry has expired, or when one of an entry's declared citations no longer points at the
+// content it claims to point at.
 package main
 
 import (
@@ -29,8 +30,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "storesurface: %v\n", err)
 		os.Exit(2)
 	}
-	fmt.Printf("storesurface: %d interface(s), %d declared method(s), %d without an attributable call site, %d exception(s)\n",
-		report.Interfaces, report.Declared, len(report.Dead), report.Exceptions)
+	fmt.Printf("storesurface: %d interface(s), %d declared method(s), %d without an attributable call site, %d exception(s), %d citation(s)\n",
+		report.Interfaces, report.Declared, len(report.Dead), report.Exceptions, report.Citations)
 	for _, method := range report.Dead {
 		fmt.Printf("  dead  %s.%s", method.Interface, method.Name)
 		if review, ok := report.ReviewDates[method.Interface+"."+method.Name]; ok {
