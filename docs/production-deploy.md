@@ -701,7 +701,7 @@ kubectl -n release-manager get pods
 | 面 | 现状 | 证据 |
 | --- | --- | --- |
 | `/health` | 5 个 Go 服务恒 200（liveness 无失败路径）；web 8087 反代到 orchestrator；edge 只有 `tcpSocket` | 实测 8082/8083/8085/8086/8087/8088 `/health` 均 200 |
-| `/readyz` | 有失败语义（数据库/Redis/上游），失败 503 + `{"status":"degraded","checks":{...}}`；web 的同名路径报的是 **orchestrator** 的健康度 | 实测 6 个端口 `/readyz` 均 200 |
+| `/readyz` | 有失败语义（数据库/Redis/上游），失败 503 + `{"status":"degraded","checks":{...}}`；web 的同名路径报的是 **orchestrator** 的健康度。**`api` 的 `database` 检查是 TASK-352 补的**：修复前它只报 `noop`，PG 故障时仍 200（见 §10-13） | 实测 6 个端口 `/readyz` 均 200；TASK-352 的 PG 重启窗口内 api `/readyz` **503**（+172 ms 首现、≈5.6 s 恢复，镜像 `release-api:0f76163`，§10-13） |
 | `/metrics` | **只有 auth(8085) 与 orchestrator(8083)** 暴露 Prometheus 文本 | 实测：8083、8085 → 200；8082、8086、8088 → **404** |
 | web 的 `/metrics` | ⚠️ 返回 **200，但内容是 SPA 的 HTML**（`location /` 的 `try_files … /index.html` 兜底） | 实测 `Content-Type: text/html`、4,666 B |
 | 日志 | JSON（slog）写 stderr，`kubectl logs` 直接可读；字段含 `time/level/msg/request_id/procedure/error` | 实测 auth 启动/请求日志 |
@@ -886,6 +886,9 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 10. **Redis 无 AUTH**：只靠 NetworkPolicy 限制为同 namespace 可达（`allow-redis`）。Redis 一旦离开这个边界就必须补 AUTH。
 11. **交付的 `rm-prod` 里没有客户集群**：TASK-347 已把宿主 `8444 → Service operator NodePort 30844 → orchestrator:8084` 的 TCP 通路打通（TLS 握手与请求层 401 实测见 §4-⑦），但本环境没有 customer cluster/agent，所以 enroll、CommandStream、rollback / 已安装 Release / operator 在线状态这类旅程**默认没有数据可测**，`sessions` 表没有在线会话（本次实测 3 行均为 `offline` 历史行）是预期，不是故障。接入一个客户集群的完整路径（网关可达性、SAN/`hostAliases` 约束、2 个 Secret、plan→apply 实测）见 §12；演示集群是一次性的，删除后控制面**保留**它的 customer/cluster/operator/inventory 行（没有删除 RPC），会话转 `offline`、inventory 停止更新；无 operator 时的控制面只读实测见 §9.2.4。证书 SAN 约束见 §4-⑦ 与 §12.2。
 12. **NetworkPolicy 的强制执行在本集群上未证实**：`kubectl get ds -A` 只列出 `svclb-traefik-*`，**没有任何 CNI DaemonSet**（2026-10-18 01:16 +08 采样）。k3s 用内嵌 flannel，并把网络策略控制器编进 `k3s server` 进程（kube-router），所以没有独立 DaemonSet 可查；**从集群外部无法判断该控制器是否启用、策略是否真的被下到数据面**。结论：本 overlay 的 **9 条 NetworkPolicy 是声明，不是已证实的防护**，「`default-deny-ingress` 是否真的挡住东西」**没有验证过**。第 2 条记的「本集群 v1.31.5 探针放行无问题」同样有两种解释——进程内 kube-router + k3s issue #10030 已修复，或策略根本没被执行——现有证据不能区分。把它当安全边界之前：换到**明确强制执行 NP 的 CNI**（Calico/Cilium 等），并做一次**负向验证**（从一个本该被拒的源发起连接，确认被拒）；本集群上不要据此宣称「已隔离」。
+13. **`api` 的 `/readyz` 曾完全不查数据库（TASK-352 已修）**：修复前 `apiSvc` 没实现 `app.Run` 的 `readinessContributor`，`/readyz` 只剩预置的 `noop`，实测 `{"checks":{"noop":"ok"},"status":"ok"}`；PG 故障期间 k8s 仍判 Ready、流量继续打到连不上库的 api 上，用户看到 502（TASK-350 故障注入里 api 是唯一全程 200 的服务）。现在 `apiSvc.ReadinessChecks()` 用引擎连接 ping（Postgres `SQLDB().PingContext` / SQLite `DB().PingContext`，2 s 超时，与 auth/orchestrator 同规格）暴露 `database` 检查，失败 503；`/health` 仍是纯 liveness，语义不变。单测 `TestRegisterWiresStorePing` 走的是 SQLite 分支（`dbPath` + 空 driver），Postgres 分支的 `SQLDB().PingContext` 没有单测——它的证据就是下面这次真机重启窗口。
+    实测（2026-10-18 02:39:54.894 +08 重启 `postgres-0`，镜像 `release-api:0f76163`（与本提交 `0f76163..b618062` 的生产代码逐字节相同：`git diff` 仅涉及测试文件与文档））：**+172 ms 首次 `/readyz` 503**（`database: driver: bad connection`，随后 `connection refused`），最后 503 在 02:40:00.462，**02:40:00.673 恢复 200**，降级窗口 **≈5.6 s**；api Pod 全程未重启（`RESTARTS` 不变），PG 恢复后 `schema_migrations` 仍为 `34|false`、`audit_events=12`、`users=2`、`public` 表 58 张，与注入前一致。
+    ⚠️ **边界**：readiness probe 是 `periodSeconds: 5` + `failureThreshold: 3`，所以需要 **3 次连续失败**，摘流延迟约 **10–15 s（最坏 15 s）**（故障恰在探针周期后发生 ⇒ ≈10 s；恰在上次成功探测后发生 ⇒ ≈15 s）。更短的抖动里 `/readyz` 已 503（这是本次修复带来的可观测信号），但摘流尚未发生，用户仍可能看到少量 502；要缩短摘流延迟就调这两个探针参数，**不要动 liveness**。
 
 ## 11. 验收清单（本次实测结果）
 
