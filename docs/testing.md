@@ -367,8 +367,9 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `web` | `npm ci` → `npm run lint` → `npm test` → `npm run build`（`vue-tsc -b` 类型门禁 + `vite build`；15 分钟超时；`working-directory: web`） | 全部触发 |
 | `store-surface` | `make check-store-surface`（5 分钟超时） | 全部触发 |
 | `dead-methods` | `make check-dead-methods`（5 分钟超时；**不在 required 清单**，见「死代码盲区」节） | 全部触发 |
+| `backup-script` | 跑 `bash scripts/test-backup-script.sh`（脚本 `scripts/test-backup-script.sh`）：从 `deploy/kustomize/production/backup-cronjob.yaml` 提取 CronJob 的内联脚本，在真实 `postgres:16` 的 dash 下跑 8 条失败/成功用例（`PATH` shim 注入 `pg_dump`/`psql`/`sync`/`mv` 失败），断言退出码 + `/backups` 的文件名集合；10 分钟超时；不需要 Go、集群、kubeconfig、PostgreSQL 服务或 secret，唯一网络依赖是一次 `postgres:16` 拉取 | 全部触发 |
 
-表里 18 行与 `test.yml` 的 job 名集合一致、`if:` 触发口径逐条对齐，这两条由 `make check-citations`
+表里 19 行与 `test.yml` 的 job 名集合一致、`if:` 触发口径逐条对齐，这两条由 `make check-citations`
 的集合/触发判据强制（TASK-315）：**没有 job 级 `if:` 的 job 写「全部触发」，带 `if:` 的必须写「PR 不跑」**。
 
 `proto-check` 存在的原因不是「多跑一次生成」，而是补齐一个真实的检查缺口：`test` 与
@@ -559,7 +560,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   机器可读的 `e2e-results/console/results.json` 仍随 `e2e-prerequisite-diagnostics` 上传（`test.yml:487-493`）。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
-> `.github/workflows/test.yml`（18 个 job 与触发条件）、
+> `.github/workflows/test.yml`（19 个 job 与触发条件）、
 > `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
 > `test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
 > `test/e2e/prerequisite/smoke.sh`、`test/e2e/prerequisite/console.sh`、`test/integration/`、
