@@ -1582,6 +1582,16 @@ type ReleaseBundle struct {
 // because reachability succeeds first).
 //
 // Arguments, in order: bundle id, bundle id, organization, organization, active status.
+//
+// TASK-369: the owner branch is deliberately NOT tied to the binding's current status.
+// owner_organization_id records which organization a definition belongs to (data
+// ownership); revoking the org-customer binding withdraws the binding branch but not the
+// ownership relation. This is not a sticky authorization grant, because every caller
+// requires an ACTIVE binding before it reaches this predicate (CreateOperation through
+// AuthorizeWrite, the read paths through authorizeDefinition). The AND therefore lives in
+// the gates, not in the relation -- do not "fix" the OR below. A new caller must bring its
+// own binding gate: this predicate is broader than every current one. See
+// docs/architecture.md 1.5.1.
 const ClaimedBundleOutsideOrganizationPredicate = `
 	SELECT EXISTS (
 		SELECT 1 FROM release_definitions AS d
@@ -1611,6 +1621,11 @@ const ClaimedBundleOutsideOrganizationPredicate = `
 // WHERE fragment (it cannot reuse a SELECT EXISTS verbatim); its equivalence is pinned by
 // TestBundleListMatchesReachability in internal/store/postgres, so the two cannot silently
 // disagree about who may see what.
+//
+// The owner branch is data ownership, not a live binding grant; see the TASK-369 note on
+// ClaimedBundleOutsideOrganizationPredicate above and docs/architecture.md 1.5.1. The
+// service-layer gates are what require an active binding, so revoking one still denies
+// every read and claim.
 const ReachableBundlePredicate = `
 	SELECT EXISTS (
 		SELECT 1 FROM release_definitions AS d

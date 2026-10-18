@@ -43,6 +43,27 @@
 - 跨服务授权由身份上下文发布**版本化 Authorization Snapshot**，业务服务维护只读投影与 checkpoint；治理写操作仅在投影追平且新鲜时执行。
 - policy/snapshot 不可用时写操作 fail closed，读操作仅在明确允许的场景降级；前端路由守卫与按钮隐藏只提供 UX，不构成安全边界。
 
+#### 1.5.1 Bundle 租户可达性：`owner` 是归属，不是放行
+
+`release_bundles` 没有租户归属列，"一个组织能否读到某个 bundle" 由一条谓词从三张表推导：存在 definition `d`，使
+
+- `d.owner_organization_id` = 组织，**或**该组织对 `d.customer_id` 持有 `status='active'` 的 `org_customer_bindings` 行；**且**
+- 该 bundle 是 `d.current_bundle_id`，或被 `d` 的某个 operation 使用过。
+
+谓词源在 `internal/store/store.go`（`ReachableBundlePredicate` / `ClaimedBundleOutsideOrganizationPredicate`，SQLite 与 PostgreSQL 共用同一份 SQL）；列表侧不能复用 `SELECT EXISTS`，PostgreSQL 在 `internal/store/postgres/bundles.go` 用等价 WHERE 片段表达同一关系，二者由集成测试钉住逐行一致。
+
+`owner_organization_id` 记录的是**数据归属**（这个 definition 属于哪个组织），不是一条可撤销的授权。因此 revoke `org_customer_bindings` 只撤销"绑定带来的可达性"，不会抹掉 owner 那一支——这**不是**"粘住的授权"，因为没有任何入口把它单独当授权用：
+
+| 入口 | 绑定门禁 | 位置 |
+| --- | --- | --- |
+| `GetBundle` | owner 匹配 **且** `Bindings().RequireActive` | `internal/orchestrator/bundle_service.go` 的 `authorizeDefinition` |
+| `ListBundles` | 同上（同一个 `authorizeDefinition`） | 同上 |
+| `CreateOperation` | `AuthorizeWrite` 要求 active binding | `internal/authorization/store_authorizer.go` |
+
+revoke 之后这些入口一律 `permission_denied`；谓词仍为真只说明"归属关系还在"。授权裁决点仍然只有服务端（ADR-006）。
+
+⇒ **不要把谓词"顺手修"成 `owner AND active binding`**：那会把数据归属与授权混为一谈，并让 store 级关系重复表达入口门禁已经表达的规则。该语义由两层回归测试钉住：store 级见 `internal/store/sqlite/bundles_reachability_test.go` 的 "the owner keeps the relation after its own binding is revoked"，入口级见 `internal/orchestrator/bundle_reachability_gate_test.go`。边界仍然存在：谓词比每个当前入口都**宽**，新增调用点必须自带 binding 门禁，否则它会继承 owner 那一支（TASK-369 记录了这条可达性边界与变异证据）。
+
 ### 1.6 发布输入模型分离
 
 Operation 创建时校验并固化四者关系，后续对象变化不得改写既有 Operation 输入：
