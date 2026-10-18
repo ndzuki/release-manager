@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, nextTick, onMounted, ref, shallowRef, useTemplateRef } from 'vue';
-import AppDialog from '@/components/common/AppDialog.vue';
+import { computed, nextTick, onMounted, useTemplateRef } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
-import { AUTHORIZATION_ACTIONS, type AuthorizationAction, type BindingView } from '@/connect/binding-api';
+import BindingCreateForm from '@/components/bindings/BindingCreateForm.vue';
+import BindingRevokeDialog from '@/components/bindings/BindingRevokeDialog.vue';
+import BindingTable from '@/components/bindings/BindingTable.vue';
+import CapabilityGrantForm from '@/components/bindings/CapabilityGrantForm.vue';
+import { useBindingCreate } from '@/composables/useBindingCreate';
+import { useBindingRevoke } from '@/composables/useBindingRevoke';
+import { useCapabilityGrant } from '@/composables/useCapabilityGrant';
 import { useAuthStore } from '@/stores/auth';
 import { useGovernanceStore } from '@/stores/governance';
-import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Bindings and capability grants (REQ-049 / REQ-027, A2 + A3 of the UX plan).
@@ -18,118 +22,65 @@ import { formatTimestamp } from '@/utils/formatTimestamp';
  * contract forces: bindings are listable (revoked rows included, for history),
  * while capability grants have NO list RPC — the panel only applies a grant/revoke
  * and reports the source/policy versions the server answered.
+ *
+ * TASK-363: the page is a composition surface. The table, the confirmation and the
+ * two forms live in components/bindings; the create/grant/revoke state lives in
+ * composables. What stays here is the store wiring, the page-level states and the
+ * focus hand-off after a successful revoke.
  */
 const auth = useAuthStore();
 const store = useGovernanceStore();
-
-const newCustomerId = ref('');
-const createError = ref('');
-
-const subject = ref('');
-const action = ref<AuthorizationAction>('release.emergency.resolve');
-const desiredState = ref<'grant' | 'revoke'>('grant');
-const grantError = ref('');
 
 const activeOrgId = computed(() => auth.activeOrganization?.id ?? '');
 const activeOrgName = computed(() => auth.activeOrganization?.name ?? '');
 const activeBindings = computed(() => store.bindings.filter((binding) => binding.status === 'active'));
 
-/** Set by the row button; the revoke RPC waits for the dialog's confirmation. */
-const pendingRevoke = shallowRef<BindingView | null>(null);
-/*
- * TASK-303: the panel renders the revoke's OWN failure, not the page-level
- * `store.failure` that every operation writes. Opening the confirmation used to
- * show — and `role="alert"` used to announce — whatever the previous operation had
- * failed with (a grant refusal, say), so the user read an error about something
- * they had not asked for. The page-level <ErrorState> below still reads
- * `store.failure`; that copy is unchanged.
- */
-const revokeFailure = shallowRef<string | null>(null);
+const {
+  customerId: newCustomerId,
+  error: createError,
+  submit: submitBinding,
+} = useBindingCreate({
+  bind: (customerId) => store.bind(customerId),
+  activeBindings: () => activeBindings.value,
+});
+
+const {
+  subject,
+  action,
+  desiredState,
+  error: grantError,
+  submit: submitGrant,
+} = useCapabilityGrant({
+  grant: (target, capability, revoked) => store.setCapability(target, capability, revoked),
+});
+
+const {
+  pending: pendingRevoke,
+  failure: revokeFailure,
+  description: revokeDescription,
+  arm: armRevoke,
+  close: closeRevoke,
+  confirm,
+} = useBindingRevoke({
+  revoke: (binding) => store.revoke(binding),
+  failureMessage: () => store.failure?.message ?? null,
+});
+
 /*
  * TASK-297: the row button is gone once the revocation lands, so the browser
  * would drop focus on <body>; the success notice is where the confirm left the
  * user, and `tabindex="-1"` is what lets us move focus there programmatically.
  */
 const noticeRef = useTemplateRef<HTMLParagraphElement>('notice');
-const revokeDescription = computed(() =>
-  pendingRevoke.value
-    ? `确认后将立即撤销客户 ${pendingRevoke.value.customerId} 的绑定，并收回该绑定授予的能力，此操作不可恢复。`
-    : '',
-);
 
 onMounted(() => {
   if (activeOrgId.value) void store.loadBindings(activeOrgId.value);
 });
 
-async function submitBinding(): Promise<void> {
-  createError.value = '';
-  const customerId = newCustomerId.value.trim();
-  if (!customerId) {
-    createError.value = '请填写客户 ID';
-    return;
-  }
-  // The server refuses an active duplicate with ALREADY_EXISTS; catching it here
-  // saves a request and gives the same explanation.
-  if (activeBindings.value.some((binding) => binding.customerId === customerId)) {
-    createError.value = '该客户已绑定（正在生效）';
-    return;
-  }
-  if (await store.bind(customerId)) newCustomerId.value = '';
-}
-
-async function submitGrant(): Promise<void> {
-  grantError.value = '';
-  const target = subject.value.trim();
-  if (!target) {
-    grantError.value = '请填写主体（用户 ID）';
-    return;
-  }
-  if (await store.setCapability(target, action.value, desiredState.value === 'revoke')) subject.value = '';
-}
-
-/*
- * TASK-303: arming and closing the confirmation drop the previous attempt's
- * reason, so the panel can only ever render the revoke it belongs to.
- */
-function armRevoke(binding: BindingView): void {
-  revokeFailure.value = null;
-  pendingRevoke.value = binding;
-}
-
-function closeRevoke(): void {
-  revokeFailure.value = null;
-  pendingRevoke.value = null;
-}
-
-/*
- * TASK-295: the row button used to call the store directly, so one misclick
- * revoked the binding and its capability grant with no confirmation. The
- * destructive RPC now runs only here, from the dialog's confirm action.
- *
- * TASK-297: on failure the dialog stays open AND the reason is rendered inside
- * its body (`revoke-failure`). The page-level <ErrorState> sits behind the
- * fixed backdrop, so "stays open" alone showed the user an empty confirmation
- * they had to cancel out of before they could read why the revoke failed.
- * On success focus moves to the notice: the row button disappears with the
- * revocation, and focus must not fall back to <body>.
- */
 async function confirmRevoke(): Promise<void> {
-  const binding = pendingRevoke.value;
-  if (!binding) return;
-  revokeFailure.value = null;
-  if (!(await store.revoke(binding))) {
-    // The store has just recorded the reason for THIS attempt; copy it into the
-    // revoke's own slot instead of reading the shared ref from the template.
-    revokeFailure.value = store.failure?.message ?? null;
-    return;
-  }
-  pendingRevoke.value = null;
+  if (!(await confirm())) return;
   await nextTick();
   noticeRef.value?.focus();
-}
-
-function statusLabel(binding: BindingView): string {
-  return binding.status === 'active' ? '生效中' : '已撤销';
 }
 </script>
 
@@ -176,117 +127,41 @@ function statusLabel(binding: BindingView): string {
       message="该组织还没有与任何客户建立授权绑定。"
     />
 
-    <table v-else-if="store.bindings.length > 0" class="governance__table">
-      <thead>
-        <tr>
-          <th scope="col">客户</th>
-          <th scope="col">状态</th>
-          <th scope="col">版本</th>
-          <th scope="col">建立时间</th>
-          <th scope="col">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="binding in store.bindings" :key="binding.id" :data-testid="`binding-row-${binding.customerId}`">
-          <td><code>{{ binding.customerId }}</code></td>
-          <td>
-            <span class="governance__status" :class="`governance__status--${binding.status}`">{{ statusLabel(binding) }}</span>
-          </td>
-          <td>{{ binding.optimisticVersion }}</td>
-          <td>{{ formatTimestamp(binding.createdAt) }}</td>
-          <td>
-            <button
-              v-if="binding.status === 'active'"
-              type="button"
-              class="danger"
-              :disabled="store.saving"
-              @click="armRevoke(binding)"
-            >
-              撤销
-            </button>
-            <span v-else class="governance__muted">—</span>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <BindingTable
+      v-else-if="store.bindings.length > 0"
+      :bindings="store.bindings"
+      :saving="store.saving"
+      @revoke="armRevoke"
+    />
 
     <!-- Rendered only while armed (the reference RevokeOperatorDialog pattern):
          `open` is always true and the owner decides when the dialog exists. -->
-    <AppDialog
+    <BindingRevokeDialog
       v-if="pendingRevoke"
-      :open="true"
-      title="撤销绑定"
       :description="revokeDescription"
-      danger
-      :close-on-backdrop="false"
-      :close-on-escape="!store.saving"
+      :failure="revokeFailure"
+      :saving="store.saving"
       @close="closeRevoke"
-    >
-      <!-- Inside the panel, not only in the page-level <ErrorState> behind the
-           fixed backdrop: the whole point of keeping the dialog open on failure
-           is that the reason is readable where the user already is (TASK-297).
-           TASK-303: the copy comes from the revoke's own slot, so arming the
-           confirmation can never surface another operation's failure. -->
-      <p
-        v-if="revokeFailure"
-        class="governance__error"
-        role="alert"
-        data-testid="revoke-failure"
-      >
-        {{ revokeFailure }}
-      </p>
-      <template #footer>
-        <button type="button" :disabled="store.saving" @click="closeRevoke">取消</button>
-        <button
-          type="button"
-          class="governance__confirm-danger"
-          :disabled="store.saving"
-          @click="confirmRevoke"
-        >
-          {{ store.saving ? '撤销中…' : '确认撤销' }}
-        </button>
-      </template>
-    </AppDialog>
+      @confirm="confirmRevoke"
+    />
 
     <div class="governance__panels">
-      <form class="governance__panel" @submit.prevent="submitBinding">
-        <h2>新增绑定</h2>
-        <label>
-          客户 ID
-          <input v-model="newCustomerId" name="customerId" placeholder="客户 ID" />
-        </label>
-        <button type="submit" :disabled="store.saving">{{ store.saving ? '提交中…' : '绑定' }}</button>
-        <p v-if="createError" class="governance__error" role="alert" data-testid="binding-create-error">{{ createError }}</p>
-      </form>
+      <BindingCreateForm
+        v-model:customer-id="newCustomerId"
+        :saving="store.saving"
+        :error="createError"
+        @submit="submitBinding"
+      />
 
-      <form class="governance__panel" @submit.prevent="submitGrant">
-        <h2>能力授予</h2>
-        <p class="governance__hint">
-          契约没有「列出既有授权」的 RPC，因此这里只能施加一次授予/撤销并回报服务端返回的版本号。
-        </p>
-        <label>
-          主体（用户 ID）
-          <input v-model="subject" name="subject" placeholder="用户 ID" />
-        </label>
-        <label>
-          能力
-          <select v-model="action" name="action">
-            <option v-for="item in AUTHORIZATION_ACTIONS" :key="item" :value="item">{{ item }}</option>
-          </select>
-        </label>
-        <label>
-          动作
-          <select v-model="desiredState" name="desiredState">
-            <option value="grant">授予</option>
-            <option value="revoke">撤销</option>
-          </select>
-        </label>
-        <button type="submit" :disabled="store.saving">{{ store.saving ? '提交中…' : '应用' }}</button>
-        <p v-if="store.grantVersions" class="governance__versions" data-testid="grant-versions">
-          {{ t('governance.sourcePolicy') }} {{ store.grantVersions.sourceVersion }} / {{ store.grantVersions.policyVersion }}
-        </p>
-        <p v-if="grantError" class="governance__error" role="alert" data-testid="grant-error">{{ grantError }}</p>
-      </form>
+      <CapabilityGrantForm
+        v-model:subject="subject"
+        v-model:action="action"
+        v-model:desired-state="desiredState"
+        :saving="store.saving"
+        :versions="store.grantVersions"
+        :error="grantError"
+        @submit="submitGrant"
+      />
     </div>
   </section>
 </template>
@@ -333,115 +208,9 @@ function statusLabel(binding: BindingView): string {
   color: var(--color-success-ink);
 }
 
-.governance__table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--color-surface);
-}
-
-.governance__table th,
-.governance__table td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
-  text-align: left;
-}
-
-.governance__status {
-  padding: 0.1rem var(--space-2);
-  border-radius: var(--radius-xl);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-}
-
-.governance__status--active {
-  background: var(--color-success-surface-soft);
-  color: var(--color-success-ink);
-}
-
-.governance__status--revoked {
-  background: var(--color-surface-muted);
-  color: var(--color-muted);
-}
-
-.governance__muted {
-  color: var(--color-muted);
-}
-
-.governance__table button.danger {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-danger-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-error);
-  cursor: pointer;
-}
-
-/* The confirm button is slotted into AppDialog's footer, which only supplies a
-   baseline; the danger tone is the caller's rule (same split as
-   RevokeOperatorDialog). */
-.governance__confirm-danger {
-  border-color: var(--color-danger-border);
-  color: var(--color-error);
-}
-
 .governance__panels {
   display: grid;
   gap: var(--space-4);
   grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
-}
-
-.governance__panel {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-}
-
-.governance__panel h2 {
-  margin: 0;
-  font-size: var(--font-size-lg);
-}
-
-.governance__panel label {
-  display: grid;
-  gap: var(--space-1);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-}
-
-.governance__panel input,
-.governance__panel select {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.governance__panel button {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  cursor: pointer;
-}
-
-.governance__hint {
-  margin: 0;
-  color: var(--color-muted);
-  font-size: var(--font-size-xs);
-}
-
-.governance__versions {
-  margin: 0;
-  color: var(--color-muted);
-  font-size: var(--font-size-sm);
-}
-
-.governance__error {
-  margin: 0;
-  color: var(--color-error);
-  font-size: var(--font-size-sm);
 }
 </style>
