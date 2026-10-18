@@ -409,8 +409,23 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationDetailPage.vue',
-    allowed: ['Releases', '操作历史', '操作', '取消中…', '取消操作', '刷新', 'ReleaseDefinition', 'StateVersion', 'TargetRevision', '创建时间', '更新时间', '终止时间', '正在加载 Operation…', '实时更新已关闭', '点击刷新加载 Operation 最新状态', 'Operation 加载失败', '操作已完成，无法取消', 'Release', '重试'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['正在加载 Operation…', '实时更新已关闭', '点击刷新加载 Operation 最新状态', '刷新', 'Operation 加载失败', '重试', 'Release'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. W18 moved the breadcrumb/header/summary literals into the components below (no new copy)',
+  },
+  {
+    file: 'src/components/operations/OperationDetailBreadcrumbs.vue',
+    allowed: ['Releases', '操作历史'],
+    reason: 'Chinese copy already in the target locale; W18 carved it out of OperationDetailPage without changing the rendered text',
+  },
+  {
+    file: 'src/components/operations/OperationDetailHeader.vue',
+    allowed: ['操作', '取消中…', '取消操作', '刷新', '操作已完成，无法取消'],
+    reason: 'Chinese copy already in the target locale; W18 carved it out of OperationDetailPage without changing the rendered text',
+  },
+  {
+    file: 'src/components/operations/OperationDetailSummary.vue',
+    allowed: ['ReleaseDefinition', 'StateVersion', 'TargetRevision', '创建时间', '更新时间', '终止时间'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); W18 carved it out of OperationDetailPage without changing the rendered text',
   },
   {
     file: 'src/pages/HomePage.vue',
