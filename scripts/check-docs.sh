@@ -17,8 +17,10 @@
 #   5. every repository path and cited line inside vulncheck.exceptions.yaml
 #      exists (that file is not markdown; see the section below)
 #   6. `Foo.vue:123` (filename-only, no separator) and `:123` (bare line number)
-#      citations are attributed to a file and checked the same way — see "Two
-#      more citation shapes" below
+#      citations are attributed to a file and checked the same way; a
+#      filename-only citation whose basename names no repository file is COUNTED
+#      AND REPORTED as unresolved (WARN, not FAIL) instead of being skipped — see
+#      "Two more citation shapes" below
 #
 # This repository documents by evidence (`文件:行号`), which only works if those
 # line numbers survive edits; a citation that has drifted off the end of its file
@@ -26,9 +28,15 @@
 #
 # Check 6 covers two citation shapes check 4 cannot see:
 #   * `Foo.vue:123` has no separator, so check 4 never sees it. When exactly one
-#     tracked file has that basename the citation is resolved to that file; an
-#     ambiguous basename (`main.go`, `README.md`) is left alone, because guessing
-#     would invent findings.
+#     tracked (or new) file has that basename the citation is resolved to that
+#     file and checked like any other. An ambiguous basename (`main.go`,
+#     `README.md`) is left alone, because guessing would invent findings. When NO
+#     tracked (or new) file has that basename there is nothing to check, but the
+#     citation is not dropped: it is COUNTED AND REPORTED as unresolved with a
+#     WARN, and never failed. Failing is not viable — the bulk of these name upstream
+#     library files (`handler.go:274` from connectrpc) or illustrative runtime
+#     artifacts, so a hard failure would only produce blanket exemptions, the
+#     same trade-off as an unattributable bare line number below.
 #   * `:123` is a bare line number. It is attributed to the last repository file
 #     path earlier on the same line (a table row is a line), and checked against
 #     that file. Attribution is same-line on purpose: a path two lines up is not
@@ -176,9 +184,12 @@ is_exempt_line() { case "$ignore_lines" in *" $1 "*) return 0 ;; *) return 1 ;; 
 #
 # A filename-only citation (`OperationDetailPage.vue:319`) is resolved only when
 # exactly one tracked (or new, non-ignored) file carries that basename; `main.go`
-# and `README.md` are ambiguous and are deliberately left alone. A bare line
-# number (`:295`) is attributed by check 6 to the last resolvable path earlier on
-# the same line, so this helper is also how that context is established.
+# and `README.md` are ambiguous and are deliberately left alone. A basename that
+# matches NO file returns failure like every other unresolvable span; check 6
+# distinguishes that case (it is counted and warned about) from a code span that
+# merely is not a path. A bare line number (`:295`) is attributed by check 6 to
+# the last resolvable path earlier on the same line, so this helper is also how
+# that context is established.
 # ---------------------------------------------------------------------------
 declare -A basename_path=()
 declare -A basename_count=()
@@ -263,8 +274,10 @@ n_bare=0
 n_bare_attr=0
 n_bare_unattr=0
 n_name=0
+n_name_unresolved=0
 n_snapshot_exempt=0
 declare -A unattr_by_file=()
+declare -A unresolved_name_by_file=()
 declare -A file_lines=()
 # Parallel arrays: one entry per frozen-snapshot file that actually exempted a
 # citation that would otherwise have failed.
@@ -413,7 +426,8 @@ for f in "${md[@]}"; do
   # Here they are attributed and checked. Attribution is same-line only: the last
   # resolvable file path earlier on the line owns the following bare numbers. A
   # bare number with no such path is counted as UNVERIFIED, never failed and
-  # never guessed at (see the header).
+  # never guessed at (see the header). A filename-only citation whose basename
+  # matches no repository file is likewise counted and reported, never failed.
   #
   # Confidence decides whether a mismatch FAILS or is only reported:
   #   * same table cell (or a non-table line) -> the owning file is unambiguous,
@@ -422,7 +436,9 @@ for f in "${md[@]}"; do
   #     cites the previous cell's Requirements doc, not Toast.vue, so a mismatch
   #     there is reported with WARN and not failed. Failing would punish rows
   #     that use "同上"/"见上" shorthand; silently dropping them would hide them.
-  # A filename-only citation names its own file, so it always fails when broken.
+  # A RESOLVED filename-only citation names its own file, so an out-of-range
+  # number fails. One whose basename names no repository file cannot be resolved
+  # at all; that is the case counted as unresolved below, not a silent skip.
   bctx_line=-1
   bcur=""
   bcur_cell=-1
@@ -462,7 +478,24 @@ for f in "${md[@]}"; do
       fi
       continue
     fi
-    resolve_cited_file "$bpath" "$docdir" || continue
+    if ! resolve_cited_file "$bpath" "$docdir"; then
+      # Until this branch existed, an unresolvable filename-only citation was
+      # dropped here: resolve_cited_file can only fail, and `continue` made the
+      # failure invisible — no WARN, no count, no trace. Count it instead, but do
+      # not fail it: the observed population names upstream library files
+      # (`handler.go:274` from connectrpc) and illustrative runtime artifacts.
+      # Only spans that carry a line number are citations; a bare filename
+      # mention is not a line-number assertion and is not counted here.
+      case "$bpath" in
+        */*) ;;  # path-shaped spans are check 4's job
+        *)
+          if [ -n "$bnums" ] && [[ $bpath =~ $EXT_RE ]] && [ "${basename_count[$bpath]:-0}" = 0 ]; then
+            n_name_unresolved=$((n_name_unresolved + 1))
+            unresolved_name_by_file[$f]=$(( ${unresolved_name_by_file[$f]:-0} + 1 ))
+          fi ;;
+      esac
+      continue
+    fi
     bcur=$RESOLVED
     bcur_cell=$bcell
     # Full paths are check 4's job; this section only validates basenames.
@@ -616,6 +649,14 @@ if [ "$n_bare_unattr" -gt 0 ]; then
   echo "check-docs: WARN $n_bare_unattr bare :NNN citation(s) could not be attributed to a repository file on their line (no path, or an ambiguous/external one), so they were NOT verified (report only; attribution is same-line only)"
   if [ "${#unattr_by_file[@]}" -gt 0 ]; then
     top=$(for k in "${!unattr_by_file[@]}"; do printf '%s\t%s\n' "${unattr_by_file[$k]}" "$k"; done \
+            | sort -rn | head -5 | awk '{printf "%s %s, ", $1, $2}' || true)
+    echo "check-docs:      most: ${top%, }"
+  fi
+fi
+if [ "$n_name_unresolved" -gt 0 ]; then
+  echo "check-docs: WARN $n_name_unresolved filename-only citation(s) (Foo.vue:12) name a basename that matches NO repository file, so they were NOT verified (report only; usually an upstream library file or an illustrative artifact — see the header)"
+  if [ "${#unresolved_name_by_file[@]}" -gt 0 ]; then
+    top=$(for k in "${!unresolved_name_by_file[@]}"; do printf '%s\t%s\n' "${unresolved_name_by_file[$k]}" "$k"; done \
             | sort -rn | head -5 | awk '{printf "%s %s, ", $1, $2}' || true)
     echo "check-docs:      most: ${top%, }"
   fi
