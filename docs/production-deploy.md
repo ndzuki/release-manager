@@ -1078,7 +1078,7 @@ TASK-368 之后的第四次发布，也是一次**纯版本对齐**：把 `origi
 | 数据面 | `release_definitions` 4 行，`owner_organization_id IS NULL` **0 行**（0\|4） |
 | 入口 | `https://localhost:8443/` → 200（`curl -k`，3.7 ms） |
 | 登录 | 离开 `/login` **818 ms**（真 Chrome，playwright-core + 系统 Chrome） |
-| 备份 | 备份 PVC 上最新产物 `release_manager-20261018T114751Z.dump`，**164,049 B**（11:47:54Z；notifier 同批 4,592 B）。本次无迁移，未强制新建 dump |
+| 备份 | 备份 PVC 上最新产物 `release_manager-20261018T114751Z.dump`，**164,049 B**（11:47:54Z；notifier 同批 4,592 B；两个体积于 `2026-10-18 23:06 +08` 直接 `ls -l` 备份 PVC 复核）。本次无迁移，未强制新建 dump |
 | 回滚基线 | `kubectl -n release-manager get deploy -o yaml` 落盘 `/tmp/rm372/deploys-baseline-98f7b52.yaml`（945 行） |
 | 迁移差异 | `git diff --name-only 98f7b52..f06c6e7 -- migrations/` ⇒ **0 文件** |
 
@@ -1095,7 +1095,7 @@ k3d image import -c rm-prod /tmp/rm372/images/*.tar 2>&1 | tee /tmp/rm372/import
 grep ERRO /tmp/rm372/import-all.log      # 0 命中
 ```
 
-- 8 个镜像全部 `linux/amd64`；8 个 tar 合计 **118,367,744 B**（≈113 MiB）。
+- 8 个镜像全部 `linux/amd64`；8 个 tar 合计 **118,367,744 B**（≈113 MiB）。原始 `/tmp/rm372/images/` 已随清理删除，`2026-10-18 23:05 +08` 用仍在本机的 `localhost:5001/release-*:f06c6e7` 逐镜像重导复算（`docker save --platform linux/amd64 | wc -c` 求和）仍得 **118,367,744 B**；方法校验：对 `98f7b52` 重导的 8 个 tar 体积与原 `/tmp/rm368/images/*.tar` 逐镜像相同（`du -cb` 合计同为 118,367,744 B）。**与 §8.7 的 `98f7b52` 同值不是抄写**：两次构建的差异只有等长替换（Go 版本串均 7 字符、web chunk 哈希均 8 字符），`api` 的应用层与 config 各差 1 B 且方向相反（10,853,034 vs 10,853,033 B / 393 vs 394 B），web 的层差异（409,544 vs 409,199 B）在 tar 的 512 B 块对齐后同为 409,600 B；对照 `6f343cf` 为 **118,385,152 B**（§8.6），可见该数值确实随构建变化。
 - 导入 **17.2 s**，输出 `Successfully imported 8 image(s) into 1 cluster(s)`，`grep ERRO` **0 命中**；节点内 `crictl images | grep f06c6e7` 可见 8 个 `:f06c6e7`。
 - web 产物可直接核对：构建日志里的入口 chunk 是 `dist/assets/index-I-oIH8-D.js`，发布后 `curl -sk https://localhost:8443/ | grep assets/index-` 返回**同一个文件名** ⇒ 线上 SPA 确实来自本次构建。
 
@@ -1111,7 +1111,7 @@ grep ERRO /tmp/rm372/import-all.log      # 0 命中
 | `web` | 6 | **7,804 ms** | 11 | 200 | 200 |
 
 - 六步计时之和 **37,317 ms**；没有任何一步失败，未触发 `undo`。
-- `api` 启动日志仍有已知的 `WARN PostgreSQL not reachable yet`（`14:45:20Z` 起，3 次尝试后 `14:45:22Z` 连上并 `release-api started`）——这是新 Pod IP 在 NetworkPolicy 里尚未编程完成的启动瞬态，不是数据库故障。
+- `api` 启动日志仍有已知的 `WARN PostgreSQL not reachable yet`：`14:45:20.155Z` 起共 **2 条**（`attempt=1`、`attempt=2`，重试间隔 818 ms / 1.96 s），随后 `14:45:22.941Z` 即 `release-api started`（`of=5` 的后两次没有用到；`2026-10-18 23:04 +08` 用 `kubectl logs deploy/api` 复核）——这是新 Pod IP 在 NetworkPolicy 里尚未编程完成的启动瞬态，不是数据库故障。
 
 **⭐ 无迁移的验收**
 
@@ -1138,13 +1138,13 @@ grep ERRO /tmp/rm372/import-all.log      # 0 命中
 
 | 页面 | 触发动作 | 提示文案 | `role` | 2 s 后仍在 | 可关闭且关闭后消失 |
 | --- | --- | --- | --- | --- | --- |
-| `/definitions` | 新建 `task372-toast-smoke` | `已创建定义 task372-toast-smoke（版本 1）` | `status` | ✅ | ✅（见下） |
-| `/definitions` | 停用该定义 | `已停用定义 task372-toast-smoke` | `status` | ✅ | ✅ |
+| `/definitions` | 新建 `task372-toast-smoke` | `已创建定义 task372-toast-smoke（版本 1）` | `status` | ✅ | ⚠️ 该次观测未验证（`definitions-notice-dismiss` 选择器在该页不存在；同页 update 那次已验证关闭） |
+| `/definitions` | 停用该定义 | `已停用定义 task372-toast-smoke` | `status` | ✅ | ⚠️ 同上：该次观测未验证关闭 |
 | `/definitions` | 编辑该定义并保存（版本 3） | `已更新定义 task372-toast-smoke（版本 3）` | `status` | ✅ | ✅ 点 `.toast__dismiss` 后元素消失 |
 | `/settings/organization` | 把 `487d61ac-…` 的角色改为 `deployer`，再改回 `release_admin` | `已把 487d61ac-… 的角色改为 deployer` / `… release_admin` | `status` | ✅ / ✅ | ✅ / ✅ 点 `organization-notice-dismiss` 后消失 |
 
 - `Toast` 默认**不自动消失**（`web/src/components/common/Toast.vue:10` 的 `PERSISTENT BY DEFAULT`），所以「2 s 后仍在」是默认行为的直接观测，不是等待窗口太短。
-- 口径：`/definitions` 页面把 `data-testid` 作为**透传属性**传给 `Toast`，没有走 `testid` prop，因此关闭按钮没有派生的 `${testid}-dismiss`。关闭行为在该页的「更新」Toast 上以 `.toast__dismiss` 验证；`/settings/organization` 走 `testid` prop，`organization-notice-dismiss` 可直接命中。
+- 口径：`/definitions` 页面把 `data-testid` 作为**透传属性**传给 `Toast`，没有走 `testid` prop，因此关闭按钮没有派生的 `${testid}-dismiss`；`smoke-toast.json` 里 `definitions-create`/`definitions-disable` 的 `dismissControlPresent=false` 只说明该选择器没命中，**不等于不可关闭，也不等于已验证关闭**。关闭行为是在另一次观测里用 `.toast__dismiss` 验证的（`smoke-toast-dismiss.json`，`14:48:20Z` 起，update toast：`dismissControlPresent=true`、`goneAfterDismiss=true`）；`/settings/organization` 走 `testid` prop，`organization-notice-dismiss` 可直接命中（两次均 `goneAfterDismiss=true`）。上表按**每次观测各自的证据**填写，不把两次观测合并成一次。
 - 失败路径没有被故意制造：组件层用 `tone="error"` → `role="alert"` 的映射由 `Toast` 自己的测试覆盖，本次只验证成功路径的 `role="status"`。
 
 **副作用（如实记录，未回改生产数据）**
