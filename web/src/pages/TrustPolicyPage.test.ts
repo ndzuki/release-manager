@@ -315,6 +315,44 @@ describe('trust-root create and rotate', () => {
 
     expect(wrapper.text()).toContain('无权修改信任根');
   });
+
+  /*
+   * TASK-267. The notice line is the shared Toast primitive now. Toast hides itself
+   * on dismiss and never turns that flag back on, so a notice handed to the SAME
+   * instance after a dismissal renders nothing (the documented single-instance limit,
+   * pinned in Toast.test.ts).
+   *
+   * A browser check of "the box disappears on close" cannot see the second half, so
+   * this case pins the whole sequence: create succeeds -> dismiss -> create succeeds
+   * again, with a different key id so the second notice cannot be the stale text.
+   *
+   * Boundary worth stating: this page has two routes out of the hidden instance —
+   * the page's own `@dismiss="store.notice = ''"` and the store clearing `notice` at
+   * the start of every write (stores/trustPolicy.ts createRoot/rotateRoot/apply). The
+   * case therefore pins the user-visible sequence, not that one specific line: it
+   * stays green if either route survives, and goes red only when both are removed.
+   * The page-line-only guard lives in the ValuesEditorPage notice-lifetime case,
+   * whose store never clears its source.
+   */
+  it('shows the trust notice again after it is dismissed and the next create succeeds', async () => {
+    mockedCreate
+      .mockResolvedValueOnce(root('key-3', 'active'))
+      .mockResolvedValueOnce(root('key-4', 'active'));
+    const wrapper = await mountPage();
+
+    await wrapper.get('[data-testid="trust-create-entry"]').trigger('click');
+    await fillAndSubmit('key-3', 'CN=next');
+    expect(wrapper.get('[data-testid="trust-notice"]').text()).toContain('key-3');
+
+    await wrapper.get('[data-testid="trust-notice-dismiss"]').trigger('click');
+    expect(wrapper.find('[data-testid="trust-notice"]').exists()).toBe(false);
+
+    await wrapper.get('[data-testid="trust-create-entry"]').trigger('click');
+    await fillAndSubmit('key-4', 'CN=next-2');
+    const notice = wrapper.get('[data-testid="trust-notice"]');
+    expect(notice.text()).toContain('key-4');
+    expect(notice.text()).not.toContain('key-3');
+  });
 });
 
 /*

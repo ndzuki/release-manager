@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ValuesEditorPage from './ValuesEditorPage.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -58,11 +58,25 @@ const mocks = vi.hoisted(() => ({
     discard: vi.fn(async () => true),
     dispose: vi.fn(),
   },
+  /*
+   * TASK-267: a reactive view of the same stub. The page reads `editor.toast`
+   * from a `v-if`; only a reactive source lets a test observe the "dismiss, then
+   * succeed again" sequence the real store drives. Kept on the hoisted object so
+   * both the mock factory and the cases can reach it.
+   */
+  editorProxy: null as null | { toast: string | null },
 }));
 
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => ({ push: mocks.push }) }));
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => mocks.auth }));
-vi.mock('@/stores/valuesEditor', () => ({ useValuesEditorStore: () => mocks.editor }));
+vi.mock('@/stores/valuesEditor', async () => {
+  // TASK-267: the stub is reactive so the page's `v-if`/`@dismiss` wiring can be
+  // observed across renders; the store's own behaviour is covered by
+  // stores/valuesEditor.test.ts and is not the subject here.
+  const { reactive } = await import('vue');
+  mocks.editorProxy = reactive(mocks.editor);
+  return { useValuesEditorStore: () => mocks.editorProxy };
+});
 vi.mock('@/stores/emergencyAuthorization', () => ({ useEmergencyAuthorizationStore: () => mocks.authorization }));
 
 function mountPage() {
@@ -294,5 +308,94 @@ describe('ValuesEditorPage return to task list (AC-055-15)', () => {
     expect(mocks.push).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'ConvergenceTasks' }),
     );
+  });
+});
+
+/*
+ * TASK-267. The operation-result notice is the shared Toast primitive now. Toast
+ * keeps its own `visible` flag and hides itself on dismiss, and it never sets that
+ * flag back: a notice handed to the SAME instance after a dismissal renders nothing
+ * (the documented single-instance limit, pinned in Toast.test.ts). The page's half
+ * of the contract is `@dismiss="editor.toast = null"` — clearing the source drops
+ * the `v-if`, so the NEXT success mounts a fresh instance.
+ *
+ * That is exactly what a browser check of "the box disappears" cannot see, so it is
+ * pinned here as a page-level sequence: success -> dismiss -> success again. The
+ * store is this file's standing stub (stores/valuesEditor.test.ts owns its real
+ * behaviour); the mock's `save` mirrors the real one, which sets this exact copy on
+ * success (stores/valuesEditor.ts).
+ */
+describe('ValuesEditorPage notice lifetime (TASK-267)', () => {
+  const pages: Array<{ unmount: () => void }> = [];
+
+  function mountWithSaveAction() {
+    const wrapper = mount(ValuesEditorPage, {
+      global: {
+        stubs: {
+          ValuesEditorSkeleton: true,
+          ValuesCodeEditor: { props: ['modelValue'], template: '<pre data-testid="values-editor">{{ modelValue }}</pre>' },
+          ValuesDiffPanel: true,
+          SecretRefEditor: true,
+          ValuesConflictDialog: true,
+          ErrorState: true,
+          ConvergenceLockedPathsPanel: true,
+          RejectRevisionDialog: true,
+          ValuesRevisionActions: {
+            emits: ['save'],
+            template: '<button data-testid="save" @click="$emit(\'save\')">save</button>',
+          },
+        },
+      },
+    });
+    pages.push(wrapper);
+    return wrapper;
+  }
+
+  beforeEach(() => {
+    Object.assign(mocks.editor, {
+      currentRevision: null,
+      parentRevision: null,
+      editorContent: '{}',
+      loading: false,
+      error: null,
+      canonicalCurrent: {},
+      restoredDraft: false,
+      toast: null,
+      showConflictDialog: false,
+      saving: false,
+      saveDisabled: false,
+    });
+    vi.clearAllMocks();
+    mocks.editor.save.mockImplementation(async () => {
+      mocks.editorProxy!.toast = '已保存为 Draft';
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    for (const wrapper of pages.splice(0)) wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('shows the confirmation again after it is dismissed and the next save succeeds', async () => {
+    const wrapper = mountWithSaveAction();
+    await flushPromises();
+
+    // 1. Success renders the notice (the positive backing for every absence below).
+    await wrapper.get('[data-testid="save"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-testid="values-editor-toast"]').text()).toContain('已保存为 Draft');
+
+    // 2. Dismissing removes it from the DOM.
+    await wrapper.get('[data-testid="values-editor-toast-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="values-editor-toast"]').exists()).toBe(false);
+
+    // 3. The next success must mount a fresh Toast. Without the page clearing
+    //    `editor.toast` on dismiss, the retained instance stays hidden and this is
+    //    where the regression shows up.
+    await wrapper.get('[data-testid="save"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-testid="values-editor-toast"]').text()).toContain('已保存为 Draft');
   });
 });
