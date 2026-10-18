@@ -437,6 +437,40 @@ func writeShim(t *testing.T, dir, name, body string) {
 	}
 }
 
+// kubectlDrainStdin is the fragment a fake kubectl needs to model the real
+// CLI for `apply -f -`: kubectl reads the manifest from stdin to EOF, so the
+// `printf ... | kubectl apply -f -` pipelines in dev.sh always complete.
+//
+// A fake that exits without reading closes the pipe while that writer may
+// still be running. dev.sh runs under `set -euo pipefail`, so the writer's
+// failure fails the whole pipeline and dev-up reports a bogus
+// `kubectl apply failed for ...` even though the shim exited 0. Ubuntu's bash
+// 5.2 (CI) kills the builtin printf with SIGPIPE and prints NOTHING — the CI
+// log carried no diagnostic; the dev hosts' bash 5.3 at least prints
+// "write error: Broken pipe" (TASK-358).
+//
+// The match is over the whole argv, not fixed positions: dev.sh's ctl_kubectl
+// prepends `--context "$CONTROL_CTX"`, so its apply arrives as
+// `--context k3d-release-manager-control apply -f -`, and customer_kubectl
+// saves the manifest as `-n release-manager-customer apply -f -`. Every
+// token must be present — `apply`, `-f` and `-` — order-independent, so
+// `apply -f file.yaml` and read-only verbs keep their stdin untouched.
+//
+// Shims that assert on the applied manifest read stdin themselves and must
+// not use this fragment.
+func kubectlDrainStdin() string {
+	return `has_apply=0 has_dash_f=0 has_stdin=0
+for a in "$@"; do
+  case "$a" in
+    apply) has_apply=1 ;;
+    -f) has_dash_f=1 ;;
+    -) has_stdin=1 ;;
+  esac
+done
+if [ "$has_apply" = 1 ] && [ "$has_dash_f" = 1 ] && [ "$has_stdin" = 1 ]; then cat >/dev/null; fi
+`
+}
+
 // dockerIPProbeShim returns the docker shim fragment that answers the
 // per-customer-network IP probes agents_up performs: the management node and
 // the registry are bridged into every customer network, and the agent overlay
@@ -675,7 +709,7 @@ func TestCiProfileRequiresE2ERunID(t *testing.T) {
 	writeShim(t, binDir, "docker", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "k3d", "#!/usr/bin/env bash\nprintf 'k3d version v5.8.3 k3s1\\n'\n")
 	writeShim(t, binDir, "curl", "#!/usr/bin/env bash\nexit 0\n")
-	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\nexit 0\n")
+	writeShim(t, binDir, "kubectl", "#!/usr/bin/env bash\n"+kubectlDrainStdin()+"exit 0\n")
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	env = append(env, "DEV_PROFILE=ci")
 
@@ -822,7 +856,7 @@ for a in "$@"; do
     exit 0
   fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	// go: answer the GOPROXY probe dev.sh forwards as a build-arg; the seed
@@ -1056,7 +1090,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DEV_DATA_DIR/curl.log"
@@ -2187,7 +2221,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
@@ -2293,6 +2327,127 @@ func TestRegistryContainerCreatedWithManagedLabels(t *testing.T) {
 		if strings.HasPrefix(line, "registry create ") {
 			t.Fatalf("dev.sh must not call k3d registry create anymore:\n%s", line)
 		}
+	}
+}
+
+// TestDevUpFakeKubectlReadsPipedManifest is the regression guard for the
+// TASK-358 CI flake: the fake kubectl must consume the manifest dev.sh
+// streams into `apply -f -`, exactly like the real CLI.
+//
+// The shared happy shims print no kustomize output, so the writer never has to
+// wait for the reader and the defect stays invisible. Here the customer-agent
+// overlay emits a manifest larger than one pipe buffer: a fake kubectl that
+// exits without reading cannot consume it, so the writer blocks and then fails
+// with EPIPE/SIGPIPE deterministically — no load, no timing, and the same
+// verdict on bash 5.2 (CI) and bash 5.3 (dev hosts).
+func TestDevUpFakeKubectlReadsPipedManifest(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	// Linux pipe capacity is 64 KiB, so ~95 KiB cannot fit: the writer cannot
+	// finish unless the fake kubectl reads stdin to EOF.
+	manifestPath := filepath.Join(stateDir, "customer-agent-manifest.yaml")
+	filler := strings.Repeat("# filler line keeping this manifest above one pipe buffer\n", 1600)
+	if err := os.WriteFile(manifestPath, []byte(filler), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeShim(t, binDir, "kustomize", `#!/usr/bin/env bash
+case "$*" in
+  *customer-agent*) cat `+shellquote.Quote(manifestPath)+` ;;
+  *) : ;;
+esac
+`)
+
+	out, err := runDev(t, env, "up")
+	if err != nil {
+		t.Fatalf("dev-up failed; the fake kubectl must drain the piped manifest:\n%s", out)
+	}
+}
+
+// TestDevUpFakeKubectlDrainsContextPrefixedPipedManifest covers the management
+// plane's manifest path. ctl_kubectl prepends `--context "$CONTROL_CTX"`, so
+// its fake kubectl receives `--context k3d-release-manager-control apply -f -`
+// — the trigger must be matched over the argv, not at fixed positions
+// (TASK-358 review, P2). Here the management kustomize build emits more than
+// one pipe buffer while the customer overlays stay empty, so a shim that does
+// not drain under the `--context` prefix fails deterministically and the
+// failure is isolated to the context-prefixed pipeline.
+func TestDevUpFakeKubectlDrainsContextPrefixedPipedManifest(t *testing.T) {
+	stateDir := t.TempDir()
+	env, binDir := fakeEnv(t, stateDir)
+	fakeK3d(t, binDir, stateDir)
+	happyShims(t, binDir)
+
+	manifestPath := filepath.Join(stateDir, "control-manifest.yaml")
+	filler := strings.Repeat("# filler line keeping this manifest above one pipe buffer\n", 1600)
+	if err := os.WriteFile(manifestPath, []byte(filler), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeShim(t, binDir, "kustomize", `#!/usr/bin/env bash
+case "$*" in
+  *customer-agent*) : ;;
+  *) cat `+shellquote.Quote(manifestPath)+` ;;
+esac
+`)
+
+	out, err := runDev(t, env, "up")
+	if err != nil {
+		t.Fatalf("dev-up failed; the fake kubectl must drain the context-prefixed manifest:\n%s", out)
+	}
+}
+
+// TestKubectlDrainStdinMatchesArgvTokens pins the fragment's trigger to argv
+// token membership: `apply`, `-f` and `-` may appear anywhere and in any
+// order, while `apply -f file.yaml` and read-only verbs must leave stdin
+// alone. The writer is the same `printf` pipeline dev.sh runs, with more data
+// than the 64 KiB pipe buffer, so draining is observable as the pipeline's
+// exit status without any load or timing dependence.
+func TestKubectlDrainStdinMatchesArgvTokens(t *testing.T) {
+	dir := t.TempDir()
+	writeShim(t, dir, "kubectl", "#!/usr/bin/env bash\n"+kubectlDrainStdin()+"exit 0\n")
+	shim := filepath.Join(dir, "kubectl")
+
+	payload := filepath.Join(dir, "manifest.yaml")
+	filler := strings.Repeat("# filler line keeping this manifest above one pipe buffer\n", 1600)
+	if err := os.WriteFile(payload, []byte(filler), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	script := `set -euo pipefail
+manifest="$(cat "$KUBECTL_PAYLOAD")"
+printf '%s\n' "$manifest" | "$KUBECTL_SHIM" "$@"`
+
+	cases := []struct {
+		name  string
+		argv  []string
+		drain bool
+	}{
+		{name: "plain apply", argv: []string{"apply", "-f", "-"}, drain: true},
+		{name: "context prefix", argv: []string{"--context", "k3d-release-manager-control", "apply", "-f", "-"}, drain: true},
+		{name: "namespace prefix", argv: []string{"-n", "release-manager-customer", "apply", "-f", "-"}, drain: true},
+		{name: "file operand", argv: []string{"apply", "-f", "deploy.yaml"}, drain: false},
+		{name: "read only", argv: []string{"get", "ns"}, drain: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"-c", script, "drain-test"}, tc.argv...)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", args...)
+			cmd.Env = append(os.Environ(),
+				"KUBECTL_PAYLOAD="+payload,
+				"KUBECTL_SHIM="+shim,
+			)
+			out, err := cmd.CombinedOutput()
+			if tc.drain && err != nil {
+				t.Fatalf("argv %v must drain stdin to EOF, got %v:\n%s", tc.argv, err, out)
+			}
+			if !tc.drain && err == nil {
+				t.Fatalf("argv %v must not read stdin, yet the pipeline succeeded:\n%s", tc.argv, out)
+			}
+		})
 	}
 }
 
@@ -2688,7 +2843,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "go", `#!/usr/bin/env bash
@@ -2814,7 +2969,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 	writeShim(t, binDir, "kustomize", "#!/usr/bin/env bash\nexit 0\n")
 	writeShim(t, binDir, "curl", `#!/usr/bin/env bash
@@ -3904,7 +4059,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 		if out, err := runDev(t, env, "up"); err != nil {
 			t.Fatalf("dev-up failed:\n%s", out)
@@ -3935,7 +4090,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 		env = append(env, "DEV_TIMEOUT_READY=1")
 		out, err := runDev(t, env, "up")
@@ -3977,7 +4132,7 @@ for a in "$@"; do
   if [ "$a" = "port-forward" ]; then printf 'Forwarding from 127.0.0.1:18088 -> 8088\n'; sleep 30; exit 0; fi
   if [ "$a" = "redis-cli" ]; then printf 'PONG\n'; exit 0; fi
 done
-exit 0
+`+kubectlDrainStdin()+`exit 0
 `)
 	env = append(env, "DEV_TIMEOUT_READY=1")
 
