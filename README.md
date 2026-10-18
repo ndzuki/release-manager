@@ -53,7 +53,7 @@
 
 ```
 cmd/          每个二进制的 main 包
-internal/     业务实现（45 个包；对外契约见 internal/store、internal/contracts）
+internal/     业务实现（对外契约见 internal/store、internal/contracts）
 api/proto/    protobuf 单一契约源；api/gen、web/src/gen 为生成产物（禁止手改）
 api/kulala/   Kulala/Neovim HTTP 调试集合
 configs/      各服务 dev 配置（生产配置由部署侧注入）
