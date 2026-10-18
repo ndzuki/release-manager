@@ -6,6 +6,8 @@ import { t } from '@/i18n/messages';
 // On success the URL carries ONLY mode=convergence&prepareToken (AC-058-35).
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import EmptyState from '@/components/common/EmptyState.vue';
+import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
@@ -109,9 +111,19 @@ function continueToRevision(): void {
     />
     <div v-else class="convergence-body">
       <h1>{{ t('convergence.page.pending') }}（{{ releaseDefinitionId }}）</h1>
-      <p v-if="selection.loadError" class="error-text" role="alert">{{ selection.loadError.message }}</p>
+      <!-- UX-035 (W15): while selection.load is running the page used to render the
+           task table with zero rows, which reads as "nothing to converge" instead of
+           "still loading". The three states now mirror the shared primitives (W14). -->
+      <LoadingState v-if="selection.loading" message="正在加载收敛任务…" />
+      <ErrorState v-else-if="selection.loadError" :message="selection.loadError.message" />
+      <EmptyState
+        v-else-if="selection.tasks.length === 0"
+        :title="t('state.noData')"
+        :message="t('convergence.page.empty')"
+      />
 
       <ConvergenceTaskList
+        v-else
         :tasks="selection.tasks"
         :selected-task-ids="selection.selectedTaskIds"
         @toggle="selection.toggleTask"
