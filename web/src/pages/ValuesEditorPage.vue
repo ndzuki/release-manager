@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
+import Toast from '@/components/common/Toast.vue';
 import ConvergenceLockedPathsPanel from '@/components/emergency/ConvergenceLockedPathsPanel.vue';
 import SecretRefEditor from '@/components/values/SecretRefEditor.vue';
 import ValuesCodeEditor from '@/components/values/ValuesCodeEditor.vue';
@@ -159,7 +160,17 @@ onBeforeUnmount(() => {
       </label>
     </header>
 
-    <div v-if="editor.toast" class="notice" role="status">{{ editor.toast }}</div>
+    <!-- TASK-267: operation results (saved / submitted / approved / rejected / discarded)
+         render through the shared Toast primitive; the page class keeps the box unchanged. -->
+    <Toast
+      v-if="editor.toast"
+      class="notice"
+      tone="success"
+      testid="values-editor-toast"
+      @dismiss="editor.toast = null"
+    >
+      {{ editor.toast }}
+    </Toast>
     <div v-if="editor.restoredDraft" class="notice notice--warning" role="status">
       <span>
         {{ t('values.draft.restored') }}<template v-if="editor.draftSavedAt">{{ t('values.draft.savedAt', { time: formatTimestamp(editor.draftSavedAt) }) }}</template>

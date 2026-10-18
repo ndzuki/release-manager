@@ -178,9 +178,16 @@ function removeMember(member: OrganizationMemberView): void {
       {{ orgArmFailure }}
     </p>
 
-    <p v-if="store.notice" class="organization__notice" role="status" data-testid="organization-notice">
+    <!-- TASK-267: membership write outcomes use the shared Toast primitive. -->
+    <Toast
+      v-if="store.notice"
+      class="organization__notice"
+      tone="success"
+      testid="organization-notice"
+      @dismiss="store.notice = ''"
+    >
       {{ store.notice }}
-    </p>
+    </Toast>
 
     <ErrorState
       v-if="store.failure"

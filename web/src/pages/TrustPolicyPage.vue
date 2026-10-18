@@ -7,6 +7,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import TrustRootEditor from '@/components/trust/TrustRootEditor.vue';
 import { TRUST_ENVIRONMENTS, allowedActions, type TrustAction, type TrustRootView } from '@/connect/trust-api';
 import { useTrustPolicyStore } from '@/stores/trustPolicy';
@@ -123,7 +124,16 @@ const confirmTitle = computed(() =>
       </div>
     </header>
 
-    <p v-if="store.notice" class="trust__notice" role="status" data-testid="trust-notice">{{ store.notice }}</p>
+    <!-- TASK-267: trust-root write outcomes use the shared Toast primitive. -->
+    <Toast
+      v-if="store.notice"
+      class="trust__notice"
+      tone="success"
+      testid="trust-notice"
+      @dismiss="store.notice = ''"
+    >
+      {{ store.notice }}
+    </Toast>
 
     <ErrorState
       v-if="store.failure"

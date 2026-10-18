@@ -6,6 +6,7 @@ import { useRoute } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import { listOperations, mapOperationError, type OperationSummaryItem } from '@/connect/operation-api';
 import type {} from '@/types/operation';
 import { formatTimestamp } from '@/utils/formatTimestamp';
@@ -165,9 +166,15 @@ onMounted(() => load(false));
 
     <!-- The reset notice belongs to the whole page, not to the table branch: it
          must still be visible when the re-query comes back empty. -->
-    <div v-if="cursorReset" class="operation-list__notice" role="status">
+    <!-- TASK-267: the stale-cursor recovery report uses the shared Toast primitive. -->
+    <Toast
+      v-if="cursorReset"
+      class="operation-list__notice"
+      testid="operation-list-cursor-reset"
+      @dismiss="cursorReset = false"
+    >
       页码已过期，已从最新一页重新加载（筛选条件保留）。
-    </div>
+    </Toast>
     <ErrorState
       v-if="showError"
       title="操作历史加载失败"

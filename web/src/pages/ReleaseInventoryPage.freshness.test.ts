@@ -1,10 +1,11 @@
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import ReleaseInventoryPage from './ReleaseInventoryPage.vue';
 import { getAuthorizationSnapshot } from '@/connect/emergency-api';
 import type * as EmergencyApi from '@/connect/emergency-api';
+import { orchestratorClient } from '@/connect/client';
 import type * as Client from '@/connect/client';
 import { useAuthStore } from '@/stores/auth';
 
@@ -24,6 +25,12 @@ vi.mock('@/connect/client', async (importOriginal) => {
     orchestratorClient: {
       ...actual.orchestratorClient,
       listReleases: vi.fn(async () => ({ releases: [], totalCount: 0, nextCursor: '' })),
+      // TASK-267: the sync-accepted notice needs a sync entry that answers; the
+      // per-case value is overridden in the notice-lifetime suite below.
+      triggerInventorySync: vi.fn(async () => ({
+        $typeName: 'orchestrator.v1.TriggerInventorySyncResponse',
+        syncRequestId: 'sync-1',
+      })),
     },
   };
 });
@@ -96,5 +103,48 @@ describe('ReleaseInventoryPage authorization freshness (REQ-033 AC-033-10)', () 
     await vi.waitFor(() => expect(getAuthorizationSnapshot).toHaveBeenCalled());
 
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
+  });
+});
+
+/*
+ * TASK-267. The sync-accepted line is the shared Toast primitive now. Toast hides
+ * itself on dismiss and never turns that flag back on, so a second `syncRequestId`
+ * handed to the SAME instance renders nothing (the single-instance limit pinned in
+ * Toast.test.ts). `triggerSync` (stores/releaseInventory.ts) does not clear the id
+ * before asking again — it only assigns the new one on success — so the page's
+ * `@dismiss="inventory.syncRequestId = null"` is the only thing that drops the
+ * `v-if` and remounts the primitive. Hence a page-level sequence, not just
+ * "the box disappears": sync accepted -> dismiss -> sync accepted again.
+ */
+describe('ReleaseInventoryPage sync notice lifetime (TASK-267)', () => {
+  it('shows the sync notice again after it is dismissed and the next sync is accepted', async () => {
+    vi.mocked(getAuthorizationSnapshot).mockResolvedValue(snapshot(true));
+    const requested = vi.mocked(orchestratorClient.triggerInventorySync);
+    requested.mockReset().mockResolvedValue({
+      $typeName: 'orchestrator.v1.TriggerInventorySyncResponse',
+      syncRequestId: 'sync-1',
+    });
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const syncEntry = wrapper.findAll('button').find((button) => button.text() === '触发同步');
+    if (!syncEntry) throw new Error('sync entry not rendered');
+
+    await syncEntry.trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-testid="inventory-sync-notice"]').text()).toContain('sync-1');
+
+    await wrapper.get('[data-testid="inventory-sync-notice-dismiss"]').trigger('click');
+    expect(wrapper.find('[data-testid="inventory-sync-notice"]').exists()).toBe(false);
+
+    requested.mockResolvedValue({
+      $typeName: 'orchestrator.v1.TriggerInventorySyncResponse',
+      syncRequestId: 'sync-2',
+    });
+    await syncEntry.trigger('click');
+    await flushPromises();
+    const notice = wrapper.get('[data-testid="inventory-sync-notice"]');
+    expect(notice.text()).toContain('sync-2');
   });
 });
