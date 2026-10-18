@@ -182,3 +182,59 @@ describe('release inventory failure correlation (UX-015)', () => {
     expect(store.errorDetails).toBeNull();
   });
 });
+
+/*
+ * W16 follow-up (review of 512b09f1): the de-duplication key was "a refresh is in
+ * flight", not "the same query is in flight". The page's filter controls mutate
+ * the store and then call refresh(), so a new filter joined the request that was
+ * already in flight for the OLD status/nameSearch and its rows were applied to
+ * the new filter. The store's own comment claimed a filter change "still goes
+ * through load()", which was never true of the page.
+ */
+describe('release inventory refresh query identity (W16 follow-up)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    listReleases.mockReset();
+  });
+
+  it('starts a new request when the filter changed while one was in flight', async () => {
+    const pending: Array<(value: unknown) => void> = [];
+    listReleases.mockImplementation(
+      () => new Promise((resolve) => {
+        pending.push(resolve as (value: unknown) => void);
+      }) as never,
+    );
+    const store = useReleaseInventoryStore();
+    store.setScope('customer-1', 'cluster-1');
+
+    const unfiltered = store.refresh();
+    expect(listReleases).toHaveBeenCalledTimes(1);
+
+    // Exactly what ReleaseInventoryPage.handleStatusChange does: mutate, then refresh.
+    store.setStatusFilter('active');
+    const filtered = store.refresh();
+
+    // Joining the in-flight unfiltered request would keep this at 1.
+    expect(listReleases).toHaveBeenCalledTimes(2);
+    expect(listReleases).toHaveBeenLastCalledWith(
+      expect.objectContaining({ statusFilter: ReleaseInventoryStatus.ACTIVE }),
+    );
+
+    // The superseded request answers LAST. Its rows describe the previous filter
+    // and must not be applied on top of the request that replaced it.
+    pending[1]?.(create(ListReleasesResponseSchema, {
+      releases: [summary(ReleaseInventoryStatus.ACTIVE)],
+      totalCount: 1,
+    }));
+    pending[0]?.(create(ListReleasesResponseSchema, {
+      releases: [summary(ReleaseInventoryStatus.MISSING)],
+      totalCount: 1,
+    }));
+    await Promise.all([unfiltered, filtered]);
+
+    expect(store.releases).toHaveLength(1);
+    expect(store.releases[0]!.status).toBe('active');
+    // The stale request settling late must not clear the new request's state.
+    expect(store.loading).toBe(false);
+  });
+});

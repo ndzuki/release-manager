@@ -1,5 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import { create } from '@bufbuild/protobuf';
+import { TimestampSchema } from '@bufbuild/protobuf/wkt';
 import { nextTick } from 'vue';
 import { t } from '@/i18n/messages';
 import type { AuditEvent } from '@/gen/audit/v1/audit_pb';
@@ -158,5 +160,27 @@ describe('AuditEventTable accessibility (UX-017/018)', () => {
 
     await row.trigger('keydown', { key: 'Enter' });
     expect(wrapper.emitted('select')).toHaveLength(2);
+  });
+});
+
+/*
+ * W17 follow-up (review of 512b09f1): the audit surface used to print
+ * `new Date(...).toLocaleString()`, which carried seconds. Routing it through the
+ * shared formatter's default `short` style silently dropped them, so two events
+ * inside the same minute rendered identically — a real regression for evidence
+ * that is read after the fact. The audit list must stay at HH:mm:ss; the other
+ * call sites keep the minute-precision default on purpose.
+ */
+describe('AuditEventTable timestamps (W17 follow-up)', () => {
+  it('renders the event time with seconds', () => {
+    const at = new Date(2026, 9, 17, 20, 2, 46);
+    const wrapper = mountTable({
+      events: [{
+        ...auditEvent('e-2'),
+        createdAt: create(TimestampSchema, { seconds: BigInt(Math.floor(at.getTime() / 1000)) }),
+      }],
+    });
+
+    expect(wrapper.get('tbody td').text()).toMatch(/20:02:46/);
   });
 });

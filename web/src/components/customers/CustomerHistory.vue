@@ -32,7 +32,7 @@ function eventLabel(eventType: string): string {
     <ol v-else class="customer-history__list">
       <li v-for="event in events" :key="event.id" class="customer-history__item">
         <strong>{{ eventLabel(event.eventType) }}</strong>
-        <time v-if="event.createdAt" :datetime="event.createdAt">{{ formatTimestamp(event.createdAt) }}</time>
+        <time v-if="event.createdAt" :datetime="event.createdAt">{{ formatTimestamp(event.createdAt, { style: 'medium' }) }}</time>
       </li>
     </ol>
   </section>

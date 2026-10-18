@@ -8,13 +8,19 @@
  * and the same null rendered as "unknown" in one column and "—" in the next.
  * Call sites keep their own fallback word (it is content, not formatting) but
  * the pattern now lives here.
+ *
+ * The style is content too. Audit evidence is read after the fact, where two
+ * events in the same minute must stay distinguishable, so the audit list/detail
+ * and the customer history pass `{ style: 'medium' }` (HH:mm:ss). Every other
+ * call site keeps the default `short`, where a minute is enough to orient.
  */
 export type TimestampStyle = 'short' | 'medium';
 
 export interface FormatTimestampOptions {
   /** Rendered for null/blank/unparseable input; defaults to an em dash. */
   fallback?: string;
-  /** `short` = HH:mm, `medium` = HH:mm:ss. Both use a medium date. */  style?: TimestampStyle;
+  /** `short` = HH:mm, `medium` = HH:mm:ss. Both use a medium date. */
+  style?: TimestampStyle;
 }
 
 const formatters: Record<TimestampStyle, Intl.DateTimeFormat> = {

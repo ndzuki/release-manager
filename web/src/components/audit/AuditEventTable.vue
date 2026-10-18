@@ -30,7 +30,7 @@ const actorKindLabels: Record<ActorKind, string> = {
 };
 
 function formatTime(event: AuditEvent): string {
-  return event.createdAt ? formatTimestamp(timestampDate(event.createdAt)) : '—';
+  return event.createdAt ? formatTimestamp(timestampDate(event.createdAt), { style: 'medium' }) : '—';
 }
 
 function actorLabel(event: AuditEvent): string {

@@ -324,10 +324,10 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | W13 | ~~假阳性显示：`ReleaseStatusBadge` 未知状态显示为 Active~~ **2026-10-17 已修**：未知/`UNSPECIFIED`/字段缺失一律渲染 catalog 中性「未知」态，store 映射的 `default` 同步改为 `'unknown'`（证据见 §3.2 的 UX-061 行） | UX-061 | **S**（已完成） | 否 |
 | W14 | ~~键盘/读屏：状态组件固定 id、Audit 详情无 Esc、时间线 500 个 tab 停靠点、表格 caption~~ **2026-10-18 已交付（W1 批次）**：三态组件改用 `useId()`（`web/src/components/common/EmptyState.vue:25`、`ErrorState.vue:27`、`ForbiddenState.vue:25`）；Audit 详情面板支持 Esc（`web/src/components/audit/AuditEventDetail.vue:36`）；时间线条目移出 tab 序并给列表加 `aria-live`（`web/src/components/operations/TimelineEntryItem.vue:50`、`OperationTimeline.vue:52`）；三张表补 caption/scope，审计行补 Space（`web/src/components/audit/AuditEventTable.vue:50`、`OperatorTable.vue:24`、`ConvergenceTaskList.vue:23`） | UX-037、UX-019、UX-020、UX-017 | **M**（已完成） | 间接（H5 相关） |
 | W15 | 列表容量：三处无分页/虚拟滚动 + Inventory 表窄屏横滚 | UX-065、UX-073、UX-035 | **M** | 否 |
-| W16 | ~~请求风暴：Audit 每次按键 `router.replace`、Inventory 刷新未去重~~ **2026-10-18 已交付（W1 批次）**：Audit 的 URL 镜像改为 300 ms debounce（`web/src/pages/AuditPage.vue:100`），submit/reset 立即写；Inventory 的并发刷新共享一个请求（`web/src/stores/releaseInventory.ts:212`），四处入口不再把 MouseEvent 当参数（`web/src/pages/ReleaseInventoryPage.vue`） | UX-011、UX-057 | **S**（已完成） | 否 |
-| W17 | ~~双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 **13 个文件**~~ **2026-10-18 已交付（W1 批次）**：单一实现 `web/src/utils/formatTimestamp.ts:25`；13 处本地副本删除、3 处 `toLocaleString()` 改走同一实现，调用点保留各自的 fallback 词与秒精度（`{ fallback }` / `{ style }`）。复算口径：`grep -rl 'function formatTimestamp' web/src` ⇒ **1**（仅该工具文件） | UX-076、UX-071、UX-077 | **M**（已完成） | 否 |
+| W16 | ~~请求风暴：Audit 每次按键 `router.replace`、Inventory 刷新未去重~~ **2026-10-18 已交付（W1 批次）**：Audit 的 URL 镜像改为 300 ms debounce（`web/src/pages/AuditPage.vue:100`），submit/reset 立即写；Inventory 的并发刷新按**查询签名**去重（签名 = customer/cluster/status/nameSearch，`web/src/stores/releaseInventory.ts:171`）：同签名才 join 一个请求，换筛选时另起 `load()` 且旧响应由 generation 守卫丢弃、不覆盖新筛选（`:193` 的守卫、`:257` 的 `refresh()`）；四处入口不再把 MouseEvent 当参数（`web/src/pages/ReleaseInventoryPage.vue`） | UX-011、UX-057 | **S**（已完成） | 否 |
+| W17 | ~~双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 **13 个文件**~~ **2026-10-18 已交付（W1 批次）**：单一实现 `web/src/utils/formatTimestamp.ts:31`；13 处本地副本删除、3 处 `toLocaleString()` 改走同一实现；调用点保留各自的 fallback 词（`{ fallback }`），审计列表/详情与客户历史 3 处显式传 `{ style: 'medium' }` 保留**秒精度**（`web/src/components/audit/AuditEventTable.vue`、`AuditEventDetail.vue`、`web/src/components/customers/CustomerHistory.vue`），其余调用点保持默认 `short`。复算口径：`grep -rl 'function formatTimestamp' web/src` ⇒ **1**（仅该工具文件） | UX-076、UX-071、UX-077 | **M**（已完成） | 否 |
 | W18 | 巨型组件再拆分（`OperationDetailPage` 481 行） | UX-070 | **M** | 否 |
-| W19 | ~~草稿安全：Values 草稿无 scope/TTL/时间戳~~ **2026-10-18 已交付（W1 批次）**：草稿键含 org/customer/cluster/definition（`web/src/stores/valuesEditor.ts:69`）、记录带 `savedAt` 与 `parentRevisionId`、7 天 TTL（`:34`）、父 Revision 变更即拒绝恢复（`:243`）、`setItem` 失败上报（`:273`）、新增「丢弃本地草稿」（`:466`）；页面提示含保存时刻与丢弃入口 | UX-008 | **S**（已完成） | 否 |
+| W19 | ~~草稿安全：Values 草稿无 scope/TTL/时间戳~~ **2026-10-18 已交付（W1 批次）**：草稿键含 org/customer/cluster/definition（`web/src/stores/valuesEditor.ts:69`）、记录带 `savedAt` 与 `parentRevisionId`、7 天 TTL（`:34`）、父 Revision 变更即拒绝恢复（`:264`）、`setItem` 失败上报（`:280`）、新增「丢弃本地草稿」（`:466`）；页面提示含保存时刻与丢弃入口 | UX-008 | **S**（已完成） | 否 |
 | W20 | ~~会话/剪贴板边界：`useSessionExpiry` **无 2^31-1 上界 clamp**（`web/src/composables/useSessionExpiry.ts:20` 已有下界 `Math.max(0, …)`，真缺陷是 `setTimeout` 的上界溢出 ⇒ 超长有效期会被当 1ms 立刻登出；精确口径同 §3.2 的 UX-055 行）、`copy()` 无失败反馈~~ **2026-10-17 已交付（TASK-325）**：延迟改为分段重排（`web/src/composables/useSessionExpiry.ts:17` 的 2^31-1 上限 + `:42-51` 每次唤醒重算剩余，到点才登出）；`copy()` 失败/成功都出 `Toast`（`web/src/components/operators/EnrollmentTokenModal.vue:70-81`、`:139-154`）。证据见 §3.2 的 UX-055/UX-009 行 | UX-055、UX-009 | **S**（已完成） | 否 |
 | W21 | 设计令牌收尾：`ClusterDetail` 三列无断点、`OperatorTable` nowrap、`EmergencyResultPanel` 溢出未换行 | UX-032、UX-031、UX-033 | **S** | 否 |
 | W22 | 中文收敛（`NOT_YET_MIGRATED` 台账） | UX-084；决策 **G5/D9 延后** | **M** | 否（已裁定延后） |
@@ -442,7 +442,7 @@ ReleaseDefinition `973456b9-…`，已审批 ValuesRevision、7 条历史 Operat
 | --- | --- | --- |
 | **H1 能登录** | **PASS** | 提交后 **621 ms** 离开 `/login`（< 4 s）；`Login` 响应带 `rm_access`/`rm_refresh`/`rm_csrf` 三个 `Set-Cookie`；刷新后仍在会话内。截图 `h1-after-login.png` |
 | **H2 关键页可达** | **PASS（12/12 hop，全程只点击）** | `/` → 客户 → 客户详情 → 集群 → 集群详情 → 发布清单 → 新建操作 → 返回发布清单 → 操作历史 → 操作详情，每一步都经可见链接；发布清单列出绑定的 `e2e-plan/release-fixture`。截图 `h2-*.png` |
-| **H3 危险操作有确认** | **PASS（可测三项）+ 数据缺口两项** | 停用客户 / 停用集群 / 撤销 Operator 三个入口都弹出自定义 `AppDialog`，**Esc 均可关闭**；`window.confirm/alert/prompt` 计数 **0**。**数据缺口**：回滚入口要求 `revision > 1`（库存 revision=1 ⇒ 0 个入口）、解除卡锁页为空态（无卡住的锁）、无待撤销令牌 ⇒ 这三条**未实测**，不是通过 |
+| **H3 危险操作有确认** | **PASS（可测三项）+ 数据缺口三条** | 停用客户 / 停用集群 / 撤销 Operator 三个入口都弹出自定义 `AppDialog`，**Esc 均可关闭**；`window.confirm/alert/prompt` 计数 **0**。**数据缺口**：回滚入口要求 `revision > 1`（库存 revision=1 ⇒ 0 个入口）、解除卡锁页为空态（无卡住的锁）、无待撤销令牌 ⇒ 这三条**未实测**，不是通过 |
 | **H4 失败原因可见** | **PASS** | ① 403（DevTools 改 `ListCustomers` 响应）⇒ `403 无权访问 permission denied`，**无**空态同屏；② 读取失败（abort `ListReleases`）⇒ `Release 列表加载失败` + 重试 + 技术细节，**无** `暂无 Release` 同屏；③ 服务端拒绝（`TriggerInventorySync` ⇒ 503 `operator is offline`）⇒ `Operator 离线，无法触发同步` + 技术细节。截图 `h4-*.png` |
 | **H5 焦点与可访问名** | **PASS** | 对话框打开时焦点在框内，**12 次 Tab 未出框**，Esc 关闭后焦点回到「停用客户」触发按钮；操作表单空提交后两个无效字段各带 `aria-invalid="true"` 且 `aria-describedby` 指向真实错误节点（`请选择制品` / `请选择已审批的配置版本`）。截图 `h5-*.png` |
 | **H6 紧急变更可用** | **BLOCKED（环境数据，不是前端缺陷）** | 入口存在（绑定行 1 个、未绑定行显示「未绑定 Definition」）；页面渲染目标与三条路径，但三条**全部不可用**：operator 会话离线 ⇒ 无容器/副本/注解观测（`镜像变更不可用 / 副本数变更不可用 / 注解变更不可用`）⇒ **无法提交任一路径**。kill switch 关闭态需改服务端投影，未构造 |
@@ -453,7 +453,7 @@ ReleaseDefinition `973456b9-…`，已审批 ValuesRevision、7 条历史 Operat
 未见未捕获异常、未见 Vue 警告升级为 error。
 
 **走查发现的缺陷（已在本批次修）**：读取失败时 `ErrorState` 没有技术细节行，用户拿不到 `requestId` ⇒
-`ReleaseInventory` 现在把 `correlationLine(describeError(...))` 放进 `errorDetails`（`web/src/stores/releaseInventory.ts:191`），
+`ReleaseInventory` 现在把 `correlationLine(describeError(...))` 放进 `errorDetails`（`web/src/stores/releaseInventory.ts:225`），
 同步拒绝的 notice 也带「技术细节」。H4 的复测已从 FAIL 转为 PASS。
 
 ### 10.1 本批次的前端交付（W14 / W16 / W17 / W19）
@@ -461,12 +461,17 @@ ReleaseDefinition `973456b9-…`，已审批 ValuesRevision、7 条历史 Operat
 | 项 | 实现 | 单测（含变异） |
 | --- | --- | --- |
 | W14 a11y 四件 | 见 §5.2 W14 行 | 新增 `StateAccessibility.test.ts`、`AuditEventDetail.test.ts`，扩 `AuditEventTable.test.ts`、`OperationTimeline.test.ts` |
-| W16 请求风暴 | 见 §5.2 W16 行 | `AuditPage.test.ts`（5 次按键 ⇒ 1 次 history 写）、`releaseInventory.test.ts`（并发刷新 1 个请求） |
-| W17 时间格式漂移 | 见 §5.2 W17 行 | 新增 `formatTimestamp.test.ts`（fallback / 三种输入 / 秒精度） |
+| W16 请求风暴 | 见 §5.2 W16 行 | `AuditPage.test.ts`（5 次按键 ⇒ 1 次 history 写）、`releaseInventory.test.ts`（同签名并发刷新 1 个请求；换筛选时另起请求、旧响应不覆盖新筛选） |
+| W17 时间格式漂移 | 见 §5.2 W17 行 | 新增 `formatTimestamp.test.ts`（fallback / 三种输入 / `medium` = 秒）+ 三处审计面组件的秒精度断言（`AuditEventTable.test.ts`、`AuditEventDetail.test.ts`、`CustomerHistory.test.ts`） |
 | W19 草稿安全 | 见 §5.2 W19 行 | `valuesEditor.test.ts` 新增 7 条（父变更、TTL、旧格式、scope、丢弃、配额失败、正常恢复） |
 
 **变异证明**（逐条改坏 ⇒ 目标测试必红 ⇒ 逐字还原并比对 sha256）：9/9 全红 —— 去 debounce、去刷新去重、
 去父 Revision 比对、去 TTL、去 key scope、恢复固定 id、去 `aria-live`、Esc 改为任意键关闭、去表格 Space 处理。
+
+**2026-10-18 复核追加**（W16/W17 阻断项）：① 去刷新签名比对（`refresh()` 改回“有 in-flight 就 join”）⇒
+`releaseInventory.test.ts` 的「换筛选另起请求」必红（`expected "vi.fn()" to be called 2 times, but got 1 times`）；② 去响应守卫（`load()` 不再比对
+generation/签名）⇒ 同一用例的「旧响应不覆盖新筛选」必红（`expected 'missing' to be 'active'`）；
+③ 三处审计面去掉 `{ style: 'medium' }` ⇒ 各自的秒精度断言必红（3/3）。三组均逐字还原并比对 sha256 一致。
 
 ### 10.2 未做 / 风险（如实）
 
