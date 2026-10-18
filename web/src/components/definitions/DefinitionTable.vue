@@ -25,7 +25,21 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <table class="definitions__table">
+  <!--
+    TASK-367: eight columns of names, namespace/release pairs and chart names have a
+    min-content width well above a 375px viewport. The table is wrapped in a labelled,
+    focusable scroll region (the same shape as AuditEventTable and ReleaseInventoryTable)
+    instead of letting the whole page scroll sideways, so a keyboard user can Tab to the
+    region and scroll it with the arrow keys.
+  -->
+  <div
+    class="definitions__scroll"
+    role="region"
+    :aria-label="t('definitions.table.scrollRegion')"
+    tabindex="0"
+    data-testid="definitions-table-scroll"
+  >
+    <table class="definitions__table">
     <thead>
       <tr>
         <th scope="col">名称</th>
@@ -87,10 +101,18 @@ const emit = defineEmits<{
         </td>
       </tr>
     </tbody>
-  </table>
+    </table>
+  </div>
 </template>
 
 <style scoped>
+.definitions__scroll {
+  overflow-x: auto;
+  /* A grid/flex item's automatic minimum would otherwise re-inflate the page to the
+     table's min-content width, which is exactly the bug the wrapper fixes. */
+  min-width: 0;
+}
+
 .definitions__row-actions {
   display: flex;
   gap: var(--space-2);
