@@ -347,7 +347,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 
 ### 5.2 时间与时长
 
-标准是 `google.protobuf.Timestamp`（`api/proto/common/v1/types.proto:16` 等 9 个文件导入）。JSON 线上渲染为 RFC 3339 `Z` 字符串；Go 侧统一 `time.Now().UTC()`（`cmd/**` 与 `internal/**` 非测试代码里 319 处，占全部 353 处 `time.Now()` 的绝大多数；余下多为时延测量与已在 UTC 值上的算术），SQLite 写 RFC3339(Nano) 文本、PostgreSQL 用 `TIMESTAMPTZ`。
+标准是 `google.protobuf.Timestamp`（`api/proto/common/v1/types.proto:16` 等 9 个文件导入）。JSON 线上渲染为 RFC 3339 `Z` 字符串；Go 侧统一 `time.Now().UTC()`（`cmd/**` 与 `internal/**` 非测试代码里占全部 `time.Now()` 的绝大多数；两个计数都随代码增长，不写死，按同一口径现取：`grep -rn 'time\.Now()\.UTC()' cmd internal --include='*.go' | grep -v _test\.go | wc -l` 对 `grep -rn 'time\.Now()' cmd internal --include='*.go' | grep -v _test\.go | wc -l`（逐行计数，测试文件除外）；余下多为时延测量与已在 UTC 值上的算术），SQLite 写 RFC3339(Nano) 文本、PostgreSQL 用 `TIMESTAMPTZ`。
 
 四例非 Timestamp，务必区分：`auth.v1` 的 `int64 expires_at` 是 **Unix 秒**（`api/proto/auth/v1/auth.proto:45`）；`operator.v1.EnrollResponse.certificate_expires_at` 是 RFC3339 字符串；`SubmitBundle` 的 `occurred_at` 是必须为 RFC3339 的字符串，否则 `invalid_argument`（`internal/orchestrator/bundle_service.go:173-175`）；`observe_timeout_display` 是 `time.Duration.String()` 的展示值。全仓库唯一的 `google.protobuf.Duration` 字段是 `UpgradeCommand.timeout`（`api/proto/operator/v1/upgrade_result.proto:78`）。其余时长一律 `_seconds` 后缀标量（`ttl_seconds`、`heartbeat_interval_seconds`、`duration_ms`）。契约里**不存在毫秒 epoch 字段**。
 
