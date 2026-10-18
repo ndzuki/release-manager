@@ -1,17 +1,21 @@
 <script setup lang="ts">
+import { computed, onMounted } from 'vue';
 import { t } from '@/i18n/messages';
-import { computed, onMounted, ref, useId } from 'vue';
-import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import Toast from '@/components/common/Toast.vue';
-import { ORGANIZATION_ROLES, type OrganizationRole } from '@/connect/organization-api';
-import type { OrganizationMemberView, OrganizationView } from '@/connect/organization-api';
+import OrganizationAddMemberForm from '@/components/organization/OrganizationAddMemberForm.vue';
+import OrganizationCreateDialog from '@/components/organization/OrganizationCreateDialog.vue';
+import OrganizationDisableDialog from '@/components/organization/OrganizationDisableDialog.vue';
+import OrganizationMemberTable from '@/components/organization/OrganizationMemberTable.vue';
+import { useMemberAdd } from '@/composables/useMemberAdd';
+import { useOrganizationCreate } from '@/composables/useOrganizationCreate';
+import { useOrganizationDisable } from '@/composables/useOrganizationDisable';
+import type { OrganizationMemberView, OrganizationRole } from '@/connect/organization-api';
 import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
 import { useOrganizationsStore } from '@/stores/organizations';
-import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Organization membership (REQ-026 / A1 of the UX plan's missing surfaces).
@@ -32,14 +36,15 @@ import { formatTimestamp } from '@/utils/formatTimestamp';
  *    policy, so the button follows that role, not `organization/write`;
  *  - disable needs `organization/write` (platform_admin or release_admin) and is
  *    TERMINAL, so it confirms through a danger alertdialog before the RPC runs.
+ *
+ * TASK-363: the page is a composition surface. The list, the add form and the two
+ * dialogs live in components/organization, the create/disable/add state lives in
+ * composables, and what stays here is the store wiring, the role projection and the
+ * page-level states.
  */
 const auth = useAuthStore();
 const store = useOrganizationStore();
 const orgStore = useOrganizationsStore();
-
-const newUserId = ref('');
-const newRole = ref<OrganizationRole>('viewer');
-const addError = ref('');
 
 const activeOrgId = computed(() => auth.activeOrganization?.id ?? '');
 const activeOrgName = computed(() => auth.activeOrganization?.name ?? '');
@@ -54,134 +59,55 @@ const canDisableOrganization = computed(() =>
   auth.roleNames.some((role) => role === 'platform_admin' || role === 'release_admin'),
 );
 
-const creatingOrg = ref(false);
-const newOrgName = ref('');
-const createOrgValidation = ref('');
-const createOrgFailure = ref<string | null>(null);
-const orgIdPrefix = useId();
+const {
+  creating: creatingOrg,
+  name: newOrgName,
+  validationError: createOrgValidation,
+  failure: createOrgFailure,
+  open: startCreateOrg,
+  close: closeCreateOrg,
+  submit: submitCreateOrg,
+} = useOrganizationCreate({
+  create: (name) => orgStore.create(name),
+  failureMessage: () => orgStore.failure?.message ?? null,
+});
 
-function createOrgFieldId(field: string): string {
-  return `${orgIdPrefix}-org-${field}`;
-}
+const {
+  pending: pendingDisableOrg,
+  failure: disableOrgFailure,
+  armFailure: orgArmFailure,
+  loading: loadingOrg,
+  description: disableOrgDescription,
+  arm: armDisableOrg,
+  close: closeDisableOrg,
+  confirm: confirmDisableOrg,
+} = useOrganizationDisable({
+  organizationId: () => activeOrgId.value,
+  read: (orgId) => orgStore.read(orgId),
+  disable: (orgId, expectedVersion) => orgStore.disable(orgId, expectedVersion),
+  failureMessage: () => orgStore.failure?.message ?? null,
+  failureCode: () => orgStore.failure?.code ?? null,
+});
 
-/*
- * Two separate slots on purpose. `disableOrgFailure` is rendered INSIDE the
- * confirmation dialog (the page-level alert sits behind the fixed backdrop), while
- * `orgArmFailure` reports a failure that happened BEFORE the dialog exists — the
- * fresh read that supplies the version, or the absence of an active organization.
- * Sharing one slot is exactly the TASK-303 defect: the dialog would then announce an
- * error from a different operation.
- */
-const pendingDisableOrg = ref<OrganizationView | null>(null);
-const disableOrgFailure = ref<string | null>(null);
-const orgArmFailure = ref<string | null>(null);
-const loadingOrg = ref(false);
-
-const disableOrgDescription = computed(() =>
-  pendingDisableOrg.value ? t('organization.disable.description', { name: pendingDisableOrg.value.name }) : '',
-);
+const {
+  userId: newUserId,
+  role: newRole,
+  error: addError,
+  submit: submitAdd,
+} = useMemberAdd({
+  members: () => store.members,
+  add: (userId, role) => store.add(userId, role),
+});
 
 onMounted(() => {
   if (activeOrgId.value) void store.load(activeOrgId.value);
 });
 
-function startCreateOrg(): void {
-  createOrgValidation.value = '';
-  createOrgFailure.value = null;
-  newOrgName.value = '';
-  creatingOrg.value = true;
-}
-
-async function submitCreateOrg(): Promise<void> {
-  createOrgValidation.value = '';
-  createOrgFailure.value = null;
-  const name = newOrgName.value.trim();
-  if (!name) {
-    createOrgValidation.value = t('organization.create.name');
-    return;
-  }
-  const created = await orgStore.create(name);
-  if (created) {
-    creatingOrg.value = false;
-    return;
-  }
-  createOrgFailure.value = orgStore.failure?.message ?? null;
-}
-
-/**
- * Reads the organization the server holds NOW before arming the confirmation: the
- * version in the session snapshot is from login time, and DisableOrganization is a
- * compare-and-swap, so the stale value would be refused (ABORTED).
- */
-async function armDisableOrg(): Promise<void> {
-  orgArmFailure.value = null;
-  disableOrgFailure.value = null;
-  const orgId = activeOrgId.value;
-  if (!orgId) {
-    orgArmFailure.value = t('organization.disable.unavailable');
-    return;
-  }
-  loadingOrg.value = true;
-  try {
-    const fresh = await orgStore.read(orgId);
-    if (!fresh) {
-      orgArmFailure.value = orgStore.failure?.message ?? null;
-      return;
-    }
-    if (fresh.status === 'disabled') {
-      orgArmFailure.value = t('organization.disable.alreadyDisabled');
-      return;
-    }
-    pendingDisableOrg.value = fresh;
-  } finally {
-    loadingOrg.value = false;
-  }
-}
-
-function closeDisableOrg(): void {
-  disableOrgFailure.value = null;
-  pendingDisableOrg.value = null;
-}
-
-async function confirmDisableOrg(): Promise<void> {
-  const target = pendingDisableOrg.value;
-  if (!target) return;
-  disableOrgFailure.value = null;
-  const disabled = await orgStore.disable(target.id, target.optimisticVersion);
-  if (disabled) {
-    pendingDisableOrg.value = null;
-    return;
-  }
-  disableOrgFailure.value = orgStore.failure?.message ?? null;
-  if (orgStore.failure?.code === 'conflict') {
-    // A lost race means the row moved: re-read so the hinted retry carries the
-    // version the server now holds instead of the one that was just refused.
-    const fresh = await orgStore.read(target.id);
-    if (fresh) pendingDisableOrg.value = fresh;
-    else disableOrgFailure.value = orgStore.failure?.message ?? disableOrgFailure.value;
-  }
-}
-
-async function submitAdd(): Promise<void> {
-  addError.value = '';
-  const userId = newUserId.value.trim();
-  if (!userId) {
-    addError.value = '请填写用户 ID';
-    return;
-  }
-  if (store.members.some((member) => member.userId === userId)) {
-    addError.value = '该用户已是组织成员；请直接修改其角色';
-    return;
-  }
-  // AddMember is not convergent: re-adding fails, so refuse duplicates locally too.
-  const ok = await store.add(userId, newRole.value);
-  if (ok) newUserId.value = '';
-}
-
 /**
  * A rejected change (last platform_admin, missing permission) must not leave the
  * <select> showing the role the server refused: the model value is unchanged, so
- * Vue would not reset the element by itself.
+ * Vue would not reset the element by itself. The native event comes from the table,
+ * which reports which row asked for the change.
  */
 async function changeRole(member: OrganizationMemberView, event: Event): Promise<void> {
   const element = event.target as HTMLSelectElement;
@@ -191,6 +117,9 @@ async function changeRole(member: OrganizationMemberView, event: Event): Promise
   if (!ok) element.value = member.role;
 }
 
+function removeMember(member: OrganizationMemberView): void {
+  void store.remove(member);
+}
 </script>
 
 <template>
@@ -269,128 +198,48 @@ async function changeRole(member: OrganizationMemberView, event: Event): Promise
       message="该组织还没有成员记录。"
     />
 
-    <table v-else-if="store.members.length > 0" class="organization__table">
-      <thead>
-        <tr>
-          <th scope="col">用户</th>
-          <th scope="col">角色</th>
-          <th scope="col">版本</th>
-          <th scope="col">加入时间</th>
-          <th scope="col">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="member in store.members" :key="member.userId" :data-testid="`member-row-${member.userId}`">
-          <td><code>{{ member.userId }}</code></td>
-          <td>
-            <span class="organization__role" :class="`organization__role--${member.role}`">{{ member.role }}</span>
-          </td>
-          <td>{{ member.optimisticVersion }}</td>
-          <td>{{ formatTimestamp(member.createdAt) }}</td>
-          <td v-if="store.canWriteMembership" class="organization__actions">
-            <label class="visually-hidden" :for="`role-${member.userId}`">修改 {{ member.userId }} 的角色</label>
-            <select
-              :id="`role-${member.userId}`"
-              :value="member.role"
-              :disabled="store.saving"
-              @change="changeRole(member, $event)"
-            >
-              <option v-for="role in ORGANIZATION_ROLES" :key="role" :value="role" :disabled="!store.grantableRoles.includes(role)">
-                {{ role }}
-              </option>
-            </select>
-            <button type="button" class="danger" :disabled="store.saving" @click="store.remove(member)">移除</button>
-          </td>
-          <td v-else class="organization__readonly">只读</td>
-        </tr>
-      </tbody>
-    </table>
+    <OrganizationMemberTable
+      v-else-if="store.members.length > 0"
+      :members="store.members"
+      :can-write="store.canWriteMembership"
+      :saving="store.saving"
+      :grantable-roles="store.grantableRoles"
+      @change-role="changeRole"
+      @remove="removeMember"
+    />
 
-    <form v-if="store.canWriteMembership" class="organization__add" @submit.prevent="submitAdd">
-      <h2>添加成员</h2>
-      <label>
-        用户 ID
-        <input v-model="newUserId" name="userId" placeholder="用户 ID" />
-      </label>
-      <label>
-        角色
-        <select v-model="newRole" name="role">
-          <option v-for="role in addableRoles" :key="role" :value="role">{{ role }}</option>
-        </select>
-      </label>
-      <button type="submit" :disabled="store.saving">{{ store.saving ? '提交中…' : '添加' }}</button>
-      <p v-if="addError" class="organization__error" role="alert" data-testid="organization-add-error">{{ addError }}</p>
-    </form>
+    <OrganizationAddMemberForm
+      v-if="store.canWriteMembership"
+      v-model:user-id="newUserId"
+      v-model:role="newRole"
+      :roles="addableRoles"
+      :saving="store.saving"
+      :error="addError"
+      @submit="submitAdd"
+    />
 
     <!-- TASK-301: create an organization (platform_admin only). The failure is
          rendered inside the dialog, where the user already is. -->
-    <AppDialog
+    <OrganizationCreateDialog
+      v-model:name="newOrgName"
       :open="creatingOrg"
-      :title="t('organization.create.title')"
-      :close-on-backdrop="false"
-      :close-on-escape="!orgStore.saving"
-      @close="creatingOrg = false"
-    >
-      <div class="organization__create">
-        <p class="organization__hint">{{ t('organization.create.hint') }}</p>
-        <form @submit.prevent="submitCreateOrg">
-          <div class="organization__field">
-            <label :for="createOrgFieldId('name')">{{ t('organization.create.name') }}</label>
-            <input :id="createOrgFieldId('name')" v-model="newOrgName" name="organizationName" />
-          </div>
-          <p
-            v-if="createOrgValidation"
-            class="organization__error"
-            role="alert"
-            data-testid="organization-create-validation"
-          >
-            {{ createOrgValidation }}
-          </p>
-          <p v-if="createOrgFailure" class="organization__error" role="alert" data-testid="organization-create-error">
-            {{ createOrgFailure }}
-          </p>
-          <div class="organization__actions">
-            <button type="button" :disabled="orgStore.saving" @click="creatingOrg = false">
-              {{ t('action.cancel') }}
-            </button>
-            <button type="submit" :disabled="orgStore.saving" data-testid="organization-create-submit">
-              {{ orgStore.saving ? t('organization.create.submitting') : t('organization.create.submit') }}
-            </button>
-          </div>
-        </form>
-      </div>
-    </AppDialog>
+      :saving="orgStore.saving"
+      :validation-error="createOrgValidation"
+      :failure="createOrgFailure"
+      @close="closeCreateOrg"
+      @submit="submitCreateOrg"
+    />
 
     <!-- TASK-301: disabling is terminal, so it confirms through a danger
          alertdialog; the RPC runs from `confirmDisableOrg`, never from the header. -->
-    <AppDialog
+    <OrganizationDisableDialog
       v-if="pendingDisableOrg"
-      :open="true"
-      :title="t('organization.disable.title')"
       :description="disableOrgDescription"
-      danger
-      :close-on-backdrop="false"
-      :close-on-escape="!orgStore.saving"
+      :failure="disableOrgFailure"
+      :saving="orgStore.saving"
       @close="closeDisableOrg"
-    >
-      <p v-if="disableOrgFailure" class="organization__error" role="alert" data-testid="organization-disable-error">
-        {{ disableOrgFailure }}
-      </p>
-      <template #footer>
-        <button type="button" :disabled="orgStore.saving" @click="closeDisableOrg">
-          {{ t('action.cancel') }}
-        </button>
-        <button
-          type="button"
-          class="organization__confirm-danger"
-          :disabled="orgStore.saving"
-          data-testid="organization-disable-confirm"
-          @click="confirmDisableOrg"
-        >
-          {{ orgStore.saving ? t('organization.disable.submitting') : t('organization.disable.confirm') }}
-        </button>
-      </template>
-    </AppDialog>
+      @confirm="confirmDisableOrg"
+    />
   </section>
 </template>
 
@@ -446,48 +295,6 @@ async function changeRole(member: OrganizationMemberView, event: Event): Promise
   color: var(--color-error);
 }
 
-.organization__create {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.organization__create form {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.organization__field {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.organization__field label {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-}
-
-.organization__create input {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.organization__create .organization__actions {
-  justify-content: flex-end;
-}
-
-/* AppDialog's footer supplies the baseline; the danger tone is the caller's rule. */
-.organization__confirm-danger {
-  border-color: var(--color-danger-border);
-  color: var(--color-error);
-}
-
-.organization__hint {
-  margin: 0;
-  color: var(--color-muted);
-}
-
 .organization__notice {
   margin: 0;
   padding: var(--space-2) var(--space-3);
@@ -495,86 +302,6 @@ async function changeRole(member: OrganizationMemberView, event: Event): Promise
   border-radius: var(--radius-lg);
   background: var(--color-success-surface-soft);
   color: var(--color-success-ink);
-}
-
-.organization__table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--color-surface);
-}
-
-.organization__table th,
-.organization__table td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
-  text-align: left;
-}
-
-.organization__role {
-  padding: 0.1rem var(--space-2);
-  border-radius: var(--radius-xl);
-  background: var(--color-surface-muted);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-}
-
-.organization__role--platform_admin {
-  background: var(--color-info-subtle);
-  color: var(--color-info-ink-strong);
-}
-
-.organization__actions {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.organization__actions button,
-.organization__add button {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  cursor: pointer;
-}
-
-.organization__actions button.danger {
-  border-color: var(--color-danger-border);
-  color: var(--color-error);
-}
-
-.organization__readonly {
-  color: var(--color-muted);
-}
-
-.organization__add {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-end;
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-}
-
-.organization__add h2 {
-  margin: 0;
-  font-size: var(--font-size-lg);
-}
-
-.organization__add label {
-  display: grid;
-  gap: var(--space-1);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-}
-
-.organization__add input,
-.organization__add select {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
 }
 
 .organization__error {
