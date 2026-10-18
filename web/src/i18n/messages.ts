@@ -439,6 +439,7 @@ const zhCN = {
   'definitions.valuesPath': 'Values 路径',
   'definitions.customerId': '客户 ID',
   'definitions.clusterId': '集群 ID',
+  'definitions.table.scrollRegion': '发布定义表格（可横向滚动）',
   'definitions.editorTitle': '编辑 {name}（版本 {version}）',
   // TASK-301: creating and disabling a definition had no console surface.
   'definitions.create.open': '新建定义',
@@ -462,6 +463,7 @@ const zhCN = {
   'definitions.disable.submitting': '禁用中…',
   'definitions.disable.success': '已停用定义 {name}',
   // TASK-301: organization-level create/disable (REQ-026); the member surface is A1.
+  'organization.table.scrollRegion': '组织成员表格（可横向滚动）',
   'organization.create.open': '新建组织',
   'organization.create.title': '新建组织',
   'organization.create.name': '组织名称',

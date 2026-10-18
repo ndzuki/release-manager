@@ -45,6 +45,10 @@ const role = defineModel<OrganizationRole>('role', { required: true });
 <style scoped>
 .organization__add {
   display: flex;
+  /* TASK-367: a single non-wrapping row (heading + two fields + button) has a
+     min-content width above 375px and used to stretch the whole page. Wrapping is
+     inert at desktop widths, where the row already fits. */
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-end;
   padding: var(--space-4);
