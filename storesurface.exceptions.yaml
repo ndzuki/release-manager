@@ -175,7 +175,7 @@ exceptions:
     review_by: "2026-12-31"
   - interface: VulnerabilityExceptionStore
     method: Get
-    reason: "[deferred-unwired] 暂缓保留（用户裁定 2026-09-30「暂缓不得删」）：整个漏洞例外面**未装配**——vulnerability.NewService 在**生产无调用者**（仅测试 internal/orchestrator/vulnerability_test.go:48 构造未装配实例）、Service.SetVulnerabilityEvaluator **无任何调用点**（只有其声明、doc 注释，以及 SECURITY.md:511 与 docs/runbook.md:233 两处文档提及，两文都写着「尚无生产调用者」）；REQ-042 的 SBOM/漏洞准入扫描器方案未裁定（见 gotcha req042-vulnerability-admission）。本方法**生产 0 调用**（仅 1 处测试读取 internal/store/postgres/store_test.go:1193）⇒ 属「未装配」而非死代码，删除会抹掉未来接线的锚点。待 REQ-042 方案落定后重新裁定。"
+    reason: "[deferred-unwired] 暂缓保留（用户裁定 2026-09-30「暂缓不得删」）：整个漏洞例外面**未装配**——vulnerability.NewService 在**生产无调用者**（仅测试 internal/orchestrator/vulnerability_test.go:48 构造未装配实例）、Service.SetVulnerabilityEvaluator **无任何调用点**（只有其声明、doc 注释，以及 SECURITY.md:511 与 docs/runbook.md:233 两处文档提及，两文都写着「尚无生产调用者」）；REQ-042 的 SBOM/漏洞准入扫描器方案未裁定（见 gotcha req042-vulnerability-admission）。本方法**生产 0 调用**（仅 1 处测试读取 internal/store/postgres/store_test.go:1296）⇒ 属「未装配」而非死代码，删除会抹掉未来接线的锚点。待 REQ-042 方案落定后重新裁定。"
     review_by: "2026-12-31"
     citations:
       - file: internal/orchestrator/vulnerability_test.go
@@ -188,5 +188,5 @@ exceptions:
         line: 233
         contains: "SetVulnerabilityEvaluator"
       - file: internal/store/postgres/store_test.go
-        line: 1193
+        line: 1296
         contains: "VulnerabilityExceptions().Get("

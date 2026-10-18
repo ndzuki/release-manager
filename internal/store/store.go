@@ -1645,6 +1645,24 @@ const ReachableBundlePredicate = `
 		)
 	)`
 
+// DefinitionVisibleToOrganizationPredicate is the single tenant predicate for a
+// scoped release-definition read (TASK-371). Both engines run this exact text as a
+// WHERE fragment over `release_definitions`, with two arguments in this order:
+// organization, active binding status.
+//
+// It enforces the same rule as the per-definition read gate
+// (Service.authorizeReadDefinition in internal/orchestrator/service.go): an ACTIVE
+// org-customer binding for the definition's customer. There is deliberately NO
+// owner_organization_id branch: ownership records where a definition was created,
+// while the read gate withdraws every read once the binding is revoked
+// (docs/architecture.md 1.5.1), and a list that showed a row Get would refuse
+// would reintroduce the enumeration oracle this predicate exists to close.
+const DefinitionVisibleToOrganizationPredicate = `
+	EXISTS (
+		SELECT 1 FROM org_customer_bindings AS bind
+		WHERE bind.org_id = ? AND bind.customer_id = release_definitions.customer_id AND bind.status = ?
+	)`
+
 // BundleListFilter narrows bundle queries and binds opaque pagination tokens.
 type BundleListFilter struct {
 	ReleaseDefinitionID string
@@ -2116,6 +2134,12 @@ type DefinitionStore interface {
 	Get(ctx context.Context, id string) (*ReleaseDefinition, error)
 	Update(ctx context.Context, def *ReleaseDefinition, event *ReleaseDefinitionEvent) (*ReleaseDefinition, error)
 	List(ctx context.Context, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
+	// ListForOrganization is List with the tenant scope applied: only definitions
+	// whose customer has an ACTIVE org-customer binding for orgID are returned
+	// (TASK-371, see DefinitionVisibleToOrganizationPredicate). An empty customer
+	// filter means "every customer reachable from orgID", never "every tenant" --
+	// orgID is required so a caller cannot accidentally get the unscoped result.
+	ListForOrganization(ctx context.Context, orgID, customerID, clusterID string, includeDisabled bool) ([]*ReleaseDefinition, error)
 }
 
 // ReleaseDefinitionEvent is emitted for release definition lifecycle changes.

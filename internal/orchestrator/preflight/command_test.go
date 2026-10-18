@@ -145,6 +145,9 @@ func (s *stubDefinitionStore) Update(_ context.Context, _ *store.ReleaseDefiniti
 func (s *stubDefinitionStore) List(_ context.Context, _, _ string, _ bool) ([]*store.ReleaseDefinition, error) {
 	return nil, nil
 }
+func (s *stubDefinitionStore) ListForOrganization(_ context.Context, _, _, _ string, _ bool) ([]*store.ReleaseDefinition, error) {
+	return nil, nil
+}
 func (s *stubDefinitionStore) SetCurrentBundle(_ context.Context, _, _ string) (bool, error) {
 	return false, nil
 }

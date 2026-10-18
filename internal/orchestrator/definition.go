@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -161,11 +162,23 @@ func releaseDefinitionOwner(
 
 // GetReleaseDefinition retrieves a release definition by ID.
 //
+// TASK-371: the id alone is not an authorization. The definition is subject to
+// the same tenant rule as an operation read on it
+// (authorizeReadDefinition: an ACTIVE org-customer binding plus an active
+// membership), and an unreadable definition answers NOT_FOUND rather than
+// PERMISSION_DENIED so the code cannot be used to enumerate ids across
+// organizations.
+//
 //nolint:dupl // Resource Get handlers intentionally share the project-wide Connect error mapping.
 func (s *Service) GetReleaseDefinition(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.GetReleaseDefinitionRequest],
 ) (*connect.Response[orchestratorv1.GetReleaseDefinitionResponse], error) {
+	actor, err := definitionReadActor(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	def, err := s.store.Definitions().Get(ctx, req.Msg.GetDefinitionId())
 	if err != nil {
 		if err == store.ErrNotFound {
@@ -175,17 +188,44 @@ func (s *Service) GetReleaseDefinition(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	if err := s.authorizeReadDefinition(ctx, def, actor); err != nil {
+		if connect.CodeOf(err) == connect.CodePermissionDenied {
+			// Same answer as an unknown id: an unreadable definition must not be
+			// distinguishable from a missing one (TASK-371).
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("definition %q not found", req.Msg.GetDefinitionId()))
+		}
+		return nil, err
+	}
+
 	return connect.NewResponse(&orchestratorv1.GetReleaseDefinitionResponse{
 		Definition: toProtoDefinition(def),
 	}), nil
 }
 
 // ListReleaseDefinitions lists definitions, optionally filtered by customer and cluster.
+//
+// TASK-371: the result is always scoped to the caller's organization. Before this
+// change an empty customer_id meant "every tenant" -- the store appends the
+// customer predicate only when the parameter is non-empty, and the interceptor's
+// binding check also fires only for a non-empty customer_id -- so any
+// authenticated viewer could enumerate every organization's definitions. The list
+// is now restricted to customers with an ACTIVE binding to the caller's
+// organization, the same tenant rule an operation read on the definition
+// enforces. Requiring customer_id was not an option: the console's default page
+// sends empty filters (web/src/stores/definitions.ts).
 func (s *Service) ListReleaseDefinitions(
 	ctx context.Context,
 	req *connect.Request[orchestratorv1.ListReleaseDefinitionsRequest],
 ) (*connect.Response[orchestratorv1.ListReleaseDefinitionsResponse], error) {
-	defs, err := s.store.Definitions().List(ctx,
+	actor, err := definitionReadActor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireActiveMembership(ctx, actor); err != nil {
+		return nil, err
+	}
+
+	defs, err := s.store.Definitions().ListForOrganization(ctx, actor.OrganizationID,
 		req.Msg.GetCustomerId(), req.Msg.GetClusterId(),
 		req.Msg.GetIncludeDisabled(),
 	)
@@ -202,6 +242,32 @@ func (s *Service) ListReleaseDefinitions(
 	return connect.NewResponse(&orchestratorv1.ListReleaseDefinitionsResponse{
 		Definitions: protoDefs,
 	}), nil
+}
+
+// definitionReadActor returns the actor a definition read is scoped to. Both read
+// paths are anchored to an organization, so a caller without one (including a
+// service token, which is not used for these procedures) is unauthenticated.
+func definitionReadActor(ctx context.Context) (authctx.Actor, error) {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok || actor.OrganizationID == "" || actor.UserID == "" {
+		return authctx.Actor{}, connect.NewError(connect.CodeUnauthenticated,
+			fmt.Errorf("an authenticated organization member is required to read release definitions"))
+	}
+	return actor, nil
+}
+
+// requireActiveMembership mirrors the membership half of authorizeReadDefinition
+// for a read that spans several definitions and therefore has no single
+// definition to authorize (TASK-371).
+func (s *Service) requireActiveMembership(ctx context.Context, actor authctx.Actor) error {
+	if _, err := s.store.OrgMembers().Get(ctx, actor.OrganizationID, actor.UserID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return cancelOperationError(connect.CodePermissionDenied, "membership_inactive",
+				errors.New("actor has no active membership"))
+		}
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("membership lookup: %w", err))
+	}
+	return nil
 }
 
 // UpdateReleaseDefinition updates mutable fields of a definition with optimistic locking.

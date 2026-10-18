@@ -156,6 +156,43 @@ func (s *definitionStore) List(
 	}
 	query += ` ORDER BY created_at DESC`
 
+	return s.queryDefinitions(ctx, query, args)
+}
+
+// ListForOrganization is List with the tenant scope applied; the predicate lives
+// in store.DefinitionVisibleToOrganizationPredicate so SQLite and PostgreSQL
+// cannot disagree about who may read a definition (TASK-371).
+func (s *definitionStore) ListForOrganization(
+	ctx context.Context,
+	orgID, customerID, clusterID string,
+	includeDisabled bool,
+) ([]*store.ReleaseDefinition, error) {
+	if orgID == "" {
+		return nil, errors.New("list definitions for organization: organization is required")
+	}
+	query := definitionSelect + ` WHERE ` + store.DefinitionVisibleToOrganizationPredicate
+	args := []any{orgID, string(store.BindingActive)}
+	if customerID != "" {
+		query += ` AND customer_id = ?`
+		args = append(args, customerID)
+	}
+	if clusterID != "" {
+		query += ` AND cluster_id = ?`
+		args = append(args, clusterID)
+	}
+	if !includeDisabled {
+		query += ` AND status != 'disabled'`
+	}
+	query += ` ORDER BY created_at DESC`
+
+	return s.queryDefinitions(ctx, query, args)
+}
+
+func (s *definitionStore) queryDefinitions(
+	ctx context.Context,
+	query string,
+	args []any,
+) ([]*store.ReleaseDefinition, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list definitions: %w", err)
