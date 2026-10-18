@@ -2,7 +2,7 @@
 
 本文是 `deploy/kustomize/production` overlay 在**单节点 k3d 集群**上的部署与运维手册：前置条件、必填 Secret、启动顺序、TLS、备份恢复、升级回滚、可观测面与已知限制。manifest 的结构与逐条设计理由不在此重复，见 [production overlay README](../deploy/kustomize/production/README.md)；故障处置的通用路径见 [runbook](runbook.md)。
 
-**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
+**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），同日的 TASK-366 增量发布再把 tag 前移到 `6f343cf`（§8.6）；§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
 
 ## 0. 速览
 
@@ -14,7 +14,7 @@
 | PVC | **5 个全部 `Bound`**（含自动备份卷 `release-manager-backups`） | 同上 + `kubectl -n release-manager get pvc` |
 | 渲染对象 | **45 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 3 PVC / 9 NetworkPolicy / 1 CronJob） | `kubectl kustomize`，纯本地渲染，不接触集群 |
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
-| 镜像 tag | `778ded6`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-362，见 §8.5 |
+| 镜像 tag | `6f343cf`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-366，见 §8.6 |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
 | operator 网关 | `https://127.0.0.1:8444`（mTLS；2026-10-18 12:28 起仅 loopback，跨机接入见 §10-5） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
 | 宿主端口绑定 | 8443/8444 → `127.0.0.1`（无 `0.0.0.0`/`[::]`）；6443 API 仍是 `0.0.0.0:44609` | 2026-10-18 12:28 `docker port`，见 §10-5 |
@@ -26,7 +26,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:778ded6`（2026-10-18 前为 `876df9a`，更早为 `3ecf69b`，见 §8.5 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:6f343cf`（2026-10-18 前为 `778ded6`、更前为 `876df9a`，见 §8.5/§8.6 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`），经 `operator` Service 的 NodePort 30844 暴露给客户集群 |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -828,6 +828,100 @@ kubectl -n release-manager rollout status deploy/<svc> --timeout=300s
 - `web` 镜像包含 #437 的 W9/W10/W12/W21，本次只验证页面可加载与数据可见，**没有逐项复验每个 UX 条目**。
 - 用 `kubectl set image` 直接改 Deployment，绕过了 kustomize 的 tag 默认值：仓库清单里的 tag 仍是 `:dev`，`kubectl apply -k` 会把它改回去（正式发布走 §2.3 的改 tag + apply）。
 - `operator` 镜像构建了但**没有部署**（它跑在客户集群里，本集群没有对应工作负载）；`notification-sink` 同理。
+
+### 8.6 实测：`6f343cf` 增量发布与 #440 SIGTERM 修复验证（2026-10-18，TASK-366）
+
+TASK-362 之后的第二次发布：把 `origin/main` 从 `778ded6` 前移到 `6f343cf`。区间内只有三个合并：#438（纯文档）、#439（web W18 拆分，`OperationDetailPage` 484→246 行，行为不变）、#440（`internal/auth` policy reloader shutdown panic 修复，以及 `cmd/auth`、`cmd/orchestrator` 的关闭顺序）。本次把 6 个服务和 `web` 全量滚到 `:6f343cf`，并在新 `auth` Pod 上做了一次真实 SIGTERM。
+
+**基线（发布前实测，2026-10-18 15:08 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | 全部 `:778ded6`（`api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web`）；`edge=nginx:1.27-alpine` |
+| revision | `api=10`、`auth=2`、`orchestrator=2`、`notifier=2`、`webhook=2`、`web=8`、`edge=1` |
+| Pod | 10 个工作负载 `1/1` + 1 个 `Completed` 的备份 Job Pod；`RESTARTS` 全 0 |
+| PVC | 5 个全部 `Bound` |
+| schema | `35\|false` |
+| 数据面 | `release_definitions=4`、`audit_events=34`、`sessions=9`、`operations=6` |
+| 入口 | `https://localhost:8443/` → 200（5.6 ms）；浏览器登录离开 `/login` **883 ms** |
+| 备份 | `release_manager-20261018T020000Z.dump`，**159,481 B**（02:00 UTC 的 CronJob 产出，取自 Job 日志；`release_notifier` 同批 4,592 B） |
+| 回滚基线 | `kubectl -n release-manager get deploy -o yaml > /tmp/rm366/deploys-baseline-778ded6.yaml`（945 行，本次已落盘） |
+
+**构建与导入**
+
+```bash
+git worktree add /tmp/rm-wt366 -b chore/366-deploy-6f343cf origin/main   # HEAD = 6f343cf
+cd /tmp/rm-wt366
+make docker-build-all IMAGE_TAG=6f343cf
+for svc in api auth orchestrator operator webhook notifier notification-sink web; do
+  docker save --platform linux/amd64 -o "/tmp/rm366/$svc.tar" "localhost:5001/release-$svc:6f343cf"
+done
+k3d image import -c rm-prod /tmp/rm366/*.tar 2>&1 | tee /tmp/rm366/import-all.log
+grep ERRO /tmp/rm366/import-all.log      # 0 命中
+```
+
+- 8 个镜像全部 `linux/amd64`；8 个 tar 合计 **118,385,152 B**（≈113 MiB）。
+- 导入 **23 s**，输出 `Successfully imported 8 image(s)`，`grep ERRO` **0 命中**；节点内 `crictl images` 可见 8 个 `:6f343cf`。
+
+**滚动（逐个 `set image`，每步 `rollout status` 后立即验 `/health` + `/readyz`）**
+
+| 服务 | 滚动耗时 | `/health` | `/readyz` |
+| --- | --- | --- | --- |
+| `auth` | **≈6 s** | 200 | 200 |
+| `orchestrator` | **5.8 s** | 200 | 200 |
+| `web` | **7.7 s** | 200 | 200 |
+| `api` | **5.7 s** | 200 | 200 |
+| `notifier` | **5.7 s** | 200 | 200 |
+| `webhook` | **5.7 s** | 200 | 200 |
+
+- 没有任何一步失败，未触发 `undo`。发布后 revision：`api=11`、`auth=3`、`web=9`、`orchestrator`/`notifier`/`webhook=3`（`edge` 仍 1）。
+- `auth` 的耗时由 Event 时间戳回算（`07:11:36Z` 新 ReplicaSet 扩容 → `07:11:42Z` 新 Pod Ready 且旧 ReplicaSet 缩到 0）：首个计时脚本用了宿主没有的 `bc`，auth 的计时打印失败并使脚本中止（auth 本身已滚动成功），后续服务改用 ms 整数计时。
+- 命令模板（`$SVC` 为服务名）：`kubectl -n release-manager set image deploy/$SVC $SVC=localhost:5001/release-$SVC:6f343cf` + `kubectl -n release-manager rollout status deploy/$SVC --timeout=300s`。
+
+**⭐ SIGTERM 验证（#440 / TASK-365）**
+
+- 对象：滚动后的新 `auth` Pod `auth-5c75c9d66d-62w6m`（`release-auth:6f343cf`、`RESTARTS=0`、`terminationGracePeriodSeconds=30`）。
+- 删除前：启动日志正常（`store opened`、`redis session adapter enabled`、`release-auth started`），`/readyz` = **200** `{"checks":{"database":"ok","noop":"ok","redis":"ok"},"status":"ok"}`。
+- 操作：先 `kubectl logs -f <pod>` 持续抓日志，再 `kubectl delete pod <pod>`（由 kubelet 发 SIGTERM），等待删除完成。
+
+被删 Pod 的完整关闭日志（`/tmp/rm366/auth-sigterm.log` 原文，共 7 行，前 5 行为启动日志）：
+
+```text
+{"time":"2026-10-18T07:12:43.281273028Z","level":"INFO","msg":"shutting down"}
+{"time":"2026-10-18T07:12:43.281464647Z","level":"INFO","msg":"release-auth stopped"}
+```
+
+- **没有 panic**：日志中没有 `panic: runtime error: invalid memory address or nil pointer dereference`，也没有 `service close error`；进程走完了 `app.Run` 的 graceful shutdown（`shutting down` → `release-auth stopped`），`kubectl logs -f` 正常 EOF（exit 0）。
+- 关闭顺序符合 #440 的意图：`enforcer.Close()` 在 `store.Close()` 之前，先取消并 join policy reloader，再关连接池。
+- **口径**：这只是**一次** SIGTERM（删除 1 个 Pod），不是完整 SIGTERM 演练；旧竞态需要 reload tick 与 teardown 撞车，单次删除不保证命中时序。确定性证据是 `internal/auth/casbin_reloader_test.go` 的 3 条回归测试（`Apply` 返回 nil snapshot、reload 进行中 `Close`、`Close` 后不再 reload），本次**没有重跑单测**，只验生产路径。
+- 替换 Pod `auth-5c75c9d66d-dtt2k` 起来后 `/readyz` 200，集群恢复 10/10。
+
+**其余验证**
+
+- Pod：10 个工作负载 `1/1` + 1 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0。
+- 服务：6 个 `/health`/`/readyz` 全 200（`web` 的两条路径仍是 nginx 反代到 orchestrator，不是 web 自身检查）。
+- 迁移：`schema_migrations` 保持 `35|f`；`git diff 778ded6..6f343cf` 不含 `migrations/` 变更，本次不执行迁移。
+- 数据面：`release_definitions=4`、`sessions=9`、`operations=6` 不变；`audit_events` **34 → 35**，新增一行是 orchestrator 重启时写下的 `cleanup.gc`（资源 `gc-startup-1`，`2026-10-18T07:12:00Z`，审计页可检索），不是发布引入的业务写入。
+- 冒烟（真 Chrome：playwright-core + 系统 Chrome + `ignoreHTTPSErrors`）：登录离开 `/login` **955 ms**；`/audit` 200（页面 **20 行 / 共 35 条**）；`/operations` 200（当下无非终态 Operation，空态）；Release 清单 200（**2 行**）；Release 操作历史 200（空态）；Operation 详情 200（真实紧急操作 `40696e12…`，渲染 Intent/Before/After 与状态时间线）。控制台 2 条 error，都是登录前 `ValidateToken`/`RefreshToken` 的 **401**（未登录探测），页面自身零未归因 error、零失败请求。
+- 截图：`/tmp/rm366-evidence/` 下 `00-baseline-home.png`、`01-login.png`、`02-audit.png`、`02-operations.png`、`02-release-inventory.png`、`02-release-operations.png`、`02-operation-detail.png`；原始结果 `baseline-login.json`、`smoke-result.json`。
+
+**回滚（本次未执行）**
+
+```bash
+kubectl -n release-manager rollout undo deploy/<svc>
+kubectl -n release-manager rollout status deploy/<svc> --timeout=300s
+# <svc> ∈ api auth orchestrator notifier webhook web
+```
+
+- 上一版都在：`api` rev 10、`auth` rev 2、`orchestrator`/`notifier`/`webhook` rev 2、`web` rev 8，镜像全部是 `:778ded6`。
+- 本区间没有迁移，回滚只是镜像级，不涉及 schema 或数据回退；`undo` 同样按 §8.2.1 再开一个 revision。
+
+**本次边界（未验证，别外推）**
+
+- SIGTERM 只删了 1 个 Pod、只测了 `auth`；`orchestrator` 的同款关闭顺序没有单独触发。
+- `web` 的 W18 拆分只验证页面可加载与数据可见（audit / operations / release inventory / operation detail），没有逐像素复验；0 像素差异的证据在拆分提交 #439 自己的交付记录里，本次不重做。
+- 用 `kubectl set image` 直改 Deployment，仓库清单 tag 仍是 `:dev`；`kubectl apply -k` 会把它改回去，正式发布仍走 §2.3。
+- 新 `auth` Pod 启动时仍会先打一条 `WARN PostgreSQL not reachable yet, retrying`（约 0.9 s 后恢复，PG `RESTARTS=0`），与 TASK-362 的观察一致，是 #426 有界等待在生效，不是本次回归。
 
 ## 9. 可观测
 
