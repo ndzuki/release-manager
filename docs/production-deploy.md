@@ -2,7 +2,7 @@
 
 本文是 `deploy/kustomize/production` overlay 在**单节点 k3d 集群**上的部署与运维手册：前置条件、必填 Secret、启动顺序、TLS、备份恢复、升级回滚、可观测面与已知限制。manifest 的结构与逐条设计理由不在此重复，见 [production overlay README](../deploy/kustomize/production/README.md)；故障处置的通用路径见 [runbook](runbook.md)。
 
-**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
+**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
 
 ## 0. 速览
 
@@ -14,11 +14,11 @@
 | PVC | **5 个全部 `Bound`**（含自动备份卷 `release-manager-backups`） | 同上 + `kubectl -n release-manager get pvc` |
 | 渲染对象 | **45 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 3 PVC / 9 NetworkPolicy / 1 CronJob） | `kubectl kustomize`，纯本地渲染，不接触集群 |
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
-| 镜像 tag | `a6707b6`（`git rev-parse --short HEAD`） | `kubectl get pods -o jsonpath=…image`、`crictl images` |
+| 镜像 tag | `778ded6`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-362，见 §8.5 |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
 | operator 网关 | `https://127.0.0.1:8444`（mTLS；2026-10-18 12:28 起仅 loopback，跨机接入见 §10-5） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
 | 宿主端口绑定 | 8443/8444 → `127.0.0.1`（无 `0.0.0.0`/`[::]`）；6443 API 仍是 `0.0.0.0:44609` | 2026-10-18 12:28 `docker port`，见 §10-5 |
-| schema | `schema_migrations` = `34`, `dirty=f` | 只读 SQL，见 §11 |
+| schema | `schema_migrations` = `35`, `dirty=f`（2026-10-18 前为 `34`） | 只读 SQL，见 §8.5 |
 
 ## 1. 现状与拓扑
 
@@ -26,7 +26,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:ceda261`（2026-10-17 实测为 `3ecf69b`，见 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:778ded6`（2026-10-18 前为 `876df9a`，更早为 `3ecf69b`，见 §8.5 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`），经 `operator` Service 的 NodePort 30844 暴露给客户集群 |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -720,6 +720,114 @@ kubectl -n release-manager get pods
 - 镜像构建用了本机 CN 镜像前缀 `docker.1ms.run/library/{node,nginx}:…`；Dockerfile 默认是 digest 固定的官方镜像，两者不保证逐字节相同。CI 或可复现构建应使用默认参数。
 - 演练用 `kubectl set image` + `rollout undo`，**绕过了 kustomize 的 tag 默认值**：仓库里的 6 个 tag 仍是 `:dev`，本次也没有改 `last-applied-configuration`。正式发布仍以 §2.3 + `kubectl apply -k` 为准；本节的命令只用于单服务、可回滚的紧急升级。
 - 演练结束后 `web` Deployment 的镜像与 Pod 数已回到演练前（`ceda261`、2/2），但 **revision 注解从 2 变成 4**、revision 序列变成了 `1,3,4`；这是 `rollout undo` 的记账副作用，不是配置漂移。
+
+### 8.5 实测：`778ded6` 全量发布与迁移 34→35（2026-10-18，TASK-362）
+
+TASK-349 只换过 `web` 一个 Deployment，且没有跑迁移；本次把 `origin/main` 的 `778ded6`（#432 owner 校验、#436 `sessions` 身份列 + 迁移 000035、#437 web W9/W10/W12/W21）**全量**上线，第一次在生产路径上验证「6 个 Go 服务 + web 一起换镜像、由新进程前滚迁移」。
+
+**基线（发布前实测）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api=localhost:5001/release-api:876df9a`；`auth`/`orchestrator`/`notifier`/`webhook=…:a6707b6`；`web=…:ceda261`；`edge=nginx:1.27-alpine` |
+| revision | `api=9`、`web=7`、`auth`/`orchestrator`/`notifier`/`webhook=1`、`edge=1` |
+| Pod | 10 个工作负载 Pod `1/1` + 1 个 `Completed` 的备份 Job Pod |
+| schema | `34\|false` |
+| `sessions` | 9 行，其中 6 行的 `customer_id`/`cluster_id` 为空串 |
+| 入口 | `https://localhost:8443/` → 200 |
+| 备份 | `release_manager-20261018T020000Z.dump`，**159,481 B**（02:00 UTC 的 CronJob 产出，取自 Job 日志） |
+
+**构建与导入**
+
+宿主是 `x86_64`、Docker server arch `amd64`；构建目标 8 个（含 `operator` 与 `notification-sink`，`edge` 用现成的 `nginx:1.27-alpine` 不动）：
+
+```bash
+git worktree add /tmp/rm-wt362 -b chore/362-deploy-fixes origin/main   # HEAD = 778ded6
+cd /tmp/rm-wt362
+make docker-build-all IMAGE_TAG=778ded6
+for svc in api auth orchestrator operator webhook notifier notification-sink web; do
+  docker save --platform linux/amd64 -o "/tmp/rm362/$svc.tar" "localhost:5001/release-$svc:778ded6"
+done
+k3d image import -c rm-prod /tmp/rm362/*.tar 2>&1 | tee /tmp/rm362/import-all.log
+grep ERRO /tmp/rm362/import-all.log      # 0 行
+```
+
+- `docker image inspect` 显示 8 个镜像全是 `linux/amd64`；`docker save` 产物的 `index.json` 只有 amd64 一个 manifest（构建走 buildx，attestation 不随 `--platform` 进 tar）。
+- 8 个 tar 合计约 **116 MiB**，导入 **29 s**；输出 `Successfully imported 8 image(s)` 且 `grep ERRO` **0 命中**；节点内 `crictl images` 可见 8 个 `:778ded6`。
+
+**滚动（逐个 `set image`，不 `apply -k`，每步等 Ready）**
+
+| 服务 | 耗时 | 备注 |
+| --- | --- | --- |
+| `api` | **5 s** | 最先滚；启动时执行迁移 |
+| `orchestrator` | **5 s** | #432/#436 的代码在这里 |
+| `auth` | **6 s** | |
+| `notifier` | **6 s** | |
+| `webhook` | **6 s** | |
+| `web` | **8 s** | 2 副本，最后滚 |
+
+命令模板（`$SVC` 为服务名）：
+
+```bash
+kubectl -n release-manager set image deploy/$SVC $SVC=localhost:5001/release-$SVC:778ded6
+kubectl -n release-manager rollout status deploy/$SVC --timeout=300s
+```
+
+每步 Ready 后立即取 `/health` 与 `/readyz`（port-forward 到 ClusterIP）。发布后 revision 变成 `api=10`、`web=8`、其余 4 个 Go 服务 `2`（`edge` 仍 1）。
+
+**迁移 34→35 与 #436 回填**
+
+`api` 的启动路径是 `cmd/api/store.go:80` → `postgresstore.Open(..., migrations.FS)` → `internal/store/postgres/db.go:179` 的 `RunMigrations`；`orchestrator`/`auth`/`notifier` 也各自在启动时跑同一个 `migrations.FS`。
+
+```bash
+kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release_manager -Atc \
+  "select version,dirty from schema_migrations"                       # 35|f
+kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release_manager -Atc \
+  "select count(*) filter (where customer_id='' or cluster_id=''), count(*) from sessions"   # 0|9
+```
+
+- `migrations/000035_session_identity_backfill.up.sql` 把 6 行空串 `sessions` 按 `operators` 的权威 `customer_id`/`cluster_id` 回填为 `56846183-…`/`rm-cust`；回填后 9 行全部非空（**6 → 0**）。
+- 它的 down 是空注释：这是数据修复，旧值 `''` 就是缺陷本身，没有可恢复的信息；生产进程也从不执行 `RunMigrationsDown`。
+- `internal/operator/service.go:488` 现在是新会话写入 scope 的落点（`CustomerID: op.CustomerID, ClusterID: op.ClusterID`）。本集群 9 行 `sessions` 全是历史行（3 `revoked` + 6 `offline`），**没有在线 operator**，所以「新写入带 scope」只有源码与回填证据，没有在线会话实测。
+
+**冒烟（真 Chrome：playwright-core + 系统 Chrome + `ignoreHTTPSErrors`）**
+
+| 项 | 结果 |
+| --- | --- |
+| 登录 | 成功，离开 `/login` **923 ms** |
+| `/audit` | 200，**20 行 / 共 34 条** |
+| `/operations` | 200，空队列（当下没有非终态 Operation） |
+| Release 清单 | 200，**2 行**（`e2e-release/…`、`e2e-plan/…`） |
+| Release 操作历史 + Operation 详情 | 200；详情页渲染 Intent/Before/After（真实紧急操作 `40696e12…`） |
+| 控制台 | 3 条 error，均已归因：2 条登录前的 `ValidateToken`/`RefreshToken` **401**（未登录时的预期探测）、1 条本次故意构造的 `actor` 不一致请求 **400**；页面自身零未归因错误 |
+
+截图落在 `/tmp/rm362-evidence/`：`01-login.png`、`02-audit.png`、`02-operations.png`、`02-release-inventory.png`、`02-release-operations.png`、`02-operation-detail.png`。
+
+**#432（definition owner 由 JWT 组织填充）**
+
+- 不带 `actor` 建 definition（`namespace=task362-smoke`、`release=task362-owner-smoke`）→ **200**；DB 里 `owner_organization_id = 2142e4dd-2408-44c0-a247-364a95034fe6`（JWT 组织）、`created_by = 72687459-…`（管理员）。响应体没有 owner 字段，结论以 DB 为准。修复前这里会静默写 `NULL`。
+- 带矛盾的 `actor.organization` → **400 invalid_argument**：`actor.organization "00000000-…" does not match the authenticated organization "2142e4dd-…"`，且不落库。
+- 存量里 `owner_organization_id` 为空的两条（`acme-web`、`release-fixture`）是修复前的死定义，本次**没有改**。测试对象已用 `DisableReleaseDefinition` 置成 `disabled`（默认列表不再返回），但**它仍留在库里**，是本任务的已知残留。
+
+**回滚预案（本次未执行）**
+
+```bash
+kubectl -n release-manager rollout undo deploy/<svc>
+kubectl -n release-manager rollout status deploy/<svc> --timeout=300s
+# <svc> ∈ api orchestrator auth notifier webhook web
+```
+
+- 只回镜像，**不回迁移**。`000035` 的 down 为空，且生产进程从不执行 `RunMigrationsDown`；回退到 `876df9a`/`a6707b6`/`ceda261` 的旧代码后，新列与回填值会被旧读取路径忽略（旧代码只经 `sessions.operator_id` + `operators` join），所以「schema 35 + 旧镜像」预期可运行，但**没有数据级回退**。
+- 真要数据级回退只能用 §7 的 dump（`release_manager-20261018T020000Z.dump`，159,481 B）；代价是丢掉 02:00 UTC 之后写入的行。
+- 回滚同样受 §8.2.1 的 revision 陷阱约束：`undo` 是再开一个 revision。
+
+**本次边界（未验证，别外推）**
+
+- 没有在线 operator，`#436` 的新写入路径没有实跑；只验证了迁移回填。
+- 只做页面级冒烟，没有故障注入（PG/Redis/edge 重启）、没有并发/长连接压测。
+- `web` 镜像包含 #437 的 W9/W10/W12/W21，本次只验证页面可加载与数据可见，**没有逐项复验每个 UX 条目**。
+- 用 `kubectl set image` 直接改 Deployment，绕过了 kustomize 的 tag 默认值：仓库清单里的 tag 仍是 `:dev`，`kubectl apply -k` 会把它改回去（正式发布走 §2.3 的改 tag + apply）。
+- `operator` 镜像构建了但**没有部署**（它跑在客户集群里，本集群没有对应工作负载）；`notification-sink` 同理。
 
 ## 9. 可观测
 
