@@ -4,6 +4,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import type { CustomerEvent } from '@/types/customer';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 defineProps<{
   events: CustomerEvent[];
@@ -31,7 +32,7 @@ function eventLabel(eventType: string): string {
     <ol v-else class="customer-history__list">
       <li v-for="event in events" :key="event.id" class="customer-history__item">
         <strong>{{ eventLabel(event.eventType) }}</strong>
-        <time v-if="event.createdAt" :datetime="event.createdAt">{{ new Date(event.createdAt).toLocaleString() }}</time>
+        <time v-if="event.createdAt" :datetime="event.createdAt">{{ formatTimestamp(event.createdAt, { style: 'medium' }) }}</time>
       </li>
     </ol>
   </section>

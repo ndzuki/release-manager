@@ -1,5 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
+import { create } from '@bufbuild/protobuf';
+import { TimestampSchema } from '@bufbuild/protobuf/wkt';
 import { nextTick } from 'vue';
 import { t } from '@/i18n/messages';
 import type { AuditEvent } from '@/gen/audit/v1/audit_pb';
@@ -131,5 +133,54 @@ describe('AuditEventTable pager', () => {
     await wrapper.setProps({ loading: false });
     expect(pagerButtons(wrapper)[0]!.attributes('disabled')).toBeUndefined();
     expect(pagerButtons(wrapper)[1]!.attributes('disabled')).toBeUndefined();
+  });
+});
+
+/*
+ * UX-017/UX-018 (W14): the table had no caption (so no accessible name and no
+ * table announcement), header cells carried no scope, and a focusable row
+ * answered Enter but not Space — while Space is the key screen-reader users are
+ * told to press to activate a row.
+ */
+describe('AuditEventTable accessibility (UX-017/018)', () => {
+  it('names the table and binds every header to its column', () => {
+    const wrapper = mountTable();
+    const caption = wrapper.get('table caption');
+    expect(caption.text()).toBe(t('audit.table.results'));
+    const headers = wrapper.findAll('thead th');
+    expect(headers.length).toBeGreaterThan(0);
+    for (const header of headers) expect(header.attributes('scope')).toBe('col');
+  });
+
+  it('selects a row with Space, not only Enter', async () => {
+    const wrapper = mountTable();
+    const row = wrapper.get('tbody tr');
+    await row.trigger('keydown', { key: ' ' });
+    expect(wrapper.emitted('select')).toHaveLength(1);
+
+    await row.trigger('keydown', { key: 'Enter' });
+    expect(wrapper.emitted('select')).toHaveLength(2);
+  });
+});
+
+/*
+ * W17 follow-up (review of 512b09f1): the audit surface used to print
+ * `new Date(...).toLocaleString()`, which carried seconds. Routing it through the
+ * shared formatter's default `short` style silently dropped them, so two events
+ * inside the same minute rendered identically — a real regression for evidence
+ * that is read after the fact. The audit list must stay at HH:mm:ss; the other
+ * call sites keep the minute-precision default on purpose.
+ */
+describe('AuditEventTable timestamps (W17 follow-up)', () => {
+  it('renders the event time with seconds', () => {
+    const at = new Date(2026, 9, 17, 20, 2, 46);
+    const wrapper = mountTable({
+      events: [{
+        ...auditEvent('e-2'),
+        createdAt: create(TimestampSchema, { seconds: BigInt(Math.floor(at.getTime() / 1000)) }),
+      }],
+    });
+
+    expect(wrapper.get('tbody td').text()).toMatch(/20:02:46/);
   });
 });

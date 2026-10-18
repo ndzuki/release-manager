@@ -3,6 +3,7 @@ import { t } from '@/i18n/messages';
 import { statusLabel as valuesStatusLabel } from '@/i18n/status-labels';
 import { computed } from 'vue';
 import type {ValuesRevision} from '@/types/valuesRevision';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 // submitDisabled is optional so the component stays usable standalone; the store
 // enforces the same rule authoritatively (a caller that forgets it cannot submit
@@ -24,8 +25,10 @@ const emit = defineEmits<{ save: []; submit: []; approve: []; reject: []; discar
 
 const statusLabel = computed(() => valuesStatusLabel('valuesRevision', props.revision?.status ?? 'draft'));
 
-function formatTimestamp(value?: string): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '';
+
+// W17: an absent decision time renders as nothing, not as a dash.
+function formatDecidedAt(value?: string): string {
+  return formatTimestamp(value, { fallback: '' });
 }
 </script>
 
@@ -39,7 +42,7 @@ function formatTimestamp(value?: string): string {
         <code>{{ revision.valuesDigest }}</code>
       </p>
       <p v-if="revision?.status === 'rejected' && revision.decidedAt" class="rejection">
-        {{ t('values.revision.rejectTime') }} {{ formatTimestamp(revision.decidedAt) }}
+        {{ t('values.revision.rejectTime') }} {{ formatDecidedAt(revision.decidedAt) }}
       </p>
       <p v-if="selfApproval && revision?.status === 'pending_approval'" class="hint">不可审批自己创建的 Revision。</p>
     </div>

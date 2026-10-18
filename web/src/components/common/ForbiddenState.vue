@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useId } from 'vue';
 import { t } from '@/i18n/messages';
 
 interface ForbiddenStateProps {
@@ -14,12 +15,20 @@ withDefaults(defineProps<ForbiddenStateProps>(), {
 });
 
 const emit = defineEmits<{ action: [] }>();
+
+/**
+ * UX-037 (W14): a fixed DOM id was shared by every instance, so two states on
+ * one page produced duplicate ids and the second one's aria-labelledby pointed
+ * at the first one's heading (or at nothing). useId() gives each instance its
+ * own pair.
+ */
+const titleId = useId();
 </script>
 
 <template>
-  <section class="forbidden-state" role="alert" aria-labelledby="forbidden-state-title">
+  <section class="forbidden-state" role="alert" :aria-labelledby="titleId">
     <span class="forbidden-state__code" aria-hidden="true">403</span>
-    <h2 id="forbidden-state-title" class="forbidden-state__title">{{ title }}</h2>
+    <h2 :id="titleId" class="forbidden-state__title">{{ title }}</h2>
     <p class="forbidden-state__text">{{ message }}</p>
     <slot name="action">
       <button v-if="actionLabel" class="forbidden-state__action" type="button" @click="emit('action')">

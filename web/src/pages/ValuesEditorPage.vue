@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useValuesEditorStore } from '@/stores/valuesEditor';
 import type { EditorLanguage, SecretRef } from '@/types/valuesRevision';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 const route = useRoute();
 const router = useRouter();
@@ -54,13 +55,16 @@ const selfApproval = computed(
 );
 
 watch(
-  [releaseDefinitionId, clusterId, canWrite, convergenceMode, prepareToken],
-  async ([definitionId, nextClusterId, writable, isConvergence, token]) => {
-    editor.resetScope(definitionId, nextClusterId);
-    editor.setEditable(writable);
+  [releaseDefinitionId, clusterId, customerId, canWrite, convergenceMode, prepareToken],
+  async ([definitionId, nextClusterId, nextCustomerId, writable, isConvergence, token]) => {
     const organizationId = auth.activeOrganization?.id ?? '';
-    if (organizationId && customerId.value) {
-      void authorization.load(organizationId, customerId.value);
+    // UX-008 (W19): the browser draft is scoped by the whole route, not just the
+    // definition id — the same id reached from another cluster/organization must
+    // not share a draft slot.
+    editor.resetScope(definitionId, nextClusterId, nextCustomerId, organizationId);
+    editor.setEditable(writable);
+    if (organizationId && nextCustomerId) {
+      void authorization.load(organizationId, nextCustomerId);
     }
     if (isConvergence && token) {
       await editor.loadConvergence(token);
@@ -156,7 +160,16 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="editor.toast" class="notice" role="status">{{ editor.toast }}</div>
-    <div v-if="editor.restoredDraft" class="notice notice--warning" role="status">已恢复未保存的编辑</div>
+    <div v-if="editor.restoredDraft" class="notice notice--warning" role="status">
+      <span>
+        {{ t('values.draft.restored') }}<template v-if="editor.draftSavedAt">{{ t('values.draft.savedAt', { time: formatTimestamp(editor.draftSavedAt) }) }}</template>
+      </span>
+      <button type="button" @click="editor.discardLocalDraft()">{{ t('values.draft.discard') }}</button>
+    </div>
+    <div v-else-if="editor.draftNotice" class="notice" role="status">{{ editor.draftNotice }}</div>
+    <div v-if="editor.draftSaveFailed" class="notice notice--warning" role="alert">
+      {{ t('values.draft.saveFailed') }}
+    </div>
     <div v-if="firstRevision && !editor.loading" class="notice">创建首个配置 Revision。</div>
     <div v-if="!canWrite" class="notice notice--warning">当前角色为只读。服务端仍会独立执行授权。</div>
 

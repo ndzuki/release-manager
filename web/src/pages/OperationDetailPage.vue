@@ -21,6 +21,7 @@ import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization'
 import { useOperationTimelineStore } from '@/stores/operationTimeline';
 import type { EmergencyResultDisplay } from '@/features/emergency/model';
 import type { PreflightResult } from '@/types/operation';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 const route = useRoute();
 const router = useRouter();
@@ -294,8 +295,10 @@ function openConvergence(): void {
   });
 }
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '—';
+
+// W17: detail timestamps keep second precision; formatting is shared.
+function formatDetailTime(value: string | null): string {
+  return formatTimestamp(value, { style: 'medium' });
 }
 </script>
 
@@ -423,9 +426,9 @@ function formatTimestamp(value: string | null): string {
           <dt>{{ t('emergency.result.effectStatus') }}</dt><dd>{{ statusLabel('effect', store.operation?.effectStatus ?? undefined) }}</dd>
         </div>
         <div><dt>TargetRevision</dt><dd>{{ store.operation?.targetRevision || '—' }}</dd></div>
-        <div><dt>创建时间</dt><dd>{{ formatTimestamp(store.operation?.createdAt ?? null) }}</dd></div>
-        <div><dt>更新时间</dt><dd>{{ formatTimestamp(store.operation?.updatedAt ?? null) }}</dd></div>
-        <div><dt>终止时间</dt><dd>{{ formatTimestamp(store.operation?.terminalAt ?? null) }}</dd></div>
+        <div><dt>创建时间</dt><dd>{{ formatDetailTime(store.operation?.createdAt ?? null) }}</dd></div>
+        <div><dt>更新时间</dt><dd>{{ formatDetailTime(store.operation?.updatedAt ?? null) }}</dd></div>
+        <div><dt>终止时间</dt><dd>{{ formatDetailTime(store.operation?.terminalAt ?? null) }}</dd></div>
       </dl>
 
       <EmergencyResultPanel

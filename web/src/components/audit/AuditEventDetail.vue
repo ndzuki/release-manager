@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from 'vue';
 import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 const props = defineProps<{
   event: AuditEvent;
@@ -22,8 +24,23 @@ const actorKindLabels: Record<ActorKind, string> = {
 };
 
 function formatTime(event: AuditEvent): string {
-  return event.createdAt ? timestampDate(event.createdAt).toLocaleString() : '—';
+  return event.createdAt ? formatTimestamp(timestampDate(event.createdAt), { style: 'medium' }) : '—';
 }
+
+/**
+ * UX-019 (W14): the detail panel is a modal surface (it replaces the list while
+ * open) but Escape did nothing — the only way out was the close button. Listen
+ * at the document so the shortcut works regardless of which control has focus;
+ * AppDialog keeps its own trap, this is the read-only panel.
+ */
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return;
+  event.stopPropagation();
+  emit('close');
+}
+
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>

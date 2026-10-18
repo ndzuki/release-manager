@@ -11,6 +11,7 @@ import {
   type ListReleasesResponse,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { orchestratorClient } from '@/connect/client';
+import { correlationLine, describeError } from '@/connect/error-copy';
 
 export type ReleaseStatus = 'active' | 'missing' | 'out_of_sync' | 'unknown';
 /**
@@ -123,9 +124,14 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
   const loading = ref(false);
   const appending = ref(false);
   const error = ref<string | null>(null);
+  // UX-015 (TASK-325 W1 walkthrough): the read failure copy dropped the
+  // correlation line, so a user reporting "the release list is broken" had no
+  // requestId to hand over. ErrorState already renders `details`.
+  const errorDetails = ref<string | null>(null);
   const syncRequestId = ref<string | null>(null);
   const syncing = ref(false);
   const syncError = ref<string | null>(null);
+  const syncErrorDetails = ref<string | null>(null);
   const lastLoadedAt = ref<number | null>(null);
   const customerId = ref<string | null>(null);
   const clusterId = ref<string | null>(null);
@@ -139,7 +145,9 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     totalCount.value = 0;
     lastLoadedAt.value = null;
     error.value = null;
+    errorDetails.value = null;
     syncError.value = null;
+    syncErrorDetails.value = null;
   }
 
   function setScope(nextCustomerId: string, nextClusterId: string): void {
@@ -147,15 +155,47 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     customerId.value = nextCustomerId;
     clusterId.value = nextClusterId;
     resetCache();
+    // The in-flight refresh belonged to the previous scope: drop the handle so
+    // the new scope starts its own request, and let load()'s generation check
+    // discard whatever the old one returns.
+    refreshInFlight = null;
   }
 
+  /**
+   * The question a read asks: every value that reaches ListReleases. A response
+   * may only be applied while its signature still describes the store, and two
+   * refreshes may only share a request when their signatures match (W16
+   * follow-up). Scope is part of it because switching cluster has to invalidate
+   * the rows of the old cluster, not just unblock a new request.
+   */
+  function filterSignature(): string {
+    return JSON.stringify([customerId.value, clusterId.value, statusFilter.value ?? '', nameSearch.value]);
+  }
+
+  // Monotonic id of the newest read. A superseded response must not touch the
+  // store, and in particular must not clear the loading state of the read that
+  // replaced it.
+  let loadGeneration = 0;
+
   async function load(options: { append?: boolean } = {}): Promise<void> {
-    if (!customerId.value || !clusterId.value) return;
+    if (!customerId.value || !clusterId.value) {
+      // Clearing the scope supersedes the read that was in flight for the old
+      // one. Nothing new is requested, so no loading flag may stay set.
+      loadGeneration++;
+      loading.value = false;
+      appending.value = false;
+      return;
+    }
     const append = options.append === true;
     if (append && !hasMore.value) return;
+    // From here on this call is the newest read: it supersedes every response
+    // that started before it, including one whose filter has since changed.
+    const generation = ++loadGeneration;
+    const signature = filterSignature();
     if (append) appending.value = true;
     else loading.value = true;
     error.value = null;
+    errorDetails.value = null;
     try {
       const response = await orchestratorClient.listReleases(create(ListReleasesRequestSchema, {
         customerId: customerId.value,
@@ -165,9 +205,16 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
         pageSize: 50,
         cursor: append ? nextCursor.value ?? '' : '',
       }));
+      // A response only answers the query it was sent with. If a newer read
+      // started, or the filter changed while this one was in flight, applying
+      // it would paint another query's rows and leak the old rows into the new
+      // filter — the stale window this store had (W16 follow-up).
+      if (generation !== loadGeneration || signature !== filterSignature()) return;
       applyResponse(response, append);
       lastLoadedAt.value = Date.now();
     } catch (requestError) {
+      // A superseded failure is not the current query's failure either.
+      if (generation !== loadGeneration) return;
       const reason = errorReason(requestError);
       if (reason === '数据已变更，已刷新' && append) {
         nextCursor.value = null;
@@ -175,9 +222,14 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
         return;
       }
       error.value = reason;
+      errorDetails.value = correlationLine(describeError(requestError), 'ListReleases');
     } finally {
-      loading.value = false;
-      appending.value = false;
+      // Only the newest read owns the shared flags; an older request settling
+      // late must not make the UI claim the current one finished.
+      if (generation === loadGeneration) {
+        loading.value = false;
+        appending.value = false;
+      }
     }
   }
 
@@ -188,15 +240,36 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     totalCount.value = response.totalCount;
   }
 
-  async function refresh(): Promise<void> {
+  /**
+   * UX-057 (W16): refresh is reachable from four controls (header button, retry
+   * notice, empty state, error state) plus the 5-minute cache re-arm, and the
+   * in-flight state was never shared. A double click issued two ListReleases
+   * calls whose responses could land out of order.
+   *
+   * W16 follow-up: concurrent refreshes share one request only when they ask the
+   * same question. The status/nameSearch controls mutate the store and then call
+   * refresh(), so a refresh started before the change is still in flight for the
+   * OLD query; joining it served rows for the previous filter under the new one.
+   * The signature is the de-duplication key: a mismatch starts a new load().
+   */
+  let refreshInFlight: { signature: string; promise: Promise<void> } | null = null;
+
+  function refresh(): Promise<void> {
+    const signature = filterSignature();
+    if (refreshInFlight && refreshInFlight.signature === signature) return refreshInFlight.promise;
     nextCursor.value = null;
-    await load();
+    const run = load().finally(() => {
+      if (refreshInFlight?.promise === run) refreshInFlight = null;
+    });
+    refreshInFlight = { signature, promise: run };
+    return run;
   }
 
   async function triggerSync(): Promise<void> {
     if (!customerId.value || !clusterId.value || syncing.value) return;
     syncing.value = true;
     syncError.value = null;
+    syncErrorDetails.value = null;
     try {
       const response = await orchestratorClient.triggerInventorySync({
         customerId: customerId.value,
@@ -209,6 +282,7 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
         syncRequestId.value = connectError.metadata.get('X-Sync-Request-ID');
       }
       syncError.value = errorReason(requestError);
+      syncErrorDetails.value = correlationLine(describeError(requestError), 'TriggerInventorySync');
     } finally {
       syncing.value = false;
     }
@@ -235,9 +309,11 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     loading,
     appending,
     error,
+    errorDetails,
     syncRequestId,
     syncing,
     syncError,
+    syncErrorDetails,
     lastLoadedAt,
     customerId,
     clusterId,

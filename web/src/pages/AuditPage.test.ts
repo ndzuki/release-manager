@@ -332,3 +332,49 @@ describe('AuditPage', () => {
     expect(wrapper.text()).not.toContain('暂无审计事件');
   });
 });
+
+/*
+ * UX-011 (W16): the form → URL mirror used to run per keystroke. The URL is
+ * shareable state, not a page query, so five keystrokes must not become five
+ * history writes; one debounced write is the contract.
+ */
+describe('AuditPage URL mirror (UX-011)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    queryAuditEvents.mockReset();
+  });
+
+  it('writes the URL once for a burst of keystrokes instead of once per key', async () => {
+    vi.useFakeTimers();
+    try {
+      signInAs('org-1');
+      queryAuditEvents.mockResolvedValue(queryResponse([]));
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [{ path: '/audit', name: 'Audit', component: AuditPage }],
+      });
+      await router.push('/audit');
+      await router.isReady();
+      const replace = vi.spyOn(router, 'replace').mockResolvedValue(undefined as never);
+
+      const wrapper = mount(AuditPage, { global: { plugins: [router] } });
+      await flushPromises();
+
+      // `actor` is deliberately private (never mirrored into the URL), so type
+      // into a field the mirror does carry.
+      const resourceId = wrapper.get('input[name="resource_id"]');
+      for (const value of ['a', 'ab', 'abc', 'abcd', 'abcde']) {
+        await resourceId.setValue(value);
+      }
+      // Still inside the debounce window: nothing has been written yet.
+      expect(replace).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(350);
+      expect(replace).toHaveBeenCalledTimes(1);
+      const target = replace.mock.calls[0][0] as { query?: Record<string, string> };
+      expect(target.query?.resource_id).toBe('abcde');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

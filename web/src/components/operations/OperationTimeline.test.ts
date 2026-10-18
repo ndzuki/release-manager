@@ -210,3 +210,25 @@ describe('OperationTimeline', () => {
     expect(wrapper.text()).toContain('暂无时间线事件');
   });
 });
+
+/*
+ * UX-020 (W14): every <li> carried tabindex="0", so a 500-entry timeline put 500
+ * tab stops between the page and whatever follows it. The entries are read-only
+ * list content, not controls — the list announces updates through aria-live
+ * instead of making the user tab through it.
+ */
+describe('OperationTimeline keyboard and live-region contract (UX-020)', () => {
+  it('keeps timeline entries out of the tab order and announces the list', () => {
+    const wrapper = mount(OperationTimeline, {
+      props: {
+        entries: [entry({ id: 'a', sequence: 3n }), entry({ id: 'b', sequence: 2n })],
+        operation: operation(),
+        streamStatus: 'connected',
+      },
+    });
+    for (const item of wrapper.findAll('.timeline-entry')) {
+      expect(item.attributes('tabindex')).toBeUndefined();
+    }
+    expect(wrapper.get('.operation-timeline__list').attributes('aria-live')).toBe('polite');
+  });
+});

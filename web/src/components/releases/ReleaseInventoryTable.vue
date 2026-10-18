@@ -2,6 +2,7 @@
 import { t } from '@/i18n/messages';
 import ReleaseStatusBadge from './ReleaseStatusBadge.vue';
 import type { ReleaseSummary } from '@/stores/releaseInventory';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 const props = defineProps<{
   releases: ReleaseSummary[];
@@ -50,8 +51,10 @@ function convergenceRoute(release: ReleaseSummary) {
   };
 }
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '尚未同步';
+
+// UX-076 (W17): the table's own fallback word; the formatting itself is shared.
+function formatSyncTime(value: string | null): string {
+  return formatTimestamp(value, { fallback: '尚未同步' });
 }
 </script>
 
@@ -105,7 +108,7 @@ function formatTimestamp(value: string | null): string {
             </RouterLink>
             <code v-else>{{ release.valuesDigest || '—' }}</code>
           </td>
-          <td>{{ formatTimestamp(release.lastSyncAt) }}</td>
+          <td>{{ formatSyncTime(release.lastSyncAt) }}</td>
           <td v-if="canEmergency || canConvergence">
             <span v-if="!release.releaseDefinitionId" class="muted" title="未关联 ReleaseDefinition，紧急变更入口不可用">
               未绑定 Definition

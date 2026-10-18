@@ -256,6 +256,11 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
       '已提交审批',
       '已拒绝，任务已解绑',
       "锁定路径不可修改：${changed.join('、')}",
+      '浏览器存储不可用，无法恢复本地草稿',
+      '本地草稿格式无法识别，已忽略',
+      '本地草稿已超过 7 天，已丢弃',
+      '父 Revision 已变更，旧草稿未恢复',
+      '已丢弃本地草稿，已回到服务端内容',
     ],
     reason:
       'Chinese copy already in the target locale; the toast strings reach the page through editor.toast, which no scan can follow',
@@ -287,7 +292,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ValuesEditorPage.vue',
-    allowed: ['YAML', 'JSON', '编辑 canonical values 并通过 SecretRef 引用集群 Secret。', '已恢复未保存的编辑', '创建首个配置 Revision。', '当前角色为只读。服务端仍会独立执行授权。', '重试', '确认丢弃当前 Draft？绑定的 个收敛任务将被解绑。', '取消', '确认丢弃', 'ValuesRevision 加载失败', '确认丢弃 Draft'],
+    allowed: ['YAML', 'JSON', '编辑 canonical values 并通过 SecretRef 引用集群 Secret。', '创建首个配置 Revision。', '当前角色为只读。服务端仍会独立执行授权。', '重试', '确认丢弃当前 Draft？绑定的 个收敛任务将被解绑。', '取消', '确认丢弃', 'ValuesRevision 加载失败', '确认丢弃 Draft'],
     reason: 'editor language identifiers; the surrounding labels are Chinese',
   },
   {
@@ -328,8 +333,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/audit/AuditEventDetail.vue',
-    allowed: ['ms'],
-    reason: 'ms is the unit suffix',
+    allowed: ['ms', 'Escape'],
+    reason: 'ms is the unit suffix; Escape is the KeyboardEvent.key name compared against, not copy',
   },
   {
     file: 'src/components/audit/AuditExportPanel.vue',

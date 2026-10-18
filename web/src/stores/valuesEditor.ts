@@ -25,6 +25,24 @@ import { validateSecretRefs, validateValuesDocument } from '@/utils/valuesValida
 
 const EMPTY_TEMPLATE = '# Paste or edit your values.yaml here\n{}';
 const DRAFT_PREFIX = 'values_draft:';
+/**
+ * UX-008 (W19): a browsers-local draft lives for at most a week. Older text is
+ * discarded rather than silently adopted: YAML written against a parent that
+ * has since been approved elsewhere is not "unsaved work", it is a conflict the
+ * user has to see.
+ */
+const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The stored draft is a record, not raw YAML. The record carries what a restore
+ * decision needs: when it was written and which approved revision it was based
+ * on. A bare document (the old format) cannot be compared, so it is not read.
+ */
+interface DraftRecord {
+  document: string;
+  savedAt: number;
+  parentRevisionId: string | null;
+}
 
 interface DraftStorage {
   getItem(key: string): string | null;
@@ -42,8 +60,30 @@ function makeSecretRef(): SecretRefFormItem {
   return { id: crypto.randomUUID(), path: '', name: '', key: '' };
 }
 
-function draftKey(releaseDefinitionId: string): string {
-  return `${DRAFT_PREFIX}${releaseDefinitionId}`;
+/**
+ * The key is scoped by organization, customer, cluster AND definition. The old
+ * key was `values_draft:<releaseDefinitionId>` only, so the same definition id
+ * reached from another cluster (or another organization's mirror of it) hit the
+ * same slot, and two tabs shared one draft blindly.
+ */
+function draftKey(organizationId: string, customerId: string, clusterId: string, releaseDefinitionId: string): string {
+  return `${DRAFT_PREFIX}${organizationId}:${customerId}:${clusterId}:${releaseDefinitionId}`;
+}
+
+function parseDraftRecord(raw: string): DraftRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== 'object') return null;
+  const record = parsed as Partial<DraftRecord>;
+  if (typeof record.document !== 'string') return null;
+  if (typeof record.savedAt !== 'number' || !Number.isFinite(record.savedAt)) return null;
+  const parentRevisionId = record.parentRevisionId;
+  if (parentRevisionId !== null && typeof parentRevisionId !== 'string') return null;
+  return { document: record.document, savedAt: record.savedAt, parentRevisionId: parentRevisionId ?? null };
 }
 
 /**
@@ -63,6 +103,9 @@ function chainHeadVersionOf(revisions: ValuesRevision[]): number {
 export const useValuesEditorStore = defineStore('valuesEditor', () => {
   const releaseDefinitionId = ref('');
   const clusterId = ref('');
+  // Scope of the draft key (see draftKey): set by resetScope from the route.
+  const organizationId = ref('');
+  const customerId = ref('');
   const currentRevision = ref<ValuesRevision | null>(null);
   const parentRevision = ref<ValuesRevision | null>(null);
   // CAS anchor for a new revision (see chainHeadVersionOf). Kept apart from
@@ -83,6 +126,9 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   const showConflictDialog = ref(false);
   const draftLoaded = ref(false);
   const restoredDraft = ref(false);
+  const draftSavedAt = ref<number | null>(null);
+  const draftNotice = ref<string | null>(null);
+  const draftSaveFailed = ref(false);
   const toast = ref<string | null>(null);
   // Convergence mode (REQ-058 Step 8): prepareToken + locked paths from the
   // Prepare Session. Locked values are rendered read-only and re-verified by
@@ -99,7 +145,9 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
   let editorTimer: ReturnType<typeof setTimeout> | undefined;
   let draftTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const draftKeyValue = computed(() => draftKey(releaseDefinitionId.value));
+  const draftKeyValue = computed(() =>
+    draftKey(organizationId.value, customerId.value, clusterId.value, releaseDefinitionId.value),
+  );
   const secretRefsError = computed(() => validateSecretRefs(secretRefs.value, availableSecrets.value));
   const validationError = computed(() => validationIssue.value?.message ?? null);
   const canEdit = computed(
@@ -177,11 +225,72 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     draftTimer = undefined;
   }
 
+  function removeDraft(): void {
+    try {
+      storage.removeItem(draftKeyValue.value);
+    } catch {
+      // Storage may already be gone (private mode / eviction); nothing to undo.
+    }
+  }
+
+  /**
+   * Reads the scoped draft and decides whether it may be restored. Returns the
+   * document only when the record is parseable, fresh, and based on the parent
+   * the server just returned. Every rejection is explained through
+   * `draftNotice` instead of silently presenting stale content as the user's
+   * work (UX-008).
+   */
+  function readDraft(): string | null {
+    let raw: string | null;
+    try {
+      raw = storage.getItem(draftKeyValue.value);
+    } catch {
+      draftNotice.value = '浏览器存储不可用，无法恢复本地草稿';
+      return null;
+    }
+    if (raw === null) return null;
+    const record = parseDraftRecord(raw);
+    if (!record) {
+      removeDraft();
+      draftNotice.value = '本地草稿格式无法识别，已忽略';
+      return null;
+    }
+    if (Date.now() - record.savedAt > DRAFT_TTL_MS) {
+      removeDraft();
+      draftNotice.value = '本地草稿已超过 7 天，已丢弃';
+      return null;
+    }
+    const parentId = parentRevision.value?.id ?? null;
+    if (record.parentRevisionId !== parentId) {
+      removeDraft();
+      draftNotice.value = '父 Revision 已变更，旧草稿未恢复';
+      return null;
+    }
+    draftSavedAt.value = record.savedAt;
+    return record.document;
+  }
+
+  function persistDraft(document: string): void {
+    const record: DraftRecord = {
+      document,
+      savedAt: Date.now(),
+      parentRevisionId: parentRevision.value?.id ?? null,
+    };
+    try {
+      storage.setItem(draftKeyValue.value, JSON.stringify(record));
+      draftSaveFailed.value = false;
+    } catch {
+      // Quota exceeded or storage disabled: tell the user the draft is NOT
+      // being kept instead of letting them believe it is.
+      draftSaveFailed.value = true;
+    }
+  }
+
   function canonicalizeAndDiff(): void {
     const result = validateValuesDocument(editorContent.value);
     canonicalCurrent.value = result.canonical.value;
     validationIssue.value = result.issue;
-    if (result.issue?.code === 'secret_literal_forbidden') storage.removeItem(draftKeyValue.value);
+    if (result.issue?.code === 'secret_literal_forbidden') removeDraft();
     if (result.issue || result.canonical.value === null) {
       diffResult.value = { changes: [], hasChanges: false };
       return;
@@ -210,8 +319,8 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
         return;
       }
       const result = validateValuesDocument(editorContent.value);
-      if (!result.issue) storage.setItem(draftKeyValue.value, editorContent.value);
-      else if (result.issue.code === 'secret_literal_forbidden') storage.removeItem(draftKeyValue.value);
+      if (!result.issue) persistDraft(editorContent.value);
+      else if (result.issue.code === 'secret_literal_forbidden') removeDraft();
       draftTimer = undefined;
     }, 2000);
   }
@@ -229,10 +338,17 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     editable.value = value;
   }
 
-  function resetScope(nextReleaseDefinitionId: string, nextClusterId: string): void {
+  function resetScope(
+    nextReleaseDefinitionId: string,
+    nextClusterId: string,
+    nextCustomerId = '',
+    nextOrganizationId = '',
+  ): void {
     clearTimers();
     releaseDefinitionId.value = nextReleaseDefinitionId;
     clusterId.value = nextClusterId;
+    customerId.value = nextCustomerId;
+    organizationId.value = nextOrganizationId;
     currentRevision.value = null;
     parentRevision.value = null;
     chainHeadVersion.value = 0;
@@ -246,6 +362,9 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     showConflictDialog.value = false;
     draftLoaded.value = false;
     restoredDraft.value = false;
+    draftSavedAt.value = null;
+    draftNotice.value = null;
+    draftSaveFailed.value = false;
     editable.value = true;
     toast.value = null;
     convergenceMode.value = false;
@@ -284,7 +403,7 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
         null;
       // Convergence mode never reads browser drafts — prepared payloads are
       // rebuilt from the canonical API only (AC-058-35/48).
-      const savedDraft = convergenceMode.value ? null : storage.getItem(draftKeyValue.value);
+      const savedDraft = convergenceMode.value ? null : readDraft();
       draftLoaded.value = savedDraft !== null;
       restoredDraft.value = savedDraft !== null;
       editorContent.value = savedDraft ?? currentRevision.value?.document ?? parentRevision.value?.document ?? EMPTY_TEMPLATE;
@@ -339,6 +458,22 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
     }
   }
 
+  /**
+   * UX-008 (W19): an explicit way out of a restored draft. Without one the only
+   * exits were "overwrite it by hand" or "save it" — a user who wanted the
+   * server state back had no action for that.
+   */
+  function discardLocalDraft(): void {
+    removeDraft();
+    draftLoaded.value = false;
+    restoredDraft.value = false;
+    draftSavedAt.value = null;
+    draftSaveFailed.value = false;
+    draftNotice.value = '已丢弃本地草稿，已回到服务端内容';
+    editorContent.value = currentRevision.value?.document ?? parentRevision.value?.document ?? EMPTY_TEMPLATE;
+    canonicalizeAndDiff();
+  }
+
   function addSecretRef(): void {
     secretRefs.value.push(makeSecretRef());
   }
@@ -381,9 +516,11 @@ export const useValuesEditorStore = defineStore('valuesEditor', () => {
         // create; later saves in this scope must not replay it.
         prepareToken.value = '';
       }
-      storage.removeItem(draftKeyValue.value);
+      removeDraft();
       draftLoaded.value = false;
       restoredDraft.value = false;
+      draftSavedAt.value = null;
+      draftNotice.value = null;
       toast.value = convergenceMode.value ? '已创建收敛 Draft（任务已绑定）' : '已保存为 Draft';
       return true;
     } catch (requestError) {
@@ -556,6 +693,9 @@ function changedLockedPaths(current: unknown, baseline: unknown, paths: string[]
     showConflictDialog,
     draftLoaded,
     restoredDraft,
+    draftSavedAt,
+    draftNotice,
+    draftSaveFailed,
     toast,
     convergenceMode,
     prepareToken,
@@ -577,6 +717,7 @@ function changedLockedPaths(current: unknown, baseline: unknown, paths: string[]
     setEditorContent,
     setEditorLanguage,
     setEditable,
+    discardLocalDraft,
     addSecretRef,
     removeSecretRef,
     updateSecretRef,

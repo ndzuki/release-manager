@@ -8,6 +8,7 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import { listOperations, mapOperationError, type OperationSummaryItem } from '@/connect/operation-api';
 import type {} from '@/types/operation';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Operation history for one release definition (W3 / UX plan N5).
@@ -46,10 +47,6 @@ const cursorReset = ref(false);
 const showError = computed(() => error.value !== null && rows.value.length === 0);
 const showEmpty = computed(() => !loading.value && error.value === null && rows.value.length === 0);
 const showTable = computed(() => rows.value.length > 0);
-
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
-}
 
 async function load(append = false, clearOnError = false): Promise<void> {
   if (append) loadingMore.value = true;

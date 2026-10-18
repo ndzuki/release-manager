@@ -2,6 +2,7 @@
 import { t } from '@/i18n/messages';
 import { onUnmounted, ref } from 'vue';
 import type { TimelineEntry } from '@/types/operation';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 defineProps<{ entry: TimelineEntry }>();
 
@@ -11,10 +12,6 @@ let copiedResetTimer: ReturnType<typeof setTimeout> | null = null;
 onUnmounted(() => {
   if (copiedResetTimer !== null) clearTimeout(copiedResetTimer);
 });
-
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value)) : '—';
-}
 
 async function copyIdentity(value: string): Promise<void> {
   try {
@@ -32,6 +29,13 @@ async function copyIdentity(value: string): Promise<void> {
   }
 }
 
+// Template-safe wrapper: an object literal inside `{{ }}` is not copy the
+// i18n scanner can parse, and reaching into the formatter's options from the
+// template hides the choice. Entry timestamps render with seconds.
+function formatEntryTime(value: string | null): string {
+  return formatTimestamp(value, { style: 'medium' });
+}
+
 const kindLabel: Record<string, string> = {
   STATE_TRANSITION: '状态转换',
   ACK: '已确认',
@@ -43,12 +47,12 @@ const kindLabel: Record<string, string> = {
 </script>
 
 <template>
-  <li class="timeline-entry" :class="`timeline-entry--${entry.kind.toLowerCase()}`" tabindex="0" :aria-label="kindLabel[entry.kind] ?? entry.kind">
+  <li class="timeline-entry" :class="`timeline-entry--${entry.kind.toLowerCase()}`">
     <span class="timeline-entry__dot" aria-hidden="true" />
     <div class="timeline-entry__body">
       <div class="timeline-entry__header">
         <strong>{{ kindLabel[entry.kind] ?? entry.kind }}</strong>
-        <time :datetime="entry.timestamp ?? ''">{{ formatTimestamp(entry.timestamp) }}</time>
+        <time :datetime="entry.timestamp ?? ''">{{ formatEntryTime(entry.timestamp) }}</time>
       </div>
 
       <template v-if="entry.kind === 'STATE_TRANSITION'">

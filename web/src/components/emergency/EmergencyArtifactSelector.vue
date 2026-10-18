@@ -5,6 +5,7 @@
 import { computed } from 'vue';
 import { t } from '@/i18n/messages';
 import type { CandidateArtifactDisplay } from '@/features/emergency/model';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 const props = defineProps<{
   containers: string[];
@@ -34,8 +35,10 @@ const emit = defineEmits<{
   'select-artifact': [artifactId: string];
 }>();
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '未知';
+
+// W17: keep the selector's own fallback word, share the formatting.
+function formatValidatedAt(value: string | null): string {
+  return formatTimestamp(value, { fallback: '未知' });
 }
 </script>
 
@@ -84,7 +87,7 @@ function formatTimestamp(value: string | null): string {
         <span class="artifact-body">
           <strong>{{ artifact.repository }}</strong>
           <span class="digest">{{ artifact.digest }}</span>
-          <span class="meta">验证于 {{ formatTimestamp(artifact.validatedAt) }}</span>
+          <span class="meta">验证于 {{ formatValidatedAt(artifact.validatedAt) }}</span>
         </span>
       </label>
     </div>
