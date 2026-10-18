@@ -6,8 +6,10 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import RouteRuleEditor from '@/components/clusters/RouteRuleEditor.vue';
 import { useScopeNames } from '@/composables/useScopeNames';
+import { mapSaveError } from '@/connect/cluster-api';
 import { useClusterStore } from '@/stores/cluster';
 import { useAuthStore } from '@/stores/auth';
 
@@ -37,14 +39,43 @@ onMounted(() => store.loadCluster(clusterId));
 // Cancelling never reaches `store.disable`; confirming runs the same path as before.
 const disableDialogOpen = ref(false);
 
+/*
+ * W10 (UX-041). The destructive path used to end silently: the dialog closed, the
+ * row flipped to "disabled", and nothing said the action had happened. The failure
+ * branch was worse — `store.disable` rethrows, nothing caught it, so a refused
+ * disable produced an unhandled rejection and no on-screen reason at all. Both
+ * outcomes now land in the shared Toast primitive (assertive role for the error).
+ */
+interface Notice {
+  tone: 'success' | 'error';
+  text: string;
+}
+
+const notice = ref<Notice | null>(null);
+
 async function confirmDisable() {
   disableDialogOpen.value = false;
-  await store.disable(clusterId);
+  try {
+    await store.disable(clusterId);
+    notice.value = {
+      tone: 'success',
+      text: t('cluster.detail.disableSuccess', { name: store.current?.name ?? clusterId }),
+    };
+  } catch (cause) {
+    notice.value = { tone: 'error', text: mapSaveError(cause).message };
+  }
 }
 </script>
 
 <template>
   <section class="page">
+    <Toast
+      v-if="notice"
+      :tone="notice.tone"
+      testid="cluster-detail-notice"
+      @dismiss="notice = null"
+    >{{ notice.text }}</Toast>
+
     <LoadingState v-if="store.loading" :message="t('state.loading.cluster')" />
     <ForbiddenState v-else-if="store.forbidden" />
     <ErrorState v-else-if="store.error" :message="store.error">
@@ -124,4 +155,14 @@ h1, p { margin: 0; }
 .summary dd { margin: 0.25rem 0 0; font-weight: 700; }
 .actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
 .danger { color: var(--color-error); }
+/*
+ * W21 (UX-032): the three-column summary had no breakpoint, so at a narrow width
+ * each track was squeezed to its min-content and the values wrapped mid-word (or the
+ * page scrolled sideways). One column below 48rem, the same breakpoint the rest of the
+ * console uses (PatchOverrideEditor, ClusterEditPage, …).
+ */
+@media (max-width: 48rem) {
+  .summary { grid-template-columns: 1fr; }
+  .page__header, .actions { flex-wrap: wrap; }
+}
 </style>

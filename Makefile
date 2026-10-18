@@ -410,11 +410,11 @@ web-install: ## Install web dependencies from the lockfile (npm ci)
 	cd web && npm ci
 
 .PHONY: web-check
-web-check: ## Front-end gates: eslint + vitest + vue-tsc/vite build (TASK-175)
+web-check: ## Front-end gates: eslint + vitest + vue-tsc/vite build + contract fixture (TASK-175, AC-058-50)
 	@command -v npm >/dev/null 2>&1 || { printf "$(YELLOW)npm is required for the web gates$(NC)\n"; exit 1; }
 	@test -d web/node_modules || { printf "$(YELLOW)web/node_modules is missing; run 'make web-install' first$(NC)\n"; exit 1; }
-	cd web && npm run lint && npm test && npm run build
-	@printf "$(GREEN)web gates pass (lint + test + build)$(NC)\n"
+	cd web && npm run lint && npm test && npm run build && npm run check:contract
+	@printf "$(GREEN)web gates pass (lint + test + build + contract fixture)$(NC)\n"
 
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage report

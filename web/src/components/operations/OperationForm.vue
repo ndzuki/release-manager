@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, reactive } from 'vue';
+import { computed, nextTick, reactive, ref } from 'vue';
 import FormField from '@/components/common/FormField.vue';
 import PatchOverrideEditor from './PatchOverrideEditor.vue';
 import { useOperationFormStore, type OperationFormErrors } from '@/stores/operationForm';
@@ -29,14 +29,53 @@ const revisionStatus = computed(() => {
 const revisionsDescribedBy = computed(() => (revisionStatus.value ? revisionStatusId : undefined));
 const revisionStatusRole = computed(() => (store.revisionsError ? 'alert' : 'status'));
 
-function prepareConfirmation(): void {
+/*
+ * W12 (UX-024 / UX-053). Two gaps the review measured, both about the distance
+ * between "the form knows something is wrong" and "the operator sees it":
+ *
+ * ① VALIDATE ON BLUR, not only on submit. `validate()` is the store's single source
+ *    of truth, so the blur handler re-runs it and copies back only the field the
+ *    operator just left — a field they have not touched never grows an error.
+ * ② FOCUS THE FIRST ERROR after a refused submit. The errors are rendered by
+ *    FormField/PatchOverrideEditor, so the form owns no refs to the controls; it
+ *    queries the DOM for the first invalid control (or the fieldset-level summary a
+ *    patch error without an index renders) rather than duplicating the error map.
+ */
+type ValidatedField = 'bundleId' | 'valuesRevisionId' | 'expectedCurrentRevision' | 'targetRevision' | 'patch';
+
+const formRef = ref<HTMLFormElement | null>(null);
+
+function applyValidation(field: ValidatedField): void {
+  const next = store.validate();
+  if (field === 'patch') {
+    if (next.patch === undefined) {
+      delete errors.patch;
+      delete errors.patchIndex;
+      return;
+    }
+    errors.patch = next.patch;
+    errors.patchIndex = next.patchIndex;
+    return;
+  }
+  const message = next[field];
+  if (message === undefined) delete errors[field];
+  else errors[field] = message;
+}
+
+async function focusFirstError(): Promise<void> {
+  await nextTick();
+  formRef.value?.querySelector<HTMLElement>('[aria-invalid="true"], [data-field-error]')?.focus();
+}
+
+async function prepareConfirmation(): Promise<void> {
   Object.keys(errors).forEach((key) => delete errors[key as keyof OperationFormErrors]);
   Object.assign(errors, store.openConfirmation());
+  if (Object.keys(errors).length > 0) await focusFirstError();
 }
 </script>
 
 <template>
-  <form class="operation-form" @submit.prevent="prepareConfirmation">
+  <form ref="formRef" class="operation-form" @submit.prevent="prepareConfirmation">
     <fieldset class="operation-form__types">
       <legend>{{ t('operation.form.type') }}</legend>
       <label v-for="operationType in operationTypes" :key="operationType">
@@ -74,6 +113,7 @@ function prepareConfirmation(): void {
           :disabled="disabled"
           :required="fieldRequired"
           data-testid="operation-bundle"
+          @blur="applyValidation('bundleId')"
         >
           <option :value="null">{{ t('operation.form.selectArtifact') }}</option>
           <option v-for="bundle in store.availableBundles" :key="bundle.bundleId" :value="bundle.bundleId">
@@ -99,6 +139,7 @@ function prepareConfirmation(): void {
           :disabled="disabled || store.revisionsLoading || store.approvedRevisions.length === 0"
           :required="fieldRequired"
           data-testid="operation-values-revision"
+          @blur="applyValidation('valuesRevisionId')"
         >
           <option :value="null">{{ t('operation.form.selectRevision') }}</option>
           <option
@@ -134,6 +175,7 @@ function prepareConfirmation(): void {
           :aria-invalid="invalid"
           :disabled="disabled"
           :required="fieldRequired"
+          @blur="applyValidation('expectedCurrentRevision')"
         />
       </template>
     </FormField>
@@ -155,6 +197,7 @@ function prepareConfirmation(): void {
           :aria-invalid="invalid"
           :disabled="disabled"
           :required="fieldRequired"
+          @blur="applyValidation('targetRevision')"
         />
       </template>
     </FormField>
@@ -164,6 +207,7 @@ function prepareConfirmation(): void {
       v-model="store.fields.patch"
       :error="errors.patch"
       :error-index="errors.patchIndex"
+      @blur="applyValidation('patch')"
     />
 
     <button class="operation-form__submit" type="submit">{{ t('operation.form.checkAndConfirm') }}</button>

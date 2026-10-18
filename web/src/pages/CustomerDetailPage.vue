@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted, shallowRef, watch } from 'vue';
+import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import CustomerForm from '@/components/customers/CustomerForm.vue';
 import CustomerHistory from '@/components/customers/CustomerHistory.vue';
 import DisableCustomerDialog from '@/components/customers/DisableCustomerDialog.vue';
@@ -18,6 +19,12 @@ const auth = useAuthStore();
 const clusterRoutingEnabled = import.meta.env.VITE_FEATURE_CLUSTER_ROUTING !== 'false';
 const store = useCustomerStore();
 const showDisableDialog = shallowRef(false);
+/*
+ * W10 (UX-041): a successful disable used to only flip the banner. The failure half
+ * already had `disableError` rendered below; the success half had nothing, so the
+ * console looked unchanged apart from a subtle badge. The toast is the counterpart.
+ */
+const disableNotice = ref<string | null>(null);
 
 const customerId = computed(() => typeof route.params.id === 'string' ? route.params.id : '');
 const isCreate = computed(() => customerId.value === '');
@@ -56,13 +63,24 @@ async function refresh() {
 
 async function disable() {
   if (isCreate.value || !store.current) return;
+  const name = store.current.name;
   await store.disable(store.current.id);
   showDisableDialog.value = false;
+  // A refused disable is already rendered from `store.disableError`; only announce
+  // the success, so the two outcomes never appear together.
+  if (!store.disableError) disableNotice.value = t('customer.detail.disableSuccess', { name });
 }
 </script>
 
 <template>
   <section class="customer-detail">
+    <Toast
+      v-if="disableNotice"
+      tone="success"
+      testid="customer-detail-notice"
+      @dismiss="disableNotice = null"
+    >{{ disableNotice }}</Toast>
+
     <LoadingState v-if="store.loading && !isCreate" :message="t('state.loading.customer')" />
     <ForbiddenState v-else-if="store.forbidden" />
     <ErrorState v-else-if="store.error" :message="store.error">

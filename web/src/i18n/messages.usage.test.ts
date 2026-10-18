@@ -141,8 +141,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationForm.vue',
-    allowed: [],
-    reason: 'everything renders from the catalog; the revision id placeholder was replaced by the approved-revision selector (TASK-280 D10)',
+    allowed: ['bundleId', 'valuesRevisionId', 'expectedCurrentRevision', 'targetRevision', '[aria-invalid="true"], [data-field-error]'],
+    reason:
+      'everything renders from the catalog; the revision id placeholder was replaced by the approved-revision selector (TASK-280 D10). W12 registered five non-copy literals: the four blur-validation field keys are the `OperationFormErrors` property names the store owns (stores/operationForm.ts), and the fifth is the CSS selector the switch searches for when focus moves to the first error',
   },
   {
     file: 'src/components/operations/PatchOverrideEditor.vue',

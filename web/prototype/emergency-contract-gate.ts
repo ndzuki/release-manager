@@ -1,4 +1,11 @@
 /**
+ * SUPERSEDED 2026-10-18 (W9 / AC-058-50): every symbol this file lists as "MISSING"
+ * has since landed, and the file sits outside `tsconfig.json`'s `include`, so no gate
+ * compiles it. The live artifact — required symbols present, legacy
+ * `EmergencyChange(payload, actor)` absent, compiled by `make web-check` and
+ * `npm run check:contract` — is `web/src/contracts/req058-emergency-contract.fixture.ts`.
+ * Kept only as the historical prototype; a failure here is not a gate signal.
+ *
  * TASK-058 Step 1 canonical contract gate fixture (throwaway, v3 · 2026-08-22).
  *
  * Verifies that the current generated schema/client can express REQ-058's

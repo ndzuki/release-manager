@@ -4,6 +4,9 @@ import type { PatchOverride } from '@/types/operation';
 
 const model = defineModel<PatchOverride[]>({ required: true });
 const props = defineProps<{ error?: string; errorIndex?: number }>();
+// W12 (UX-053): the editor owns the patch controls, so it is the component that
+// knows when the operator leaves one of them; the form decides what to validate.
+const emit = defineEmits<{ blur: [] }>();
 
 function addRow(): void {
   model.value.push({ path: '', value: '', kind: 'LITERAL' });
@@ -18,6 +21,19 @@ function removeRow(index: number): void {
   <fieldset class="patch-editor">
     <legend>{{ t('operation.patch.title') }}</legend>
     <p class="patch-editor__hint">{{ t('operation.patch.help') }}</p>
+    <!--
+      W12 (UX-024): a patch error that names no row used to render nowhere — every
+      message was gated on `errorIndex === index`, so an error without an index became
+      invisible. It now gets a fieldset-level summary, which is also the focus target
+      when the form moves focus to the first error.
+    -->
+    <p
+      v-if="props.error && props.errorIndex === undefined"
+      class="patch-editor__error"
+      role="alert"
+      data-field-error
+      tabindex="-1"
+    >{{ props.error }}</p>
     <div
       v-for="(override, index) in model"
       :key="index"
@@ -29,6 +45,7 @@ function removeRow(index: number): void {
         :aria-label="`Patch ${index + 1} path`"
         :aria-invalid="props.errorIndex === index"
         placeholder="image.tag"
+        @blur="emit('blur')"
       />
       <select v-model="override.kind" :aria-label="`Patch ${index + 1} kind`">
         <option value="LITERAL">{{ t('operation.patch.literal') }}</option>
@@ -39,6 +56,7 @@ function removeRow(index: number): void {
         :aria-label="`Patch ${index + 1} value`"
         :aria-invalid="props.errorIndex === index"
         :placeholder="override.kind === 'SECRET_REF' ? 'secret-name' : 'value'"
+        @blur="emit('blur')"
       />
       <button type="button" class="patch-editor__remove" @click="removeRow(index)">{{ t('cluster.rules.remove') }}</button>
       <p v-if="props.error && props.errorIndex === index" class="patch-editor__row-error" role="alert">
@@ -52,6 +70,7 @@ function removeRow(index: number): void {
 <style scoped>
 .patch-editor { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .patch-editor__hint { margin: 0; color: var(--color-muted); font-size: var(--font-size-md); }
+.patch-editor__error { margin: 0; color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .patch-editor__row { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: 0.5rem; }
 .patch-editor__row--error { padding: 0.65rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: var(--color-danger-soft); }
 .patch-editor__row-error { grid-column: 1 / -1; margin: 0; color: var(--color-error); }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, shallowRef, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import OperatorPollingNotice from '@/components/operators/OperatorPollingNotice.vue';
 import OperatorStatusBadge from '@/components/operators/OperatorStatusBadge.vue';
 import RevokeOperatorDialog from '@/components/operators/RevokeOperatorDialog.vue';
@@ -23,14 +24,19 @@ const clusterId = computed(() => String(route.params.clusterId));
 const { heartbeatIntervalSeconds } = storeToRefs(store);
 const operatorId = computed(() => String(route.params.operatorId));
 const showRevoke = shallowRef(false);
+// W10 (UX-041): the detail page updated the badge without saying the revocation
+// had gone through; the toast is the confirmation the operator acts on.
+const revokeNotice = ref<string | null>(null);
 
 async function refresh(): Promise<boolean> {
   return store.loadDetail(customerId.value, clusterId.value, operatorId.value);
 }
 
 async function confirmRevoke(reason: string): Promise<void> {
+  const name = store.current?.name || operatorId.value;
   if (await store.revokeOperator(customerId.value, clusterId.value, operatorId.value, reason)) {
     showRevoke.value = false;
+    revokeNotice.value = t('operator.revoke.success', { name });
   }
 }
 
@@ -45,6 +51,13 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
 
 <template>
   <section class="page">
+    <Toast
+      v-if="revokeNotice"
+      tone="success"
+      testid="operator-detail-notice"
+      @dismiss="revokeNotice = null"
+    >{{ revokeNotice }}</Toast>
+
     <OperatorPollingNotice :stopped="pollingStopped" @resume="resumePolling" />
 
     <LoadingState v-if="store.loading && !store.current" :message="t('operator.detail.loading')" />

@@ -99,7 +99,13 @@ function valuesLabel(values: EmergencyTypedValuesDisplay | null): string {
 .emergency-result { display: grid; gap: 0.9rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-surface); }
 .result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 0.6rem 1rem; }
 .result-grid dt { color: var(--color-muted); font-size: var(--font-size-sm); }
-.result-grid dd { margin: 0; }
+/*
+ * W21 (UX-033): a long image reference (registry/namespace/repo@sha256:…) is a single
+ * unbreakable token, and it used to leak out of its grid track — `overflow-wrap:
+ * anywhere` both wraps it and shrinks the track's min-content floor, so the panel no
+ * longer widens the page.
+ */
+.result-grid dd { margin: 0; overflow-wrap: anywhere; }
 .effect-applied { color: var(--color-success); }
 .effect-unknown { color: var(--color-warning); }
 .effect-not_applied, .effect-not_started { color: var(--color-muted); }
