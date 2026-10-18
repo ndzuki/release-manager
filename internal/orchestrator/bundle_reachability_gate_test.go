@@ -27,11 +27,13 @@ import (
 // binding stops reads and claims even when the definition is owned by the caller's
 // organization.
 //
-// Mutation evidence (recorded on the TASK-369 card): removing the active-binding gate from
-// authorizeDefinition turns the read half red; the write half is the same gate through
-// AuthorizeWrite. Changing the predicate's "OR" to "AND" turns the store-level pin red
-// (internal/store/sqlite/bundles_reachability_test.go, "the owner keeps the relation after
-// its own binding is revoked").
+// Mutation evidence (recorded on the TASK-369 card): M1 changes the predicate's "OR" to
+// "AND" and turns the store-level pin red (internal/store/sqlite/bundles_reachability_test.go,
+// "the owner keeps the relation after its own binding is revoked"). M2 removes the
+// active-binding gate from authorizeDefinition and turns the read half red. M3 removes the
+// active-binding check from AuthorizeWrite -- a DIFFERENT function that also requires an
+// active binding -- and turns the write half red. Both entry gates are therefore
+// load-bearing, and each half is pinned by its own mutation.
 func TestBundleTenantBoundaryAfterOwnerBindingRevoke(t *testing.T) {
 	ctx := context.Background()
 	st := sqlitestore.OpenTest(t)
