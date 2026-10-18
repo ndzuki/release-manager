@@ -33,6 +33,7 @@ type authSvc struct {
 	cfg           config.ServiceConfig
 	jwtPrivateKey string
 	store         store.Store
+	enforcer      *auth.Enforcer
 	redisClient   *redis.Client
 	pingDB        func(context.Context) error
 	pingRedis     func(context.Context) error
@@ -54,6 +55,12 @@ func (s *authSvc) Shutdown(ctx context.Context) error {
 func (s *authSvc) Close() error {
 	if s.cancel != nil {
 		s.cancel()
+	}
+	// The policy reloader runs on its own goroutine over the shared store.
+	// Stop it and wait for any in-flight reload before the pool goes away;
+	// otherwise a reload can race store.Close and dereference a nil snapshot.
+	if s.enforcer != nil {
+		s.enforcer.Close()
 	}
 	var errs []error
 	if s.redisClient != nil {
@@ -170,6 +177,7 @@ func (s *authSvc) Register(mux *http.ServeMux, logger *slog.Logger) error {
 	if err := enforcer.LoadPolicies(context.Background()); err != nil {
 		logger.Error("initial policy load failed", "error", err)
 	}
+	s.enforcer = enforcer
 	if !s.cfg.Maintenance {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.cancel = cancel

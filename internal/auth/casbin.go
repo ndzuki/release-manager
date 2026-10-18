@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/casbin/casbin/v2"
@@ -34,6 +35,10 @@ e = some(where (p.eft == allow))
 m = (r.sub == p.sub || g(r.sub, p.sub, r.dom)) && r.dom == p.dom && keyMatch(r.obj, p.obj) && keyMatch(r.act, p.act)
 `
 
+// ErrEnforcerClosed reports that the enforcer was closed, so it no longer
+// loads or refreshes policy state from its store.
+var ErrEnforcerClosed = errors.New("authorization enforcer is closed")
+
 // Enforcer wraps a durable Casbin authorization snapshot.
 type Enforcer struct {
 	enforcer      *casbin.SyncedEnforcer
@@ -44,6 +49,15 @@ type Enforcer struct {
 	mu            sync.RWMutex
 	policyHealthy bool
 	policyVersion uint64
+	// Lifecycle of the background policy reloader. closeOnce/closed keep Close
+	// idempotent and fail-closed; reloadCancel and reloadDone let Close stop the
+	// goroutine and wait for an in-flight reload before the store goes away.
+	lifecycleMu  sync.Mutex
+	closeOnce    sync.Once
+	closeDone    chan struct{}
+	reloadCancel context.CancelFunc
+	reloadDone   chan struct{}
+	closed       atomic.Bool
 }
 
 // NewEnforcer creates a Casbin enforcer backed by the durable authorization store.
@@ -58,7 +72,7 @@ func NewEnforcer(st store.Store, logger *slog.Logger, metrics ...*authorization.
 		return nil, fmt.Errorf("casbin enforcer: %w", err)
 	}
 	e.EnableAutoSave(false)
-	result := &Enforcer{enforcer: e, store: st, logger: logger}
+	result := &Enforcer{enforcer: e, store: st, logger: logger, closeDone: make(chan struct{})}
 	if len(metrics) > 0 {
 		result.metrics = metrics[0]
 	}
@@ -129,21 +143,43 @@ func (e *Enforcer) EnforceServiceActor(ctx context.Context, service, domain, obj
 }
 
 // LoadPolicies reloads the durable policy snapshot (AC-027-03 hot reload).
+// After Close it fails closed without touching the store.
 func (e *Enforcer) LoadPolicies(ctx context.Context) error {
-	e.refreshMu.Lock()
+	if e.closed.Load() {
+		return ErrEnforcerClosed
+	}
+	if err := e.lockRefresh(); err != nil {
+		return err
+	}
 	defer e.refreshMu.Unlock()
 	return e.loadPolicies(ctx)
+}
+
+// lockRefresh serialises policy refreshes and refuses new ones once Close has
+// run. Close takes the same lock as a barrier, so after it returns no caller
+// that passed this check can still be reading the store from a refresh.
+func (e *Enforcer) lockRefresh() error {
+	e.refreshMu.Lock()
+	if e.closed.Load() {
+		e.refreshMu.Unlock()
+		return ErrEnforcerClosed
+	}
+	return nil
 }
 
 func (e *Enforcer) loadPolicies(ctx context.Context) error {
 	durable, err := e.store.Authorization().Load(ctx)
 	if err != nil {
-		e.setPolicyState(false, e.PolicyVersion())
+		e.setPolicyUnavailable(e.PolicyVersion())
 		return fmt.Errorf("load durable authorization snapshot: %w", err)
+	}
+	if durable == nil {
+		e.setPolicyUnavailable(e.PolicyVersion())
+		return errors.New("load durable authorization snapshot: store returned no snapshot")
 	}
 	rules, compileErr := compileAuthorizationRules(ctx, e.logger, e.store, durable.Grants, durable.Rules)
 	if compileErr != nil {
-		e.setPolicyState(false, durable.PolicyVersion)
+		e.setPolicyUnavailable(durable.PolicyVersion)
 		return compileErr
 	}
 	if !reflect.DeepEqual(rules, durable.Rules) {
@@ -151,16 +187,26 @@ func (e *Enforcer) loadPolicies(ctx context.Context) error {
 		if durable.SourceVersion == 0 && len(rules) > 0 {
 			mutation = store.AuthorizationMembershipChanged
 		}
-		durable, err = e.store.Authorization().Apply(ctx, store.AuthorizationApplyCommand{
+		// Keep the previous snapshot until Apply succeeds: Apply returns a nil
+		// snapshot on every error path (both SQLite and PostgreSQL), so
+		// assigning its result to durable would turn the error branch into a
+		// nil dereference (CI panic at TASK-365: casbin.go:161 while a reloader
+		// tick raced the store teardown).
+		updated, applyErr := e.store.Authorization().Apply(ctx, store.AuthorizationApplyCommand{
 			ExpectedSourceVersion: durable.SourceVersion,
 			ExpectedPolicyVersion: durable.PolicyVersion,
 			Mutation:              mutation,
 			Rules:                 rules,
 		})
-		if err != nil {
-			e.setPolicyState(false, durable.PolicyVersion)
-			return fmt.Errorf("persist authorization rules: %w", err)
+		if applyErr != nil {
+			e.setPolicyUnavailable(durable.PolicyVersion)
+			return fmt.Errorf("persist authorization rules: %w", applyErr)
 		}
+		if updated == nil {
+			e.setPolicyUnavailable(durable.PolicyVersion)
+			return errors.New("persist authorization rules: store returned no snapshot")
+		}
+		durable = updated
 	}
 
 	e.mu.Lock()
@@ -183,7 +229,12 @@ func (e *Enforcer) loadPolicies(ctx context.Context) error {
 
 // RefreshPolicies recompiles current membership and grants, persists them, then reloads Casbin.
 func (e *Enforcer) RefreshPolicies(ctx context.Context) (uint64, error) {
-	e.refreshMu.Lock()
+	if e.closed.Load() {
+		return e.PolicyVersion(), ErrEnforcerClosed
+	}
+	if err := e.lockRefresh(); err != nil {
+		return e.PolicyVersion(), err
+	}
 	defer e.refreshMu.Unlock()
 
 	durable, err := e.store.Authorization().Load(ctx)
@@ -222,17 +273,15 @@ func (e *Enforcer) PolicyHealthy() bool {
 	return e.policyHealthy
 }
 
-func (e *Enforcer) setPolicyState(healthy bool, version uint64) {
+// setPolicyUnavailable records that the policy snapshot is unusable while
+// keeping the reported version at the last durable value.
+func (e *Enforcer) setPolicyUnavailable(version uint64) {
 	e.mu.Lock()
-	e.policyHealthy = healthy
+	e.policyHealthy = false
 	e.policyVersion = version
 	e.mu.Unlock()
 	if e.metrics != nil {
-		if healthy {
-			e.metrics.PolicyHealth.Set(1)
-		} else {
-			e.metrics.PolicyHealth.Set(0)
-		}
+		e.metrics.PolicyHealth.Set(0)
 	}
 }
 
@@ -265,7 +314,12 @@ func (e *Enforcer) RemoveRoleBinding(user, role, domain string) error {
 }
 
 func (e *Enforcer) mutateRules(ctx context.Context, change func([]store.CasbinRule) []store.CasbinRule) error {
-	e.refreshMu.Lock()
+	if e.closed.Load() {
+		return ErrEnforcerClosed
+	}
+	if err := e.lockRefresh(); err != nil {
+		return err
+	}
 	defer e.refreshMu.Unlock()
 
 	durable, err := e.store.Authorization().Load(ctx)
@@ -293,21 +347,64 @@ func (e *Enforcer) AddServiceActorBinding(service, role, domain string) error {
 }
 
 // StartPolicyReloader runs a periodic policy reloader (AC-027-03).
+//
+// The goroutine stops when ctx is cancelled or when Close is called. Close
+// waits for an in-flight reload, so callers must Close the enforcer before
+// closing the underlying store. Calling it more than once, or after Close, is
+// a no-op.
 func (e *Enforcer) StartPolicyReloader(ctx context.Context, interval time.Duration) {
+	e.lifecycleMu.Lock()
+	if e.closed.Load() || e.reloadCancel != nil {
+		e.lifecycleMu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	e.reloadCancel = cancel
+	e.reloadDone = done
+	e.lifecycleMu.Unlock()
+
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-runCtx.Done():
 				return
 			case <-ticker.C:
-				if err := e.LoadPolicies(ctx); err != nil {
+				if err := e.LoadPolicies(runCtx); err != nil && runCtx.Err() == nil {
 					e.logger.Error("policy reload failed", "error", err)
 				}
 			}
 		}
 	}()
+}
+
+// Close stops the policy reloader and waits for an in-flight reload to finish.
+// It must be called before the underlying store is closed; afterwards policy
+// loads fail closed with ErrEnforcerClosed instead of touching the store.
+func (e *Enforcer) Close() {
+	e.closeOnce.Do(func() {
+		e.closed.Store(true)
+		e.lifecycleMu.Lock()
+		cancel, done := e.reloadCancel, e.reloadDone
+		e.lifecycleMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if done != nil {
+			<-done
+		}
+		// Barrier: a caller that passed the closed check before this Close may
+		// still hold refreshMu. Wait it out, so Close returning really means
+		// the store has no policy reader left. closeDone is published under the
+		// same lock, so a waiter cannot observe a half-closed lifecycle.
+		e.refreshMu.Lock()
+		close(e.closeDone)
+		e.refreshMu.Unlock()
+	})
+	<-e.closeDone
 }
 
 // storeAdapter implements casbin.Adapter over the durable casbin_rule snapshot.
