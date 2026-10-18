@@ -1190,10 +1190,13 @@ dispatch 分支在 `internal/orchestrator/preflight/coordinator.go:221`。`inter
 - **rollback 不是把 Helm revision 号退回去**：它**追加**一个新 revision（v1,v2 → v3），v3 的内容等于 v1。
   所以回滚后 inventory 的 `revision` 是 **3** 而不是 1，`deployment.kubernetes.io/revision` 也是 3。
   判断「回滚到升级前」要看**内容**（副本数 / 镜像 / annotation），不能看 revision 号。
-- **`RollbackRelease` 响应的 `to_revision` 是错的**：本次请求 `target_revision=1`，响应却是
-  `{fromRevision:2, toRevision:3}`。原因是 `rollbackResponse` 用了 `ExpectedRevision+1` 而不是
-  `TargetRevision`（`internal/orchestrator/rollback.go:238-244`）；数据库 `operations.target_revision` 实查是 `1`，
-  所以是**响应投影错**，执行目标没错（本条只记录，未在本次修）。
+- **`RollbackRelease` 响应的 `to_revision` 是「内容目标 revision」**：本次请求 `target_revision=1`，修复前响应是
+  `{fromRevision:2, toRevision:3}`，因为 `rollbackResponse` 用了 `ExpectedRevision+1` 而不是 `TargetRevision`。
+  **已修（TASK-354）**：`internal/orchestrator/rollback.go:250-258` 现在投影
+  `from_revision` = 请求的 `expected_current_revision`（乐观锁）与 `to_revision` = 请求的 `target_revision`
+  （**回到哪个版本的内容**），判别式断言见 `internal/orchestrator/rollback_test.go:91`。
+  回滚**追加**的新 Helm revision 号（上面的 v3）在该 RPC 里不可知——handler 只创建 operation，operator 之后才执行
+  Helm rollback——只能从 inventory `revision` / Helm history 观察，**不要**从 `to_revision` 推断新 revision 号。
 
 #### 12.6.3 紧急变更（image 路径）：入口有，本环境不可达
 

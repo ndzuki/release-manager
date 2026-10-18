@@ -58,7 +58,11 @@ func TestRollbackRelease_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.Msg.OperationId)
 	assert.Equal(t, int32(3), resp.Msg.FromRevision)
-	assert.Equal(t, int32(4), resp.Msg.ToRevision) // rollback creates rev 4
+	// TASK-354 / AC-354-01: to_revision is the CONTENT target
+	// (request.target_revision = 1), not the Helm revision the rollback appends.
+	// This case discriminates: 1 is neither expected-1 (2) nor expected+1 (4),
+	// so the retired `ExpectedRevision+1` projection fails it.
+	assert.Equal(t, int32(1), resp.Msg.ToRevision)
 	assert.Equal(t, "preflight", resp.Msg.State)
 
 	// Verify operation persisted correctly
@@ -74,6 +78,88 @@ func TestRollbackRelease_Success(t *testing.T) {
 	// "queued"). The stable contract is the type and the revisions asserted
 	// above; the status must be a legal non-terminal state of the rollback path.
 	assert.Contains(t, []store.OperationStatus{store.StatusPreflight, store.StatusQueued}, op.Status)
+}
+
+// TestRollbackResponse_ProjectsTargetRevision pins the projection contract of
+// rollbackResponse (TASK-354 / AC-354-01): to_revision is the CONTENT target
+// captured as op.TargetRevision, never a guessed "appended Helm revision".
+//
+// The discriminating rows are the ones where target differs from BOTH
+// expected-1 and expected+1: the retired `ExpectedRevision+1` formula only
+// passes when the two numbers accidentally coincide, so a table of
+// "ordinary rollback" rows alone would not have caught the bug TASK-353 found.
+func TestRollbackResponse_ProjectsTargetRevision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		expected int
+		target   int
+	}{
+		{name: "task-353 case: target 1 of expected 2", expected: 2, target: 1},
+		{name: "target differs from expected-1 and expected+1", expected: 5, target: 2},
+		{name: "common case: one revision back", expected: 5, target: 4},
+		{name: "wide gap back to the first revision", expected: 100, target: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resp := rollbackResponse(&store.Operation{
+				ID:               "op-rollback-354",
+				Status:           store.StatusPreflight,
+				ExpectedRevision: tt.expected,
+				TargetRevision:   tt.target,
+			})
+			require.NotNil(t, resp)
+			assert.Equal(t, "op-rollback-354", resp.Msg.GetOperationId())
+			assert.Equal(t, int32(tt.expected), resp.Msg.GetFromRevision())
+			assert.Equal(t, int32(tt.target), resp.Msg.GetToRevision())
+			assert.Equal(t, string(store.StatusPreflight), resp.Msg.GetState())
+		})
+	}
+}
+
+// TestRollbackRelease_ResponseTargetRevisionFromStore drives the same contract
+// through the handler: the response must project the operation row the handler
+// wrote (operations.target_revision), not recompute it from expected+1.
+func TestRollbackRelease_ResponseTargetRevisionFromStore(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedDefinition(t, st)
+	// REQ-067 rule 13: the inventory revision must equal
+	// expected_current_revision, so this case needs revision 5.
+	require.NoError(t, st.Inventories().Upsert(t.Context(), &store.ReleaseInventory{
+		ReleaseDefinitionID: "def-001",
+		CustomerID:          "cust-001",
+		ClusterID:           "cls-001",
+		Namespace:           "default",
+		ReleaseName:         "my-release",
+		InventoryStatus:     store.InventoryActive,
+		Revision:            5,
+	}))
+	require.NoError(t, st.Operators().Create(context.Background(), &store.Operator{
+		ID: "operator-rollback-target", Name: "operator-rollback-target", CustomerID: "cust-001", ClusterID: "cls-001",
+		CertSerial: "serial-rollback-target", Status: store.OperatorActive,
+	}))
+
+	resp, err := svc.RollbackRelease(adminCtx(), withIdempotencyKey(connect.NewRequest(&orchestratorv1.RollbackReleaseRequest{
+		ReleaseDefinitionId:     "def-001",
+		TargetRevision:          2,
+		ExpectedCurrentRevision: 5,
+		Reason:                  "task-354 discriminator: 2 is neither 4 nor 6",
+	}), "idem-rb-354-target"))
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(5), resp.Msg.GetFromRevision())
+	assert.Equal(t, int32(2), resp.Msg.GetToRevision())
+
+	op, err := st.Operations().Get(context.Background(), resp.Msg.GetOperationId())
+	require.NoError(t, err)
+	assert.Equal(t, 5, op.ExpectedRevision)
+	assert.Equal(t, 2, op.TargetRevision)
+	assert.Equal(t, int32(op.TargetRevision), resp.Msg.GetToRevision(),
+		"the response must project the stored target revision")
 }
 
 func TestRollbackRelease_TargetRevisionInvalid(t *testing.T) {

@@ -235,11 +235,23 @@ func hashRollbackRequest(msg *orchestratorv1.RollbackReleaseRequest) string {
 		int(msg.GetExpectedCurrentRevision()), int(msg.GetTargetRevision()), msg.GetReason())
 }
 
+// rollbackResponse projects the PLANNED revision pair of a ROLLBACK operation.
+//
+// from_revision is the revision the caller declared live (the request's
+// expected_current_revision, i.e. the optimistic lock); to_revision is the
+// revision whose CONTENT the rollback restores (the request's target_revision,
+// stored as op.TargetRevision). It is deliberately NOT the new Helm revision the
+// rollback appends: this handler only creates the operation and the operator
+// executes the Helm rollback later, so the appended revision number does not
+// exist yet and cannot be known here (the control plane learns it afterwards
+// from the inventory revision / Helm history). Deriving it from
+// ExpectedRevision+1 guessed a number the caller never asked for and that
+// contradicted both the request and operations.target_revision.
 func rollbackResponse(op *store.Operation) *connect.Response[orchestratorv1.RollbackReleaseResponse] {
 	return connect.NewResponse(&orchestratorv1.RollbackReleaseResponse{
 		OperationId:  op.ID,
-		FromRevision: int32(op.ExpectedRevision),     //nolint:gosec // Helm revisions are bounded well below int32 max.
-		ToRevision:   int32(op.ExpectedRevision + 1), //nolint:gosec // Helm revisions are bounded well below int32 max.
+		FromRevision: int32(op.ExpectedRevision), //nolint:gosec // Helm revisions are bounded well below int32 max.
+		ToRevision:   int32(op.TargetRevision),   //nolint:gosec // Helm revisions are bounded well below int32 max.
 		State:        string(op.Status),
 	})
 }

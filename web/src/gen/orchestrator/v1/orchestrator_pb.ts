@@ -753,6 +753,10 @@ export const RollbackReleaseRequestSchema: GenMessage<RollbackReleaseRequest> = 
 /**
  * RollbackReleaseResponse returns the created rollback operation.
  *
+ * The revision pair is the PLANNED pair captured on the operation, not a
+ * post-execution observation: this RPC only accepts the rollback; the operator
+ * executes the Helm rollback afterwards.
+ *
  * @generated from message orchestrator.v1.RollbackReleaseResponse
  */
 export type RollbackReleaseResponse = Message<"orchestrator.v1.RollbackReleaseResponse"> & {
@@ -762,11 +766,21 @@ export type RollbackReleaseResponse = Message<"orchestrator.v1.RollbackReleaseRe
   operationId: string;
 
   /**
+   * Revision the caller declared live (request.expected_current_revision), i.e.
+   * the optimistic-lock value the operation was created with.
+   *
    * @generated from field: int32 from_revision = 2;
    */
   fromRevision: number;
 
   /**
+   * Revision whose CONTENT the rollback restores (request.target_revision), so
+   * "back to <to_revision>" is the correct reading.
+   * A rollback appends a NEW Helm revision instead of reusing the old number;
+   * that appended revision only exists once the operator has executed the
+   * rollback and is observable through the inventory revision / Helm history,
+   * never through this field.
+   *
    * @generated from field: int32 to_revision = 3;
    */
   toRevision: number;

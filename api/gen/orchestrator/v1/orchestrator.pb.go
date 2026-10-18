@@ -2261,12 +2261,24 @@ func (x *RollbackReleaseRequest) GetValuesPatch() string {
 }
 
 // RollbackReleaseResponse returns the created rollback operation.
+//
+// The revision pair is the PLANNED pair captured on the operation, not a
+// post-execution observation: this RPC only accepts the rollback; the operator
+// executes the Helm rollback afterwards.
 type RollbackReleaseResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	FromRevision  int32                  `protobuf:"varint,2,opt,name=from_revision,json=fromRevision,proto3" json:"from_revision,omitempty"`
-	ToRevision    int32                  `protobuf:"varint,3,opt,name=to_revision,json=toRevision,proto3" json:"to_revision,omitempty"`
-	State         string                 `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	OperationId string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	// Revision the caller declared live (request.expected_current_revision), i.e.
+	// the optimistic-lock value the operation was created with.
+	FromRevision int32 `protobuf:"varint,2,opt,name=from_revision,json=fromRevision,proto3" json:"from_revision,omitempty"`
+	// Revision whose CONTENT the rollback restores (request.target_revision), so
+	// "back to <to_revision>" is the correct reading.
+	// A rollback appends a NEW Helm revision instead of reusing the old number;
+	// that appended revision only exists once the operator has executed the
+	// rollback and is observable through the inventory revision / Helm history,
+	// never through this field.
+	ToRevision    int32  `protobuf:"varint,3,opt,name=to_revision,json=toRevision,proto3" json:"to_revision,omitempty"`
+	State         string `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
