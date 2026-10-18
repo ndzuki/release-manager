@@ -1,0 +1,13 @@
+-- TASK-359 rollback: intentionally empty.
+--
+-- This migration is a data repair, not a schema change: it copies the only
+-- organization that could ever authorize a definition (the customer's unique
+-- active binding) onto owner_organization_id. The previous value (NULL) carried
+-- no information -- it was the defect that made the definition unapprovable --
+-- so clearing the column again would re-introduce it rather than roll anything
+-- back.
+--
+-- Rolling the *code* back is safe without this down: the pre-TASK-357 writer did
+-- not read this column at creation time, and the pre-fix readers still treat an
+-- owner as authoritative only in the approval paths, so a populated owner is
+-- equivalent to "approval may proceed" rather than to any new stored state.

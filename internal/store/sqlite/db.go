@@ -2089,6 +2089,30 @@ var migrationStatements = []string{
 	     cluster_id  = (SELECT o.cluster_id  FROM operators AS o WHERE o.id = sessions.operator_id)
 	 WHERE (customer_id = '' OR cluster_id = '')
 	   AND EXISTS (SELECT 1 FROM operators AS o WHERE o.id = sessions.operator_id)`,
+
+	// TASK-359: backfill release_definitions.owner_organization_id for rows the
+	// pre-TASK-357 creation path left NULL. Mirrors
+	// migrations/000036_release_definition_owner_backfill.up.sql: the owner is
+	// the customer's unique active binding, the only organization that could
+	// ever pass checkApprovalAuth for that definition. owner_organization_id IS
+	// NULL makes a second run a no-op; the "exactly one active binding" guard
+	// leaves ambiguous rows NULL instead of guessing, and the organizations join
+	// skips a disabled owner that could not authorize anyway. The column itself
+	// stays nullable on both engines: no management flow can repair an
+	// unbackfillable row yet, so NOT NULL is deferred (TASK-359).
+	`UPDATE release_definitions
+	 SET owner_organization_id = (
+	     SELECT b.org_id FROM org_customer_bindings AS b
+	     WHERE b.customer_id = release_definitions.customer_id AND b.status = 'active')
+	 WHERE owner_organization_id IS NULL
+	   AND (SELECT count(*) FROM org_customer_bindings AS b
+	        WHERE b.customer_id = release_definitions.customer_id AND b.status = 'active') = 1
+	   AND EXISTS (
+	     SELECT 1 FROM org_customer_bindings AS b
+	     JOIN organizations AS o ON o.id = b.org_id
+	     WHERE b.customer_id = release_definitions.customer_id
+	       AND b.status = 'active'
+	       AND o.status = 'active')`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }
