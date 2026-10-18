@@ -485,7 +485,7 @@ func (s *Service) CommandStream(
 			Capabilities:  hello.GetCapabilities(),
 			StartedAt:     now,
 			LastHeartbeat: now,
-			ExpiresAt:     now.Add(s.sessionTTL),
+			ExpiresAt:     now.Add(s.sessionTTL), CustomerID: op.CustomerID, ClusterID: op.ClusterID, // TASK-361
 		}
 		// The Enroll placeholder session (empty InstanceID) does not block the
 		// first Establish — it is replaced, not treated as a concurrent

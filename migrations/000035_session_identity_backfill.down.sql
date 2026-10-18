@@ -1,0 +1,11 @@
+-- TASK-361 rollback: intentionally empty.
+--
+-- This migration is a data repair, not a schema change: it copies the operator's
+-- customer_id / cluster_id onto sessions rows the pre-fix writer left as the
+-- column default ''. The previous value ('') carried no information -- it was the
+-- defect -- so there is nothing to restore, and clearing the columns would
+-- re-introduce it for every row rather than roll anything back.
+--
+-- Rolling the *code* back is safe without this down: the pre-fix reader never
+-- consulted these columns (sessions were scoped through sessions.operator_id and
+-- the operators join), so populated values are ignored by it.

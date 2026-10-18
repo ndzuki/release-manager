@@ -2073,6 +2073,21 @@ var migrationStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_operations_non_terminal_created
 	 ON operations(created_at, id)
 	 WHERE status NOT IN ('succeeded','failed','cancelled','timeout')`,
+
+	// TASK-361: backfill sessions.customer_id / cluster_id for legacy rows. The
+	// columns were added with DEFAULT '' (the ALTERs above), so rows written
+	// before CommandStream populated them kept the empty string and could only be
+	// scoped by joining operators. operator_id references operators(id), so the
+	// authoritative scope is recoverable; the EXISTS guard keeps the statement a
+	// no-op when a legacy SQLite database has foreign_keys off and carries a
+	// dangling operator_id. Mirrors
+	// migrations/000035_session_identity_backfill.up.sql; the WHERE clause makes a
+	// second run a no-op, and populated rows are never rewritten.
+	`UPDATE sessions
+	 SET customer_id = (SELECT o.customer_id FROM operators AS o WHERE o.id = sessions.operator_id),
+	     cluster_id  = (SELECT o.cluster_id  FROM operators AS o WHERE o.id = sessions.operator_id)
+	 WHERE (customer_id = '' OR cluster_id = '')
+	   AND EXISTS (SELECT 1 FROM operators AS o WHERE o.id = sessions.operator_id)`,
 }
 
 func nowUTC() string { return time.Now().UTC().Format(time.RFC3339) }

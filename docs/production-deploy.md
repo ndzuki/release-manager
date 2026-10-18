@@ -1146,8 +1146,8 @@ NULL owner，也不会拖到批准时才暴露）→ `CreateValuesRevision` →
 - 未改 SAN 生成逻辑（`cmd/orchestrator/main.go:173-176` 仍是 2 个固定 DNS 名），也没加配置项；
 - `PublishRelease` 未实现 ⇒ definition 没有「当前 bundle」；UI 发布清单里手工 helm 装的那条显示「生效中」但
   「未绑定 Definition」，operator 装的那条绑定 Definition 并显示「不同步」（同时提供「创建操作 / 紧急变更」）；
-- `sessions` 的 `customer_id` / `cluster_id` 只有 enroll 时创建的那一行有值，`CommandStream` 新建的行是空串
-  （按集群过滤会话要 join `operators`）。
+- ~~`sessions` 的 `customer_id` / `cluster_id` 只有 enroll 时创建的那一行有值，`CommandStream` 新建的行是空串~~
+  **已修（TASK-361）**：建会话时从 operator 行写入两列（`internal/operator/service.go:488`），迁移 `migrations/000035_session_identity_backfill.up.sql` 回填存量空串行。
 
 > **2026-10-18 后续实测（TASK-353）**：upgrade / rollback 已在上面的客户集群上真实走通，
 > 紧急变更（image 路径）被可信门禁拒绝；细节与证据见 §12.6。上面的「未做」保留为 §12.5 时点的记录。
