@@ -2,7 +2,7 @@
 
 本文是 `deploy/kustomize/production` overlay 在**单节点 k3d 集群**上的部署与运维手册：前置条件、必填 Secret、启动顺序、TLS、备份恢复、升级回滚、可观测面与已知限制。manifest 的结构与逐条设计理由不在此重复，见 [production overlay README](../deploy/kustomize/production/README.md)；故障处置的通用路径见 [runbook](runbook.md)。
 
-**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），同日的 TASK-366 增量发布再把 tag 前移到 `6f343cf`（§8.6）；§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
+**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），同日的 TASK-366 增量发布把 tag 前移到 `6f343cf`（§8.6），TASK-368 再前移到 `98f7b52` 并把 schema 推到 36（§8.7）；§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
 
 ## 0. 速览
 
@@ -14,11 +14,11 @@
 | PVC | **5 个全部 `Bound`**（含自动备份卷 `release-manager-backups`） | 同上 + `kubectl -n release-manager get pvc` |
 | 渲染对象 | **45 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 3 PVC / 9 NetworkPolicy / 1 CronJob） | `kubectl kustomize`，纯本地渲染，不接触集群 |
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
-| 镜像 tag | `6f343cf`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-366，见 §8.6 |
+| 镜像 tag | `98f7b52`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-368，见 §8.7 |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
 | operator 网关 | `https://127.0.0.1:8444`（mTLS；2026-10-18 12:28 起仅 loopback，跨机接入见 §10-5） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
 | 宿主端口绑定 | 8443/8444 → `127.0.0.1`（无 `0.0.0.0`/`[::]`）；6443 API 仍是 `0.0.0.0:44609` | 2026-10-18 12:28 `docker port`，见 §10-5 |
-| schema | `schema_migrations` = `35`, `dirty=f`（2026-10-18 前为 `34`） | 只读 SQL，见 §8.5 |
+| schema | `schema_migrations` = `36`, `dirty=f`（2026-10-18 TASK-368 前为 `35`，更前为 `34`） | 只读 SQL，见 §8.7 |
 
 ## 1. 现状与拓扑
 
@@ -26,7 +26,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:6f343cf`（2026-10-18 前为 `778ded6`、更前为 `876df9a`，见 §8.5/§8.6 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:98f7b52`（2026-10-18 前为 `6f343cf`/`778ded6`、更前为 `876df9a`，见 §8.5–§8.7 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`），经 `operator` Service 的 NodePort 30844 暴露给客户集群 |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -931,6 +931,135 @@ kubectl -n release-manager rollout status deploy/<svc> --timeout=300s
 - `web` 的 W18 拆分只验证页面可加载与数据可见（audit / operations / release inventory / operation detail），没有逐像素复验；0 像素差异的证据在拆分提交 #439 自己的交付记录里，本次不重做。
 - 用 `kubectl set image` 直改 Deployment，仓库清单 tag 仍是 `:dev`；`kubectl apply -k` 会把它改回去，正式发布仍走 §2.3。
 - 新 `auth` Pod 启动时仍会先打一条 `WARN PostgreSQL not reachable yet, retrying`（约 0.9 s 后恢复，PG `RESTARTS=0`），与 TASK-362 的观察一致，是 #426 有界等待在生效，不是本次回归。
+
+### 8.7 实测：`98f7b52` 全量发布与迁移 35→36 owner 回填（2026-10-18，TASK-368）
+
+TASK-366 之后的第三次发布：把 `origin/main` 从 `6f343cf` 前移到 `98f7b52`（#441–#447）。区间内**唯一的数据变更**是 #447 的 `migrations/000036_release_definition_owner_backfill`（回填 `release_definitions.owner_organization_id` 仍为 NULL 的行，SQLite 孪生语句在 `internal/store/sqlite/db.go:2103`）；其余是 #443/#444/#445 的 web 拆分（`DefinitionsPage`/`OrganizationPage`/`BindingsPage` → composables + components，行为等价）、#446 的 375px 溢出修复、#442 的文档门禁。区间内**没有** `api/proto/**` 变更，六个服务与 `web` 全量滚到 `:98f7b52`。
+
+**基线（发布前实测，2026-10-18 19:47 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | 全部 `:6f343cf`（`api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web`）；`edge=nginx:1.27-alpine` |
+| revision | `api=11`、`auth=3`、`orchestrator=3`、`notifier=3`、`webhook=3`、`web=9`、`edge=1` |
+| Pod | 10 个工作负载 `1/1` + 1 个 `Completed` 的备份 Job Pod；`RESTARTS` 全 0 |
+| schema | `35\|f` |
+| 数据面 | `release_definitions` 4 行，其中 `owner_organization_id IS NULL` **2 行**（`acme-web` active、`release-fixture` disabled） |
+| 入口 | `https://localhost:8443/` → 200（`curl -k`，4.1 ms） |
+| 登录 | 离开 `/login` **910 ms**（真 Chrome，playwright-core + 系统 Chrome） |
+| 备份 | 最新 CronJob 产物 `release_manager-20261018T020000Z.dump`，**159,481 B**；部署前手动触发 `backup-pre-368` ⇒ `release_manager-20261018T114751Z.dump`，**164,049 B**（notifier 同批 4,592 B） |
+| 回滚基线 | `kubectl -n release-manager get deploy -o yaml` 落盘 `/tmp/rm368/deploys-baseline-6f343cf.yaml`（40,114 B） |
+
+**迁移触发面（本次先纠正了一个假设）**
+
+不是只有 `api` 会跑迁移。`postgresstore.Open` 内部固定调用 `RunMigrations`（`internal/store/postgres/db.go:174`、`:179`），而 `cmd/api`（`cmd/api/store.go:47`）、`cmd/auth`（`cmd/auth/main.go:104`）、`cmd/orchestrator`（`cmd/orchestrator/main.go:622`）都走这个入口；`notifier` 用的是自己的迁移集（`cmd/notifier/main.go:157` + `migrations/embed.go:23`），不会执行 `000036`。**结论：`api`/`auth`/`orchestrator` 里谁先滚，35→36 就在那一步发生。**
+
+因此本次的滚动顺序是：**先 `api`**，再 `auth` → `orchestrator` → `notifier` → `webhook` → `web`。理由：既然数据变更必然会落在三个 PG 服务中的第一个，就让它是 `api`——计划和验证都按它准备，迁移发生的时刻是已知且立刻可查的，其余服务随后启动时看到的是 36（no-op）；若迁移失败，此时只有 `api` 一个新 ReplicaSet，其余五个仍是 `:6f343cf`，爆炸半径最小。
+
+**构建与导入**
+
+```bash
+git worktree add /tmp/rm-wt368 -b chore/368-deploy-98f7b52 origin/main   # HEAD = 98f7b52
+cd /tmp/rm-wt368
+make docker-build-all IMAGE_TAG=98f7b52
+for svc in api auth orchestrator operator webhook notifier notification-sink web; do
+  docker save --platform linux/amd64 -o "/tmp/rm368/images/$svc.tar" "localhost:5001/release-$svc:98f7b52"
+done
+k3d image import -c rm-prod /tmp/rm368/images/*.tar 2>&1 | tee /tmp/rm368/import-all.log
+grep ERRO /tmp/rm368/import-all.log      # 0 命中
+```
+
+- 8 个镜像全部 `linux/amd64`；构建 **75.6 s**；8 个 tar 合计 **118,367,744 B**（≈113 MiB）。
+- 导入 **21.1 s**，输出 `Successfully imported 8 image(s) into 1 cluster(s)`，`grep ERRO` **0 命中**；节点内 `crictl images | grep 98f7b52` 可见 8 个 `:98f7b52`。
+
+**滚动（每步 `set image` → `rollout status --timeout=300s` → 立即验 `/health` + `/readyz`）**
+
+| 服务 | 顺序 | 滚动耗时 | `/health` | `/readyz` |
+| --- | --- | --- | --- | --- |
+| `api` | 1（触发迁移） | **5,556 ms** | 200 | 200 |
+| `auth` | 2 | **5,881 ms** | 200 | 200 |
+| `orchestrator` | 3 | **5,834 ms** | 200 | 200 |
+| `notifier` | 4 | **5,848 ms** | 200 | 200 |
+| `webhook` | 5 | **5,810 ms** | 200 | 200 |
+| `web` | 6 | **7,842 ms** | 200 | 200 |
+
+- 六步计时之和 **36,771 ms**；Pod 创建时间戳显示首个新 `api` Pod 在 `11:50:08Z`、最后一个 `web` Pod 在 `11:50:47Z`，整窗约 39 s。没有任何一步失败，未触发 `undo`。
+- 发布后 revision：`api=12`、`auth=4`、`orchestrator=4`、`notifier=4`、`webhook=4`、`web=10`（`edge` 仍 1）。`/readyz` 都是 `status=ok`，`database`/`redis`/`cleanup_gc`/`orchestrator` 各项与各服务职责一致。
+
+**⭐ 迁移 `000036` 验收（`api` 滚动完成后立即只读查询）**
+
+1. `select version, dirty from schema_migrations` ⇒ **`36|f`**（发布前 `35|f`）。
+2. `select count(*) filter (where owner_organization_id is null), count(*) from release_definitions` ⇒ **`0|4`**（发布前 `2|4`）。
+3. 逐行核对（`order by created_at`）：
+
+| id | name | status | owner_organization_id | 说明 |
+| --- | --- | --- | --- | --- |
+| `a8777ebf-ebfd-4caa-bf93-d6b38b4315fb` | `acme-web` | `active` | `2142e4dd-2408-44c0-a247-364a95034fe6` | 原 NULL → 回填 |
+| `f85dafb2-4279-427b-84bc-851e2bf3cfd3` | `release-fixture` | `disabled` | `2142e4dd-2408-44c0-a247-364a95034fe6` | 原 NULL → 回填；状态仍 `disabled` |
+| `973456b9-cbeb-4ab9-8cfe-18f8a06b5106` | `release-fixture` | `active` | `2142e4dd-2408-44c0-a247-364a95034fe6` | 原已有 owner，值未变 |
+| `bb6f5ce8-6b95-4d02-bcc5-797abdb00755` | `task362-owner-smoke` | `disabled` | `2142e4dd-2408-44c0-a247-364a95034fe6` | 原已有 owner，值未变 |
+
+4. **「不猜测」守卫没有误伤**：总行数仍 4，id/name/status 与基线逐行一致；原先已有 owner 的两行值完全相同（都是 `2142e4dd`），因此这次 UPDATE 只可能改了那两行 NULL。守卫本身（`migrations/000036_release_definition_owner_backfill.up.sql:38` 起的 `owner_organization_id IS NULL` + 「customer 恰好一条 active 绑定」+ 「owner 组织 active」）对生产库两行都成立：两个 customer 的 active 绑定各只有一条（`b1228022-…` 与 `9b965bf8-…`），组织 `2142e4dd` 为 `active`。
+5. **没有迁移日志可抄**：`RunMigrations` 不接 logger（`internal/postgres/migrate.go:25`），`api` 启动日志里没有迁移行。判据是 `schema_migrations` 与数据，不是日志；本次日志中只有启动期那条已知的 `WARN PostgreSQL not reachable yet`（`11:50:08Z`，约 1 s 后 `release-api started`）。
+
+**`acme-web` 行为变化（API 实测，零写入）**
+
+- 发布前（19:48:44 +08）：`CreateValuesRevision(acme-web, document="{}")` ⇒ **400 `failed_precondition`**，`X-Reason-Code: release_definition_owner_unresolved`，body `{"code":"failed_precondition","message":"release definition owner organization is unresolved"}`。
+- 发布后（19:51:18 +08）：同一调用再带一个不存在的 `prepare_token` ⇒ **404 `not_found`**，`X-Reason-Code: prepare_token_not_found`。
+- 为什么这能证明 owner 门禁已过：`authorizeValuesWrite` 的 owner 检查（`internal/orchestrator/values_revision.go:358`）在 prepare token 查表之前；用一个不存在的 token 让调用恰好停在 owner 检查**之后**，因此既证明 owner 已解析，又**没有写入任何行**（`values_revisions` 里 `acme-web` 仍 0 行，`audit_events` 未增）。
+- 口径：这不是完整批准链——`acme-web` 本来就没有 values revision，无法复现「批准返回 owner_unresolved」的原场景；批准路径上的同一检查在 `internal/orchestrator/values_approval.go:281`。
+
+**冒烟（真 Chrome，1440×960）**
+
+- 登录离开 `/login` **902 ms**；`/audit` 200（页面 20 行 / 共 36 条）；`/operations` 200（无非终态 Operation，空态）；Release 清单 200（2 行）。
+- `/definitions` 200（4 行）——#445 拆分后可用：`新建定义` 打开对话框（9 个输入），点「取消」关闭，前后表格行数 4→4，**没有提交任何定义**。
+- 控制台 2 条 error、2 条 401，都是登录前 `ValidateToken`/`RefreshToken` 的未登录探测（与 TASK-366 相同）；零失败请求。
+- 截图：`/tmp/rm368-evidence/` 下 `00-login.png`、`01-audit.png`、`02-operations.png`、`03-release-inventory.png`、`04-definitions.png`、`05-definitions-create-dialog.png`、`06-narrow-definitions.png`、`07-narrow-organizations.png`；原始结果 `smoke-result.json`。
+
+**窄屏 375px（#446 的生产验收）**
+
+| 页面 | `documentElement.scrollWidth` | `innerWidth` | 页面级横向滚动 |
+| --- | --- | --- | --- |
+| `/definitions` | **375** | 375 | 无 |
+| `/settings/organization` | **375** | 375 | 无 |
+
+- 与 TASK-367 记录的 804→375 / 606→375 同口径（即修复后回到视口宽度）；两页都为零控制台 error。
+- 表格本身仍比视口宽（实测表格右边界 701 / 606 px），这是**设计如此**：它被放在带名、可聚焦的横滚区域里（`web/src/components/definitions/DefinitionTable.vue:37`、`:39`；`web/src/components/organization/OrganizationMemberTable.vue:37`、`:39`），滚动的是表格区域而不是整页。
+
+**数据面副作用（如实记录）**
+
+- `audit_events` 35 → 36：新增的一行是 `orchestrator` 启动时的 `cleanup.gc`（`gc-startup-1`，`2026-10-18T11:50:27Z`），不是业务写入、也不是迁移写入；与 TASK-366 的同类观察一致。
+- `values_revisions` 仍 1 行（唯一的 approved 行属于 `release-fixture`），`release_definitions` 仍 4 行。
+
+**回滚（本次不能只回镜像）**
+
+```bash
+# 1) 先把 schema 退回 35（必须用 98f7b52 一侧的 migrations；down 文件是空操作，不清数据）
+cd /tmp/rm-wt368
+DATABASE_DSN='postgres://<user>:<pass>@<host>:5432/release_manager?sslmode=disable'
+go run -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate \
+  -path migrations -database "$DATABASE_DSN" down 1
+
+# 2) 再按逆序回镜像
+for svc in web webhook notifier orchestrator auth api; do
+  kubectl -n release-manager rollout undo deploy/$svc
+  kubectl -n release-manager rollout status deploy/$svc --timeout=300s
+done
+```
+
+- 上一版都在：`api` rev 11、`auth` rev 3、`orchestrator`/`notifier`/`webhook` rev 3、`web` rev 9，镜像全部 `:6f343cf`。
+- **为什么必须先 `down 1`**：`6f343cf` 的二进制内嵌的迁移集只到 35，而 `RunMigrations` 会对当前版本 `36` 调 `versionExists(36)`；golang-migrate v4.20.1 的 `versionExists` 找不到 36 就返回错误，`postgres.Open` 随之失败 ⇒ `api`/`auth`/`orchestrator` 起不来，`rollout undo` 只会停在 CrashLoop。
+- 该结论**本机实测过**（临时 `postgres:16` 容器，schema 36 上执行 1..35 的迁移集）：`migration_failed: apply migrations: no migration found for version 36: read down for version 36 .: file does not exist`；执行 `down 1` 后同一迁移集返回 `nil`。临时容器已删除。
+- 数据面：`000036` 的 down 文件是**有意为空**（回填是数据修复，不是 schema 变更），所以 `down 1` 只把版本号退回 35，owner 值保留；`6f343cf` 的代码只在批准路径读 owner，保留值等价于「批准可以继续」，不是新状态。
+- 若迁移失败或 `dirty=true`：**停在原地**并报告，用 `release_manager-20261018T114751Z.dump`（§7.2）恢复；不要手改 `schema_migrations`，也不要自行 `down`。
+
+**本次边界（未验证，别外推）**
+
+- 迁移由 `api` 首次触发；`auth`/`orchestrator` 启动时看到 36 已是 no-op，没有单独验证「由 `auth` 触发」的路径。
+- 没有做真实 SIGTERM / 故障注入（#440 的验证在 §8.6），也没有重跑 `go test -race ./...`（本次没有改生产代码，验证集中在部署与迁移）。
+- `acme-web` 只验证到 owner 门禁之后的下一层（`prepare_token_not_found`），没有造 values revision 走完整批准链。
+- #443/#444/#445 的拆分只验证页面可加载、表格与对话框可用；没有逐像素复验（像素等价证据在拆分提交自己的交付记录里）。#446 只验证了它修的两页；TASK-367 记录的其余 9 个页面在 375px 仍会溢出（未修）。
+- 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；`kubectl apply -k` 会改回去，正式发布仍走 §2.3。
 
 ## 9. 可观测
 
