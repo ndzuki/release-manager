@@ -48,7 +48,9 @@ in-memory storage + `kubefake`，**不需要集群**：
 `web/package.json` 提供 `test`（`vitest run`）、`test:e2e`（`playwright test`）、`lint`（`eslint .`）
 与 `build`（`vue-tsc -b && vite build`）。Makefile 转发其中三关（TASK-175，见命令矩阵的
 `make web-install` / `make web-check`）；`make web-check` 已并入 `make quality`，所以本地的
-「全量质量门禁」覆盖前端三关。`test:e2e` 需要完整 dev 栈，由 CI 的 `e2e`/`e2e-prerequisite` job 承担：
+「全量质量门禁」覆盖前端三关。`lint` 这一关除 js/ts/vue 规则外还含 **a11y 最小子集**
+（19 条 `eslint-plugin-vuejs-accessibility` 规则，按实测违规数裁剪而来，TASK-267）；开了哪些规则、
+哪些规则故意没开及各自违规数，见 `web/README.md` 的「Accessibility gate」节。`test:e2e` 需要完整 dev 栈，由 CI 的 `e2e`/`e2e-prerequisite` job 承担：
 **PR 上不跑**，只在 push main / `workflow_dispatch` 跑（spec 车道归属与取证据命令见下文「控制台（浏览器）E2E：CI 车道与 spec 归属」）。
 
 #### 控制台（浏览器）E2E：回滚路径（TASK-240）

@@ -61,9 +61,9 @@ function formatSyncTime(value: string | null): string {
 <template>
   <!-- UX-073 (W15): at narrow widths the table used to be a bare horizontal scroller.
        It is now a labelled, keyboard-scrollable region at every size, and below 40rem
-       each row becomes a card so nothing is hidden off-screen. The ARIA roles are
-       explicit because the card layout changes the CSS display type, which otherwise
-       drops the native table semantics. -->
+       each row becomes a card (nothing hidden off-screen). The ARIA roles are kept
+       defensively: a Chromium 480px AX-tree comparison (2026-10-18) showed the tree
+       unchanged without them, but other engines were unverified; they document narrow-card intent. -->
   <div
     class="release-table-wrap"
     role="region"
