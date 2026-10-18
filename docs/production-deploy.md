@@ -809,13 +809,14 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 - 带矛盾的 `actor.organization` → **400 invalid_argument**：`actor.organization "00000000-…" does not match the authenticated organization "2142e4dd-…"`，且不落库。
 - 存量里 `owner_organization_id` 为空的两条（`acme-web`、`release-fixture`）是修复前的死定义，本次**没有改**。测试对象已用 `DisableReleaseDefinition` 置成 `disabled`（默认列表不再返回），但**它仍留在库里**，是本任务的已知残留。
 
-**#432 收口（TASK-359，`migrations/000036_release_definition_owner_backfill.up.sql`）**
+**#432 收口（TASK-359，`migrations/000036_release_definition_owner_backfill.up.sql`；合并时尚未执行）**
 
 上面那两条 NULL owner 残留的后继处理，取证与判定记录在 TASK-359 卡面；这里只留部署侧结论：
 
-- **回填**：`000036` 把仍为 NULL 的 definition 回填为客户**唯一 active 组织绑定**（`org_customer_bindings` 里该 customer 恰好一条 `status='active'`，且该组织 `status='active'`）。对生产库这两行而言唯一可回填到的组织是 `2142e4dd-…`（全库只有一个组织；两个 customer 各自只有这一条 active 绑定；`acme-web` 创建前 1 秒存在 admin 的 `auth_sessions`，`release-fixture` 创建前 2 秒 admin 建了 bundle）。**没有**新授予任何该组织此前不通过 active binding 就拥有的授权：owner 的唯一用途就是 `checkApprovalAuth` 的组织比对。
+- **回填**：`000036` 把仍为 NULL 的 definition 回填为客户**唯一 active 组织绑定**（`org_customer_bindings` 里该 customer 恰好一条 `status='active'`，且该组织 `status='active'`）。对生产库这两行而言唯一可回填到的组织是 `2142e4dd-…`（全库只有一个组织；两个 customer 各自只有这一条 active 绑定；`acme-web` 创建前 1 秒存在 admin 的 `auth_sessions`，`release-fixture` 创建前 2 秒 admin 建了 bundle）。**本次合并不改生产库**：`000036` 只在下次部署的 `Open→RunMigrations` 里执行，届时 `schema_migrations.version` 才从 35 变成 36（合并前只读实测仍为 `version=35 | dirty=false`）。
+- **授权影响（准确表述）**：回填在 `checkApprovalAuth`（`internal/orchestrator/values_approval.go`）上**不新增审批授权**——该处除 owner 相等外还要求组织 active、org-customer binding active、成员资格与角色。owner **并不只**服务于审批：`authorizeValuesWrite` / `authorizeValuesRead`（`internal/orchestrator/values_revision.go`）、prepare 会话授权（`internal/orchestrator/prepare_sessions.go`）、bundle 的 `authorizeDefinition`（`internal/orchestrator/bundle_service.go`）都读它；这些写路径与 values 读路径同样要求 active binding（`RequireActive` / `AuthorizeWrite`），所以当前**不改变任何可达性**。**残留风险（如实记录）**：owner 一旦落库即"粘住"——store 层的 `ReachableBundlePredicate` / `ClaimedBundleOutsideOrganizationPredicate`（`internal/store/store.go`、`internal/store/postgres/bundles.go`）是 `owner = org OR active binding` 的 OR 关系，日后 binding 被 revoke 后，owner 仍可能给 bundle 读/claim 提供依据。这与 TASK-357 之后新建行的**既有语义**一致，**不是本次新增**，但本次把这两条存量行并入了同一语义。
 - **不猜测**：若某 customer 有 0 条或多条 active 绑定、或绑定组织已 disabled，该 definition **保持 NULL**，仍以 `failed_precondition: release_definition_owner_unresolved` 拒绝 Submit/Approve（REQ-068 既定语义）。`000036` 的 down 是空注释（数据修复，NULL 就是缺陷本身，无信息可恢复）。
-- **不加 NOT NULL（TASK-359 结论）**：REQ-068 的前置条件是"管理流程补齐后"，而当前**没有任何 RPC/store 路径**能在创建之后写 `owner_organization_id`，NOT NULL 会让不可回填的行在产品内永久不可修复；同时 SQLite 无法就地加 NOT NULL，`release_definitions` 有 6 张子表（含 `operations`），重建代价与风险超出本 P2 数据修复的范围。列因此在两个引擎上都保持可空，由 `internal/store/sqlite/db.go` 的同构 UPDATE 与服务端创建路径（TASK-357，创建时组织为空即拒绝）共同守护。
+- **不加 NOT NULL（TASK-359 结论）**：REQ-068 的前置条件是"管理流程补齐后"，而当前**没有任何 RPC/store 路径**能在创建之后写 `owner_organization_id`，NOT NULL 会让不可回填的行在产品内永久不可修复；同时 SQLite 无法就地加 NOT NULL，`release_definitions` 的 `id` 被 **6 张子表**通过外键引用（`release_definition_events`、`values_revisions`、`operations`、`emergency_intents`、`convergence_tasks`、`convergence_prepare_sessions`；up 迁移里共 **7 处** `REFERENCES release_definitions(id)`，因为 `values_revisions` 的外键在 `000012` 里重建过一次），另有 3 张表（`values_revision_decisions`、`operation_events`、`release_inventory`）直接存 `release_definition_id` 而没有外键，重建代价与风险超出本 P2 数据修复的范围。列因此在两个引擎上都保持可空，由 `internal/store/sqlite/db.go` 的同构 UPDATE 与服务端创建路径（TASK-357，创建时组织为空即拒绝）共同守护。
 
 **回滚预案（本次未执行）**
 
