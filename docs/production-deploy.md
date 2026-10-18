@@ -1181,7 +1181,7 @@ TASK-372 之后的第五次发布，本次是 **P1 安全修复上线**：把 `o
 
 **变更面**（`git diff --no-ext-diff --name-only f06c6e7..ee3afae`，11 个文件）：`internal/orchestrator/definition.go`（`GetReleaseDefinition` 增加 `authorizeReadDefinition`，不可读一律 `not_found`；`ListReleaseDefinitions` 改走 `ListForOrganization` 并校验 membership）、`internal/store/store.go`（新增共享谓词 `DefinitionVisibleToOrganizationPredicate` 与接口方法 `ListForOrganization`）、`internal/store/{sqlite,postgres}/definitions.go`、5 个测试文件、`docs/api.md`、`storesurface.exceptions.yaml`。`git diff --name-only f06c6e7..ee3afae -- migrations/` ⇒ **0 文件** ⇒ 无迁移，schema 保持 `36|f`，回滚是纯镜像级。
 
-**修复承载服务 = `orchestrator`**。依据：`cmd/orchestrator/main.go:484` 是唯一挂载 `OrchestratorService` 的位置；`cmd/api/main.go:122` 只挂 `AuditService`，`grep -n "NewHandler\|Handle(" cmd/api/main.go` 只有这一行 —— **`cmd/api` 没有挂载 OrchestratorService**。控制台的定义页经 `web` 的 nginx 把 `/orchestrator.v1.` 前缀反代到 `orchestrator:8083`（§1.2），因此本修复只由 `orchestrator` 承载。仍按惯例构建 8 个镜像、滚 6 个服务以保持 tag 一致；其余 5 个服务与 `f06c6e7` 功能等价（区间 Go 改动只在 `internal/orchestrator`；`internal/store` 只新增接口方法与该谓词，没有改动既有查询；`web` 源码零变更）。
+**修复承载服务 = `orchestrator`**。依据：`cmd/orchestrator/main.go:484` 创建完整的 `OrchestratorService` handler（`cmd/orchestrator/main.go:495` 的 `mux.Handle(path, handler)` 把它挂到管理面 mux），定义读路径（`GetReleaseDefinition`/`ListReleaseDefinitions`）由它承载；同文件 `cmd/orchestrator/main.go:202` 也调用 `NewOrchestratorServiceHandler`（在 `buildGatewayServer` 内），但那个 handler 只把 `SyncInventory` 一条 procedure 挂到 mTLS gateway（`cmd/orchestrator/main.go:210`），**不承载定义读**；`cmd/api/main.go:122` 只挂 `AuditService`，`grep -n "NewHandler\|Handle(" cmd/api/main.go` 只有这一行 —— **`cmd/api` 没有挂载 OrchestratorService**。控制台的定义页经 `web` 的 nginx 把 `/orchestrator.v1.` 前缀反代到 `orchestrator:8083`（§1.2），因此本修复只由 `orchestrator` 承载。仍按惯例构建 8 个镜像、滚 6 个服务以保持 tag 一致；其余 5 个服务与 `f06c6e7` 功能等价（区间 Go 改动只在 `internal/orchestrator`；`internal/store` 只新增接口方法与该谓词，没有改动既有查询；`web` 源码零变更）。
 
 **基线（发布前实测，2026-10-18 23:17–23:19 +08）**
 
@@ -1233,7 +1233,8 @@ grep ERRO /tmp/rm373/import-all.log      # 0 命中
 
 **⭐ 生产验收（重点是「安全修复没有把功能修坏」）**
 
-1. 服务面：10 个工作负载 Pod `1/1`（`RESTARTS` 全 0）；`https://localhost:8443/` → **200**；6 个服务 `/health` 与 `/readyz` 全 **200**。
+1. 服务面：10 个工作负载 Pod `1/1`（`RESTARTS` 全 0）；`https://localhost:8443/` → **200**；6 个服务 `/health` 与 `/readyz` 全 **200**（发布后逐服务记录见 `post-health.txt`，23:28 复测见 `post-health-recheck.txt`）。
+   - 复测口径与结果（2026-10-18 23:28:28 +08，`kubectl port-forward` 到各 ClusterIP，只读 `GET`，6 个 Deployment 均 `:ee3afae`）：`api` 200/200（`database`+`noop`）、`auth` 200/200（`database`+`noop`+`redis`）、`orchestrator` 200/200（`database`+`noop`+`cleanup_gc`）、`notifier` 200/200（`database`+`noop`）、`webhook` 200/200（`noop`+`orchestrator` 上游）、`web` 200/200（nginx 反代到 orchestrator，body 与 orchestrator 相同）。
 2. schema 仍 **`36|f`**；`release_definitions` **5 行**、`owner_organization_id IS NULL` 仍 **0 行**；无迁移执行痕迹。
 3. ⭐ **定义页没有变空**：
    - `/definitions` 200、**5 行**（发布前也是 5 行，`definition-row-*` 的 ID 集合逐项相同）；同一组织的既有数据在作用域收紧后仍全部可见。
@@ -1243,7 +1244,7 @@ grep ERRO /tmp/rm373/import-all.log      # 0 命中
    - 控制台只有登录前 2 条 401（`ValidateToken`/`RefreshToken` 未登录探测）；**未归因 error = 0**。
 4. **跨组织隔离的验证边界（如实）**：生产只有 1 个组织（`2142e4dd-…`），**没有造第二个组织**（会污染生产数据），所以「跨组织读不到」**无法在生产单组织环境实测**。该行为由 CI 端到端回归覆盖：PR #454 的 `internal/orchestrator/definition_read_scope_test.go` 把**真实 auth interceptor**（JWT + Casbin + binding）叠在 handler 前，三个子测试 —— ① 空 filter 的 List 只返回本组织 1 条；② 读外组织 definition ⇒ `not_found`（与不存在的 id 同码）；③ 显式指定外组织 customer ⇒ 在 handler 之上被拒 `permission_denied`。单测另有 `TestGetDefinition_CrossOrganizationIsNotFound`（含「不可读与不存在不可区分」断言）与 `TestGetDefinition_OwnOrganizationSucceeds`。
 5. **375px**：`/definitions` `innerWidth=375`、`docScrollWidth=375`、`bodyScrollWidth=375`，无页面级横向溢出。
-6. 证据：`/tmp/rm373-evidence/{baseline-browser,post-deploy-browser,baseline-rpc,post-deploy-rpc}.json`、`post-deploy-db.txt`、`post-health.txt`、`images-built.txt`、`crictl-ee3afae.txt`；截图 `baseline-01…03`、`post-01…06`。
+6. 证据：`/tmp/rm373-evidence/{baseline-browser,post-deploy-browser,baseline-rpc,post-deploy-rpc}.json`、`post-deploy-db.txt`、`post-health.txt`、`post-health-recheck.txt`（23:28 逐服务复测原始输出，含各服务 `/readyz` body）、`probe455.sh`（复测脚本）、`images-built.txt`、`crictl-ee3afae.txt`；截图 `baseline-01…03`、`post-01…06`。
 
 **发布版本的时点说明（重要）**
 
