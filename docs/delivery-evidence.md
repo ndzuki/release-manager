@@ -52,7 +52,7 @@
 | --- | --- | --- | --- |
 | **AC-056-01** 非 Bundle 镜像前后端拒绝 | ⚠️ 部分 | 前端：`web/src/stores/operationForm.ts:266`（`Patch 引用了 Bundle 外镜像`）+ 错误码映射 `web/src/connect/operation-api.ts:374` | **后端半边缺失**：`internal/**` 无 `non_bundle_image` 产生点，仅在 `errcodes.exceptions.yaml:14` 登记（`expires_at: 2026-12-31`）。落点：`CreateOperation` 的 patch 校验处比照 `internal/orchestrator/service.go:298` 的 bundle 加载结果做镜像归属校验 |
 | **AC-056-02** 未批准 ValuesRevision 拒绝 | ✅ 已实现 | 前端只列出已审批项：`web/src/components/operations/OperationForm.vue:99`（`approvedRevisions.length === 0` 时禁用）；成员校验 `web/src/stores/operationForm.ts:219`；测试 `web/src/stores/operationForm.test.ts:202`、`web/src/components/operations/OperationForm.test.ts:138`。后端：`internal/orchestrator/service.go:1582`（`revision_not_approved`） | 轻微不一致：前端消息表的键是 `values_not_approved`（`web/src/connect/operation-api.ts:373`），服务端实际发 `revision_not_approved` ⇒ 该条专属文案不可达（走兜底文案）。可在 `operation-api.ts` 的 `messages` 增加 `revision_not_approved` 键 |
-| **AC-056-03** Preflight 失败展示 | ✅ 已实现 | 面板 `web/src/components/operations/PreflightResultPanel.vue`（三态 overall，`:32`）；读失败单独态 `web/src/pages/OperationDetailPage.vue:133`、渲染于 `:357`；测试 `web/src/components/operations/PreflightResultPanel.test.ts`、`PreflightResultPanel.spec.ts` | — |
+| **AC-056-03** Preflight 失败展示 | ✅ 已实现 | 面板 `web/src/components/operations/PreflightResultPanel.vue`（三态 overall，`:32`）；读失败单独态 `web/src/composables/useOperationPreflight.ts:43`（`failure`，W18 从页面下沉；置态 `:65-68`）、渲染于 `web/src/pages/OperationDetailPage.vue:187-195`；测试 `web/src/components/operations/PreflightResultPanel.test.ts`、`PreflightResultPanel.spec.ts` | — |
 | **AC-056-04** 幂等（重复点击只建一个） | ✅ 已实现 | 稳定键 + 提交门：`web/src/stores/operationForm.ts:286`（`submitting` 早退）、`:291`（`idempotencyKey ??= crypto.randomUUID()`）；后端去重：`internal/orchestrator/service.go:268-275`（同 scope+key 命中即回既有 operation，`RequestHash` 不同则 `AlreadyExists`）；契约测试 `internal/orchestrator/idempotency_contract_test.go:18`、`:45` | 缺一条「同 key 两次 submit 只发一次 RPC」的前端用例（代码层守卫在，测试未钉住） |
 | **AC-056-05** 二次确认取消不发 RPC | ✅ 已实现 | `web/src/stores/operationForm.ts:281`(`cancelConfirmation`) 只回 `step='form'`，不发请求；测试 `web/src/stores/operationForm.test.ts:155`（`does not submit when confirmation is cancelled`） | — |
 | **AC-056-06** INSTALL 必填差异 | ✅ 已实现 | `web/src/components/operations/OperationForm.vue:62`（bundle，非 ROLLBACK）、`:87`（valuesRevision，非 ROLLBACK）、`:121`（currentRevision 仅非 INSTALL ⇒ INSTALL 不渲染）、`:142`（targetRevision 仅 ROLLBACK） | — |
@@ -171,9 +171,9 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-010 | major | ✅ | `web/src/pages/AuditPage.vue:103-127` 收进单条 `v-if/v-else-if` 链，有数据时降级为页内 warning（`:126`） |
 | UX-011 | major | ⏳ | `web/src/pages/AuditPage.vue:68-76` 仍 deep watch → `syncQuery()`，无 debounce |
 | UX-012 | major | ✅ | `web/src/pages/AuditPage.vue:107`（`permission_denied` 分支）→ `ForbiddenState` |
-| UX-013 | major | ✅ | `web/src/pages/OperationDetailPage.vue:133`（`preflightFailure`）→ 渲染 `:357-361`；注释即 TASK-281 |
+| UX-013 | major | ✅ | `web/src/composables/useOperationPreflight.ts:43`（`failure`，W18 从页面下沉）→ 渲染 `web/src/pages/OperationDetailPage.vue:187-195`；注释即 TASK-281（同文件 `:12`） |
 | UX-014 | major | ⏳ | `web/src/pages/OperationDetailPage.vue` 仍无 `Forbidden` 分支（`grep Forbidden` 零命中） |
-| UX-015 | major | ✅ | `web/src/connect/error-copy.ts:50`（读 requestId）、`:65-69`（`correlationLine`）；≥10 处调用点（如 `web/src/pages/OperationDetailPage.vue:157`） |
+| UX-015 | major | ✅ | `web/src/connect/error-copy.ts:50`（读 requestId）、`:65-69`（`correlationLine`）；≥10 处调用点（如 `web/src/composables/useOperationPreflight.ts:67`） |
 | UX-016 | major | ⏳ | `web/src/stores/releaseInventory.ts:114` 非 `Unavailable` 时仍返回 `connectError.rawMessage` |
 | UX-017 | major | ⏳ | 全仓仍无 `<caption>`（`grep "<caption"` 零命中）；`scope="col"` 已补（如 `web/src/components/releases/ReleaseInventoryTable.vue:63`） |
 | UX-018 | major | ⚠️ | 行可点仍是 `tabindex="0"` + 仅 Enter：`web/src/components/audit/AuditEventTable.vue:62`、`:64`；但 `:focus-visible` 已可见（`:165`） |
@@ -200,7 +200,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-039 | major | ✅ | 已修（TASK-325，前一条 TASK-177/299 已迁 `AppDialog`）：Escape 仅在**没有明文可失**时可用——`:close-on-escape="escapeClosable"`（`web/src/components/operators/EnrollmentTokenModal.vue:94`），判据 `!generating && !plaintext`（`:39`）；成功分支仍以两个勾选为唯一出口。测试 `web/src/components/operators/EnrollmentTokenModal.test.ts:114`（失败分支 Esc 关闭）与 `:131`（成功分支 Esc 不关闭） |
 | UX-040 | major | ✅ | 已接线：`web/src/pages/EmergencyChangePage.vue:237` 渲染 `EmergencyAnnotationEditor` |
 | UX-041 | minor | ✅ | 2026-10-18 修复（W10）：四页都接共享 `Toast`——集群停用（`web/src/pages/ClusterDetailPage.vue:56` 的 `confirmDisable`、`:72` 渲染）、客户停用（`web/src/pages/CustomerDetailPage.vue:71`、`:77`）、Operator 撤销（列表 `web/src/pages/OperatorListPage.vue:44`、`:64`；详情 `web/src/pages/OperatorDetailPage.vue:35`、`:54`）。成功 `role="status"`、失败（集群停用此前是**未捕获 rejection**）`role="alert"`；文案入 catalog（`cluster.detail.disableSuccess`、`customer.detail.disableSuccess`、`operator.revoke.success`）。消费者口径 `grep -rln "from '@/components/common/Toast.vue'" web/src` ⇒ **8 个文件**（7 页 + `EnrollmentTokenModal`；采样 2026-10-18 13:05 (+08:00)）。**真机**：三处破坏性 RPC 在浏览器层拦截为合成成功，**点击前用不存在的 id 发探针**证明拦截已生效（泄漏的探针只会得到 NOT_FOUND，不改数据），截图 `w10a`–`w10d`；跑完只读复核生产状态未变（集群 `CLUSTER_STATUS_ACTIVE`、客户 `active`、operator `ACTIVE`） |
-| UX-042 | minor | ✅ | `web/src/pages/OperationDetailPage.vue:230` 声明、`:380` 已绑定 `ref="cancelTrigger"` |
+| UX-042 | minor | ✅ | 原判据 = `OperationDetailPage.vue` 里存在**从未被读取的死模板 ref**（`docs/ux-review.md:251`，处置建议「删死代码」）。**2026-10-18 修复（W18 / TASK-325，PR #439）**：`ref="cancelTrigger"` 与变量 `cancelTrigger` 已随页面拆分删除，全仓 `grep -rn cancelTrigger web/src` 零命中（页面现 246 行）；**取消后的焦点回归行为仍成立**——关闭对话框时把 `lastFocused` 记为 `document.activeElement`（`web/src/pages/OperationDetailPage.vue:112`），关闭时 `:114` 调 `lastFocused.focus()`，与已删除的 ref 无关 |
 | UX-043 | minor | ⏳ | `web/src/pages/OperationDetailPage.vue:237` 仍在模板里 `.then(...)` |
 | UX-044 | minor | ✅ | `web/src/components/operations/CancelOperationDialog.vue:38`（`close-on-escape="!submitting"`） |
 | UX-045 | minor | ⏳ | `web/src/components/operations/DisconnectBanner.vue:6` 仍 `role="status"` + `aria-live="assertive"` |
@@ -352,9 +352,9 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **D11** Trust Root 建/轮换 UI | ✅ **已交付**：create/rotate 的 client 与页面/对话框均接线 | `web/src/connect/trust-api.ts:176`（create）、`:195`（rotate）；`web/src/pages/TrustPolicyPage.vue`；对话框 `web/src/components/trust/TrustRootEditor.vue` |
 | Wave-2 S · `window.confirm` | ✅ **已清零** | 全仓仅注释（`web/src/pages/ClusterDetailPage.vue:35`、`web/src/pages/OperatorEnrollPage.vue:54`） |
 | Wave-2 S · `DefinitionsPage` 手写对话框 | ✅ **已收编到 `AppDialog`**（3 处） | `web/src/pages/DefinitionsPage.vue:369`、`:480`、`:542` |
-| Wave-2 S · `OperationDetailPage` 静默失败 | ✅ **已修**：preflight 读失败单独态 + ErrorState + 重试 + 关联行 | `web/src/pages/OperationDetailPage.vue:133`（`preflightFailure`）、`:357-361` |
+| Wave-2 S · `OperationDetailPage` 静默失败 | ✅ **已修**：preflight 读失败单独态 + ErrorState + 重试 + 关联行 | `web/src/composables/useOperationPreflight.ts:43`（`failure`）、渲染 `web/src/pages/OperationDetailPage.vue:187-195` |
 | Wave-2 S · `useOperatorPolling` 永久停 | ✅ **已修且提示已补**：失败改为指数退避重排，预算用尽才停，成功清零、focus/visibility 可再触发；预算耗尽时页面显示「自动刷新已停止」（`role="status"`）并给出恢复按钮（TASK-325） | `web/src/composables/useOperatorPolling.ts:50`、`:86`、`:105`、`:109`、`:114`；`web/src/components/operators/OperatorPollingNotice.vue` |
-| Wave-2 S · `requestId` 上屏 | ✅ **已上屏**：错误映射带 `requestId`，`correlationLine` 输出 `code · requestId`，经 `ErrorState` 的 `details` 折叠展示；≥10 处调用 | `web/src/connect/error-copy.ts:50`、`:65-69`；`web/src/components/common/ErrorState.vue:28-31`；`web/src/pages/OperationDetailPage.vue:157` |
+| Wave-2 S · `requestId` 上屏 | ✅ **已上屏**：错误映射带 `requestId`，`correlationLine` 输出 `code · requestId`，经 `ErrorState` 的 `details` 折叠展示；≥10 处调用 | `web/src/connect/error-copy.ts:50`、`:65-69`；`web/src/components/common/ErrorState.vue:28-31`；`web/src/composables/useOperationPreflight.ts:67` |
 
 ---
 
