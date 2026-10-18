@@ -469,8 +469,24 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OrganizationPage.vue',
-    allowed: ['组织成员', '用户', '角色', '版本', '加入时间', '操作', '修改 的角色', '移除', '只读', '添加成员', '用户 ID', '角色', '成员操作未成功', '正在加载成员…', '暂无成员', '该组织还没有成员记录。', '用户 ID', '请填写用户 ID', '该用户已是组织成员；请直接修改其角色', '当前组织', '刷新中…', '刷新', '提交中…', '添加', '重试'],
-    reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
+    allowed: ['组织成员', '成员操作未成功', '正在加载成员…', '暂无成员', '该组织还没有成员记录。', '当前组织', '刷新中…', '刷新', '重试'],
+    reason:
+      'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass. TASK-363 carved the member list, the add form and the two dialogs into components and the create/disable/add state into composables, so their literals moved with them; nothing new was written',
+  },
+  {
+    file: 'src/components/organization/OrganizationMemberTable.vue',
+    allowed: ['用户', '角色', '版本', '加入时间', '操作', '修改 的角色', '移除', '只读'],
+    reason: 'TASK-363 carved the member list out of OrganizationPage without changing the rendered text',
+  },
+  {
+    file: 'src/components/organization/OrganizationAddMemberForm.vue',
+    allowed: ['添加成员', '用户 ID', '角色', '提交中…', '添加'],
+    reason: 'TASK-363 carved the add-member form out of OrganizationPage without changing the rendered text',
+  },
+  {
+    file: 'src/composables/useMemberAdd.ts',
+    allowed: ['请填写用户 ID', '该用户已是组织成员；请直接修改其角色'],
+    reason: 'TASK-363 moved the add-member validation messages out of OrganizationPage verbatim, so the copy is registered where it now lives',
   },
   {
     file: 'src/components/releases/ReleaseStatusBadge.vue',
