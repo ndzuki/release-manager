@@ -29,6 +29,22 @@ const disableNotice = ref<string | null>(null);
 const customerId = computed(() => typeof route.params.id === 'string' ? route.params.id : '');
 const isCreate = computed(() => customerId.value === '');
 const canWrite = computed(() => auth.canWrite && !isCreate.value);
+/*
+ * Editability is a three-way decision (TASK-334): `active` is editable, `disabled`
+ * is read-only, and a status this console cannot read is read-only too. The old
+ * gate only recognised `disabled`, so a customer whose wire status was unreadable
+ * still exposed a writable form to anyone who typed its detail URL. That was not
+ * only a UI gap: UpdateCustomer checks the optimistic-lock version but not the
+ * customer status (internal/orchestrator/customer.go), so the server accepts the
+ * write as well — the console's gate is the only stopping point.
+ */
+const editability = computed<'editable' | 'disabled' | 'unknown'>(() => {
+  if (isCreate.value) return 'editable';
+  const status = store.current?.status;
+  if (status === 'active') return 'editable';
+  return status === 'disabled' ? 'disabled' : 'unknown';
+});
+const formReadonly = computed(() => !auth.canWrite || editability.value !== 'editable');
 const title = computed(() => isCreate.value ? t('customer.detail.create') : (store.current?.name ?? t('customer.detail.label')));
 const form = computed<CustomerFormInput | null>(() => store.draft);
 
@@ -111,6 +127,14 @@ async function disable() {
       <div v-if="store.current?.status === 'disabled'" class="disabled-banner" role="status">
         {{ t('customer.detail.disabled') }}
       </div>
+      <div
+        v-else-if="!isCreate && editability === 'unknown'"
+        class="readonly-banner"
+        role="status"
+        data-testid="customer-unknown-status"
+      >
+        {{ t('customer.detail.unknownStatus') }}
+      </div>
       <div v-if="isCreate && !auth.canWrite" class="readonly-banner" role="status">
         {{ t('customer.detail.readonly') }}
       </div>
@@ -126,7 +150,7 @@ async function disable() {
         </ErrorState>
         <CustomerForm
           v-model="store.draft!"
-          :readonly="!auth.canWrite || store.current?.status === 'disabled'"
+          :readonly="formReadonly"
           :submitting="store.saving"
           :submit-label="isCreate ? t('customer.detail.create') : t('customer.detail.save')"
           :field-violations="store.saveError?.fieldViolations"

@@ -71,6 +71,7 @@ const zhCN = {
   'customer.detail.disable': '停用客户',
   'customer.detail.disabled': '该客户已停用：不可编辑或停用。',
   'customer.detail.disabledBanner': '已停用：仅保留只读历史。',
+  'customer.detail.unknownStatus': '客户状态无法识别：为避免误改，表单已设为只读。',
   'customer.detail.subtitle': '发布管理的租户边界。',
   'customer.detail.details': '客户详情',
   'customer.detail.editTitle': '编辑客户',
