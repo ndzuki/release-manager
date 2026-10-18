@@ -11,6 +11,7 @@ import (
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,13 +30,17 @@ func seedCluster(t *testing.T, st store.Store, id, customerID string) {
 
 // ── CreateReleaseDefinition ───────────────────────────────
 
+// This is the shape the console actually sends: web/src/connect/definition-api.ts
+// builds CreateReleaseDefinitionRequest without an `actor`, so the owner has to
+// come from the verified request identity. Before TASK-357 this succeeded with a
+// NULL owner and produced a definition approval could never accept.
 func TestCreateReleaseDefinition_Success(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedCustomer(t, st, "cust-1", "acme")
 	seedCluster(t, st, "cls-1", "cust-1")
 
-	resp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	resp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId:  "cust-1",
 			ClusterId:   "cls-1",
@@ -43,8 +48,6 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 			ReleaseName: "my-release",
 			ChartName:   "nginx",
 			Enabled:     true,
-			// REQ-040: the creating actor's organization owns the definition.
-			Actor: &commonv1.ActorContext{UserId: "user-1", Organization: "org-1"},
 		},
 	))
 	require.NoError(t, err)
@@ -54,13 +57,16 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 	assert.Equal(t, "my-release", def.ReleaseName)
 	assert.Equal(t, "active", def.Status)
 	assert.Equal(t, int64(1), def.Version)
+	assert.Equal(t, "user-001", def.CreatedBy)
 
 	// AC-040-01: Verify no Helm release interaction — only store-level operations.
+	// REQ-018 §关联需求影响 → REQ-040: the creating organization owns the definition.
 	got, err := st.Definitions().Get(context.Background(), def.Id)
 	require.NoError(t, err)
-	if assert.NotNil(t, got.OwnerOrganizationID, "creating actor's organization must own the definition (REQ-040)") {
-		assert.Equal(t, "org-1", *got.OwnerOrganizationID)
+	if assert.NotNil(t, got.OwnerOrganizationID, "the verified actor's organization must own the definition") {
+		assert.Equal(t, "org-001", *got.OwnerOrganizationID)
 	}
+	assert.Equal(t, "user-001", got.CreatedBy, "created_by comes from the verified actor, not the request body")
 	assert.Equal(t, store.DefStatusActive, got.Status)
 	assert.NotEmpty(t, got.ID)
 
@@ -71,13 +77,130 @@ func TestCreateReleaseDefinition_Success(t *testing.T) {
 	assert.Equal(t, "definition_created", events[0].EventType)
 }
 
+// TASK-357: a create that cannot resolve the owner must fail loudly and persist
+// nothing. Before the fix it answered success with owner_organization_id NULL, and
+// only a later Submit/Approve surfaced release_definition_owner_unresolved.
+func TestCreateReleaseDefinition_RejectsUnresolvedOwner(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "no verified actor", ctx: context.Background()},
+		// A service actor is accepted by authctx but carries no organization; the
+		// handler must not fall back to the request body or persist NULL.
+		{name: "service actor without organization", ctx: authctx.WithActor(context.Background(), authctx.Actor{Service: "service:test"})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, st, cleanup := setupService(t)
+			defer cleanup()
+			seedCustomer(t, st, "cust-owner", "owner")
+			seedCluster(t, st, "cls-owner", "cust-owner")
+
+			_, err := svc.CreateReleaseDefinition(tt.ctx, connect.NewRequest(
+				&orchestratorv1.CreateReleaseDefinitionRequest{
+					CustomerId:  "cust-owner",
+					ClusterId:   "cls-owner",
+					Namespace:   "ns",
+					ReleaseName: "no-owner",
+					ChartName:   "nginx",
+					Enabled:     true,
+				},
+			))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+			assert.Contains(t, err.Error(), "actor organization is required")
+
+			defs, listErr := st.Definitions().List(context.Background(), "", "", true)
+			require.NoError(t, listErr)
+			assert.Empty(t, defs, "a refused create must not persist a definition")
+		})
+	}
+}
+
+// TASK-357: the request `actor` is advisory, not authoritative. A value that
+// contradicts the verified identity is a client bug and is refused instead of
+// silently overridden (or silently stored, which is how dead definitions appeared).
+func TestCreateReleaseDefinition_RejectsContradictingRequestActor(t *testing.T) {
+	tests := []struct {
+		name  string
+		actor *commonv1.ActorContext
+		want  string
+	}{
+		{
+			name:  "different organization",
+			actor: &commonv1.ActorContext{UserId: "user-001", Organization: "org-other"},
+			want:  "does not match the authenticated organization",
+		},
+		{
+			name:  "different user",
+			actor: &commonv1.ActorContext{UserId: "user-other", Organization: "org-001"},
+			want:  "does not match the authenticated user",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, st, cleanup := setupService(t)
+			defer cleanup()
+			seedCustomer(t, st, "cust-mismatch", "mismatch")
+			seedCluster(t, st, "cls-mismatch", "cust-mismatch")
+
+			_, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
+				&orchestratorv1.CreateReleaseDefinitionRequest{
+					CustomerId:  "cust-mismatch",
+					ClusterId:   "cls-mismatch",
+					Namespace:   "ns",
+					ReleaseName: "mismatch",
+					ChartName:   "nginx",
+					Enabled:     true,
+					Actor:       tt.actor,
+				},
+			))
+			require.Error(t, err)
+			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+			assert.Contains(t, err.Error(), tt.want)
+
+			defs, listErr := st.Definitions().List(context.Background(), "", "", true)
+			require.NoError(t, listErr)
+			assert.Empty(t, defs, "a refused create must not persist a definition")
+		})
+	}
+}
+
+// TASK-357: a matching legacy actor keeps working (the dev fixture sends one), but
+// the verified identity still decides the owner.
+func TestCreateReleaseDefinition_AcceptsMatchingRequestActor(t *testing.T) {
+	svc, st, cleanup := setupService(t)
+	defer cleanup()
+	seedCustomer(t, st, "cust-legacy", "legacy")
+	seedCluster(t, st, "cls-legacy", "cust-legacy")
+
+	resp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
+		&orchestratorv1.CreateReleaseDefinitionRequest{
+			CustomerId:  "cust-legacy",
+			ClusterId:   "cls-legacy",
+			Namespace:   "ns",
+			ReleaseName: "legacy-actor",
+			ChartName:   "nginx",
+			Enabled:     true,
+			Actor:       &commonv1.ActorContext{UserId: "user-001", Organization: "org-001"},
+		},
+	))
+	require.NoError(t, err)
+
+	got, err := st.Definitions().Get(context.Background(), resp.Msg.Definition.Id)
+	require.NoError(t, err)
+	require.NotNil(t, got.OwnerOrganizationID)
+	assert.Equal(t, "org-001", *got.OwnerOrganizationID)
+}
+
 func TestCreateReleaseDefinition_DraftWhenDisabled(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
 	seedCustomer(t, st, "cust-d", "draft-cust")
 	seedCluster(t, st, "cls-d", "cust-d")
 
-	resp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	resp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId:  "cust-d",
 			ClusterId:   "cls-d",
@@ -89,6 +212,13 @@ func TestCreateReleaseDefinition_DraftWhenDisabled(t *testing.T) {
 	))
 	require.NoError(t, err)
 	assert.Equal(t, "draft", resp.Msg.Definition.Status)
+
+	// A draft must be born with an owner too: enabling it later must not produce a
+	// definition whose approval is permanently refused (TASK-357).
+	got, err := st.Definitions().Get(context.Background(), resp.Msg.Definition.Id)
+	require.NoError(t, err)
+	require.NotNil(t, got.OwnerOrganizationID)
+	assert.Equal(t, "org-001", *got.OwnerOrganizationID)
 }
 
 func TestCreateReleaseDefinition_DuplicateKey(t *testing.T) {
@@ -106,12 +236,12 @@ func TestCreateReleaseDefinition_DuplicateKey(t *testing.T) {
 		Enabled:     true,
 	}
 
-	resp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(req))
+	resp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(req))
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.Msg.Definition.Id)
 
 	// AC-040-02: Second call with same unique key → conflict.
-	_, err = svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(req))
+	_, err = svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(req))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "already exists")
@@ -121,7 +251,7 @@ func TestCreateReleaseDefinition_CustomerNotFound(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	_, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	_, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId:  "nonexistent",
 			ClusterId:   "cls-1",
@@ -141,7 +271,7 @@ func TestCreateReleaseDefinition_ClusterNotBelong(t *testing.T) {
 	seedCustomer(t, st, "cust-4", "delta")
 	seedCluster(t, st, "cls-4", "cust-4")
 
-	_, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	_, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId:  "cust-3",
 			ClusterId:   "cls-4",
@@ -162,7 +292,7 @@ func TestCreateReleaseDefinition_ClusterDisabled(t *testing.T) {
 	cls := &store.Cluster{ID: "cls-disabled", Name: "off", CustomerID: "cust-5", Status: store.ClusterDisabled}
 	require.NoError(t, st.Clusters().Create(context.Background(), cls))
 
-	_, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	_, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId:  "cust-5",
 			ClusterId:   "cls-disabled",
@@ -183,7 +313,7 @@ func TestGetReleaseDefinition_Success(t *testing.T) {
 	seedCustomer(t, st, "cust-g", "zeta")
 	seedCluster(t, st, "cls-g", "cust-g")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId:  "cust-g",
 			ClusterId:   "cls-g",
@@ -223,13 +353,13 @@ func TestListReleaseDefinitions_ByCustomer(t *testing.T) {
 	seedCluster(t, st, "cls-list-1", "cust-list-1")
 	seedCluster(t, st, "cls-list-2", "cust-list-2")
 
-	_, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	_, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-list-1", ClusterId: "cls-list-1", Namespace: "ns", ReleaseName: "rel-a", Enabled: true,
 		},
 	))
 	require.NoError(t, err)
-	_, err = svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	_, err = svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-list-2", ClusterId: "cls-list-2", Namespace: "ns", ReleaseName: "rel-b", Enabled: true,
 		},
@@ -252,7 +382,7 @@ func TestUpdateReleaseDefinition_Success(t *testing.T) {
 	seedCustomer(t, st, "cust-upd", "upd")
 	seedCluster(t, st, "cls-upd", "cust-upd")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-upd", ClusterId: "cls-upd", Namespace: "old-ns", ReleaseName: "upd-rel", Enabled: true,
 		},
@@ -280,7 +410,7 @@ func TestUpdateReleaseDefinition_OptimisticLockConflict(t *testing.T) {
 	seedCustomer(t, st, "cust-lock", "lock")
 	seedCluster(t, st, "cls-lock", "cust-lock")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-lock", ClusterId: "cls-lock", Namespace: "ns", ReleaseName: "lock-rel", Enabled: true,
 		},
@@ -320,7 +450,7 @@ func TestDisableReleaseDefinition_Success(t *testing.T) {
 	seedCustomer(t, st, "cust-dis", "dis")
 	seedCluster(t, st, "cls-dis", "cust-dis")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-dis", ClusterId: "cls-dis", Namespace: "prod", ReleaseName: "dis-rel", Enabled: true,
 		},
@@ -353,7 +483,7 @@ func TestDisableReleaseDefinition_Idempotent(t *testing.T) {
 	seedCustomer(t, st, "cust-idem", "idem")
 	seedCluster(t, st, "cls-idem", "cust-idem")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-idem", ClusterId: "cls-idem", Namespace: "ns", ReleaseName: "idem-rel", Enabled: true,
 		},
@@ -393,7 +523,7 @@ func TestCreateOperation_DisabledDefinition(t *testing.T) {
 	seedCluster(t, st, "cls-opd", "cust-opd")
 	seedActorBinding(t, st, "cust-opd")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-opd", ClusterId: "cls-opd", Namespace: "ns2", ReleaseName: "opd-rel2", Enabled: true,
 		},
@@ -424,7 +554,7 @@ func TestCreateReleaseDefinition_NoPhysicalDelete(t *testing.T) {
 	seedCustomer(t, st, "cust-nodel", "nodel")
 	seedCluster(t, st, "cls-nodel", "cust-nodel")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-nodel", ClusterId: "cls-nodel", Namespace: "ns", ReleaseName: "nodel-rel", Enabled: true,
 		},
@@ -453,13 +583,12 @@ func TestCreateOperation_ValidationFlow(t *testing.T) {
 	seedCluster(t, st, "cls-flow", "cust-flow")
 	seedActorBinding(t, st, "cust-flow")
 
-	ctx := context.Background()
+	ctx := adminCtx()
 
 	// Create definition → create operation → verify
 	createDefResp, err := svc.CreateReleaseDefinition(ctx, connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-flow", ClusterId: "cls-flow", Namespace: "flow-ns", ReleaseName: "flow-rel", ChartName: "nginx", Enabled: true,
-			Actor: &commonv1.ActorContext{UserId: "actor-1"},
 		},
 	))
 	require.NoError(t, err)
@@ -546,7 +675,7 @@ func TestUpdateReleaseDefinition_PresenceSemantics(t *testing.T) {
 			seedCustomer(t, st, "cust-presence", "presence")
 			seedCluster(t, st, "cls-presence", "cust-presence")
 
-			createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+			createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 				&orchestratorv1.CreateReleaseDefinitionRequest{
 					CustomerId: "cust-presence", ClusterId: "cls-presence",
 					Namespace: "ns-presence", ReleaseName: "rel-presence", ChartName: "chart-presence", Enabled: true,
@@ -575,7 +704,7 @@ func TestUpdateReleaseDefinition_ListReplacementAndClearing(t *testing.T) {
 		t.Cleanup(cleanup)
 		seedCustomer(t, st, "cust-lists", "lists")
 		seedCluster(t, st, "cls-lists", "cust-lists")
-		createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+		createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 			&orchestratorv1.CreateReleaseDefinitionRequest{
 				CustomerId: "cust-lists", ClusterId: "cls-lists", Namespace: "ns", ReleaseName: "rel", Enabled: true,
 				PromotionMappings: []*orchestratorv1.PromotionMapping{{WorkloadKind: "Deployment", WorkloadName: "api", Container: "api", Field: "image", ValuesPath: "image.tag"}},
@@ -643,7 +772,7 @@ func TestUpdateReleaseDefinition_ListReplacementAndClearing(t *testing.T) {
 		defer cleanup()
 		seedCustomer(t, st, "cust-keys", "keys")
 		seedCluster(t, st, "cls-keys", "cust-keys")
-		createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+		createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 			&orchestratorv1.CreateReleaseDefinitionRequest{
 				CustomerId: "cust-keys", ClusterId: "cls-keys", Namespace: "ns", ReleaseName: "rel", Enabled: true,
 				ApprovedAnnotationKeys: []*orchestratorv1.ApprovedAnnotationKey{{Key: "team", Scope: "example.com/team"}},
@@ -695,7 +824,7 @@ func TestUpdateReleaseDefinition_PresenceSurvivesTheWire(t *testing.T) {
 	seedCustomer(t, st, "cust-wire", "wire")
 	seedCluster(t, st, "cls-wire", "cust-wire")
 
-	createResp, err := svc.CreateReleaseDefinition(context.Background(), connect.NewRequest(
+	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
 			CustomerId: "cust-wire", ClusterId: "cls-wire", Namespace: "ns-wire", ReleaseName: "rel-wire",
 			ChartName: "chart-wire", Enabled: true,

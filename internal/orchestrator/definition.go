@@ -12,6 +12,7 @@ import (
 
 	commonv1 "github.com/ndzuki/release-manager/api/gen/common/v1"
 	orchestratorv1 "github.com/ndzuki/release-manager/api/gen/orchestrator/v1"
+	"github.com/ndzuki/release-manager/internal/authctx"
 	"github.com/ndzuki/release-manager/internal/store"
 )
 
@@ -59,6 +60,14 @@ func (s *Service) CreateReleaseDefinition(
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cluster %q is disabled", msg.GetClusterId()))
 	}
 
+	// The creating actor's organization owns the definition; it must come from the
+	// verified request identity (TASK-357, see releaseDefinitionOwner).
+	actor, err := releaseDefinitionOwner(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+
+	ownerOrg := actor.OrganizationID
 	now := time.Now().UTC()
 	def := &store.ReleaseDefinition{
 		ID:                     uuid.New().String(),
@@ -70,20 +79,14 @@ func (s *Service) CreateReleaseDefinition(
 		ChartName:              msg.GetChartName(),
 		Status:                 store.DefStatusActive,
 		OptimisticVersion:      1,
-		CreatedBy:              msg.GetActor().GetUserId(),
+		OwnerOrganizationID:    &ownerOrg,
+		CreatedBy:              actor.UserID,
 		CreatedAt:              now,
 		UpdatedAt:              now,
 		HPAManaged:             msg.GetHpaManaged(),
 		MaxEmergencyReplicas:   msg.GetMaxEmergencyReplicas(),
 		ApprovedAnnotationKeys: approvedAnnotationKeysFromProto(msg.GetApprovedAnnotationKeys()),
 		PromotionMappings:      promotionMappingsFromProto(msg.GetPromotionMappings()),
-	}
-	// The creating actor's organization owns the definition (REQ-040): approval
-	// gates on OwnerOrganizationID (values_approval.go), so a definition
-	// created through the public seam must carry it when the actor context
-	// provides an organization.
-	if ownerOrg := msg.GetActor().GetOrganization(); ownerOrg != "" {
-		def.OwnerOrganizationID = &ownerOrg
 	}
 	if !msg.GetEnabled() {
 		def.Status = store.DefStatusDraft
@@ -116,6 +119,44 @@ func (s *Service) CreateReleaseDefinition(
 	return connect.NewResponse(&orchestratorv1.CreateReleaseDefinitionResponse{
 		Definition: toProtoDefinition(def),
 	}), nil
+}
+
+// releaseDefinitionOwner resolves the organization that owns a new definition and
+// the user recorded as its creator.
+//
+// The owner MUST come from the verified request identity, never from the request
+// body (REQ-018 §关联需求影响 → REQ-040): Submit/Approve/Reject, values writes and
+// prepare sessions authorize against OwnerOrganizationID (values_approval.go,
+// values_revision.go, prepare_sessions.go). The console never populates the request
+// `actor`, so trusting the body silently persisted a NULL owner and created a
+// definition that could never be approved (`release_definition_owner_unresolved`,
+// TASK-348 found the dead row in a customer cluster). Fail the call instead of
+// storing an unusable object.
+//
+// The request `actor` stays accepted for compatibility but is advisory: a caller
+// that needs another organization must switch (SwitchOrganization) and retry with a
+// token scoped there. Storing the requested organization would let the body choose
+// the owner; ignoring a contradiction would hide the client bug.
+func releaseDefinitionOwner(
+	ctx context.Context,
+	msg *orchestratorv1.CreateReleaseDefinitionRequest,
+) (authctx.Actor, error) {
+	actor, ok := authctx.ActorFromContext(ctx)
+	if !ok || actor.OrganizationID == "" {
+		return authctx.Actor{}, connect.NewError(connect.CodeUnauthenticated,
+			fmt.Errorf("actor organization is required to create a release definition"))
+	}
+	if requestedOrg := msg.GetActor().GetOrganization(); requestedOrg != "" && requestedOrg != actor.OrganizationID {
+		return authctx.Actor{}, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("actor.organization %q does not match the authenticated organization %q",
+				requestedOrg, actor.OrganizationID))
+	}
+	if requestedUser := msg.GetActor().GetUserId(); requestedUser != "" && requestedUser != actor.UserID {
+		return authctx.Actor{}, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("actor.user_id %q does not match the authenticated user %q",
+				requestedUser, actor.UserID))
+	}
+	return actor, nil
 }
 
 // GetReleaseDefinition retrieves a release definition by ID.
