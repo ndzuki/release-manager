@@ -298,8 +298,23 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/DefinitionsPage.vue',
-    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '名称', '状态', '版本', '操作', '无法解析', '编辑', '提交时会带上读到的版本号；若期间被他人修改，服务端会拒绝（乐观锁），页面会刷新后提示重试。', '删除', '新增映射', '取消', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '第 ${index + 1} 行映射缺少必填项（workload kind/name、field、values path）', '刷新中…', '刷新', '提交中…', '保存', '刷新列表', '条', '（ 条）'],
-    reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281). TASK-318 registered `刷新列表` (a rendered action-label with no capital and no space) and the single-Han cell fragments `条` / `（ 条）`',
+    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '刷新中…', '刷新', '刷新列表'],
+    reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281). TASK-318 registered `刷新列表` (a rendered action-label with no capital and no space). TASK-363 carved the list and the three dialogs into components and the editor/create/disable state into composables, so their literals moved with them; nothing new was written',
+  },
+  {
+    file: 'src/components/definitions/DefinitionTable.vue',
+    allowed: ['名称', '状态', '版本', '操作', '无法解析', '编辑', '条'],
+    reason: 'TASK-363 carved the definitions table out of DefinitionsPage without changing the rendered text; `条` is the single-Han mapping-count unit TASK-318 registered',
+  },
+  {
+    file: 'src/components/definitions/DefinitionEditorDialog.vue',
+    allowed: ['提交时会带上读到的版本号；若期间被他人修改，服务端会拒绝（乐观锁），页面会刷新后提示重试。', '删除', '新增映射', '取消', '提交中…', '保存', '（ 条）'],
+    reason: 'TASK-363 carved the editor dialog out of DefinitionsPage without changing the rendered text; `（ 条）` is the single-Han fragment around the mapping count TASK-318 registered',
+  },
+  {
+    file: 'src/composables/useDefinitionEditor.ts',
+    allowed: ['第 ${index + 1} 行映射缺少必填项（workload kind/name、field、values path）'],
+    reason: 'TASK-363 moved the editor validation message out of DefinitionsPage verbatim, so the copy is registered where it now lives',
   },
   {
     file: 'src/pages/NotFoundPage.vue',
