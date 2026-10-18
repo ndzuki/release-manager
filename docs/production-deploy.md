@@ -1095,7 +1095,7 @@ k3d image import -c rm-prod /tmp/rm372/images/*.tar 2>&1 | tee /tmp/rm372/import
 grep ERRO /tmp/rm372/import-all.log      # 0 命中
 ```
 
-- 8 个镜像全部 `linux/amd64`；8 个 tar 合计 **118,367,744 B**（≈113 MiB）。原始 `/tmp/rm372/images/` 已随清理删除，`2026-10-18 23:05 +08` 用仍在本机的 `localhost:5001/release-*:f06c6e7` 逐镜像重导复算（`docker save --platform linux/amd64 | wc -c` 求和）仍得 **118,367,744 B**；方法校验：对 `98f7b52` 重导的 8 个 tar 体积与原 `/tmp/rm368/images/*.tar` 逐镜像相同（`du -cb` 合计同为 118,367,744 B）。**与 §8.7 的 `98f7b52` 同值不是抄写**：两次构建的差异只有等长替换（Go 版本串均 7 字符、web chunk 哈希均 8 字符），`api` 的应用层与 config 各差 1 B 且方向相反（10,853,034 vs 10,853,033 B / 393 vs 394 B），web 的层差异（409,544 vs 409,199 B）在 tar 的 512 B 块对齐后同为 409,600 B；对照 `6f343cf` 为 **118,385,152 B**（§8.6），可见该数值确实随构建变化。
+- 8 个镜像全部 `linux/amd64`；8 个 tar 合计 **118,367,744 B**（≈113 MiB）。原始 `/tmp/rm372/images/` 已随清理删除，`2026-10-18 23:05 +08` 用仍在本机的 `localhost:5001/release-*:f06c6e7` 逐镜像重导复算（`docker save --platform linux/amd64 | wc -c` 求和）仍得 **118,367,744 B**；方法校验：对 `98f7b52` 重导的 8 个 tar 体积与原 `/tmp/rm368/images/*.tar` 逐镜像相同（`du -cb` 合计同为 118,367,744 B）。**与 §8.7 的 `98f7b52` 同值不是抄写**：这是两次构建在 tar 的 512 B 块对齐后得到的实测结果——`api` 的应用层与 config 各差 1 B 且方向相反（10,853,034 vs 10,853,033 B / 393 vs 394 B），web 的层差异（409,544 vs 409,199 B）在块对齐后同为 409,600 B；对照 `6f343cf` 为 **118,385,152 B**（§8.6），可见该数值确实随构建变化。
 - 导入 **17.2 s**，输出 `Successfully imported 8 image(s) into 1 cluster(s)`，`grep ERRO` **0 命中**；节点内 `crictl images | grep f06c6e7` 可见 8 个 `:f06c6e7`。
 - web 产物可直接核对：构建日志里的入口 chunk 是 `dist/assets/index-I-oIH8-D.js`，发布后 `curl -sk https://localhost:8443/ | grep assets/index-` 返回**同一个文件名** ⇒ 线上 SPA 确实来自本次构建。
 
