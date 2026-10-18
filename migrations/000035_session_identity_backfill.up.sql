@@ -13,8 +13,10 @@
 -- authoritative scope is recoverable for every row; the EXISTS guard keeps the
 -- statement a no-op if a database ever contains a dangling operator_id (SQLite
 -- only enforces the reference when foreign_keys is on). Forward-only and
--- idempotent: the WHERE clause makes a second run a no-op, and rows that already
--- carry a value are never rewritten.
+-- idempotent: the WHERE clause makes a second run a no-op. Rows that carry both
+-- values are never touched; a row missing either one takes the operator's
+-- authoritative pair (operators are never moved between clusters, so this can
+-- only repair an incomplete row, never replace meaningful scope).
 UPDATE sessions
 SET customer_id = (SELECT o.customer_id FROM operators AS o WHERE o.id = sessions.operator_id),
     cluster_id  = (SELECT o.cluster_id  FROM operators AS o WHERE o.id = sessions.operator_id)

@@ -2082,7 +2082,8 @@ var migrationStatements = []string{
 	// no-op when a legacy SQLite database has foreign_keys off and carries a
 	// dangling operator_id. Mirrors
 	// migrations/000035_session_identity_backfill.up.sql; the WHERE clause makes a
-	// second run a no-op, and populated rows are never rewritten.
+	// second run a no-op, rows carrying both values are never touched, and a row
+	// missing either one takes the operator's authoritative pair.
 	`UPDATE sessions
 	 SET customer_id = (SELECT o.customer_id FROM operators AS o WHERE o.id = sessions.operator_id),
 	     cluster_id  = (SELECT o.cluster_id  FROM operators AS o WHERE o.id = sessions.operator_id)
