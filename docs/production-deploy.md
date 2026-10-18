@@ -37,7 +37,7 @@
 | `redis` | StatefulSet | 1 | 6379 | `redis:7-alpine`（**7.4.11**） | 仅 auth 会话缓存 + refresh 黑名单；无 AUTH |
 | `release-manager-backup` | CronJob | — | — | `postgres:16` | 每日 `02:00 UTC` 逻辑备份（`release_manager` + `release_notifier` → PVC `release-manager-backups`），见 §7.4 |
 
-七个 Deployment 里只有 `edge` 不是 Go 进程；`api`/`auth`/`orchestrator`/`notifier`/`webhook` 各自暴露 `/health` 与 `/readyz`，`web` 的 `/health`、`/readyz` 由 nginx **反代到 orchestrator**（`web/nginx.conf`），`edge` 只有 `tcpSocket` 探针。
+七个 Deployment 里只有 `edge` 与 `web` 不是 Go 进程（`web` 是 nginx）；`api`/`auth`/`orchestrator`/`notifier`/`webhook` 各自暴露 `/health` 与 `/readyz`（自身健康检查），`web` 的 `/health`、`/readyz` 由 nginx **反代到 orchestrator**（`web/nginx.conf`），**不是 web 自身的检查**；它的 k8s 探针用 `/`（`deploy/kustomize/services/web.yaml`，返回 SPA 的 `index.html`，HTTP 200），`edge` 只有 `tcpSocket` 探针。
 
 ### 1.2 入口链路
 
@@ -640,7 +640,7 @@ kubectl -n release-manager rollout status deploy/web --timeout=300s
 | `web` Deployment 镜像 | `release-web:ceda261` | `release-web:b96d964` | `release-web:ceda261` |
 | `web` Deployment revision | `2` | `3` | `4`（见 §8.2.1） |
 | Pod Ready | 10/10 | 10/10 | 10/10 |
-| 6 个服务 `/readyz` | 全 200 | 全 200 | 全 200 |
+| 6 个服务 `/readyz`（5 个 Go 服务自检 + `web` 反代到 orchestrator） | 全 200 | 全 200 | 全 200 |
 | 浏览器登录（真 Chrome） | 11/11，离开 `/login` 672 ms | 11/11，651 ms | 11/11，649 ms |
 | `schema_migrations` | `34\|false` | `34\|false` | `34\|false` |
 | `audit_events` / `users` / `tables` | `12 / 2 / 58` | `12 / 2 / 58` | `12 / 2 / 58` |
@@ -773,7 +773,7 @@ kubectl -n release-manager set image deploy/$SVC $SVC=localhost:5001/release-$SV
 kubectl -n release-manager rollout status deploy/$SVC --timeout=300s
 ```
 
-每步 Ready 后立即取 `/health` 与 `/readyz`（port-forward 到 ClusterIP）。发布后 revision 变成 `api=10`、`web=8`、其余 4 个 Go 服务 `2`（`edge` 仍 1）。
+每步 Ready 后立即取 `/health` 与 `/readyz`（port-forward 到 ClusterIP）。5 个 Go 服务（`api`、`auth`、`orchestrator`、`notifier`、`webhook`）返回的是自身检查；`web` 是 nginx，这两个路径反代到 orchestrator（**不是 web 自身健康**），它的 k8s 探针用 `/`（HTTP 200）。发布后 revision 变成 `api=10`、`web=8`、其余 4 个 Go 服务 `2`（`edge` 仍 1）。
 
 **迁移 34→35 与 #436 回填**
 
@@ -788,7 +788,7 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 
 - `migrations/000035_session_identity_backfill.up.sql` 把 6 行空串 `sessions` 按 `operators` 的权威 `customer_id`/`cluster_id` 回填为 `56846183-…`/`rm-cust`；回填后 9 行全部非空（**6 → 0**）。
 - 它的 down 是空注释：这是数据修复，旧值 `''` 就是缺陷本身，没有可恢复的信息；生产进程也从不执行 `RunMigrationsDown`。
-- `internal/operator/service.go:488` 现在是新会话写入 scope 的落点（`CustomerID: op.CustomerID, ClusterID: op.ClusterID`）。本集群 9 行 `sessions` 全是历史行（3 `revoked` + 6 `offline`），**没有在线 operator**，所以「新写入带 scope」只有源码与回填证据，没有在线会话实测。
+- `internal/operator/service.go:488` 现在是新会话写入 scope 的落点（`CustomerID: op.CustomerID, ClusterID: op.ClusterID`）。本集群 9 行 `sessions` 全是历史行（6 `revoked` + 3 `offline`；2026-10-18 13:24 +08 只读 SQL `select status, count(*) from sessions group by status`：`offline|3`、`revoked|6`），**没有在线 operator**，所以「新写入带 scope」只有源码与回填证据，没有在线会话实测。
 
 **冒烟（真 Chrome：playwright-core + 系统 Chrome + `ignoreHTTPSErrors`）**
 
