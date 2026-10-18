@@ -312,6 +312,7 @@ func TestGetReleaseDefinition_Success(t *testing.T) {
 	defer cleanup()
 	seedCustomer(t, st, "cust-g", "zeta")
 	seedCluster(t, st, "cls-g", "cust-g")
+	seedActorBinding(t, st, "cust-g")
 
 	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
@@ -325,7 +326,7 @@ func TestGetReleaseDefinition_Success(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	getResp, err := svc.GetReleaseDefinition(context.Background(), connect.NewRequest(
+	getResp, err := svc.GetReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.GetReleaseDefinitionRequest{DefinitionId: createResp.Msg.Definition.Id},
 	))
 	require.NoError(t, err)
@@ -336,7 +337,7 @@ func TestGetReleaseDefinition_NotFound(t *testing.T) {
 	svc, _, cleanup := setupService(t)
 	defer cleanup()
 
-	_, err := svc.GetReleaseDefinition(context.Background(), connect.NewRequest(
+	_, err := svc.GetReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.GetReleaseDefinitionRequest{DefinitionId: "no-such-def"},
 	))
 	require.Error(t, err)
@@ -352,6 +353,9 @@ func TestListReleaseDefinitions_ByCustomer(t *testing.T) {
 	seedCustomer(t, st, "cust-list-2", "list-b")
 	seedCluster(t, st, "cls-list-1", "cust-list-1")
 	seedCluster(t, st, "cls-list-2", "cust-list-2")
+	// TASK-371: a definition read is scoped to a customer the actor's organization
+	// is bound to, so the positive control needs that binding.
+	seedActorBinding(t, st, "cust-list-1")
 
 	_, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
@@ -366,7 +370,7 @@ func TestListReleaseDefinitions_ByCustomer(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	resp, err := svc.ListReleaseDefinitions(context.Background(), connect.NewRequest(
+	resp, err := svc.ListReleaseDefinitions(adminCtx(), connect.NewRequest(
 		&orchestratorv1.ListReleaseDefinitionsRequest{CustomerId: "cust-list-1"},
 	))
 	require.NoError(t, err)
@@ -553,6 +557,7 @@ func TestCreateReleaseDefinition_NoPhysicalDelete(t *testing.T) {
 	defer cleanup()
 	seedCustomer(t, st, "cust-nodel", "nodel")
 	seedCluster(t, st, "cls-nodel", "cust-nodel")
+	seedActorBinding(t, st, "cust-nodel")
 
 	createResp, err := svc.CreateReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.CreateReleaseDefinitionRequest{
@@ -569,7 +574,7 @@ func TestCreateReleaseDefinition_NoPhysicalDelete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Definition must still be retrievable after disable.
-	getResp, err := svc.GetReleaseDefinition(context.Background(), connect.NewRequest(
+	getResp, err := svc.GetReleaseDefinition(adminCtx(), connect.NewRequest(
 		&orchestratorv1.GetReleaseDefinitionRequest{DefinitionId: defID},
 	))
 	require.NoError(t, err)
