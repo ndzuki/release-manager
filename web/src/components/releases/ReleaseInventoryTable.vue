@@ -59,23 +59,33 @@ function formatSyncTime(value: string | null): string {
 </script>
 
 <template>
-  <div class="release-table-wrap">
-    <table class="release-table">
-      <thead>
-        <tr>
-          <th scope="col">Release</th>
-          <th scope="col">状态</th>
-          <th scope="col">Chart</th>
-          <th scope="col">Revision</th>
-          <th scope="col">{{ t('release.table.valuesDigest') }}</th>
-          <th scope="col">最近同步</th>
-          <th v-if="canEmergency || canConvergence" scope="col">紧急变更</th>
-          <th v-if="canCreateOperation" scope="col">操作</th>
+  <!-- UX-073 (W15): at narrow widths the table used to be a bare horizontal scroller.
+       It is now a labelled, keyboard-scrollable region at every size, and below 40rem
+       each row becomes a card so nothing is hidden off-screen. The ARIA roles are
+       explicit because the card layout changes the CSS display type, which otherwise
+       drops the native table semantics. -->
+  <div
+    class="release-table-wrap"
+    role="region"
+    :aria-label="t('release.table.scrollRegion')"
+    tabindex="0"
+  >
+    <table class="release-table" role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th scope="col" role="columnheader">Release</th>
+          <th scope="col" role="columnheader">状态</th>
+          <th scope="col" role="columnheader">Chart</th>
+          <th scope="col" role="columnheader">Revision</th>
+          <th scope="col" role="columnheader">{{ t('release.table.valuesDigest') }}</th>
+          <th scope="col" role="columnheader">最近同步</th>
+          <th v-if="canEmergency || canConvergence" scope="col" role="columnheader">紧急变更</th>
+          <th v-if="canCreateOperation" scope="col" role="columnheader">操作</th>
         </tr>
       </thead>
-      <tbody>
-        <tr v-for="release in releases" :key="`${release.namespace}/${release.name}`">
-          <td>
+      <tbody role="rowgroup">
+        <tr v-for="release in releases" :key="`${release.namespace}/${release.name}`" role="row">
+          <td role="cell">
             <strong>{{ release.namespace }}/{{ release.name }}</strong>
             <!-- Operation history is a READ entry: it must not sit behind the
                  create-operation capability, or a viewer never reaches it. -->
@@ -95,10 +105,10 @@ function formatSyncTime(value: string | null): string {
               操作历史
             </RouterLink>
           </td>
-          <td><ReleaseStatusBadge :status="release.status" /></td>
-          <td>{{ release.chart }}<span v-if="release.chartVersion">@{{ release.chartVersion }}</span></td>
-          <td>{{ release.revision }}</td>
-          <td>
+          <td role="cell" data-label="状态"><ReleaseStatusBadge :status="release.status" /></td>
+          <td role="cell" data-label="Chart">{{ release.chart }}<span v-if="release.chartVersion">@{{ release.chartVersion }}</span></td>
+          <td role="cell" data-label="Revision">{{ release.revision }}</td>
+          <td role="cell" :data-label="t('release.table.valuesDigest')">
             <RouterLink
               v-if="valuesRevisionEnabled && release.releaseDefinitionId && release.valuesDigest"
               class="values-link"
@@ -108,8 +118,8 @@ function formatSyncTime(value: string | null): string {
             </RouterLink>
             <code v-else>{{ release.valuesDigest || '—' }}</code>
           </td>
-          <td>{{ formatSyncTime(release.lastSyncAt) }}</td>
-          <td v-if="canEmergency || canConvergence">
+          <td role="cell" data-label="最近同步">{{ formatSyncTime(release.lastSyncAt) }}</td>
+          <td v-if="canEmergency || canConvergence" role="cell" data-label="紧急变更">
             <span v-if="!release.releaseDefinitionId" class="muted" title="未关联 ReleaseDefinition，紧急变更入口不可用">
               未绑定 Definition
             </span>
@@ -139,7 +149,7 @@ function formatSyncTime(value: string | null): string {
               </RouterLink>
             </template>
           </td>
-          <td v-if="canCreateOperation">
+          <td v-if="canCreateOperation" role="cell" data-label="操作">
             <RouterLink
               v-if="release.releaseDefinitionId"
               class="release-table__operation"
@@ -175,7 +185,12 @@ function formatSyncTime(value: string | null): string {
 
 <style scoped>
 .release-table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: 0.65rem; background: var(--color-surface); }
+.release-table-wrap:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .release-table { width: 100%; border-collapse: collapse; min-width: 58rem; }
+/* UX-073: keep the row identity in view while the table is scrolled sideways. */
+th:first-child, td:first-child { position: sticky; left: 0; z-index: 1; background: var(--color-surface); }
+th:first-child { background: var(--color-bg); }
+td:first-child { box-shadow: 1px 0 0 var(--color-border); }
 th, td { padding: 0.9rem 1rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: middle; }
 th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); letter-spacing: 0.04em; text-transform: uppercase; }
 tbody tr:last-child td { border-bottom: 0; }
@@ -186,4 +201,25 @@ code { color: var(--color-text-secondary); font-size: var(--font-size-xs); overf
 .emergency-link.blocked { color: var(--color-subtle); cursor: not-allowed; }
 .convergence-link { color: var(--color-violet); font-weight: 700; text-decoration: none; white-space: nowrap; margin-left: 0.6rem; }
 .muted { color: var(--color-subtle); white-space: nowrap; }
+
+/* UX-073 (W15): below 40rem the columns become labelled cards. The labels come from
+   the cells' data-label, so the header row is only visually hidden — it keeps naming
+   the columns for assistive technology. */
+@media (max-width: 40rem) {
+  .release-table-wrap { border: 0; background: transparent; }
+  .release-table { display: block; min-width: 0; }
+  .release-table thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .release-table tbody { display: grid; gap: 0.75rem; }
+  .release-table tr { display: grid; gap: 0.35rem; padding: 0.85rem 1rem; border: 1px solid var(--color-border); border-radius: 0.6rem; background: var(--color-surface); }
+  /* The label is absolutely positioned instead of a grid/flex sibling: a cell's
+     content is a mix of text nodes and inline elements (e.g. chart + "@version"),
+     and a grid/flex container would split those into separate rows. */
+  .release-table td { display: block; position: relative; padding: 0.15rem 0 0.15rem 8rem; border: 0; }
+  .release-table td::before { content: attr(data-label); position: absolute; left: 0; top: 0.15rem; width: 7.5rem; color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+  .release-table td:first-child { padding: 0 0 0.4rem; border-bottom: 1px solid var(--color-border); box-shadow: none; }
+  .release-table td:first-child::before { content: none; }
+  .release-table tbody tr:last-child td { border-bottom: 0; }
+  .release-table .release-table__operation, .release-table .emergency-link,
+  .release-table .convergence-link, .release-table .muted { white-space: normal; }
+}
 </style>

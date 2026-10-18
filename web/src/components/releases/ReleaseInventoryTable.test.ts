@@ -74,3 +74,48 @@ describe('ReleaseInventoryTable rollback entry (A11)', () => {
     expect(wrapper.find('[data-testid="release-rollback-ns-release-a"]').exists()).toBe(false);
   });
 });
+
+/*
+ * UX-073 (W15): on a narrow screen the table used to be a bare horizontal scroller.
+ * The wrapper is now a labelled, keyboard-focusable region, the first column stays
+ * visible while scrolling, and every cell carries the label the card layout shows.
+ * The explicit roles keep the table semantics when the media query switches the
+ * display type to cards.
+ */
+describe('ReleaseInventoryTable narrow-screen structure (W15)', () => {
+  it('exposes a labelled, keyboard-scrollable region around the table', async () => {
+    const wrapper = await mountTable([release()]);
+
+    const region = wrapper.get('[role="region"]');
+    expect(region.attributes('tabindex')).toBe('0');
+    expect(region.attributes('aria-label')).toBe('发布清单表格（可横向滚动）');
+    expect(region.get('table').attributes('role')).toBe('table');
+  });
+
+  it('labels every data cell and keeps row/column semantics explicit', async () => {
+    const wrapper = await mountTable([release()]);
+
+    expect(wrapper.get('thead').attributes('role')).toBe('rowgroup');
+    expect(wrapper.get('tbody').attributes('role')).toBe('rowgroup');
+    expect(wrapper.get('thead tr').attributes('role')).toBe('row');
+    expect(wrapper.get('tbody tr').attributes('role')).toBe('row');
+    // canEmergency/canConvergence are off in this mount, so the emergency column
+    // (and only it) is absent; Release has no data-label because it is the card header.
+    expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(7);
+    expect(wrapper.findAll('td[role="cell"]')).toHaveLength(7);
+
+    const labels = wrapper.findAll('td[data-label]').map((cell) => cell.attributes('data-label'));
+    expect(labels).toEqual(['状态', 'Chart', 'Revision', 'Values 摘要', '最近同步', '操作']);
+  });
+
+  it('labels the emergency column when the capability renders it', () => {
+    const wrapper = mount(ReleaseInventoryTable, {
+      props: { releases: [release()], canEmergency: true, canCreateOperation: true },
+      global: { stubs: { RouterLink: true } },
+    });
+
+    expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(8);
+    const labels = wrapper.findAll('td[data-label]').map((cell) => cell.attributes('data-label'));
+    expect(labels).toEqual(['状态', 'Chart', 'Revision', 'Values 摘要', '最近同步', '紧急变更', '操作']);
+  });
+});

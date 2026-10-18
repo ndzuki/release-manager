@@ -141,6 +141,7 @@ const zhCN = {
   'customer.history.empty': '暂无历史',
   'customer.history.loading': '正在加载客户历史…',
   'customer.history.noEvents': '暂无客户生命周期事件。',
+  'customer.history.scrollRegion': '客户历史（可滚动）',
   'customer.disable.cascadeTokens': '注册令牌将被撤销。',
   'customer.disable.cascadeCerts': 'Operator 证书将被撤销。',
   'customer.disable.cascadeSessions': '活跃的 Operator 会话将被关闭。',
@@ -171,6 +172,7 @@ const zhCN = {
   'cluster.rules.targetExample': 'harbor.example.com/proxy/',
   'release.filter.allStatus': '全部状态',
   'release.table.valuesDigest': 'Values 摘要',
+  'release.table.scrollRegion': '发布清单表格（可横向滚动）',
   'common.breadcrumb': '面包屑',
   /*
    * Accessible name for a form control that lives in a repeated table row: the field
@@ -510,6 +512,7 @@ const zhCN = {
   'convergence.page.title': '收敛任务',
   'convergence.page.pending': '待收敛任务',
   'convergence.page.prepare': '准备收敛',
+  'convergence.page.empty': '没有待收敛任务。',
   'annotation.value': '值',
   'annotation.add': '添加注解',
   'annotation.keyWhitelist': 'Key（白名单）',
@@ -626,6 +629,7 @@ const zhCN = {
   'operation.timeline.ack': 'ACK 已确认',
   'operation.timeline.workload': '未上报的 Workload',
   'operation.timeline.effectConfirmed': 'Emergency 生效结果已确认',
+  'operation.timeline.scrollRegion': '状态时间线（可滚动）',
   'convergence.card.title': '收敛任务（REQUIRE_PROMOTION）',
   'convergence.card.awaitingCreate': '结果已生效，等待创建收敛任务。',
   'convergence.card.notConfirmed': '结果未确认生效前不会创建收敛任务。',

@@ -1,16 +1,37 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 import EmptyState from '@/components/common/EmptyState.vue';
+import { useVirtualList } from '@/composables/useVirtualList';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import type { CustomerEvent } from '@/types/customer';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 
-defineProps<{
+const props = defineProps<{
   events: CustomerEvent[];
   loading?: boolean;
   error?: string | null;
 }>();
+
+/*
+ * W15 (TASK-325): a long-lived customer accumulates lifecycle events without a
+ * bound, and ListCustomerEvents has no cursor to page them. Above the threshold the
+ * list windows its rows so the DOM stays small; the payload is unchanged.
+ */
+const {
+  containerRef: listContainer,
+  virtualized,
+  visible,
+  startIndex,
+  topSpacer,
+  bottomSpacer,
+  onScroll,
+  rowRef,
+} = useVirtualList(() => props.events, {
+  keyOf: (event) => event.id,
+  // .customer-history__list { gap: 0.5rem }
+  gap: 8,
+});
 
 const emit = defineEmits<{ retry: [] }>();
 
@@ -29,12 +50,37 @@ function eventLabel(eventType: string): string {
       <button type="button" @click="emit('retry')">{{ t('action.retry') }}</button>
     </ErrorState>
     <EmptyState v-else-if="events.length === 0" :title="t('customer.history.empty')" :message="t('customer.history.noEvents')" />
-    <ol v-else class="customer-history__list">
-      <li v-for="event in events" :key="event.id" class="customer-history__item">
-        <strong>{{ eventLabel(event.eventType) }}</strong>
-        <time v-if="event.createdAt" :datetime="event.createdAt">{{ formatTimestamp(event.createdAt, { style: 'medium' }) }}</time>
-      </li>
-    </ol>
+    <!-- The scroll container is the wrapper, not the list: the window's spacers are
+         padding on the list, and padding is a floor under a border-box element — a
+         max-height on the padded list would be ignored and the whole history would
+         render again (W15 follow-up found this in the real browser). -->
+    <div
+      v-else
+      ref="listContainer"
+      class="customer-history__viewport"
+      :class="{ 'customer-history__viewport--virtual': virtualized }"
+      :role="virtualized ? 'region' : undefined"
+      :tabindex="virtualized ? 0 : undefined"
+      :aria-label="virtualized ? t('customer.history.scrollRegion') : undefined"
+      @scroll.passive="onScroll"
+    >
+      <ol
+        class="customer-history__list"
+        :style="virtualized ? { paddingTop: `${topSpacer}px`, paddingBottom: `${bottomSpacer}px` } : undefined"
+      >
+        <li
+          v-for="(event, index) in visible"
+          :key="event.id"
+          :ref="rowRef(event.id)"
+          :aria-setsize="virtualized ? events.length : undefined"
+          :aria-posinset="virtualized ? startIndex + index + 1 : undefined"
+          class="customer-history__item"
+        >
+          <strong>{{ eventLabel(event.eventType) }}</strong>
+          <time v-if="event.createdAt" :datetime="event.createdAt">{{ formatTimestamp(event.createdAt, { style: 'medium' }) }}</time>
+        </li>
+      </ol>
+    </div>
   </section>
 </template>
 
@@ -42,6 +88,10 @@ function eventLabel(eventType: string): string {
 .customer-history { display: grid; gap: 0.75rem; }
 .customer-history__header h2 { margin: 0; font-size: var(--font-size-lg); }
 .customer-history__list { display: grid; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+/* W15: bounds the render cost of an unbounded history; small histories keep the
+   plain, page-scrolling list. */
+.customer-history__viewport--virtual { max-height: min(50vh, 26rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.customer-history__viewport--virtual:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .customer-history__item { display: flex; justify-content: space-between; gap: 1rem; padding: 0.75rem; border: 1px solid var(--color-border); border-radius: 0.375rem; }
 .customer-history__item time { color: var(--color-muted); font-size: var(--font-size-md); }
 </style>

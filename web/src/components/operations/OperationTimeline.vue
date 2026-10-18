@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { t } from '@/i18n/messages';
 import EmptyState from '@/components/common/EmptyState.vue';
+import { useVirtualList } from '@/composables/useVirtualList';
 import TimelineEntryItem from '@/components/operations/TimelineEntryItem.vue';
 import type { Operation, TimelineEntry } from '@/types/operation';
 import type { EmergencyEffectStatus, StreamStatus } from '@/stores/operationTimeline';
@@ -17,6 +19,28 @@ const props = defineProps<{
 const sortedEntries = computed(() =>
   [...props.entries].sort((a, b) => (a.sequence < b.sequence ? 1 : a.sequence > b.sequence ? -1 : 0)),
 );
+
+/*
+ * W15 (TASK-325): the stream keeps at most 500 entries, and rendering every one of
+ * them keeps the main thread busy on long operations. Above the virtual-list
+ * threshold only the rows around the viewport stay in the DOM; below it the list
+ * renders exactly as before. The payload is still the whole retained history —
+ * bounding it needs a server-side cursor (see the W15 row in delivery-evidence.md).
+ */
+const {
+  containerRef: listContainer,
+  virtualized,
+  visible,
+  startIndex,
+  topSpacer,
+  bottomSpacer,
+  onScroll,
+  rowRef,
+} = useVirtualList(() => sortedEntries.value, {
+  keyOf: (entry) => entry.id,
+  // .operation-timeline__list { gap: 0.5rem }
+  gap: 8,
+});
 
 const emergencyWaiting = computed(() => {
   const current = props.operation;
@@ -49,9 +73,34 @@ const emergencyResolved = computed(() => {
 
     <EmptyState v-if="entries.length === 0" title="暂无时间线事件" message="等待服务端推送事件…" />
 
-    <ol v-else class="operation-timeline__list" aria-live="polite">
-      <TimelineEntryItem v-for="entry in sortedEntries" :key="entry.id" :entry="entry" />
-    </ol>
+    <!-- The scroll container is the wrapper, not the list: the window's spacers are
+         padding on the list, and padding is a floor under a border-box element — a
+         max-height on the padded list would be ignored and every entry would render. -->
+    <div
+      v-else
+      ref="listContainer"
+      class="operation-timeline__viewport"
+      :class="{ 'operation-timeline__viewport--virtual': virtualized }"
+      :role="virtualized ? 'region' : undefined"
+      :tabindex="virtualized ? 0 : undefined"
+      :aria-label="virtualized ? t('operation.timeline.scrollRegion') : undefined"
+      @scroll.passive="onScroll"
+    >
+      <ol
+        class="operation-timeline__list"
+        aria-live="polite"
+        :style="virtualized ? { paddingTop: `${topSpacer}px`, paddingBottom: `${bottomSpacer}px` } : undefined"
+      >
+        <TimelineEntryItem
+          v-for="(entry, index) in visible"
+          :key="entry.id"
+          :ref="rowRef(entry.id)"
+          :entry="entry"
+          :aria-setsize="virtualized ? sortedEntries.length : undefined"
+          :aria-posinset="virtualized ? startIndex + index + 1 : undefined"
+        />
+      </ol>
+    </div>
 
     <p v-if="emergencyWaiting" class="operation-timeline__waiting" role="status">
       操作已取消，正在等待集群生效结果确认…
@@ -66,6 +115,10 @@ const emergencyResolved = computed(() => {
 .operation-timeline { display: grid; gap: 0.75rem; }
 .operation-timeline h2 { margin: 0; font-size: var(--font-size-base); }
 .operation-timeline__list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
+/* W15: only a list long enough to be virtualized becomes its own scroll container,
+   so an ordinary operation detail page keeps scrolling as one page. */
+.operation-timeline__viewport--virtual { max-height: min(60vh, 32rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.operation-timeline__viewport--virtual:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .operation-timeline__gap,
 .operation-timeline__truncated { margin: 0; padding: 0.5rem 0.75rem; border-radius: 0.4rem; background: var(--color-warning-surface); color: var(--color-warning-ink-strong); font-size: var(--font-size-sm); }
 .operation-timeline__truncated { background: var(--color-bg); color: var(--color-muted); }
