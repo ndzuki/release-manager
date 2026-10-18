@@ -102,12 +102,12 @@ web/
 **新增 `.vue` 必须满足这 19 条**。要加回一条规则，先按下面的口径重新测量，别直接开 `recommended`。
 
 测量口径（2026-10-18，worktree at `origin/main` = 95549fe）：用 `eslint --config <临时全量配置>
---format json` 在 `web/src`（355 个 ts/vue 文件）上跑插件全部 **23** 条规则（20 条 recommended +
-3 条 opt-in），按 `ruleId` 聚合：
+--format json` 在 `web/src`（**被 lint 的 355** 个 ts/vue；磁盘上共 369 个，14 个 `src/gen/**` 被
+ignore）上跑插件全部 **23** 条规则（20 条 recommended + 3 条 opt-in），按 `ruleId` 聚合：
 
 | 规则 | 违规数 | 处置 |
 | --- | --- | --- |
-| `label-has-for` | 87（插件默认 `required: { every: ['nesting','id'] }`） | **开**，配置为 `required: { some: ['nesting','id'] }` 后为 0 |
+| `label-has-for` | 87（插件默认 `required: { every: ['nesting','id'] }`；拆开单测 `required: 'nesting'` = 17、`required: 'id'` = 70，交集 0） | **开**，配置为 `required: { some: ['nesting','id'] }` 后为 0 |
 | `no-redundant-roles` | 21 | 不开（见下） |
 | `no-onchange` | 13（非 recommended） | 不开（见下） |
 | `no-static-element-interactions` | 2 | 不开（见下） |
@@ -127,16 +127,18 @@ web/
 - **`no-redundant-roles`（21）**：21 处全部集中在 `ReleaseInventoryTable.vue`，且都是**有意为之**。
   该组件在 `@media (max-width: 40rem)` 下把 `table`/`tbody`/`tr` 改成 `display: block/grid`
   （`ReleaseInventoryTable.vue:208-224`）来做卡片布局，显式 role 是那套布局的配套（组件头注释
-  `ReleaseInventoryTable.vue:62-66` 记录动机：display 变了，原生表格语义可能丢失）。
+  `ReleaseInventoryTable.vue:62-66` 记录动机：卡片布局下显式保留 role 是防御性措施，并注明只在
+  Chromium 实测过）。
   **实测校正（2026-10-18）**：Chromium（Playwright 1.62）480px 视口下用 CDP
   `Accessibility.getFullAXTree` 对比，去掉这 29 个 `role` 属性后 `table`/`row`/`cell`/`columnheader`
   仍然存在（只少了一个 `thead` 的 `rowgroup`）⇒ **在 Chromium 里这些 role 确实是冗余的**，
   "display 一改就丢语义"不成立。仍不删：Firefox/WebKit 未测（跨引擎表格语义差异无本地证据），
-  删掉属未验证的回归风险；组件注释把"可能丢语义"写成了既成事实。**本规则继续不开**，21 处
-  留在记录里；要开它需先补 Firefox/WebKit 证据（另立任务）。
+  删掉属未验证的回归风险；组件注释已按该实测改为保守表述（保留 role 属防御性措施 + 其他引擎未
+  验证），不再把"可能丢语义"写成既成事实。**本规则继续不开**，21 处留在记录里；要开它需先补
+  Firefox/WebKit 证据（另立任务）。
 - **`no-static-element-interactions`（2）+ `click-events-have-key-events`（1）**：两处都是规则的
   结构盲点。`AppDialog.vue:68` 的 `@click.self` 只给遮罩提供鼠标便利，键盘关闭由 `useFocusTrap`
-  的 document 级 Escape 负责（`AppDialog.vue:47-55`，注释说明它故意不绑在遮罩上）；`Toast.vue:120-125`
+  的 document 级 Escape 负责（`AppDialog.vue:47-55`，注释说明它故意不绑在遮罩上）；`Toast.vue:126-127`
   的 `@mouseenter/@mouseleave` 是「悬停暂停自动消失」（WCAG 2.2.1 的 timing adjustable），本身不是交互。
 - **`no-onchange`（13）**：规则前提是 React 的 `onChange` 每次按键触发；Vue 的 `@change` 在提交时触发，
   改成 `@blur` 会改变用户可见行为（且 Vue 无此语义问题）。该规则也不在 recommended 里。

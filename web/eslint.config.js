@@ -19,10 +19,10 @@ import vueA11y from 'eslint-plugin-vuejs-accessibility';
  *     mouse-events-have-key-events, no-access-key, no-aria-hidden-on-focusable,
  *     no-autofocus, no-distracting-elements, no-role-presentation-on-focusable,
  *     role-has-required-aria-props, tabindex-no-positive.
- *   - label-has-for, configured to the WCAG 1.3.1 / 3.3.2 requirement: a label
- *     must associate by nesting *or* by `for`. The plugin's default demands both
- *     (`required: { every: ['nesting', 'id'] }`), which flagged all 87 labels that
- *     associate by nesting — valid HTML and valid AT association.
+ *   - label-has-for, configured to the WCAG 1.3.1 / 3.3.2 requirement (nesting
+ *     *or* `for`). The plugin's default demands both (`required: { every:
+ *     ['nesting', 'id'] }`), which flags all 87 labels that use one mode only —
+ *     17 associate via `for` (no nesting) and 70 via nesting (no `for`).
  *
  * Deliberately NOT enabled (measured, see web/README.md "Accessibility gate"):
  *   - no-redundant-roles (21): all in ReleaseInventoryTable.vue, where the card
