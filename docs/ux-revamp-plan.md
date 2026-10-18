@@ -299,7 +299,7 @@ Bundle 与 Candidate Artifact 浏览/ChangePassword —— 35 项探测 **14 项
 | # | 基元 | 依据 | 现状 |
 | --- | --- | --- | --- |
 | B1 | `Drawer.vue`（右侧滑出、Teleport、Esc、遮罩） | `Requirements/REQ-060-web-notification-jobs.md:321-323` | 不存在 |
-| B2 | `Toast.vue`（success/error/warning、3s 自动消失） | 同上 `:324-326` | 不存在（值编辑器有一个局部 toast 机制） |
+| B2 | `Toast.vue`（success/error/warning、3s 自动消失） | `Requirements/REQ-060-web-notification-jobs.md:324-326` | 不存在（值编辑器有一个局部 toast 机制） |
 | B3 | 统一对话框（Teleport + 焦点陷阱 + Esc + 回焦） | 由 `REQ-057:262` 的焦点要求推得 | 8 份各自实现，7 份无焦点管理 |
 | B4 | 数据表格（排序/分页/列配置/空态一致） | 由 `architecture.md:104-105` 的 cursor 语义推得 | 5 套表格各自实现，无分页 |
 | B5 | 表单字段（label + 错误关联 + 帮助文本） | 由 `REQ-033 AC-033-03` 的 role/aria 要求推得 | 55 个控件、`aria-describedby` 仅 2 |

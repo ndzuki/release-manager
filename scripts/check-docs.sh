@@ -14,10 +14,54 @@
 #      at least one entry)
 #   3. every relative markdown link target exists
 #   4. every `path:123` citation points at lines the file actually has
+#   5. every repository path and cited line inside vulncheck.exceptions.yaml
+#      exists (that file is not markdown; see the section below)
+#   6. `Foo.vue:123` (filename-only, no separator) and `:123` (bare line number)
+#      citations are attributed to a file and checked the same way; a
+#      filename-only citation whose basename names no repository file is COUNTED
+#      AND REPORTED as unresolved (WARN, not FAIL) instead of being skipped — see
+#      "Two more citation shapes" below
 #
 # This repository documents by evidence (`文件:行号`), which only works if those
 # line numbers survive edits; a citation that has drifted off the end of its file
 # is the same class of defect as a `make` target that does not exist.
+#
+# Check 6 covers two citation shapes check 4 cannot see:
+#   * `Foo.vue:123` has no separator, so check 4 never sees it. When exactly one
+#     tracked (or new) file has that basename the citation is resolved to that
+#     file and checked like any other. An ambiguous basename (`main.go`,
+#     `README.md`) is left alone, because guessing would invent findings. When NO
+#     tracked (or new) file has that basename there is nothing to check, but the
+#     citation is not dropped: it is COUNTED AND REPORTED as unresolved with a
+#     WARN, and never failed. Failing is not viable — the bulk of these name upstream
+#     library files (`handler.go:274` from connectrpc) or illustrative runtime
+#     artifacts, so a hard failure would only produce blanket exemptions, the
+#     same trade-off as an unattributable bare line number below.
+#   * `:123` is a bare line number. It is attributed to the last repository file
+#     path earlier on the same line (a table row is a line), and checked against
+#     that file. Attribution is same-line on purpose: a path two lines up is not
+#     assumed. The citations that cannot be attributed are COUNTED AND REPORTED
+#     as unverified — not failed, and not silently dropped. Failing on them is
+#     not viable: the bulk of them are legitimate prose ("… `web/nginx.conf` 的
+#     `:91`"), and a hard failure would only produce blanket exemptions, which
+#     is worse than an explicit "not verified" count.
+#     Known edge: a bare PORT written as a code span (`:8087`) on a line that
+#     already named a file is indistinguishable from a line number. The
+#     repository writes ports without backticks next to their context
+#     (`端口 8087`) for this reason; if a port must be quoted, do not use a
+#     backticked bare `:NNNN`, or cite the port's source file explicitly.
+#
+# Frozen snapshots. An immutable point-in-time record (an audit snapshot) cannot
+# have its line numbers corrected without falsifying the record. Such a file
+# declares itself, on its own line within the first 10 lines (the declaration is
+# part of the document's identity, so it belongs at the top):
+#   <!-- check-docs:snapshot-frozen date=YYYY-MM-DD reason="..." -->
+# The marker exempts LINE-NUMBER checks in that file only: path existence, links,
+# make targets and the yaml check still apply. Both a date and a reason are
+# required — a marker missing either is an ERROR, never a silent pass. Every
+# citation the marker actually saves from failing is counted and named in the
+# output, so the exemption never hides what it is hiding. It is for frozen
+# records only; a living document's stale line numbers get fixed, not exempted.
 #
 # Precision over recall. A code span is treated as a path only when it contains a
 # separator and either starts with a real source root (cmd/, internal/, api/,
@@ -135,6 +179,56 @@ ignore_lines=" "
 
 is_exempt_line() { case "$ignore_lines" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# ---------------------------------------------------------------------------
+# Owning-file resolution for the citation shapes check 4 cannot see.
+#
+# A filename-only citation (`OperationDetailPage.vue:319`) is resolved only when
+# exactly one tracked (or new, non-ignored) file carries that basename; `main.go`
+# and `README.md` are ambiguous and are deliberately left alone. A basename that
+# matches NO file returns failure like every other unresolvable span; check 6
+# distinguishes that case (it is counted and warned about) from a code span that
+# merely is not a path. A bare line number (`:295`) is attributed by check 6 to
+# the last resolvable path earlier on the same line, so this helper is also how
+# that context is established.
+# ---------------------------------------------------------------------------
+declare -A basename_path=()
+declare -A basename_count=()
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  b=${p##*/}
+  basename_count[$b]=$(( ${basename_count[$b]:-0} + 1 ))
+  basename_path[$b]=$p
+done < <(
+  { git ls-files -z
+    git ls-files -o --exclude-standard -z 2>/dev/null
+  } | tr '\0' '\n' | sort -u
+)
+
+# Echo the file a path-shaped span names, or fail. Same precision rules as
+# check 4: repository roots, a real file, and a known extension for a basename.
+# Result goes in RESOLVED instead of stdout: this runs for every code span, and
+# a command substitution per span would fork tens of thousands of times.
+resolve_cited_file() {
+  local p=$1 base=$2 n
+  RESOLVED=""
+  [ -n "$p" ] || return 1
+  case "$p" in *' '*|*'<'*|*'>'*|*'$'*|*'='*|*'|'*|*'&'*|*'{'*|*'}'*) return 1 ;; esac
+  case "$p" in http://*|https://*|mailto:*|/*|~/*) return 1 ;; esac
+  case "$p" in
+    */*)
+      [[ $p =~ $REPO_ROOTS ]] || return 1
+      if [ -f "$p" ]; then RESOLVED=$p; return 0; fi
+      if [ -f "$base/$p" ]; then RESOLVED=$base/$p; return 0; fi
+      return 1 ;;
+    *)
+      [[ $p =~ $EXT_RE ]] || return 1
+      n=${basename_count[$p]:-0}
+      [ "$n" = 1 ] || return 1
+      RESOLVED=${basename_path[$p]}
+      return 0 ;;
+  esac
+}
+
 # First line mentioning the literal that is NOT exempt. Empty output means every
 # occurrence is exempt; `?` means the literal could not be located, which is
 # reported with an unknown line rather than silently dropped.
@@ -169,9 +263,30 @@ bad_target=()
 bad_path=()
 bad_link=()
 bad_cite=()
+bad_bare=()
+bad_name=()
+warn_bare=()
+bad_exempt=()
 n_spans=0
 n_cites=0
 n_exempt=0
+n_bare=0
+n_bare_attr=0
+n_bare_unattr=0
+n_name=0
+n_name_unresolved=0
+n_snapshot_exempt=0
+declare -A unattr_by_file=()
+declare -A unresolved_name_by_file=()
+declare -A file_lines=()
+# Parallel arrays: one entry per frozen-snapshot file that actually exempted a
+# citation that would otherwise have failed.
+snap_files=()
+snap_dates=()
+snap_counts=()
+snap_reasons=()
+# Set by resolve_cited_file (no subshell per span).
+RESOLVED=""
 
 for f in "${md[@]}"; do
   CURFILE=$f
@@ -185,6 +300,39 @@ for f in "${md[@]}"; do
     ignore_lines="$ignore_lines$ln "
     n_exempt=$((n_exempt + 1))
   done < <(grep -n 'check-docs:ignore' "$f" 2>/dev/null | cut -d: -f1 || true)
+
+  # A frozen snapshot declares itself once, with a freeze date and a reason. A
+  # marker missing either is an ERROR and is NOT honoured (fail closed): the
+  # stale citations are then reported as usual.
+  snapshot_frozen=0
+  snapshot_date=""
+  snapshot_reason=""
+  snap_file_exempt=0
+  # Anchored to the start of a line and to an HTML comment, and required to be
+  # in the first 10 lines: a document that merely DOCUMENTS the marker (this
+  # repository's testing.md does, inline or in a deeper example block) must not
+  # acquire a file-level exemption by mentioning it.
+  snap_re='^[[:space:]]*<!--[[:space:]]*check-docs:snapshot-frozen'
+  smarks=$(grep -cE "$snap_re" "$f" 2>/dev/null || true)
+  if [ "${smarks:-0}" -gt 0 ]; then
+    sline=$(grep -nE "$snap_re" "$f" | head -1 | cut -d: -f1 || true)
+    stext=$(sed -n "${sline}p" "$f")
+    sdate=$(printf '%s' "$stext" | sed -nE 's/.*date=([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/p')
+    sreason=$(printf '%s' "$stext" | sed -nE 's/.*reason="([^"]+)".*/\1/p')
+    if [ "$smarks" -gt 1 ]; then
+      bad_exempt+=("$f:$sline: more than one check-docs:snapshot-frozen marker")
+    elif [ "${sline:-0}" -gt 10 ]; then
+      bad_exempt+=("$f:$sline: snapshot marker must be in the first 10 lines")
+    elif [ -z "$sdate" ]; then
+      bad_exempt+=("$f:$sline: snapshot marker has no date=YYYY-MM-DD")
+    elif [ -z "$sreason" ]; then
+      bad_exempt+=("$f:$sline: snapshot marker has no reason=\"...\"")
+    else
+      snapshot_frozen=1
+      snapshot_date=$sdate
+      snapshot_reason=$sreason
+    fi
+  fi
 
   # --- 1. make targets -------------------------------------------------------
   while IFS= read -r tok; do
@@ -246,6 +394,11 @@ for f in "${md[@]}"; do
       [ -n "$max" ] || continue
       flen=$(wc -l < "$span")
       if [ "$max" -gt $((flen + 1)) ]; then
+        if [ "$snapshot_frozen" = 1 ]; then
+          n_snapshot_exempt=$((n_snapshot_exempt + 1))
+          snap_file_exempt=$((snap_file_exempt + 1))
+          continue
+        fi
         [ -z "$line" ] && continue
         bad_cite+=("$f:$line: \`$raw\` — ${span} has $flen lines")
       fi
@@ -264,6 +417,115 @@ for f in "${md[@]}"; do
     [ -z "$line" ] && continue
     bad_link+=("$f:$line: ]($link)")
   done < <(grep -oE '\]\([^) ]+\)' "$f" 2>/dev/null | sed -E 's/^\]\(//; s/\)$//' | sort -u || true)
+
+  # --- 6. citations that carry no repository path ----------------------------
+  # Check 4 only sees spans that contain a separator (`web/src/x.vue:12`). Two
+  # legitimate shapes therefore slip past it:
+  #   * `OperationDetailPage.vue:319` — filename only, no separator;
+  #   * `:295` — bare line number, with the file named earlier on the same line.
+  # Here they are attributed and checked. Attribution is same-line only: the last
+  # resolvable file path earlier on the line owns the following bare numbers. A
+  # bare number with no such path is counted as UNVERIFIED, never failed and
+  # never guessed at (see the header). A filename-only citation whose basename
+  # matches no repository file is likewise counted and reported, never failed.
+  #
+  # Confidence decides whether a mismatch FAILS or is only reported:
+  #   * same table cell (or a non-table line) -> the owning file is unambiguous,
+  #     so an out-of-range number fails;
+  #   * across a cell boundary -> a row like `| B2 | Toast.vue … | 同上 :324 |`
+  #     cites the previous cell's Requirements doc, not Toast.vue, so a mismatch
+  #     there is reported with WARN and not failed. Failing would punish rows
+  #     that use "同上"/"见上" shorthand; silently dropping them would hide them.
+  # A RESOLVED filename-only citation names its own file, so an out-of-range
+  # number fails. One whose basename names no repository file cannot be resolved
+  # at all; that is the case counted as unresolved below, not a silent skip.
+  bctx_line=-1
+  bcur=""
+  bcur_cell=-1
+  while IFS=$'\t' read -r bline bcell bspan; do
+    [ -n "$bspan" ] || continue
+    if [ "$bline" != "$bctx_line" ]; then bctx_line=$bline; bcur=""; fi
+    is_exempt_line "$bline" && continue
+    bpath=$bspan
+    bnums=""
+    if [[ $bspan =~ ^(.*):([0-9][0-9,./-]*)$ ]]; then
+      bpath=${BASH_REMATCH[1]}
+      bnums=${BASH_REMATCH[2]}
+    fi
+    if [ -z "$bpath" ]; then
+      n_bare=$((n_bare + 1))
+      if [ -z "$bcur" ]; then
+        n_bare_unattr=$((n_bare_unattr + 1))
+        unattr_by_file[$f]=$(( ${unattr_by_file[$f]:-0} + 1 ))
+        continue
+      fi
+      n_bare_attr=$((n_bare_attr + 1))
+      bmax=$(printf '%s' "$bnums" | tr -c '0-9' '\n' | sort -n | tail -1)
+      [ -n "$bmax" ] || continue
+      blen=${file_lines[$bcur]:-}
+      if [ -z "$blen" ]; then blen=$(wc -l < "$bcur"); file_lines[$bcur]=$blen; fi
+      if [ "$bmax" -gt $((blen + 1)) ]; then
+        if [ "$snapshot_frozen" = 1 ]; then
+          n_snapshot_exempt=$((n_snapshot_exempt + 1))
+          snap_file_exempt=$((snap_file_exempt + 1))
+          continue
+        fi
+        if [ "$bcell" = "$bcur_cell" ]; then
+          bad_bare+=("$f:$bline: \`$bspan\` — $bcur has $blen lines")
+        else
+          warn_bare+=("$f:$bline: \`$bspan\` — $bcur has $blen lines (owner cited in another table cell)")
+        fi
+      fi
+      continue
+    fi
+    if ! resolve_cited_file "$bpath" "$docdir"; then
+      # Until this branch existed, an unresolvable filename-only citation was
+      # dropped here: resolve_cited_file can only fail, and `continue` made the
+      # failure invisible — no WARN, no count, no trace. Count it instead, but do
+      # not fail it: the observed population names upstream library files
+      # (`handler.go:274` from connectrpc) and illustrative runtime artifacts.
+      # Only spans that carry a line number are citations; a bare filename
+      # mention is not a line-number assertion and is not counted here.
+      case "$bpath" in
+        */*) ;;  # path-shaped spans are check 4's job
+        *)
+          if [ -n "$bnums" ] && [[ $bpath =~ $EXT_RE ]] && [ "${basename_count[$bpath]:-0}" = 0 ]; then
+            n_name_unresolved=$((n_name_unresolved + 1))
+            unresolved_name_by_file[$f]=$(( ${unresolved_name_by_file[$f]:-0} + 1 ))
+          fi ;;
+      esac
+      continue
+    fi
+    bcur=$RESOLVED
+    bcur_cell=$bcell
+    # Full paths are check 4's job; this section only validates basenames.
+    case "$bpath" in */*) continue ;; esac
+    [ -n "$bnums" ] || continue
+    n_name=$((n_name + 1))
+    bmax=$(printf '%s' "$bnums" | tr -c '0-9' '\n' | sort -n | tail -1)
+    [ -n "$bmax" ] || continue
+    blen=${file_lines[$bcur]:-}
+    if [ -z "$blen" ]; then blen=$(wc -l < "$bcur"); file_lines[$bcur]=$blen; fi
+    if [ "$bmax" -gt $((blen + 1)) ]; then
+      if [ "$snapshot_frozen" = 1 ]; then
+        n_snapshot_exempt=$((n_snapshot_exempt + 1))
+        snap_file_exempt=$((snap_file_exempt + 1))
+        continue
+      fi
+      bad_name+=("$f:$bline: \`$bspan\` — $bcur has $blen lines")
+    fi
+  # The awk pass also emits the markdown table-cell index (0 outside a table) so
+  # attribution confidence can be judged; see the comment above.
+  done < <(awk '{ s=$0; off=0; tab=(s ~ /^[ \t]*\|/); while ((i=index(substr(s,off+1),"`"))>0) { st=off+i; r=substr(s,st+1); j=index(r,"`"); if (j==0) break; c=0; if (tab) c=split(substr(s,1,st), parts, "|"); printf "%d\t%d\t%s\n", NR, c, substr(r,1,j-1); off=st+j } }' "$f")
+
+  # Every frozen file is named even when it exempted nothing: the exemption
+  # must never be silent, and a zero is information too.
+  if [ "$snapshot_frozen" = 1 ]; then
+    snap_files+=("$f")
+    snap_dates+=("$snapshot_date")
+    snap_counts+=("$snap_file_exempt")
+    snap_reasons+=("$snapshot_reason")
+  fi
 done
 
 # ---------------------------------------------------------------------------
@@ -303,7 +565,6 @@ done
 # a silent pass. Never let either spelling become a silent bypass.
 # ---------------------------------------------------------------------------
 bad_cite_yaml=()
-bad_exempt=()
 n_yaml_cites=0
 # Overridable so the mechanism can be exercised against a fixture: the real file
 # may legitimately have no dangling citation, which would otherwise make this
@@ -376,7 +637,35 @@ echo "check-docs: ${#md[@]} markdown files; ${#targets[@]} Makefile rules; $n_sp
 # Weak guarantee, stated so nobody reads more into the count than it earns: the
 # line-number citations are checked for the LINE EXISTING, not for the cited line
 # actually being about the named symbol (V13).
-echo "check-docs: $n_cites line-number citations checked for line existence ONLY (weak guarantee: cited-line content is not verified)"
+echo "check-docs: $n_cites path:line citations checked for line existence ONLY (weak guarantee: cited-line content is not verified)"
+echo "check-docs: $n_name filename-only citations (Foo.vue:12) resolved by unique basename and checked the same way"
+if [ "$n_bare" -gt 0 ]; then
+  echo "check-docs: $n_bare bare :NNN citations; $n_bare_attr attributed to a file earlier on the same line and checked; $n_bare_unattr unattributed and NOT checked"
+fi
+for idx in "${!snap_files[@]}"; do
+  echo "check-docs: frozen snapshot ${snap_files[$idx]} (frozen ${snap_dates[$idx]}): ${snap_counts[$idx]} line-number citation(s) exempted — ${snap_reasons[$idx]}"
+done
+if [ "$n_bare_unattr" -gt 0 ]; then
+  echo "check-docs: WARN $n_bare_unattr bare :NNN citation(s) could not be attributed to a repository file on their line (no path, or an ambiguous/external one), so they were NOT verified (report only; attribution is same-line only)"
+  if [ "${#unattr_by_file[@]}" -gt 0 ]; then
+    top=$(for k in "${!unattr_by_file[@]}"; do printf '%s\t%s\n' "${unattr_by_file[$k]}" "$k"; done \
+            | sort -rn | head -5 | awk '{printf "%s %s, ", $1, $2}' || true)
+    echo "check-docs:      most: ${top%, }"
+  fi
+fi
+if [ "$n_name_unresolved" -gt 0 ]; then
+  echo "check-docs: WARN $n_name_unresolved filename-only citation(s) (Foo.vue:12) name a basename that matches NO repository file, so they were NOT verified (report only; usually an upstream library file or an illustrative artifact — see the header)"
+  if [ "${#unresolved_name_by_file[@]}" -gt 0 ]; then
+    top=$(for k in "${!unresolved_name_by_file[@]}"; do printf '%s\t%s\n' "${unresolved_name_by_file[$k]}" "$k"; done \
+            | sort -rn | head -5 | awk '{printf "%s %s, ", $1, $2}' || true)
+    echo "check-docs:      most: ${top%, }"
+  fi
+fi
+if [ "${#warn_bare[@]}" -gt 0 ]; then
+  echo "check-docs: WARN ${#warn_bare[@]} bare :NNN citation(s) whose owning path is in another table cell are beyond their file — NOT failed, because the number may refer to the previous cell:"
+  printf '    %s\n' "${warn_bare[@]}"
+fi
+echo "check-docs: $n_snapshot_exempt line-number citation(s) exempted by frozen snapshots in total"
 echo "check-docs: $n_yaml_cites citations checked in $VULN_EXC"
 fail=0
 if [ ${#bad_target[@]} -gt 0 ]; then
@@ -395,12 +684,20 @@ if [ ${#bad_cite[@]} -gt 0 ]; then
   fail=1; echo "  citation beyond the end of its file  ${#bad_cite[@]}"
   printf '    %s\n' "${bad_cite[@]}"
 fi
+if [ ${#bad_bare[@]} -gt 0 ]; then
+  fail=1; echo "  bare :NNN citation beyond the end of the file it is attributed to  ${#bad_bare[@]}"
+  printf '    %s\n' "${bad_bare[@]}"
+fi
+if [ ${#bad_name[@]} -gt 0 ]; then
+  fail=1; echo "  filename-only citation beyond the end of its file  ${#bad_name[@]}"
+  printf '    %s\n' "${bad_name[@]}"
+fi
 if [ ${#bad_cite_yaml[@]} -gt 0 ]; then
   fail=1; echo "  citation in $VULN_EXC with no such path/line  ${#bad_cite_yaml[@]}"
   printf '    %s\n' "${bad_cite_yaml[@]}"
 fi
 if [ ${#bad_exempt[@]} -gt 0 ]; then
-  fail=1; echo "  citation exemption without a reason  ${#bad_exempt[@]}"
+  fail=1; echo "  invalid citation exemption or snapshot marker  ${#bad_exempt[@]}"
   printf '    %s\n' "${bad_exempt[@]}"
 fi
 if [ "$fail" = 1 ]; then
@@ -408,6 +705,8 @@ if [ "$fail" = 1 ]; then
   echo "  Either fix the document, or ship what it promises. When a mention is"
   echo "  intentionally not a repository path, mark that same line with"
   echo "  <!-- check-docs:ignore <what it is> --> and say why."
+  echo "  A frozen snapshot that cannot be corrected declares itself with"
+  echo "  <!-- check-docs:snapshot-frozen date=YYYY-MM-DD reason=\"...\" -->."
   echo "  In $VULN_EXC, use '# check-cite-ignore: <reason>' on the citation's line,"
   echo "  or list the exact path under 'cite_ignore:' with '# <reason>' — the"
   echo "  reason is required in both forms."
