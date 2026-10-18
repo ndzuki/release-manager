@@ -432,9 +432,9 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 
 其他**明确接受**的现状（不是缺陷，是范围选择）：
 
-- dev 环境用固定弱凭据：`deploy/kustomize/base/secret.yaml:15-17` 提交了 dev-only PostgreSQL
-  用户/口令字面量（文件头 `:7-11` 声明仅 dev），同一常量内联在 `deploy/dev/dev.sh:1739,1834,1836`；
-  `http-client.env.json:7-8,29-30` 是占位口令与 `dev-key`/`test-key` 假 API key（`:16` 为假摘要）。
+- dev 环境用固定弱凭据：`deploy/kustomize/base/secret.yaml:16-18` 提交了 dev-only PostgreSQL
+  用户/口令字面量（文件头 `:8-15` 声明仅 dev），同一常量内联在 `deploy/dev/dev.sh:1995,2058,2090-2092`；
+  Kulala 的 `http-client.env.json:2-23` 只有本地 URL 与占位 UUID，**不含口令或 API key**，不要把它误读成凭据文件。
   CI 的 `DEV_PROFILE=ci` 永不把这些写进磁盘（凭据必须由 env 注入，见
   `.github/SECRETS.md` 第 5、7 节；校验实现 `internal/devfixture/files.go:154-168,199-226`）。
   **建议**：给这些文件加「仅 dev」的自动化断言，而不是只靠注释。

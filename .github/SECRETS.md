@@ -142,7 +142,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 | `DEV_TRUST_ROOT_PRIVATE_KEY` | `data/dev-trust-root/dev-trust-root.key`（`internal/devfixture/files.go:22-23,249-252`） | `dev-seed`（`internal/devfixture/files.go:264-289`） |
 | （无 CI 对应） | `data/dev-enrollment-tokens/<clusterID>.token`（`internal/devfixture/files.go:26,324-327`） | seed 的 enrollment 阶段 |
 
-文件名易混点：**`http-client.env.json` 是 Kulala 调试集合的变量文件，与 Actions secrets 无关**，里面的值全是本地占位（`http-client.env.json:7-8,29-30`）；Kulala 侧的 secret 管理器集成方式另见 `kulala-http` 相关集合说明，不在本文范围。
+文件名易混点：**`http-client.env.json` 是 Kulala 调试集合的变量文件，与 Actions secrets 无关**，里面的值只有本地 URL 与占位 UUID（`http-client.env.json:2-23`），不含任何口令或 API key；Kulala 侧的 secret 管理器集成方式另见 `kulala-http` 相关集合说明，不在本文范围。
 
 ### 7.2 其它只在本地/测试出现的 env（不需要配到 GitHub）
 

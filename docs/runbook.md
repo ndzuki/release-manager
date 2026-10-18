@@ -66,7 +66,7 @@
 
 - `/readyz` 是唯一有失败语义的探针：全部门禁通过返回 200，任一失败返回 503 且 body 是 `{"status":"degraded","checks":{"<name>":"<err>"}}`（`internal/handler/ready.go:11-34`）。检查项由各服务贡献：
   - orchestrator：`database`（2s 超时的 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:267-285`）；
-  - auth：`database` + `redis`（`cmd/auth/main.go:68-88`）；
+  - auth：`database` + `redis`（`cmd/auth/main.go:75-95`）；
   - notifier：`database`（`cmd/notifier/main.go:60-71`）；
   - **webhook、notification-sink、operator agent 现已实现 `ReadinessChecks`**（TASK-099；`grep ReadinessChecks cmd/` 命中六个 main）：webhook 检查上游 orchestrator 的 `/readyz`（`cmd/webhook/main.go:137-158`）——**orchestrator NotReady 会级联使 webhook NotReady，这是设计**（它没有转发对象时接客无意义）；operator agent 检查 gateway 会话存活（`cmd/operator/main.go:454-467`，重连窗口内 NotReady 是真实状态）；notification-sink 检查配置可用（`cmd/notification-sink/main.go:151`）。未实现检查的进程仍回 `noop` 恒 200（`internal/app/app.go:134-136,152-158`），但 kustomize 内已无此类服务。
 - `/health`（liveness 目标）**没有任何失败路径**（REQ-099 裁定：可失败性一律归 `/readyz`）：无条件 `WriteHeader(200)` + `{"status":"ok"}`（`internal/handler/health.go:12-28`）。orchestrator 额外挂一个 `gc` 子对象（`internal/app/app.go:139-143` + `cmd/orchestrator/main.go:289-307`，字段 `status`/`last_success_at`/`last_attempt_at`，Unix 秒）。结论：liveness 失败只可能是**进程已死、启动未完成（超出 startupProbe 预算）、或 3 秒内没答完**，不代表依赖健康。
