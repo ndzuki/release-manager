@@ -434,14 +434,29 @@ make migrate DATABASE_DSN='postgres://release_manager:...@postgres:5432/release_
   It is a stopgap for a cluster without a working Ingress controller, not a
   production TLS story: replace it with an Ingress controller and a CA-issued
   certificate before real traffic.
-- The host port mappings `8443:30443` and `8444:30844` bind `0.0.0.0`, so both
-  are reachable from every host interface, not just loopback. If the cluster
-  runs on a networked host, restrict them with
-  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"` and
-  `--port-add "127.0.0.1:8444:30844"` (edit the existing mappings; the bind
-  address is part of the port spec) or keep the host behind a firewall. The
-  operator gateway additionally requires a CA-issued client certificate on
-  every request, so network reachability alone does not grant access.
+- The host port mappings `8443:30443` and `8444:30844` now bind `127.0.0.1`
+  (since 2026-10-18 12:28), not `0.0.0.0`: both are loopback-only, matching
+  `docs/production-deploy.md` §10-5. The operator gateway additionally
+  requires a CA-issued client certificate on every request, so network
+  reachability alone does not grant access.
+  - **Changing an existing mapping is not `--port-add` with another host IP.**
+    It takes **two** `k3d node edit` calls and `--port-delete`, which needs
+    **k3d >= v5.9.0**. `--port-add` alone does not change the existing
+    mapping: k3d's `util.IsPortBindingEqual` treats `""` / `0.0.0.0` /
+    `127.0.0.1` / `localhost` as the same HostIP (`pkg/util/ports.go` in
+    k3d), so `NodeEdit` logs `Skipping existing PortBinding` and continues
+    (`pkg/client/node.go`). From v5.9.0 on, `--port-delete` and `--port-add`
+    also cannot be combined in one invocation: k3d refuses with
+    `Cannot combine port addition and deletion`. That is why narrowing is
+    delete-then-add: `--port-delete "8443:30443"` followed by
+    `--port-add "127.0.0.1:8443:30443"` (same pair for 8444/30844).
+  - **Reopening the bind is a deliberate rollback.** The exact commands, the
+    "this exposes the console and gateway again" warning and the downtime
+    expectation are in `docs/production-deploy.md` §4-⑥. Prefer a reverse
+    proxy on the trusted segment or a host firewall rule over `0.0.0.0`.
+    Each `node edit` replaces the serverlb container; deleting and re-adding
+    8443/8444 took the UI and the gateway down for 27.32 s (2026-10-18
+    12:27:39–12:28:06 +08, 200 ms probe).
 - **Backups are nightly but not off-site.** The CronJob and its PVC live on the
   same node as PostgreSQL; a node loss takes both. Add a copy step to remote
   storage (and back up the three private keys) before relying on this for

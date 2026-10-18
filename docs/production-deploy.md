@@ -330,6 +330,20 @@ k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"
 
 这一步只改 k3d 负载均衡节点，**不重建集群、不动 PVC 与 Secret**。每次 `k3d node edit` 都会替换 serverlb 容器（rename → create → stop old → start new → delete old），因此删除到重新添加的整个窗口里 8443/8444 **同时中断**：2026-10-18 12:27:39.054–12:28:06.378 +08 实测，200 ms 探针的断开时长为 **27.32 s**（K8s 侧 Pod/PVC 不受影响）。收窄后的绑定只有 `127.0.0.1`，不再有 IPv4 `0.0.0.0` 或 IPv6 `[::]` 监听。
 
+**回滚到对外绑定**（确需跨机访问时；k3d ≥ v5.9.0，同样是两步——`--port-delete` 与 `--port-add` 不能混在一条命令里，否则 k3d 直接报 `Cannot combine port addition and deletion`）：
+
+```bash
+# 回滚到对外绑定（k3d >= v5.9.0；两步，不能混用）
+k3d node edit k3d-rm-prod-serverlb \
+  --port-delete "127.0.0.1:8443:30443" --port-delete "127.0.0.1:8444:30844"
+k3d node edit k3d-rm-prod-serverlb \
+  --port-add "8443:30443" --port-add "8444:30844"
+docker port k3d-rm-prod-serverlb
+# 预期：30443/tcp -> 0.0.0.0:8443（HostIP 留空 = 不再限 loopback）
+```
+
+⚠️ **这会重新对外暴露**控制台（8443）与 operator 网关（8444），只在确实需要跨机访问时做，且应优先用前置反代（只监听受信网段）或宿主防火墙限制来源，不要为图方便长期开放。**停机预期**：每次 `node edit` 替换一次 serverlb 容器，收窄时两次合计实测 **27.32 s** 中断（见上）；回滚是同形状的两次编辑，**未单独复测**，按同一量级预期，不要安排在业务时段。回滚后用 `docker port` 复核 HostIP，并从另一台主机实测端口可达性。
+
 ### ⑦ 把宿主 8444 映射到 operator NodePort 30844
 
 客户集群的 operator 走控制面 mTLS 网关（`orchestrator:8084`）。该监听器在 orchestrator **进程内**终止 TLS，并按 client cert 校验每个请求的身份（`ClientAuth: VerifyClientCertIfGiven` + `ClientCAs`），因此**不能**经 edge 反代：`web/nginx.conf` 对 `/operator.v1.` 是明文 HTTP，客户端证书在那一跳就丢了。客户集群又无法访问本 namespace 的 ClusterIP，所以 overlay 给 `operator` Service 单独保留 NodePort `30844`（`deploy/kustomize/production/kustomization.yaml` 的 operator patch），再把宿主端口映射进来：
@@ -947,7 +961,7 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 2. **探针放行依赖 k3s 版本与 Pod CIDR**：`allow-kubelet-probes` 解决了 issue #10030，但 k3s **< v1.28.9 / < v1.29.4** 仍会拦掉探针；换 CIDR 必须改 `production-settings.yaml` 的 `nodeCidr`。本集群 v1.31.5 实测无问题。（⚠️ 这条规则所在的那套策略在本集群是否被**真正执行**，见第 12 条——「探针能通」本身不能证明策略生效。）
 3. **授权策略热重载窗口约 5 s**：auth 的 `authorization.policy_reload_interval: 5s`（`deploy/kustomize/production/configs/auth.production.yaml`）。首次 `Initialize` 后 5 s 内，控制台可能被弹到 `/forbidden`——刷新即可，不是权限配错。
 4. **edge 单副本 + 自签证书**：浏览器需要一次性信任例外；edge 重启期间控制台不可用（后端仍在跑）。且 edge 的 `server_name _` 不区分主机名。
-5. **宿主 8443/8444 已收窄到 `127.0.0.1`（2026-10-18 12:28 +08 实测）**：`docker port` 当前只有 `30443/tcp -> 127.0.0.1:8443` 与 `30844/tcp -> 127.0.0.1:8444`，**无** `0.0.0.0`/`[::]`；从宿主非 loopback 地址 `10.10.33.122` 访问 `https://10.10.33.122:8443` 与 `:8444` 均连接失败（curl 退出码非 0，`http_code=000`），loopback 上仍是 `200`/`401`。收窄用 `k3d node edit --port-delete` 先删 `0.0.0.0` 映射，再 `--port-add "127.0.0.1:..."`；两次 `node edit` 各替换一次 serverlb 容器，**实测 UI 与网关同时中断 27.32 s**（12:27:39.054–12:28:06.378，200 ms 探针）。⚠️ **`--port-delete` 需要 k3d ≥ v5.9.0**：本机 `/usr/bin/k3d` 是 v5.8.3（`node edit --help` 只有 `--port-add`），且 v5.8.3 的 `--port-add "127.0.0.1:8443:30443"` 会被 `util.IsPortBindingEqual` 判重跳过（`127.0.0.1`/`0.0.0.0`/`""` 视为同一 HostIP；源码 `pkg/util/ports.go` + `pkg/client/node.go`），所以**旧版「把映射改成 `127.0.0.1:...`」的建议对已建集群不生效**，本条已更正。**按需对外开放**：前置反代（只监听受信网段）或宿主防火墙放行来源，不要改回 `0.0.0.0`；8444 还有 mTLS 兜底——网络可达不等于通过认证，没有控制面 CA 签发的 client cert 时请求层返回 `401 client certificate required`（§4-⑦）。同一 `docker port` 里的 `6443/tcp -> 0.0.0.0:44609`（k3s API）**未收窄**，不在本次范围。
+5. **宿主 8443/8444 已收窄到 `127.0.0.1`（2026-10-18 12:28 +08 实测）**：`docker port` 当前只有 `30443/tcp -> 127.0.0.1:8443` 与 `30844/tcp -> 127.0.0.1:8444`，**无** `0.0.0.0`/`[::]`；从宿主非 loopback 地址 `10.10.33.122` 访问 `https://10.10.33.122:8443` 与 `:8444` 均连接失败（curl 退出码非 0，`http_code=000`），loopback 上仍是 `200`/`401`。收窄用 `k3d node edit --port-delete` 先删 `0.0.0.0` 映射，再 `--port-add "127.0.0.1:..."`；两次 `node edit` 各替换一次 serverlb 容器，**实测 UI 与网关同时中断 27.32 s**（12:27:39.054–12:28:06.378，200 ms 探针）。⚠️ **`--port-delete` 需要 k3d ≥ v5.9.0**：本机 `/usr/bin/k3d` 是 v5.8.3（`node edit --help` 只有 `--port-add`），且 v5.8.3 的 `--port-add "127.0.0.1:8443:30443"` 会被 `util.IsPortBindingEqual` 判重跳过（`127.0.0.1`/`0.0.0.0`/`""` 视为同一 HostIP；源码 `pkg/util/ports.go` + `pkg/client/node.go`），所以**旧版「把映射改成 `127.0.0.1:...`」的建议对已建集群不生效**，本条已更正。**按需对外开放**：前置反代（只监听受信网段）或宿主防火墙放行来源，不要改回 `0.0.0.0`；确需回滚到对外绑定的命令、暴露面警告与停机口径见 §4-⑥；8444 还有 mTLS 兜底——网络可达不等于通过认证，没有控制面 CA 签发的 client cert 时请求层返回 `401 client certificate required`（§4-⑦）。同一 `docker port` 里的 `6443/tcp -> 0.0.0.0:44609`（k3s API）**未收窄**，不在本次范围。
 6. **无 Vault CA 供给**：ADR-017/ADR-020 的 Vault 路径未接线，CA 与令牌都是静态 Secret（notifier 的 `vault.enabled: false`）。轮换靠手工替换 Secret。
 7. **无 HA / 多副本**：只有 `web` 是 2 副本；api/auth/orchestrator/notifier/webhook 单副本且 PDB `minAvailable: 1` ⇒ `kubectl drain` 会在这些 Pod 上**永久阻塞**（这是刻意设计，别删 PDB 绕过）。也没有多节点/反亲和/跨可用区。
 8. **无镜像签名、无 CI 推送镜像**：`.github/workflows/` 里没有 build/push 这 6 个镜像的 job（`sync-to-gitcode.yaml` 只镜像 git 仓库），镜像靠本机构建 + `k3d image import`；`make docker-push-all` 只在你已运行的 registry 上手工执行。没有 cosign/attestation。
