@@ -5,6 +5,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import type { StuckLockView } from '@/connect/stuck-lock-api';
 import { useAuthStore } from '@/stores/auth';
 import { useStuckLocksStore } from '@/stores/stuckLocks';
@@ -111,7 +112,16 @@ async function submit(): Promise<void> {
       <button type="submit" :disabled="store.loading">查询</button>
     </form>
 
-    <p v-if="store.notice" class="stuck__notice" role="status" data-testid="stuck-notice">{{ store.notice }}</p>
+    <!-- TASK-267: the release confirmation uses the shared Toast primitive. -->
+    <Toast
+      v-if="store.notice"
+      class="stuck__notice"
+      tone="success"
+      testid="stuck-notice"
+      @dismiss="store.notice = ''"
+    >
+      {{ store.notice }}
+    </Toast>
 
     <ErrorState
       v-if="store.failure"

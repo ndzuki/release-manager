@@ -2,6 +2,7 @@
 import { t } from '@/i18n/messages';
 import { ref } from 'vue';
 import ErrorState from '@/components/common/ErrorState.vue';
+import Toast from '@/components/common/Toast.vue';
 import { useArtifactLifecycleStore } from '@/stores/artifactLifecycle';
 
 /*
@@ -66,7 +67,16 @@ async function restore(): Promise<void> {
       </div>
     </header>
 
-    <p v-if="store.notice" class="lifecycle__notice" role="status" data-testid="lifecycle-notice">{{ store.notice }}</p>
+    <!-- TASK-267: GC and restore outcomes use the shared Toast primitive. -->
+    <Toast
+      v-if="store.notice"
+      class="lifecycle__notice"
+      tone="success"
+      testid="lifecycle-notice"
+      @dismiss="store.notice = ''"
+    >
+      {{ store.notice }}
+    </Toast>
 
     <section class="lifecycle__panel">
       <h2>执行保留期 GC</h2>

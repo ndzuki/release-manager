@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
+import Toast from '@/components/common/Toast.vue';
 import ReleaseInventorySkeleton from '@/components/releases/ReleaseInventorySkeleton.vue';
 import ReleaseInventoryTable from '@/components/releases/ReleaseInventoryTable.vue';
 import RollbackReleaseDialog from '@/components/releases/RollbackReleaseDialog.vue';
@@ -133,9 +134,15 @@ function handleSearchInput(event: Event): void {
         <pre>{{ inventory.syncErrorDetails }}</pre>
       </details>
     </div>
-    <div v-else-if="inventory.syncRequestId" class="notice" role="status">
+    <!-- TASK-267: the sync-accepted result uses the shared Toast primitive. -->
+    <Toast
+      v-else-if="inventory.syncRequestId"
+      class="notice"
+      testid="inventory-sync-notice"
+      @dismiss="inventory.syncRequestId = null"
+    >
       同步请求已创建：<code>{{ inventory.syncRequestId }}</code>。完成后请手动刷新。
-    </div>
+    </Toast>
 
     <div class="filters">
       <label>
