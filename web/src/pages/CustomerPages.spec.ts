@@ -187,3 +187,54 @@ describe('customer list status pill', () => {
     expect(wrapper.findAll('.status').map((pill) => pill.text())).toEqual(['生效中', '已停用']);
   });
 });
+
+/*
+ * TASK-334: the detail form's read-only gate used to recognise only `disabled`.
+ * `Customer.status` is a free-form wire string, so a status this console could not
+ * read left the form editable — and UpdateCustomer does not check the status
+ * server-side, so a direct detail URL was a real write entry point for a state
+ * nobody had established. Editability is now three-way: active editable, disabled
+ * read-only, anything else read-only with an explicit notice.
+ */
+describe('customer detail edit gate', () => {
+  async function mountDetailWithStatus(status: 'active' | 'disabled' | 'unknown') {
+    authenticateAdmin();
+    const store = useCustomerStore();
+    store.loading = false;
+    store.current = { id: 'cust-1', name: 'Acme', slug: 'acme', status, version: 1 };
+    store.draft = { name: 'Acme', slug: 'acme', version: 1 };
+    store.loadCustomer = vi.fn().mockResolvedValue(undefined);
+    store.loadHistory = vi.fn().mockResolvedValue(undefined);
+    const wrapper = await mountAt(CustomerDetailPage, '/customers/cust-1');
+    await nextTick();
+    return wrapper;
+  }
+
+  // Positive control: the new gate must not make a readable active customer read-only.
+  it('keeps an active customer editable', async () => {
+    const wrapper = await mountDetailWithStatus('active');
+
+    expect(wrapper.findAll('input').every((input) => input.attributes('disabled') === undefined)).toBe(true);
+    expect(wrapper.text()).toContain('保存修改');
+    expect(wrapper.find('[data-testid="customer-unknown-status"]').exists()).toBe(false);
+  });
+
+  it('keeps a disabled customer read-only with the disabled banner', async () => {
+    const wrapper = await mountDetailWithStatus('disabled');
+
+    expect(wrapper.findAll('input').every((input) => input.attributes('disabled') !== undefined)).toBe(true);
+    expect(wrapper.text()).not.toContain('保存修改');
+    expect(wrapper.text()).toContain('该客户已停用');
+  });
+
+  it('renders a status it cannot read as read-only with an explicit notice', async () => {
+    const wrapper = await mountDetailWithStatus('unknown');
+
+    expect(wrapper.findAll('input').every((input) => input.attributes('disabled') !== undefined)).toBe(true);
+    expect(wrapper.find('form button[type="submit"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('保存修改');
+    const notice = wrapper.get('[data-testid="customer-unknown-status"]');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.text()).toContain('客户状态无法识别');
+  });
+});
