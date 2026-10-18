@@ -2,7 +2,7 @@
 
 本文是 `deploy/kustomize/production` overlay 在**单节点 k3d 集群**上的部署与运维手册：前置条件、必填 Secret、启动顺序、TLS、备份恢复、升级回滚、可观测面与已知限制。manifest 的结构与逐条设计理由不在此重复，见 [production overlay README](../deploy/kustomize/production/README.md)；故障处置的通用路径见 [runbook](runbook.md)。
 
-**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），同日的 TASK-366 增量发布把 tag 前移到 `6f343cf`（§8.6），TASK-368 再前移到 `98f7b52` 并把 schema 推到 36（§8.7），TASK-372 把 tag 对齐到 `f06c6e7`（区间无迁移，schema 仍 36，§8.8）；§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
+**口径**：文中数字来自 2026-10-17 在本机的一次真实部署与演练（集群仍在运行）。2026-10-18 的 TASK-362 全量发布把镜像 tag 前移到 `778ded6`、schema 到 35（§8.5），同日的 TASK-366 增量发布把 tag 前移到 `6f343cf`（§8.6），TASK-368 再前移到 `98f7b52` 并把 schema 推到 36（§8.7），TASK-372 把 tag 对齐到 `f06c6e7`（区间无迁移，schema 仍 36，§8.8），TASK-373 再把 tag 前移到 `ee3afae`（P1 安全修复：定义读路径按组织作用域，区间无迁移，§8.9）；§0/§1 里受影响的实测值已随之更新。凡是「实测」都注明测量方式与时刻；「建议」表示当前**不存在**、需要改动才能获得的能力，不作为排障依据。命令里的 `<...>` 是要替换的占位符。
 
 ## 0. 速览
 
@@ -14,11 +14,11 @@
 | PVC | **5 个全部 `Bound`**（含自动备份卷 `release-manager-backups`） | 同上 + `kubectl -n release-manager get pvc` |
 | 渲染对象 | **45 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 3 PVC / 9 NetworkPolicy / 1 CronJob） | `kubectl kustomize`，纯本地渲染，不接触集群 |
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
-| 镜像 tag | `f06c6e7`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-372，见 §8.8 |
+| 镜像 tag | `ee3afae`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-373，见 §8.9 |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
 | operator 网关 | `https://127.0.0.1:8444`（mTLS；2026-10-18 12:28 起仅 loopback，跨机接入见 §10-5） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
 | 宿主端口绑定 | 8443/8444 → `127.0.0.1`（无 `0.0.0.0`/`[::]`）；6443 API 仍是 `0.0.0.0:44609` | 2026-10-18 12:28 `docker port`，见 §10-5 |
-| schema | `schema_migrations` = `36`, `dirty=f`（2026-10-18 TASK-368 前为 `35`，更前为 `34`；TASK-372 区间无迁移文件，发布前后都是 36） | 只读 SQL，见 §8.7 / §8.8 |
+| schema | `schema_migrations` = `36`, `dirty=f`（2026-10-18 TASK-368 前为 `35`，更前为 `34`；TASK-372 与 TASK-373 区间均无迁移文件，发布前后都是 36） | 只读 SQL，见 §8.7 / §8.8 / §8.9 |
 
 ## 1. 现状与拓扑
 
@@ -26,7 +26,7 @@
 
 | 工作负载 | 类型 | 副本 | 容器端口 | 镜像（实测） | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:f06c6e7`（2026-10-18 TASK-368 前为 `98f7b52`/`6f343cf`/`778ded6`、更前为 `876df9a`，见 §8.5–§8.8 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
+| `api` | Deployment | 1 | 8088 | `localhost:5001/release-api:ee3afae`（2026-10-18 TASK-368 前为 `98f7b52`/`6f343cf`/`778ded6`、更前为 `876df9a`，见 §8.5–§8.9 与 §10-1） | 审计读面；overlay 已注入 `DATABASE_DRIVER=postgres` + `DATABASE_DSN`（Secret），`--db`/PVC 保留给归档；默认组织视图为空仅指 2026-10-17 修好前/无事件时，见 §10-1（含 2026-10-18 时点更正） |
 | `auth` | Deployment | 1 | 8085 | `release-auth` | 唯一持有 JWT **私钥**、Cookie 会话、Redis |
 | `orchestrator` | Deployment | 1 | 8083 / 8084 | `release-orchestrator` | 管理面 8083；operator mTLS 网关 8084（仅两条路由，无 `/health`），经 `operator` Service 的 NodePort 30844 暴露给客户集群 |
 | `notifier` | Deployment | 1 | 8086 | `release-notifier` | 独立库 `release_notifier`；生产 egress allowlist 为空 |
@@ -1173,6 +1173,101 @@ done
 - #450 只验证了 `active` 客户「可编辑」；`disabled` 与 `unknown` 两态在生产没有数据（客户全 `active`），没有造数据去验。
 - Toast 只验证成功路径（`role="status"`）；失败路径不塞 Toast 的既有行为没有在浏览器里造失败复验。
 - 没有重跑 `go test -race ./...`（本次没有改生产代码，CI 的 test/ web / postgres-integration 已覆盖）；没有做 SIGTERM / 故障注入。
+- 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
+
+### 8.9 实测：`ee3afae` 定义读路径租户作用域修复发布（无迁移，2026-10-18，TASK-373）
+
+TASK-372 之后的第五次发布，本次是 **P1 安全修复上线**：把 `origin/main` 从 `f06c6e7` 前移到 `ee3afae`（PR [#454](https://github.com/ndzuki/release-manager/pull/454)，`fix(orchestrator): scope release definition reads to the caller's organization`，TASK-371）。区间只有两个提交：修复提交 `6b282b7` 与合并提交 `ee3afae`。
+
+**变更面**（`git diff --no-ext-diff --name-only f06c6e7..ee3afae`，11 个文件）：`internal/orchestrator/definition.go`（`GetReleaseDefinition` 增加 `authorizeReadDefinition`，不可读一律 `not_found`；`ListReleaseDefinitions` 改走 `ListForOrganization` 并校验 membership）、`internal/store/store.go`（新增共享谓词 `DefinitionVisibleToOrganizationPredicate` 与接口方法 `ListForOrganization`）、`internal/store/{sqlite,postgres}/definitions.go`、5 个测试文件、`docs/api.md`、`storesurface.exceptions.yaml`。`git diff --name-only f06c6e7..ee3afae -- migrations/` ⇒ **0 文件** ⇒ 无迁移，schema 保持 `36|f`，回滚是纯镜像级。
+
+**修复承载服务 = `orchestrator`**。依据：`cmd/orchestrator/main.go:484` 是唯一挂载 `OrchestratorService` 的位置；`cmd/api/main.go:122` 只挂 `AuditService`，`grep -n "NewHandler\|Handle(" cmd/api/main.go` 只有这一行 —— **`cmd/api` 没有挂载 OrchestratorService**。控制台的定义页经 `web` 的 nginx 把 `/orchestrator.v1.` 前缀反代到 `orchestrator:8083`（§1.2），因此本修复只由 `orchestrator` 承载。仍按惯例构建 8 个镜像、滚 6 个服务以保持 tag 一致；其余 5 个服务与 `f06c6e7` 功能等价（区间 Go 改动只在 `internal/orchestrator`；`internal/store` 只新增接口方法与该谓词，没有改动既有查询；`web` 源码零变更）。
+
+**基线（发布前实测，2026-10-18 23:17–23:19 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web` 全部 `:f06c6e7`；`edge=nginx:1.27-alpine` |
+| revision | `api=13`、`auth=5`、`orchestrator=5`、`notifier=5`、`webhook=5`、`web=11`、`edge=1` |
+| Pod | 10 个工作负载 `1/1` + 1 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| schema | `36\|f` |
+| 数据面 | `release_definitions` **5 行**，`owner_organization_id IS NULL` **0 行**；5 行的 customer 都有组织 `2142e4dd-…` 的 `active` 绑定（只读 SQL） |
+| 入口 | `https://localhost:8443/` → 200 |
+| 登录 | 离开 `/login` **849 ms**（真 Chrome，playwright-core + 系统 Chrome） |
+| 定义页 | `/definitions` 200、**5 行**；首个定义的编辑对话框能打开（对话框文本为 `编辑 task372-toast-smoke（版本 3）`，字段区可见） |
+| Get/List RPC 基线 | `GetReleaseDefinition`（`acme-web`）**200**；`ListReleaseDefinitions{includeDisabled:true}` **200 / 5 条**（登录 JWT 直连 Connect，只读） |
+| 6 服务健康 | `/health` 与 `/readyz` 全 200 |
+| 375px | `/definitions` `docScrollWidth = innerWidth = 375` |
+| 回滚基线 | `kubectl -n release-manager get deploy -o yaml` 落盘 `/tmp/rm373/deploys-baseline-f06c6e7.yaml`（945 行） |
+| 迁移差异 | `git diff --name-only f06c6e7..ee3afae -- migrations/` ⇒ **0 文件** |
+
+**构建与导入**
+
+```bash
+git fetch origin && git worktree add /tmp/rm-wt373 -b chore/373-deploy-ee3afae origin/main
+cd /tmp/rm-wt373
+make docker-build-all IMAGE_TAG=ee3afae
+for svc in api auth orchestrator operator webhook notifier notification-sink web; do
+  docker save --platform linux/amd64 -o "/tmp/rm373/$svc-ee3afae.tar" "localhost:5001/release-$svc:ee3afae"
+done
+k3d image import -c rm-prod /tmp/rm373/*-ee3afae.tar 2>&1 | tee /tmp/rm373/import-all.log
+grep ERRO /tmp/rm373/import-all.log      # 0 命中
+```
+
+- 8 个镜像全部 `linux/amd64`；8 个 tar 合计 **118,374,400 B**（≈112.9 MiB）。构建完成于 **23:20:54 +08**（构建日志落盘时刻）；`web` 与 `notification-sink` 的镜像 `Created` 是构建缓存命中（源码零改动），其余 6 个为本次新构建。
+- 导入 **20 s**，输出 `Successfully imported 8 image(s) into 1 cluster(s)`，`grep ERRO` **0 命中**；节点内 `crictl images | grep ee3afae` 可见 8 个 `:ee3afae`。
+
+**滚动（先 `orchestrator`；每步 `set image` → `rollout status --timeout=300s` → 立即验 `/health` + `/readyz`）**
+
+| 服务 | 顺序 | 滚动耗时 | revision | `/health` | `/readyz` |
+| --- | --- | --- | --- | --- | --- |
+| `orchestrator` | 1（承载修复） | **6 s** | 6 | 200 | 200 |
+| `api` | 2 | **6 s** | 14 | 200 | 200 |
+| `auth` | 3 | **6 s** | 6 | 200 | 200 |
+| `notifier` | 4 | **6 s** | 6 | 200 | 200 |
+| `webhook` | 5 | **6 s** | 6 | 200 | 200 |
+| `web` | 6（2 副本） | **8 s** | 12 | 200 | 200 |
+
+- 计时用 `date +%s`（1 s 粒度），六步之和 **38 s**；没有任何一步失败，未触发 `undo`。
+- `orchestrator` 滚完立即做了一次只读 RPC 复测（`Get` 200 / `List` 5 条），确认读路径未回归后才继续滚其余服务。
+
+**⭐ 生产验收（重点是「安全修复没有把功能修坏」）**
+
+1. 服务面：10 个工作负载 Pod `1/1`（`RESTARTS` 全 0）；`https://localhost:8443/` → **200**；6 个服务 `/health` 与 `/readyz` 全 **200**。
+2. schema 仍 **`36|f`**；`release_definitions` **5 行**、`owner_organization_id IS NULL` 仍 **0 行**；无迁移执行痕迹。
+3. ⭐ **定义页没有变空**：
+   - `/definitions` 200、**5 行**（发布前也是 5 行，`definition-row-*` 的 ID 集合逐项相同）；同一组织的既有数据在作用域收紧后仍全部可见。
+   - 首个定义的**编辑对话框可打开**：标题 `编辑 task372-toast-smoke（版本 3）`、6 个输入、4 个有值；`取消` 后行数仍 5，**未提交任何写**。
+   - **Get 读路径单独取证**：控制台编辑器用的是列表行数据（`useDefinitionEditor` 的 `freshDefinition` 取自 store），**不调用** `GetReleaseDefinition`；因此另用登录 JWT 直连 Connect 取证：`GetReleaseDefinition`（`acme-web`）**200**、`ListReleaseDefinitions` **200 / 5 条**，发布前后的 JSON 逐字段一致（`/tmp/rm373-evidence/{baseline,post-deploy}-rpc.json`）。
+   - Release 清单（`/customers/56846183-…/clusters/rm-cust/releases`）200、2 条；`/operations` 200 空态；`/audit` 200、首屏 20 行（库内 `audit_events` 37 → **38**，新增一行是 `orchestrator` 启动的 `cleanup.gc`，`15:21:31Z`）。
+   - 控制台只有登录前 2 条 401（`ValidateToken`/`RefreshToken` 未登录探测）；**未归因 error = 0**。
+4. **跨组织隔离的验证边界（如实）**：生产只有 1 个组织（`2142e4dd-…`），**没有造第二个组织**（会污染生产数据），所以「跨组织读不到」**无法在生产单组织环境实测**。该行为由 CI 端到端回归覆盖：PR #454 的 `internal/orchestrator/definition_read_scope_test.go` 把**真实 auth interceptor**（JWT + Casbin + binding）叠在 handler 前，三个子测试 —— ① 空 filter 的 List 只返回本组织 1 条；② 读外组织 definition ⇒ `not_found`（与不存在的 id 同码）；③ 显式指定外组织 customer ⇒ 在 handler 之上被拒 `permission_denied`。单测另有 `TestGetDefinition_CrossOrganizationIsNotFound`（含「不可读与不存在不可区分」断言）与 `TestGetDefinition_OwnOrganizationSucceeds`。
+5. **375px**：`/definitions` `innerWidth=375`、`docScrollWidth=375`、`bodyScrollWidth=375`，无页面级横向溢出。
+6. 证据：`/tmp/rm373-evidence/{baseline-browser,post-deploy-browser,baseline-rpc,post-deploy-rpc}.json`、`post-deploy-db.txt`、`post-health.txt`、`images-built.txt`、`crictl-ee3afae.txt`；截图 `baseline-01…03`、`post-01…06`。
+
+**发布版本的时点说明（重要）**
+
+- 部署目标按任务口径取 `origin/main = ee3afae`（2026-10-18 23:17 采样）。开工 3 分钟后 PR #453（TASK-372 的文档记录，§8.8）合并，`origin/main` 前进到 `25b1920`。
+- `git diff --name-only ee3afae..25b1920` ⇒ 只有 `docs/production-deploy.md`（+118/−4）⇒ **代码零差异**；本次镜像 `:ee3afae` 与 `25b1920` 的代码等价。本节的文档提交基于 `25b1920`。
+
+**回滚（纯镜像级，不需要任何 schema 操作）**
+
+```bash
+for svc in web webhook notifier orchestrator auth api; do
+  kubectl -n release-manager rollout undo deploy/$svc
+  kubectl -n release-manager rollout status deploy/$svc --timeout=300s
+done
+```
+
+- 上一版都在：`api` rev 13、`auth`/`orchestrator`/`notifier`/`webhook` rev 5、`web` rev 11，镜像全部 `:f06c6e7`。
+- **本次不需要 `migrate … down`**：区间没有迁移文件，`f06c6e7` 与 `ee3afae` 两侧的 schema 都是 `36`；`f06c6e7` 的二进制已在 36 上运行过（§8.8），可直接打开该 schema。回滚同样受 §8.2.1 的 revision 陷阱约束（`undo` 是再开一个 revision）。
+
+**本次边界（未验证，别外推）**
+
+- 只验证了单组织生产数据下的「同一组织全部可见」；跨组织拒绝只有 CI 单测证据，没有生产双组织实测（见上）。
+- 控制台的编辑对话框走列表数据而非 `GetReleaseDefinition`；「Get 仍可用」由直连 RPC 取证，不是浏览器对话框取证。
+- `api`/`auth`/`notifier`/`webhook` 只做了滚动与健康检查；它们与 `f06c6e7` 功能等价（区间无相关代码改动），没有逐页复验。
+- 没有做故障注入、SIGTERM、并发/长连接压测；没有重跑 `go test -race ./...`（本次没有改生产代码，CI 已覆盖 PR #454）。
 - 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
 
 ## 9. 可观测
