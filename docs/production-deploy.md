@@ -16,7 +16,8 @@
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
 | 镜像 tag | `a6707b6`（`git rev-parse --short HEAD`） | `kubectl get pods -o jsonpath=…image`、`crictl images` |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
-| operator 网关 | `https://<宿主地址>:8444`（mTLS，客户端必须带控制面 CA 签发的证书） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
+| operator 网关 | `https://127.0.0.1:8444`（mTLS；2026-10-18 12:28 起仅 loopback，跨机接入见 §10-5） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
+| 宿主端口绑定 | 8443/8444 → `127.0.0.1`（无 `0.0.0.0`/`[::]`）；6443 API 仍是 `0.0.0.0:44609` | 2026-10-18 12:28 `docker port`，见 §10-5 |
 | schema | `schema_migrations` = `34`, `dirty=f` | 只读 SQL，见 §11 |
 
 ## 1. 现状与拓扑
@@ -58,6 +59,8 @@
       → Service operator（NodePort 30844，ClusterIP 10.43.196.238）
       → orchestrator pod:8084：进程内终止 mTLS，按 client cert 校验请求身份
 ```
+
+> 2026-10-18 12:28 起宿主 8443/8444 只绑 `127.0.0.1`：上面两条「宿主」链路只在本机成立；客户集群接入需先把 8444 暴露到受信网段（反代/防火墙，见 §10-5）。
 
 要点：
 
@@ -313,25 +316,33 @@ kubectl -n release-manager rollout status deployment/auth --timeout=300s
 ### ⑥ 把宿主 8443 映射到 NodePort 30443
 
 ```bash
-k3d node edit k3d-rm-prod-serverlb --port-add "8443:30443"
+# 新集群（该端口尚无映射）：直接加，显式绑 loopback
+k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"
 docker port k3d-rm-prod-serverlb
-# 30443/tcp -> 0.0.0.0:8443
+# 30443/tcp -> 127.0.0.1:8443
+
+# 已有 0.0.0.0 映射时（本集群 2026-10-18 12:27 之前的形态）：先删再加。
+# --port-delete 需要 k3d >= v5.9.0；v5.8.3 没有该 flag，且它的
+# --port-add "127.0.0.1:8443:30443" 会被 IsPortBindingEqual 判重静默跳过。
+k3d node edit k3d-rm-prod-serverlb --port-delete "8443:30443"
+k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"
 ```
 
-这一步只改 k3d 负载均衡节点，**不重建集群、不动 PVC 与 Secret**。实测映射同时出现在 IPv4 与 IPv6（`[::]:8443`）。
+这一步只改 k3d 负载均衡节点，**不重建集群、不动 PVC 与 Secret**。每次 `k3d node edit` 都会替换 serverlb 容器（rename → create → stop old → start new → delete old），因此删除到重新添加的整个窗口里 8443/8444 **同时中断**：2026-10-18 12:27:39.054–12:28:06.378 +08 实测，200 ms 探针的断开时长为 **27.32 s**（K8s 侧 Pod/PVC 不受影响）。收窄后的绑定只有 `127.0.0.1`，不再有 IPv4 `0.0.0.0` 或 IPv6 `[::]` 监听。
 
 ### ⑦ 把宿主 8444 映射到 operator NodePort 30844
 
 客户集群的 operator 走控制面 mTLS 网关（`orchestrator:8084`）。该监听器在 orchestrator **进程内**终止 TLS，并按 client cert 校验每个请求的身份（`ClientAuth: VerifyClientCertIfGiven` + `ClientCAs`），因此**不能**经 edge 反代：`web/nginx.conf` 对 `/operator.v1.` 是明文 HTTP，客户端证书在那一跳就丢了。客户集群又无法访问本 namespace 的 ClusterIP，所以 overlay 给 `operator` Service 单独保留 NodePort `30844`（`deploy/kustomize/production/kustomization.yaml` 的 operator patch），再把宿主端口映射进来：
 
 ```bash
-k3d node edit k3d-rm-prod-serverlb --port-add "8444:30844"
+k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8444:30844"
 docker port k3d-rm-prod-serverlb
-# 30844/tcp -> 0.0.0.0:8444
-# 30844/tcp -> [::]:8444
+# 30844/tcp -> 127.0.0.1:8444
 ```
 
-这一步与 ⑥ 一样只改 k3d 负载均衡节点，**不重建集群、不动 PVC 与 Secret**。
+已有 `0.0.0.0` 映射时的先删再加（`--port-delete`，k3d ≥ v5.9.0）、容器替换与停机口径同 ⑥。
+
+> ⚠️ 2026-10-18 起 8444 只绑 `127.0.0.1` ⇒ **客户集群不能直连**（包括 §12 的 `host.k3d.internal` 路径）。要接客户集群，先按 §10-5 用反代/防火墙把网关暴露给受信网段，不要改回 `0.0.0.0`。
 
 客户集群侧把 `--orchestrator-addr` 指向宿主：
 
@@ -373,7 +384,7 @@ rm -f /tmp/rm-ca.crt
 
 **重启口径（带时间窗，采样 2026-10-18 00:47–00:49 +08）**：本次 Service 变更 apply 前后，**变更窗口内未新增重启**——10/10 Pod 全程 `Running/Ready`，Pod 名与 IP 未变。四个 Pod 显示的 `RESTARTS=2` 是**变更之前**的启动期崩溃，与本变更无关：`lastState.terminated.reason=Error`、`exitCode=1`，最后终止时刻 `2026-10-17T10:57:15Z`（auth/notifier/orchestrator）与 `2026-10-17T14:36:54Z`（api），各与自己的 Pod 创建时刻相差 <2 min，均早于变更窗口。复核采样 2026-10-18 01:16 +08 计数与 `lastState` 未变。所以**别把「10/10 Ready」读成「从未重启」**：判断有无新重启要看 `RESTARTS` 计数与 `lastState.terminated.finishedAt`，不能只看 `Ready`。
 
-⚠️ **安全面**：映射绑定 `0.0.0.0`（`[::]` 同），宿主所有网卡可达。只给本机/本网段用时改成 `127.0.0.1:8444:30844`，或在宿主防火墙限制来源；网关自身的 mTLS 仍是最终门槛。
+⚠️ **安全面**：宿主 8443/8444 自 2026-10-18 起只绑 `127.0.0.1`（§10-5），非 loopback 地址连不上；要跨机接入时**不要**改回 `0.0.0.0`，应前置反代或宿主防火墙放行受信来源。网关自身的 mTLS 仍是最终门槛。
 
 ## 5. kubeconfig 坑（实测）
 
@@ -936,7 +947,7 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 2. **探针放行依赖 k3s 版本与 Pod CIDR**：`allow-kubelet-probes` 解决了 issue #10030，但 k3s **< v1.28.9 / < v1.29.4** 仍会拦掉探针；换 CIDR 必须改 `production-settings.yaml` 的 `nodeCidr`。本集群 v1.31.5 实测无问题。（⚠️ 这条规则所在的那套策略在本集群是否被**真正执行**，见第 12 条——「探针能通」本身不能证明策略生效。）
 3. **授权策略热重载窗口约 5 s**：auth 的 `authorization.policy_reload_interval: 5s`（`deploy/kustomize/production/configs/auth.production.yaml`）。首次 `Initialize` 后 5 s 内，控制台可能被弹到 `/forbidden`——刷新即可，不是权限配错。
 4. **edge 单副本 + 自签证书**：浏览器需要一次性信任例外；edge 重启期间控制台不可用（后端仍在跑）。且 edge 的 `server_name _` 不区分主机名。
-5. **宿主 8443 与 8444 都绑定 `0.0.0.0`**：实测 `docker port` 同时出现 `0.0.0.0:8443`/`[::]:8443` 与 `0.0.0.0:8444`/`[::]:8444`，同网段任何人都能访问。只给本机用时把映射改成 `127.0.0.1:8443:30443` / `127.0.0.1:8444:30844`。8444 是 mTLS 网关：网络可达不等于通过认证，没有控制面 CA 签发的 client cert 时请求层返回 `401 client certificate required`（§4-⑦）。
+5. **宿主 8443/8444 已收窄到 `127.0.0.1`（2026-10-18 12:28 +08 实测）**：`docker port` 当前只有 `30443/tcp -> 127.0.0.1:8443` 与 `30844/tcp -> 127.0.0.1:8444`，**无** `0.0.0.0`/`[::]`；从宿主非 loopback 地址 `10.10.33.122` 访问 `https://10.10.33.122:8443` 与 `:8444` 均连接失败（curl 退出码非 0，`http_code=000`），loopback 上仍是 `200`/`401`。收窄用 `k3d node edit --port-delete` 先删 `0.0.0.0` 映射，再 `--port-add "127.0.0.1:..."`；两次 `node edit` 各替换一次 serverlb 容器，**实测 UI 与网关同时中断 27.32 s**（12:27:39.054–12:28:06.378，200 ms 探针）。⚠️ **`--port-delete` 需要 k3d ≥ v5.9.0**：本机 `/usr/bin/k3d` 是 v5.8.3（`node edit --help` 只有 `--port-add`），且 v5.8.3 的 `--port-add "127.0.0.1:8443:30443"` 会被 `util.IsPortBindingEqual` 判重跳过（`127.0.0.1`/`0.0.0.0`/`""` 视为同一 HostIP；源码 `pkg/util/ports.go` + `pkg/client/node.go`），所以**旧版「把映射改成 `127.0.0.1:...`」的建议对已建集群不生效**，本条已更正。**按需对外开放**：前置反代（只监听受信网段）或宿主防火墙放行来源，不要改回 `0.0.0.0`；8444 还有 mTLS 兜底——网络可达不等于通过认证，没有控制面 CA 签发的 client cert 时请求层返回 `401 client certificate required`（§4-⑦）。同一 `docker port` 里的 `6443/tcp -> 0.0.0.0:44609`（k3s API）**未收窄**，不在本次范围。
 6. **无 Vault CA 供给**：ADR-017/ADR-020 的 Vault 路径未接线，CA 与令牌都是静态 Secret（notifier 的 `vault.enabled: false`）。轮换靠手工替换 Secret。
 7. **无 HA / 多副本**：只有 `web` 是 2 副本；api/auth/orchestrator/notifier/webhook 单副本且 PDB `minAvailable: 1` ⇒ `kubectl drain` 会在这些 Pod 上**永久阻塞**（这是刻意设计，别删 PDB 绕过）。也没有多节点/反亲和/跨可用区。
 8. **无镜像签名、无 CI 推送镜像**：`.github/workflows/` 里没有 build/push 这 6 个镜像的 job（`sync-to-gitcode.yaml` 只镜像 git 仓库），镜像靠本机构建 + `k3d image import`；`make docker-push-all` 只在你已运行的 registry 上手工执行。没有 cosign/attestation。
@@ -978,6 +989,8 @@ enroll → 会话 → `release_inventory`（含 000024 身份四列 + 000030 观
 入口（宿主 `8444` → NodePort `30844` → `orchestrator:8084` 的 mTLS 网关、为什么不能走明文反代）见 §4-⑦；
 客户集群侧需用 `hostAliases` 把 SAN 名指到宿主，见 §12.2。
 
+> ⚠️ 2026-10-18 12:28 起宿主 8444 只绑 `127.0.0.1` ⇒ **客户集群（包括下面的 `host.k3d.internal` 路径）连不上**。执行本节前先按 §10-5 用反代/防火墙把网关暴露给客户集群所在网段。§12.5 记录的实测是在 8444 仍绑 `0.0.0.0` 时做的（2026-10-18 当天早些时候），不代表当前绑定。
+
 ### 12.2 SAN 约束：必须用 `hostAliases`（最容易踩的坑）
 
 网关服务端证书的 SAN 是**硬编码**的，没有配置项、也不含任何 IP（`cmd/orchestrator/main.go:173-176`）：
@@ -1013,7 +1026,9 @@ serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
 ```bash
 kubectl -n release-manager-customer run nettest --image=busybox:1.36.1 --restart=Never --command \
   -- sh -c 'nc -zv -w3 host.k3d.internal 8444; sleep 3600'
-kubectl -n release-manager-customer logs nettest   # 期望 "host.k3d.internal (172.24.0.1:8444) open"
+kubectl -n release-manager-customer logs nettest
+# 2026-10-18 早些时候（8444 仍绑 0.0.0.0）实测 "host.k3d.internal (172.24.0.1:8444) open"；
+# 8444 收窄到 loopback 后直接跑会 connection refused，先按 §12.1 暴露网关。
 ```
 
 控制面证书链校验：

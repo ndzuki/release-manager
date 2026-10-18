@@ -119,10 +119,23 @@ Map a host port onto the edge NodePort. This edits the k3d load balancer node;
 it does not rebuild the cluster and does not touch PVCs or Secrets:
 
 ```bash
-k3d node edit k3d-rm-prod-serverlb --port-add "8443:30443"
+# New cluster (no mapping yet): bind loopback explicitly.
+k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"
 docker port k3d-rm-prod-serverlb
-# 30443/tcp -> 0.0.0.0:8443
+# 30443/tcp -> 127.0.0.1:8443
+
+# An existing 0.0.0.0 mapping (this cluster before 2026-10-18 12:27) must be
+# removed first: --port-delete needs k3d >= v5.9.0. On v5.8.3 the narrow
+# --port-add is silently skipped because IsPortBindingEqual treats
+# 127.0.0.1 / 0.0.0.0 / "" as the same HostIP.
+k3d node edit k3d-rm-prod-serverlb --port-delete "8443:30443"
+k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8443:30443"
 ```
+
+Each `node edit` replaces the serverlb container (rename → create → stop old
+→ start new → delete old). Removing and re-adding 8443/8444 therefore took the
+UI and the gateway down for **27.32 s** on 2026-10-18 (200 ms probe,
+12:27:39.054–12:28:06.378 +08); pods and PVCs were untouched.
 
 k3d rewrites the load balancer's nginx config to forward `30443` to
 `k3d-rm-prod-server-0:30443`, so the host reaches the NodePort. `edge` is one
@@ -165,11 +178,13 @@ second Service in this overlay that keeps a NodePort (30844, see
 `kustomization.yaml`), and the k3d load balancer maps it onto the host:
 
 ```bash
-k3d node edit k3d-rm-prod-serverlb --port-add "8444:30844"
+k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8444:30844"
 docker port k3d-rm-prod-serverlb
-# 30844/tcp -> 0.0.0.0:8444
-# 30844/tcp -> [::]:8444
+# 30844/tcp -> 127.0.0.1:8444
 ```
+
+If the port is already mapped to `0.0.0.0`, delete it first (`--port-delete`,
+k3d >= v5.9.0) as in the edge section above.
 
 A customer-cluster operator then points at the host:
 
@@ -185,10 +200,12 @@ What the path does and does not guarantee:
   certificate signed by the control-plane CA the handshake may complete
   (`VerifyClientCertIfGiven`) but every request is rejected by the identity
   interceptor. The network path being open is not authentication.
-- The mapping binds `0.0.0.0` (and `[::]`), so every host interface can reach
-  it. Restrict it to loopback with
-  `k3d node edit k3d-rm-prod-serverlb --port-add "127.0.0.1:8444:30844"` when
-  only local operators need it.
+- The mapping binds `127.0.0.1` only (since 2026-10-18; see
+  `docs/production-deploy.md` §10-5). A customer-cluster operator therefore
+  cannot reach it directly — including the `host.k3d.internal` path used by the
+  demo. Expose the gateway to the customer network with a reverse proxy or a
+  host firewall rule instead of re-binding `0.0.0.0`; the mTLS
+  client-certificate check remains the authentication boundary.
 - NetworkPolicy: `allow-agent-gateway` opens TCP 8084 on the orchestrator pod
   only. NetworkPolicy matches the post-DNAT pod port, so the rule names 8084,
   not 30844 — the same shape as `allow-edge-nodeport` naming the edge pod's

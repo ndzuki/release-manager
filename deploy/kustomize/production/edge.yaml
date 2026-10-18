@@ -155,7 +155,7 @@ spec:
   # Rationale: there is no functioning Ingress controller in this cluster
   # (Traefik's svclb cannot pull klipper-lb), so the TLS terminator has to be
   # reachable from the host by k3d's port mapping. NodePort 30443 is bound to
-  # host 8443 with `k3d node edit ... --port-add 8443:30443` (README.md).
+  # host 8443 with `k3d node edit ... --port-add "127.0.0.1:8443:30443"` (README.md).
   # The operator mTLS gateway is the other one (kustomization.yaml, 30844).
   type: NodePort
   selector:
