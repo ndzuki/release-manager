@@ -106,4 +106,19 @@ describe('OrganizationMemberTable', () => {
     expect(wrapper.get<HTMLSelectElement>('select[id="role-viewer-1"]').element.disabled).toBe(true);
     expect(wrapper.get<HTMLButtonElement>('button').element.disabled).toBe(true);
   });
+
+  /*
+   * TASK-367: a member row (UUID, role, version, timestamp, role select, remove
+   * button) is wider than 375px. The fix is the same labelled, focusable scroll
+   * region as the other wide tables; the page must not scroll sideways instead.
+   */
+  it('wraps the table in a labelled, focusable horizontal scroll region', () => {
+    const wrapper = mountTable([member()]);
+
+    const region = wrapper.get('[data-testid="organization-table-scroll"]');
+    expect(region.attributes('role')).toBe('region');
+    expect(region.attributes('aria-label')).toBe('组织成员表格（可横向滚动）');
+    expect(region.attributes('tabindex')).toBe('0');
+    expect(region.find('table.organization__table').exists()).toBe(true);
+  });
 });

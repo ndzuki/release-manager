@@ -114,4 +114,20 @@ describe('DefinitionTable', () => {
 
     expect(wrapper.get<HTMLButtonElement>('[data-testid="definition-disable-def-1"]').element.disabled).toBe(true);
   });
+
+  /*
+   * TASK-367: eight columns overflow 375px. The fix is a labelled, focusable
+   * scroll region around the table — not a page-level overflow-x:hidden, which
+   * would only hide the columns. Pin the wrapper's contract so a later refactor
+   * cannot drop the keyboard path or the accessible name.
+   */
+  it('wraps the table in a labelled, focusable horizontal scroll region', () => {
+    const wrapper = mountTable([definition()]);
+
+    const region = wrapper.get('[data-testid="definitions-table-scroll"]');
+    expect(region.attributes('role')).toBe('region');
+    expect(region.attributes('aria-label')).toBe('发布定义表格（可横向滚动）');
+    expect(region.attributes('tabindex')).toBe('0');
+    expect(region.find('table.definitions__table').exists()).toBe(true);
+  });
 });

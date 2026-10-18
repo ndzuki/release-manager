@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import { ORGANIZATION_ROLES, type OrganizationMemberView, type OrganizationRole } from '@/connect/organization-api';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 
@@ -26,7 +27,19 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <table class="organization__table">
+  <!--
+    TASK-367: the member row (UUID + role + version + timestamp + role select and
+    remove button) does not fit 375px. Same labelled, focusable scroll region as the
+    other wide tables in the console; the page itself must not scroll sideways.
+  -->
+  <div
+    class="organization__scroll"
+    role="region"
+    :aria-label="t('organization.table.scrollRegion')"
+    tabindex="0"
+    data-testid="organization-table-scroll"
+  >
+    <table class="organization__table">
     <thead>
       <tr>
         <th scope="col">用户</th>
@@ -61,10 +74,23 @@ const emit = defineEmits<{
         <td v-else class="organization__readonly">只读</td>
       </tr>
     </tbody>
-  </table>
+    </table>
+  </div>
 </template>
 
 <style scoped>
+.organization__scroll {
+  overflow-x: auto;
+  /* Keep the scroll container from passing the table's min-content width back to
+     the page grid, which is what made the whole document scroll sideways. */
+  min-width: 0;
+  /* The per-row `visually-hidden` <label> is absolutely positioned; without a
+     positioned ancestor its containing block is the viewport, so its static
+     position inside the scrolled row leaked past the scroll region (measured
+     418px document width with a 375px viewport, 2026-10-18). */
+  position: relative;
+}
+
 .organization__table {
   width: 100%;
   border-collapse: collapse;
