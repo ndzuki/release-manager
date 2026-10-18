@@ -259,6 +259,11 @@ func (s *orchSvc) Shutdown(ctx context.Context) error {
 }
 
 func (s *orchSvc) Close() error {
+	// Stop and drain the authorization policy reloader before the store closes:
+	// a reload still in flight would otherwise race the pool teardown.
+	if s.enforcer != nil {
+		s.enforcer.Close()
+	}
 	if s.store == nil {
 		return nil
 	}
