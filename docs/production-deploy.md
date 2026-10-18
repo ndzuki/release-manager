@@ -1096,8 +1096,9 @@ kubectl --kubeconfig <cust> -n release-manager-customer create secret generic op
 helm --kubeconfig <cust> install release-fixture ./deploy/fixtures/chart -n e2e-release --create-namespace
 ```
 
-**5) plan → apply → observe。** `CreateReleaseDefinition`（`actor.organization` **必须**带上，否则后续
-ValuesRevision 批准会被 `release_definition_owner_unresolved` 拒绝）→ `CreateValuesRevision` →
+**5) plan → apply → observe。** `CreateReleaseDefinition`（owner 取自已验证的登录身份，请求里的
+`actor.organization` 只是兼容字段：非空且与身份不同会以 `invalid_argument` 拒绝；漏传不会再写出
+NULL owner，也不会拖到批准时才暴露）→ `CreateValuesRevision` →
 `SubmitValuesRevision` → 由**另一个用户** `ApproveValuesRevision`（创建者不能批准自己的 revision）→
 `CreateOperation`（`INSTALL`）→ `GetOperation` 读 `preflightResult`。
 
