@@ -109,6 +109,26 @@ func TestReachableFromOrganizationBranches(t *testing.T) {
 		assert.False(t, f.reachable(t, bundle.ID, "org-revoked"), "a revoked binding is not a relationship")
 	})
 
+	// TASK-369: the owner branch is DATA OWNERSHIP, not a live binding grant, so revoking
+	// the owner's own binding does not erase the relation. This is pinned on purpose: the
+	// branch looks like a "sticky authorization" bug, and the tempting "fix" (making the
+	// owner branch require an active binding too) is wrong -- every entry point already
+	// requires the active binding (authorizeDefinition / AuthorizeWrite), so the AND lives
+	// in the gates, not in this relation. See docs/architecture.md 1.5.1.
+	t.Run("the owner keeps the relation after its own binding is revoked", func(t *testing.T) {
+		f := seedReachabilityFixture(t)
+		bundle := f.bundle(t)
+		err := setCurrentBundleDirect(context.Background(), f.store, f.definition.ID, bundle.ID)
+		require.NoError(t, err)
+		require.NoError(t, f.store.Bindings().Create(context.Background(), &store.OrgCustomerBinding{
+			ID: uuid.NewString(), OrgID: f.orgID, CustomerID: f.customerID, Status: store.BindingRevoked,
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		}))
+
+		assert.True(t, f.reachable(t, bundle.ID, f.orgID),
+			"owner_organization_id records ownership; revoking the binding does not remove it (TASK-369)")
+	})
+
 	// This is the branch a review showed had no test: a bundle no definition points at is
 	// still reachable when an operation of one of the organization's definitions used it.
 	t.Run("an operation of the definition used the bundle", func(t *testing.T) {
