@@ -237,7 +237,10 @@ describe('OperationTimeline keyboard and live-region contract (UX-020)', () => {
  * W15 (TASK-325): the stream retains up to 500 entries. Above the virtual-list
  * threshold only the rows around the viewport are rendered, and the list reports the
  * full size through aria-setsize/aria-posinset so the position stays truthful for
- * assistive technology. Below the threshold the DOM must stay exactly as before.
+ * assistive technology. At or below the threshold nothing is windowed: behavior and
+ * layout match the previous version, but not byte-for-byte DOM — the scroll wrapper is
+ * now always present (an unstyled `<div>` around the `<ol>`), it just carries no
+ * styles, no tab stop and no scrollbar below the threshold.
  */
 describe('OperationTimeline list capacity (W15)', () => {
   function manyEntries(count: number) {
@@ -256,6 +259,32 @@ describe('OperationTimeline list capacity (W15)', () => {
     expect(viewport.classes()).not.toContain('operation-timeline__viewport--virtual');
     expect(viewport.attributes('tabindex')).toBeUndefined();
     expect(wrapper.get('.timeline-entry').attributes('aria-setsize')).toBeUndefined();
+  });
+
+  it('flips to a window exactly at 61 entries, keeping all 60 below it', () => {
+    // The threshold is inclusive on the "render everything" side: `virtualized` is
+    // `length > 60`, so an off-by-one here would silently re-introduce the render cost
+    // one row early or keep 61 rows live. Both sides are asserted against the real
+    // component, i.e. the production default, not an injected threshold.
+    const atThreshold = mount(OperationTimeline, {
+      props: { entries: manyEntries(60), operation: operation(), streamStatus: 'connected' },
+    });
+    const atThresholdViewport = atThreshold.get('.operation-timeline__viewport');
+    expect(atThreshold.findAll('.timeline-entry')).toHaveLength(60);
+    expect(atThresholdViewport.classes()).not.toContain('operation-timeline__viewport--virtual');
+    expect(atThresholdViewport.attributes('role')).toBeUndefined();
+    expect(atThresholdViewport.attributes('tabindex')).toBeUndefined();
+    atThreshold.unmount();
+
+    const overThreshold = mount(OperationTimeline, {
+      props: { entries: manyEntries(61), operation: operation(), streamStatus: 'connected' },
+    });
+    const overThresholdViewport = overThreshold.get('.operation-timeline__viewport');
+    expect(overThresholdViewport.classes()).toContain('operation-timeline__viewport--virtual');
+    expect(overThresholdViewport.attributes('role')).toBe('region');
+    expect(overThresholdViewport.attributes('tabindex')).toBe('0');
+    expect(overThreshold.findAll('.timeline-entry').length).toBeLessThan(61);
+    expect(overThreshold.findAll('.timeline-entry').length).toBeGreaterThan(0);
   });
 
   it('windows a long timeline, keeps the rows positioned and reports the full size', () => {

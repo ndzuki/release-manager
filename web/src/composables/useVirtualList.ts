@@ -22,16 +22,33 @@ import {
  *
  * Deliberate limits, so nobody mistakes it for the missing pagination:
  *  - the payload is still loaded whole; this fixes rendering, not transfer size;
- *  - rows shorter than `threshold` render normally, so small lists pay no layout
- *    cost and keep today's exact DOM (no nested scrollbar, no extra tab stop);
+ *  - a list of `threshold` rows or fewer is not windowed at all, so it behaves and
+ *    lays out as before: no nested scrollbar, no extra tab stop. It is *not* a
+ *    byte-identical DOM, though: the scroll wrapper is always in the tree (the
+ *    spacers are padding on the `<ol>`, and padding defeats a `max-height` on the
+ *    padded list itself), so a short list carries one extra unstyled `<div>`;
+ *  - the threshold is inclusive: 60 rows are all in the DOM, 61 is the first
+ *    windowed count (`virtualized` is `length > threshold`);
  *  - the list keeps its `<ol>`/`<li>` structure and the rows keep their real heights
  *    (measured, not assumed), so list semantics and screen-reader positions survive.
  *
- * Off-window rows are not rendered, so anything focusable inside a row (the timeline's
- * copy-ID buttons) is out of the tab order until its row scrolls in. That is why the
- * convergence task list — checkboxes and Continue buttons on every row, i.e. the list
- * is *meant* to be traversed by keyboard — is deliberately not virtualized here: it
- * needs the server cursor instead.
+ * Accessibility cost, stated rather than left implicit: off-window rows are not
+ * rendered, so anything focusable inside one leaves the tab order and the
+ * accessibility tree until its row scrolls in. In the timeline that is only the
+ * ERROR row's copy-Operation-ID / copy-Request-ID buttons (`TimelineEntryItem.vue`);
+ * a customer-history row holds no control, and W14 already removed the per-row tab
+ * stop from the timeline `<li>`, so this is not the 500-stops-per-page case it
+ * replaced. Mitigation: past the threshold the wrapper becomes a named, focusable
+ * region (`role="region"` + `tabindex="0"`), so a keyboard user focuses it once and
+ * arrow-scrolls the row they need into the window. WCAG 2.1.1 is met through that
+ * route, not by every row being tabbable at all times.
+ *
+ * That is a different call from the convergence task list, which is deliberately not
+ * virtualized: its checkboxes and Continue buttons sit on *every* row, and the list is
+ * meant to be traversed row by row by keyboard, so windowing would remove the primary
+ * interaction from most rows. The difference is one of degree, not principle — here
+ * only ERROR rows carry controls, there every row does — and the task list still needs
+ * the server cursor.
  */
 
 /** Row height assumed until ResizeObserver reports the real one. */
