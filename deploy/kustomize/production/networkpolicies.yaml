@@ -106,8 +106,9 @@ spec:
         - protocol: TCP
           port: 8087
 ---
-# The host reaches the TLS edge through NodePort 30443 (mapped to host 8443 by
-# `k3d node edit ... --port-add`, README.md). NodePort traffic is DNAT'ed and
+# The host reaches the TLS edge through NodePort 30443 (mapped to
+# 127.0.0.1:8443 by `k3d node edit ... --port-add`, README.md). NodePort
+# traffic is DNAT'ed and
 # arrives from a node address, not from a namespace or a pod that a selector
 # could name, so this rule intentionally has no `from` clause: it opens TCP 443
 # on the edge pod and nothing else. Everything else in the namespace stays
@@ -238,8 +239,8 @@ spec:
           port: 6379
 ---
 # Customer-cluster agents enroll and stream commands over mTLS on pod port
-# 8084. They enter through Service operator's NodePort 30844 (mapped to host
-# 8444, kustomization.yaml), which DNATs to this pod port; NetworkPolicy
+# 8084. They enter through Service operator's NodePort 30844 (mapped to
+# 127.0.0.1:8444, kustomization.yaml), which DNATs to this pod port; NetworkPolicy
 # evaluates the post-DNAT port, so this rule names 8084 exactly as
 # allow-edge-nodeport names the edge pod's 443 and not its 30443.
 # The source is a node address (or the external client address, depending on

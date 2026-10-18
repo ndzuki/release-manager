@@ -404,7 +404,7 @@ patches:
   # /operator.v1. as plain HTTP and would strip the client certificate.
   # NodePort -> pod DNAT is TCP-passthrough, so the TLS handshake still ends in
   # the orchestrator and the request-level cert check still applies.
-  # Host 8444 -> NodePort 30844 (k3d node edit --port-add "8444:30844").
+  # Host 8444 -> NodePort 30844 (k3d node edit --port-add "127.0.0.1:8444:30844").
   - target:
       kind: Service
       name: operator
