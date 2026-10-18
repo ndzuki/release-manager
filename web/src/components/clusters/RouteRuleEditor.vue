@@ -101,13 +101,15 @@ function isConflictingRule(rule: RouteRuleInput, index: number): boolean {
           </template>
         </FormField>
 
-        <FormField :label="t('cluster.rules.provider')">
-          <template #default="{ id }">
+        <FormField :label="t('cluster.rules.provider')" :error="fieldError(index, 'provider')">
+          <template #default="{ id, describedBy, invalid }">
             <input
               :id="id"
               v-model="rule.provider"
               :readonly="readonly"
               :placeholder="t('cluster.rules.providerPlaceholder')"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
             />
           </template>
         </FormField>

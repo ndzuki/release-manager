@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, shallowRef, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import Toast from '@/components/common/Toast.vue';
 import OperatorFilters from '@/components/operators/OperatorFilters.vue';
 import OperatorPollingNotice from '@/components/operators/OperatorPollingNotice.vue';
 import OperatorTable from '@/components/operators/OperatorTable.vue';
@@ -24,6 +25,12 @@ const customerId = computed(() => String(route.params.customerId));
 const { heartbeatIntervalSeconds } = storeToRefs(store);
 const clusterId = computed(() => String(route.params.clusterId));
 const selectedForRevoke = shallowRef<OperatorSummary | null>(null);
+/*
+ * W10 (UX-041): revoking is destructive and irreversible, and the list used to
+ * simply re-render with a "revoked" badge. The toast names the operator so the
+ * operator sees which identity the confirmation applied to.
+ */
+const revokeNotice = ref<string | null>(null);
 
 async function refresh(): Promise<boolean> {
   return store.loadList(customerId.value, clusterId.value);
@@ -35,9 +42,11 @@ async function handleFilters(filters: OperatorListFilters): Promise<void> {
 }
 
 async function confirmRevoke(reason: string): Promise<void> {
-  if (!selectedForRevoke.value) return;
-  if (await store.revokeOperator(customerId.value, clusterId.value, selectedForRevoke.value.id, reason)) {
+  const target = selectedForRevoke.value;
+  if (!target) return;
+  if (await store.revokeOperator(customerId.value, clusterId.value, target.id, reason)) {
     selectedForRevoke.value = null;
+    revokeNotice.value = t('operator.revoke.success', { name: target.name || target.id });
   }
 }
 
@@ -52,6 +61,13 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
 
 <template>
   <section class="page">
+    <Toast
+      v-if="revokeNotice"
+      tone="success"
+      testid="operator-list-notice"
+      @dismiss="revokeNotice = null"
+    >{{ revokeNotice }}</Toast>
+
     <OperatorPollingNotice :stopped="pollingStopped" @resume="resumePolling" />
 
     <header class="page__header">

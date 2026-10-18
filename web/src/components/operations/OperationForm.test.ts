@@ -220,3 +220,86 @@ describe('OperationForm field errors are described, not named', () => {
     expectErrorDescribesNotNames(wrapper, '回滚目标 Revision', '请填写回滚目标 Revision');
   });
 });
+
+/*
+ * W12 (UX-053). The form used to validate only on submit, and a refused submit left
+ * the errors somewhere below the fold with focus still on the submit button. These
+ * cases pin the two new guarantees: a field reports as soon as the operator leaves
+ * it, and a refused submit moves focus to the first control that is actually invalid.
+ *
+ * `attachTo: document.body` is what makes `document.activeElement` meaningful —
+ * Vue Test Utils does not mount into the document by default.
+ */
+async function mountAttachedForm() {
+  const store = useOperationFormStore();
+  await store.setScope('def-1');
+  const wrapper = mount(OperationForm, { attachTo: document.body });
+  await flushPromises();
+  return { wrapper, store };
+}
+
+describe('OperationForm validates on blur and focuses the first error (W12)', () => {
+  it('reports the field error as soon as the operator leaves the control', async () => {
+    const { wrapper } = await mountAttachedForm();
+    const bundle = wrapper.get('[data-testid="operation-bundle"]');
+    expect(wrapper.findAll('.form-field__error')).toHaveLength(0);
+
+    await bundle.trigger('blur');
+
+    const errors = wrapper.findAll('.form-field__error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.text()).toBe('请选择制品');
+    expect(bundle.attributes('aria-invalid')).toBe('true');
+    wrapper.unmount();
+  });
+
+  it('clears the error on the next blur once the field is valid again', async () => {
+    const { wrapper } = await mountAttachedForm();
+    const bundle = wrapper.get('[data-testid="operation-bundle"]');
+
+    await bundle.trigger('blur');
+    expect(wrapper.findAll('.form-field__error')).toHaveLength(1);
+
+    await bundle.setValue('bundle-1');
+    await bundle.trigger('blur');
+    expect(wrapper.findAll('.form-field__error')).toHaveLength(0);
+    expect(bundle.attributes('aria-invalid')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('validates a patch row on blur without waiting for submit', async () => {
+    const { wrapper, store } = await mountForm();
+    store.fields.patch.push({ path: 'not a path', value: 'v2', kind: 'LITERAL' });
+    await flushPromises();
+
+    await wrapper.get('input[aria-label="Patch 1 path"]').trigger('blur');
+
+    expect(wrapper.get('.patch-editor__row-error').text()).toBe('Patch 路径格式错误');
+    expect(wrapper.get('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('true');
+    wrapper.unmount();
+  });
+
+  it('moves focus to the first invalid control when submit is refused', async () => {
+    const { wrapper, store } = await mountAttachedForm();
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(store.step).toBe('form');
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="operation-bundle"]').element);
+    wrapper.unmount();
+  });
+
+  it('does not move focus when the form is valid (the step advances instead)', async () => {
+    const { wrapper, store } = await mountAttachedForm();
+    await wrapper.get('[data-testid="operation-bundle"]').setValue('bundle-1');
+    await wrapper.get('[data-testid="operation-values-revision"]').setValue('vr-1');
+
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+
+    expect(store.step).toBe('confirm');
+    expect(document.activeElement).not.toBe(wrapper.get('[data-testid="operation-bundle"]').element);
+    wrapper.unmount();
+  });
+});

@@ -27,14 +27,14 @@ const emit = defineEmits<{
       </thead>
       <tbody>
         <tr v-for="operator in operators" :key="operator.id">
-          <td><button class="link" type="button" @click="emit('open', operator.id)">{{ operator.name || operator.id }}</button></td>
+          <td class="operators__name"><button class="link" type="button" @click="emit('open', operator.id)">{{ operator.name || operator.id }}</button></td>
           <td><OperatorStatusBadge :lifecycle-status="operator.lifecycleStatus" /></td>
           <td>
             <OperatorStatusBadge :session-status="operator.sessionStatus" />
             <small v-if="operatorSessionReasonLabel(operator.sessionStatusReason)">{{ operatorSessionReasonLabel(operator.sessionStatusReason) }}</small>
           </td>
-          <td>{{ formatOperatorTime(operator.lastHeartbeat) }}</td>
-          <td>{{ formatOperatorTime(operator.registeredAt) }}</td>
+          <td class="operators__time">{{ formatOperatorTime(operator.lastHeartbeat) }}</td>
+          <td class="operators__time">{{ formatOperatorTime(operator.registeredAt) }}</td>
           <td><button v-if="canRevoke && operator.lifecycleStatus !== 'revoked'" type="button" class="danger" @click="emit('revoke', operator)">{{ t('operator.table.revoke') }}</button></td>
         </tr>
       </tbody>
@@ -45,7 +45,16 @@ const emit = defineEmits<{
 <style scoped>
 .table-wrap { overflow-x: auto; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .operators { width: 100%; border-collapse: collapse; }
-.operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; white-space: nowrap; }
+.operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+/*
+ * W21 (UX-031): the blanket `white-space: nowrap` on every cell forced the table to
+ * its fully unwrapped width, so a long operator name or id could only be read by
+ * scrolling sideways. The name now wraps anywhere (an id has no break opportunity);
+ * the two timestamps keep `nowrap` because a date split across two lines reads as two
+ * unrelated values. Status badges and the action cell are short enough to wrap.
+ */
+.operators__name { overflow-wrap: anywhere; }
+.operators__time { white-space: nowrap; }
 .operators th { background: var(--color-bg); color: var(--color-muted-strong); font-size: var(--font-size-sm); text-transform: uppercase; }
 .operators small { display: block; max-width: 18rem; margin-top: 0.35rem; color: var(--color-muted); white-space: normal; }
 .link { border: 0; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 700; }

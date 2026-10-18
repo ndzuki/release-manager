@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -132,5 +134,80 @@ describe('ClusterDetailPage disable confirmation (TASK-281)', () => {
     expect(disableCluster).toHaveBeenCalledWith('cluster-1');
 
     wrapper.unmount();
+  });
+});
+
+/*
+ * W10 (UX-041): the destructive path ended silently — the dialog closed and the
+ * badge changed, which is exactly the feedback an operator cannot rely on after an
+ * irreversible action. The refusal was worse: `store.disable` rethrows and nothing
+ * caught it, so a refused disable produced an unhandled rejection and no on-screen
+ * reason. Both outcomes now render through the shared Toast primitive.
+ */
+describe('ClusterDetailPage disable feedback (W10)', () => {
+  async function confirmDisableAsAdmin(): Promise<ReturnType<typeof mountPage>> {
+    useAuthStore().$patch({
+      user: {
+        $typeName: 'auth.v1.SessionUser',
+        id: 'admin-1',
+        username: 'admin',
+        roles: ['release_admin'],
+        activeOrgId: 'org-1',
+      },
+    });
+    const wrapper = await mountPage();
+    await wrapper.findAll('button').find((button) => button.text() === '停用集群')?.trigger('click');
+    clickButton(dialogPanel(), '确认停用');
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('announces a successful disable with a polite success toast', async () => {
+    const wrapper = await confirmDisableAsAdmin();
+
+    const notice = wrapper.get('[data-testid="cluster-detail-notice"]');
+    expect(notice.attributes('role')).toBe('status');
+    expect(notice.text()).toContain('已停用集群 staging');
+    wrapper.unmount();
+  });
+
+  it('shows the refusal instead of leaving an unhandled rejection', async () => {
+    vi.mocked(disableCluster).mockRejectedValue(new Error('cluster disable refused'));
+    const wrapper = await confirmDisableAsAdmin();
+
+    const notice = wrapper.get('[data-testid="cluster-detail-notice"]');
+    // Assertive: a refused destructive action must not be announced politely.
+    expect(notice.attributes('role')).toBe('alert');
+    expect(notice.text()).toContain('cluster disable refused');
+    wrapper.unmount();
+  });
+
+  it('dismisses the notice without touching the dialog state', async () => {
+    const wrapper = await confirmDisableAsAdmin();
+    expect(wrapper.find('[data-testid="cluster-detail-notice"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="cluster-detail-notice-dismiss"]').trigger('click');
+
+    expect(wrapper.find('[data-testid="cluster-detail-notice"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+/*
+ * W21 (UX-032). The three-column summary had no breakpoint, so at a narrow width the
+ * three tracks were squeezed to their min-content and the page scrolled sideways.
+ * happy-dom does not evaluate scoped CSS (no layout, no media queries), so this reads
+ * the SFC's stylesheet: the console's shared 48rem breakpoint must collapse the grid
+ * to one column.
+ */
+describe('ClusterDetailPage narrow summary (W21)', () => {
+  it('collapses the three-column summary to one column below 48rem', () => {
+    const source = readFileSync(resolve(__dirname, 'ClusterDetailPage.vue'), 'utf8');
+    const style = source.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    expect(style).toMatch(/\.summary\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*1fr\)/);
+    const narrow = style.match(/@media \(max-width: 48rem\)\s*\{([\s\S]*?)\n\}/);
+    expect(narrow, 'no 48rem breakpoint in ClusterDetailPage.vue').not.toBeNull();
+    expect(narrow![1]).toMatch(/\.summary\s*\{\s*grid-template-columns:\s*1fr/);
   });
 });

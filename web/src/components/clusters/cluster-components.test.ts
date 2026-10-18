@@ -126,17 +126,25 @@ describe('RouteRuleEditor branches the review found uncovered', () => {
 });
 
 /*
- * TASK-271 (A11y subset ②): each of the three error-bearing rule fields renders its
+ * TASK-271 (A11y subset ②): each of the error-bearing rule fields renders its
  * violation OUTSIDE the `label for`, referenced by aria-describedby. Inside the old
  * wrapping <label> the same text was part of the control's accessible NAME, so a
  * describedby pointing at it would have announced the message twice. Both halves are
  * asserted per field: the name carries only the label copy, the description carries the
  * error.
+ *
+ * W12 (UX-028) added the fourth field: the provider input had neither `:error` nor
+ * `aria-invalid`, so a provider violation had nowhere to render at all. The server
+ * never emits one today — `UpdateCluster` only reports `routes[N].sourcePrefix`/`.mode`
+ * and `ClusterRoute` carries no provider — so the violation below is injected. That
+ * wiring/server split is why UX-028 is recorded as partial in
+ * docs/delivery-evidence.md.
  */
 describe('RouteRuleEditor field errors are described, not named', () => {
   // FormField roots in DOM order: mode, provider, sourcePrefix, targetPrefix.
   const cases = [
     { field: 'mode', description: '模式不受支持', control: 'select', fieldIndex: 0 },
+    { field: 'provider', description: 'provider 不受支持', control: 'input', fieldIndex: 1 },
     { field: 'sourcePrefix', description: '来源前缀与另一条规则冲突', control: 'input', fieldIndex: 2 },
     { field: 'targetPrefix', description: '目标前缀不是合法的 URI', control: 'input', fieldIndex: 3 },
   ] as const;
