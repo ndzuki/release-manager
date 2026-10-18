@@ -809,6 +809,14 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 - 带矛盾的 `actor.organization` → **400 invalid_argument**：`actor.organization "00000000-…" does not match the authenticated organization "2142e4dd-…"`，且不落库。
 - 存量里 `owner_organization_id` 为空的两条（`acme-web`、`release-fixture`）是修复前的死定义，本次**没有改**。测试对象已用 `DisableReleaseDefinition` 置成 `disabled`（默认列表不再返回），但**它仍留在库里**，是本任务的已知残留。
 
+**#432 收口（TASK-359，`migrations/000036_release_definition_owner_backfill.up.sql`）**
+
+上面那两条 NULL owner 残留的后继处理，取证与判定记录在 TASK-359 卡面；这里只留部署侧结论：
+
+- **回填**：`000036` 把仍为 NULL 的 definition 回填为客户**唯一 active 组织绑定**（`org_customer_bindings` 里该 customer 恰好一条 `status='active'`，且该组织 `status='active'`）。对生产库这两行而言唯一可回填到的组织是 `2142e4dd-…`（全库只有一个组织；两个 customer 各自只有这一条 active 绑定；`acme-web` 创建前 1 秒存在 admin 的 `auth_sessions`，`release-fixture` 创建前 2 秒 admin 建了 bundle）。**没有**新授予任何该组织此前不通过 active binding 就拥有的授权：owner 的唯一用途就是 `checkApprovalAuth` 的组织比对。
+- **不猜测**：若某 customer 有 0 条或多条 active 绑定、或绑定组织已 disabled，该 definition **保持 NULL**，仍以 `failed_precondition: release_definition_owner_unresolved` 拒绝 Submit/Approve（REQ-068 既定语义）。`000036` 的 down 是空注释（数据修复，NULL 就是缺陷本身，无信息可恢复）。
+- **不加 NOT NULL（TASK-359 结论）**：REQ-068 的前置条件是"管理流程补齐后"，而当前**没有任何 RPC/store 路径**能在创建之后写 `owner_organization_id`，NOT NULL 会让不可回填的行在产品内永久不可修复；同时 SQLite 无法就地加 NOT NULL，`release_definitions` 有 6 张子表（含 `operations`），重建代价与风险超出本 P2 数据修复的范围。列因此在两个引擎上都保持可空，由 `internal/store/sqlite/db.go` 的同构 UPDATE 与服务端创建路径（TASK-357，创建时组织为空即拒绝）共同守护。
+
 **回滚预案（本次未执行）**
 
 ```bash
