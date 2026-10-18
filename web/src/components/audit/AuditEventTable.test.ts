@@ -133,3 +133,30 @@ describe('AuditEventTable pager', () => {
     expect(pagerButtons(wrapper)[1]!.attributes('disabled')).toBeUndefined();
   });
 });
+
+/*
+ * UX-017/UX-018 (W14): the table had no caption (so no accessible name and no
+ * table announcement), header cells carried no scope, and a focusable row
+ * answered Enter but not Space — while Space is the key screen-reader users are
+ * told to press to activate a row.
+ */
+describe('AuditEventTable accessibility (UX-017/018)', () => {
+  it('names the table and binds every header to its column', () => {
+    const wrapper = mountTable();
+    const caption = wrapper.get('table caption');
+    expect(caption.text()).toBe(t('audit.table.results'));
+    const headers = wrapper.findAll('thead th');
+    expect(headers.length).toBeGreaterThan(0);
+    for (const header of headers) expect(header.attributes('scope')).toBe('col');
+  });
+
+  it('selects a row with Space, not only Enter', async () => {
+    const wrapper = mountTable();
+    const row = wrapper.get('tbody tr');
+    await row.trigger('keydown', { key: ' ' });
+    expect(wrapper.emitted('select')).toHaveLength(1);
+
+    await row.trigger('keydown', { key: 'Enter' });
+    expect(wrapper.emitted('select')).toHaveLength(2);
+  });
+});

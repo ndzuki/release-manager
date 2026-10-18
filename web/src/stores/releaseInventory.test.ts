@@ -1,4 +1,5 @@
 import { create, fromBinary } from '@bufbuild/protobuf';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { orchestratorClient } from '@/connect/client';
@@ -105,5 +106,79 @@ describe('release inventory status mapping (UX-061)', () => {
     expect(listReleases).toHaveBeenLastCalledWith(
       expect.objectContaining({ statusFilter: ReleaseInventoryStatus.ACTIVE }),
     );
+  });
+});
+
+/*
+ * UX-057 (W16): refresh was reachable from four controls and every click issued
+ * its own ListReleases; a double click could resolve out of order. One in-flight
+ * refresh must serve every caller.
+ */
+describe('release inventory refresh de-duplication (UX-057)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    listReleases.mockReset();
+  });
+
+  it('shares one request between concurrent refreshes', async () => {
+    let resolveRequest: ((value: unknown) => void) | undefined;
+    listReleases.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRequest = resolve as (value: unknown) => void;
+      }) as never,
+    );
+    const store = useReleaseInventoryStore();
+    store.setScope('customer-1', 'cluster-1');
+
+    const first = store.refresh();
+    const second = store.refresh();
+    expect(listReleases).toHaveBeenCalledTimes(1);
+
+    resolveRequest?.(create(ListReleasesResponseSchema, { totalCount: 1 }));
+    await Promise.all([first, second]);
+
+    // The shared request is complete, so the NEXT refresh is a new request.
+    listReleases.mockResolvedValue(create(ListReleasesResponseSchema, { totalCount: 2 }));
+    await store.refresh();
+    expect(listReleases).toHaveBeenCalledTimes(2);
+  });
+});
+
+/*
+ * UX-015 / H4: a failed read must leave the user a correlation id. The copy
+ * alone ("网络错误…") is not reportable; ErrorState renders `details`, so the
+ * store has to carry the correlation line.
+ */
+describe('release inventory failure correlation (UX-015)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    listReleases.mockReset();
+  });
+
+  it('keeps the request id of a failed read in errorDetails', async () => {
+    listReleases.mockRejectedValue(
+      new ConnectError('boom', Code.Unavailable, { 'X-Request-ID': 'req-42' }),
+    );
+    const store = useReleaseInventoryStore();
+    store.setScope('customer-1', 'cluster-1');
+
+    await store.load();
+
+    expect(store.error).toBe('网络错误，请检查连接后重试');
+    expect(store.errorDetails).toContain('requestId=req-42');
+    expect(store.errorDetails).toContain('procedure=ListReleases');
+  });
+
+  it('clears the correlation line on the next successful read', async () => {
+    listReleases.mockRejectedValueOnce(new ConnectError('boom', Code.Unavailable, { 'X-Request-ID': 'req-42' }));
+    listReleases.mockResolvedValue(create(ListReleasesResponseSchema, { totalCount: 1 }));
+    const store = useReleaseInventoryStore();
+    store.setScope('customer-1', 'cluster-1');
+
+    await store.load();
+    expect(store.errorDetails).toContain('requestId=req-42');
+
+    await store.refresh();
+    expect(store.errorDetails).toBeNull();
   });
 });

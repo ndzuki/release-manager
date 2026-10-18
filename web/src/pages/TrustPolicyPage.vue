@@ -10,6 +10,7 @@ import LoadingState from '@/components/common/LoadingState.vue';
 import TrustRootEditor from '@/components/trust/TrustRootEditor.vue';
 import { TRUST_ENVIRONMENTS, allowedActions, type TrustAction, type TrustRootView } from '@/connect/trust-api';
 import { useTrustPolicyStore } from '@/stores/trustPolicy';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Signature trust roots (REQ-012 / REQ-043, A5 of the UX plan).
@@ -83,10 +84,6 @@ async function confirm(): Promise<void> {
 const confirmTitle = computed(() =>
   pendingAction.value ? t('trust.confirm.title', { keyId: pendingAction.value.root.keyId }) : '',
 );
-
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
-}
 
 </script>
 

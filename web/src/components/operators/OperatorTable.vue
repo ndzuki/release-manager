@@ -19,8 +19,11 @@ const emit = defineEmits<{
 <template>
   <div class="table-wrap">
     <table class="operators">
+      <!-- UX-017 (W14): caption + column scopes, so the table has a name and
+           every header is bound to its column. -->
+      <caption class="visually-hidden">{{ t('operator.table.caption') }}</caption>
       <thead>
-        <tr><th>{{ t('operator.table.name') }}</th><th>{{ t('operator.filters.lifecycle') }}</th><th>{{ t('operator.filters.session') }}</th><th>{{ t('operator.table.lastHeartbeat') }}</th><th>{{ t('operator.table.registered') }}</th><th>{{ t('operator.table.actions') }}</th></tr>
+        <tr><th scope="col">{{ t('operator.table.name') }}</th><th scope="col">{{ t('operator.filters.lifecycle') }}</th><th scope="col">{{ t('operator.filters.session') }}</th><th scope="col">{{ t('operator.table.lastHeartbeat') }}</th><th scope="col">{{ t('operator.table.registered') }}</th><th scope="col">{{ t('operator.table.actions') }}</th></tr>
       </thead>
       <tbody>
         <tr v-for="operator in operators" :key="operator.id">

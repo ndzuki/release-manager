@@ -58,6 +58,21 @@ Object.defineProperty(window, 'localStorage', {
   },
 });
 
+function writeDraft(
+  key: string,
+  document: string,
+  options: { parentRevisionId?: string | null; savedAt?: number } = {},
+): void {
+  window.localStorage.setItem(
+    key,
+    JSON.stringify({
+      document,
+      savedAt: options.savedAt ?? Date.now(),
+      parentRevisionId: options.parentRevisionId ?? null,
+    }),
+  );
+}
+
 describe('values editor store', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -69,15 +84,113 @@ describe('values editor store', () => {
   });
 
   it('restores a safe local draft and recomputes its diff', async () => {
-    window.localStorage.setItem('values_draft:definition-1', 'replicas: 3');
     const store = useValuesEditorStore();
-    store.resetScope('definition-1', 'cluster-1');
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    writeDraft(store.draftKey, 'replicas: 3', { parentRevisionId: 'parent-1' });
 
     await store.load();
 
     expect(store.restoredDraft).toBe(true);
     expect(store.editorContent).toBe('replicas: 3');
     expect(store.diffResult.hasChanges).toBe(true);
+    expect(store.draftSavedAt).toBe(Date.now());
+    expect(store.draftNotice).toBeNull();
+  });
+
+  /*
+   * UX-008 (W19): a draft written against a DIFFERENT approved parent is not
+   * "unsaved work" any more — approving the new parent moved the baseline, so
+   * silently restoring would make the user edit a stale branch of the chain.
+   */
+  it('refuses a draft whose parent revision changed and says so', async () => {
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    writeDraft(store.draftKey, 'replicas: 3', { parentRevisionId: 'parent-old' });
+
+    await store.load();
+
+    expect(store.restoredDraft).toBe(false);
+    expect(store.editorContent).toBe('{"replicas":2}');
+    expect(store.draftNotice).toContain('父 Revision 已变更');
+    expect(window.localStorage.getItem(store.draftKey)).toBeNull();
+  });
+
+  it('discards a draft older than the TTL instead of adopting it', async () => {
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    writeDraft(store.draftKey, 'replicas: 3', {
+      parentRevisionId: 'parent-1',
+      savedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
+    });
+
+    await store.load();
+
+    expect(store.restoredDraft).toBe(false);
+    expect(store.draftNotice).toContain('超过 7 天');
+    expect(window.localStorage.getItem(store.draftKey)).toBeNull();
+  });
+
+  it('ignores the unscoped legacy draft format', async () => {
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    // The old format was bare YAML under `values_draft:<definitionId>`; the new
+    // reader treats anything that is not a record as unreadable and drops it.
+    window.localStorage.setItem(store.draftKey, 'replicas: 3');
+
+    await store.load();
+
+    expect(store.restoredDraft).toBe(false);
+    expect(store.draftNotice).toContain('无法识别');
+    expect(window.localStorage.getItem(store.draftKey)).toBeNull();
+  });
+
+  it('scopes the draft slot by organization, customer and cluster', async () => {
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    writeDraft(store.draftKey, 'replicas: 3', { parentRevisionId: 'parent-1' });
+    const firstKey = store.draftKey;
+
+    // same definition id, another cluster: a different slot, so no draft there.
+    store.resetScope('definition-1', 'cluster-2', 'customer-1', 'org-1');
+    await store.load();
+    expect(store.restoredDraft).toBe(false);
+    expect(store.draftKey).not.toBe(firstKey);
+
+    // and the original slot still restores.
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    await store.load();
+    expect(store.restoredDraft).toBe(true);
+    expect(store.editorContent).toBe('replicas: 3');
+  });
+
+  it('drops the local draft on request and returns to the server content', async () => {
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    writeDraft(store.draftKey, 'replicas: 9', { parentRevisionId: 'parent-1' });
+    await store.load();
+    expect(store.restoredDraft).toBe(true);
+
+    store.discardLocalDraft();
+
+    expect(store.restoredDraft).toBe(false);
+    expect(store.editorContent).toBe('{"replicas":2}');
+    expect(store.draftNotice).toContain('已丢弃');
+    expect(window.localStorage.getItem(store.draftKey)).toBeNull();
+  });
+
+  it('reports a draft it could not persist instead of pretending it did', async () => {
+    const store = useValuesEditorStore();
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    try {
+      store.setEditorContent('replicas: 4');
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(store.draftSaveFailed).toBe(true);
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it('uses the safe empty template when no revision exists', async () => {
@@ -243,7 +356,6 @@ describe('values editor store', () => {
   });
 
   it('loads the prepared convergence snapshot and never reads browser drafts (AC-058-35/48)', async () => {
-    window.localStorage.setItem('values_draft:definition-1', 'local: stale-draft');
     vi.mocked(getPrepareSession).mockResolvedValue({
       releaseDefinitionId: 'definition-1',
       parentRevisionId: 'parent-1',
@@ -255,7 +367,8 @@ describe('values editor store', () => {
       parentVersion: 3n,
     });
     const store = useValuesEditorStore();
-    store.resetScope('definition-1', 'cluster-1');
+    store.resetScope('definition-1', 'cluster-1', 'customer-1', 'org-1');
+    writeDraft(store.draftKey, 'local: stale-draft', { parentRevisionId: 'parent-1' });
 
     await store.loadConvergence('token-1');
 
@@ -264,7 +377,8 @@ describe('values editor store', () => {
     expect(store.lockedPaths).toEqual(['replicas']);
     expect(store.preparedTaskIds).toEqual(['t1', 't2']);
     expect(store.restoredDraft).toBe(false);
-    expect(window.localStorage.getItem(store.draftKey)).toBe('local: stale-draft');
+    // Prepared payloads never touch browser storage and never adopt a local one.
+    expect(window.localStorage.getItem(store.draftKey)).not.toBeNull();
   });
 
   it('creates a convergence draft with the token and consumes it once (AC-058-36/38)', async () => {

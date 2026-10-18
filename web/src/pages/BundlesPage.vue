@@ -6,6 +6,7 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import { BUNDLE_STATUSES } from '@/connect/bundle-api';
 import { useBundlesStore } from '@/stores/bundles';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Release bundle catalogue (A8 of the UX plan's missing surfaces).
@@ -34,9 +35,6 @@ function applyFilters(): void {
   });
 }
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
-}
 </script>
 
 <template>

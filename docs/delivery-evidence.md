@@ -322,12 +322,12 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | W11 | ~~统一确认/对话框残留：`EnrollmentTokenModal` 的 Esc、`DisableCustomerDialog` 的勾选复位~~ **2026-10-17 已交付（TASK-325）**：两条均改为 ✅（见 §3.2 的 `UX-021`/`UX-039` 行）；专项回归见 §9 | UX-039、UX-021 | **0**（无需再做） | 间接（H3 相关） |
 | W12 | 表单错误可见性：无 index 的 patch 错误、provider 违规、blur 校验与提交后聚焦 | UX-024、UX-028、UX-053 | **S** | 否 |
 | W13 | ~~假阳性显示：`ReleaseStatusBadge` 未知状态显示为 Active~~ **2026-10-17 已修**：未知/`UNSPECIFIED`/字段缺失一律渲染 catalog 中性「未知」态，store 映射的 `default` 同步改为 `'unknown'`（证据见 §3.2 的 UX-061 行） | UX-061 | **S**（已完成） | 否 |
-| W14 | 键盘/读屏：状态组件固定 id、Audit 详情无 Esc、时间线 500 个 tab 停靠点、表格 caption | UX-037、UX-019、UX-020、UX-017 | **M** | 间接（H5 相关） |
+| W14 | ~~键盘/读屏：状态组件固定 id、Audit 详情无 Esc、时间线 500 个 tab 停靠点、表格 caption~~ **2026-10-18 已交付（W1 批次）**：三态组件改用 `useId()`（`web/src/components/common/EmptyState.vue:25`、`ErrorState.vue:27`、`ForbiddenState.vue:25`）；Audit 详情面板支持 Esc（`web/src/components/audit/AuditEventDetail.vue:36`）；时间线条目移出 tab 序并给列表加 `aria-live`（`web/src/components/operations/TimelineEntryItem.vue:50`、`OperationTimeline.vue:52`）；三张表补 caption/scope，审计行补 Space（`web/src/components/audit/AuditEventTable.vue:50`、`OperatorTable.vue:24`、`ConvergenceTaskList.vue:23`） | UX-037、UX-019、UX-020、UX-017 | **M**（已完成） | 间接（H5 相关） |
 | W15 | 列表容量：三处无分页/虚拟滚动 + Inventory 表窄屏横滚 | UX-065、UX-073、UX-035 | **M** | 否 |
-| W16 | 请求风暴：Audit 每次按键 `router.replace`、Inventory 刷新未去重 | UX-011、UX-057 | **S** | 否 |
-| W17 | 双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 **13 个文件**（口径：`grep -rl 'function formatTimestamp' web/src`，命中全部为 `pages/` 或 `components/`、无测试文件；采样 2026-10-17 15:51 (+08:00)；原写「6 份」为漂移，真实情况在扩大） | UX-076、UX-071、UX-077 | **M** | 否 |
+| W16 | ~~请求风暴：Audit 每次按键 `router.replace`、Inventory 刷新未去重~~ **2026-10-18 已交付（W1 批次）**：Audit 的 URL 镜像改为 300 ms debounce（`web/src/pages/AuditPage.vue:100`），submit/reset 立即写；Inventory 的并发刷新共享一个请求（`web/src/stores/releaseInventory.ts:212`），四处入口不再把 MouseEvent 当参数（`web/src/pages/ReleaseInventoryPage.vue`） | UX-011、UX-057 | **S**（已完成） | 否 |
+| W17 | ~~双份/漂移：时间格式（`toLocaleString`）与 `formatTimestamp` 复制 **13 个文件**~~ **2026-10-18 已交付（W1 批次）**：单一实现 `web/src/utils/formatTimestamp.ts:25`；13 处本地副本删除、3 处 `toLocaleString()` 改走同一实现，调用点保留各自的 fallback 词与秒精度（`{ fallback }` / `{ style }`）。复算口径：`grep -rl 'function formatTimestamp' web/src` ⇒ **1**（仅该工具文件） | UX-076、UX-071、UX-077 | **M**（已完成） | 否 |
 | W18 | 巨型组件再拆分（`OperationDetailPage` 481 行） | UX-070 | **M** | 否 |
-| W19 | 草稿安全：Values 草稿无 scope/TTL/时间戳 | UX-008 | **S** | 否 |
+| W19 | ~~草稿安全：Values 草稿无 scope/TTL/时间戳~~ **2026-10-18 已交付（W1 批次）**：草稿键含 org/customer/cluster/definition（`web/src/stores/valuesEditor.ts:69`）、记录带 `savedAt` 与 `parentRevisionId`、7 天 TTL（`:34`）、父 Revision 变更即拒绝恢复（`:243`）、`setItem` 失败上报（`:273`）、新增「丢弃本地草稿」（`:466`）；页面提示含保存时刻与丢弃入口 | UX-008 | **S**（已完成） | 否 |
 | W20 | ~~会话/剪贴板边界：`useSessionExpiry` **无 2^31-1 上界 clamp**（`web/src/composables/useSessionExpiry.ts:20` 已有下界 `Math.max(0, …)`，真缺陷是 `setTimeout` 的上界溢出 ⇒ 超长有效期会被当 1ms 立刻登出；精确口径同 §3.2 的 UX-055 行）、`copy()` 无失败反馈~~ **2026-10-17 已交付（TASK-325）**：延迟改为分段重排（`web/src/composables/useSessionExpiry.ts:17` 的 2^31-1 上限 + `:42-51` 每次唤醒重算剩余，到点才登出）；`copy()` 失败/成功都出 `Toast`（`web/src/components/operators/EnrollmentTokenModal.vue:70-81`、`:139-154`）。证据见 §3.2 的 UX-055/UX-009 行 | UX-055、UX-009 | **S**（已完成） | 否 |
 | W21 | 设计令牌收尾：`ClusterDetail` 三列无断点、`OperatorTable` nowrap、`EmergencyResultPanel` 溢出未换行 | UX-032、UX-031、UX-033 | **S** | 否 |
 | W22 | 中文收敛（`NOT_YET_MIGRATED` 台账） | UX-084；决策 **G5/D9 延后** | **M** | 否（已裁定延后） |
@@ -425,3 +425,52 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
   6 条、`prepare_token_expired` 5 条。⇒ `13` 只在**整仓**引号字面量口径下成立，而旧行把范围写作
   `internal/orchestrator/`；`convergence_conflict` 的 `6` 与口径相符；`prepare_token_expired` 的 `6` 在任何口径下
   都对不上（当时与现在都是 5，疑与相邻行的 `6` 同源）。这些数字只作旧值诊断与本次采样记录，不应被引用为现值。
+
+---
+
+## 10. W1 真机走查（2026-10-18，rm-prod 真浏览器）
+
+**环境**：本机 k3d `rm-prod`（交付物），入口 `https://localhost:8443`（自签证书，Playwright `ignoreHTTPSErrors`），系统 Chrome，
+`playwright-core` 驱动。**凭据**取自既有运维脚本的环境变量（未打印明文）。**被测产物**：分支
+`feat/fe-w-delivery` 的 web 构建，镜像 `localhost:5001/release-web:cc3ea91-w2`（`kubectl set image` 滚动更新，
+`IfNotPresent` + `k3d image import`；回滚命令：`kubectl -n release-manager set image deployment/web web=localhost:5001/release-web:ceda261`）。
+**走查脚本**：`/tmp/rm-fe-walk/w1-walkthrough.mjs`；**证据**：`/tmp/rm-fe-evidence/w1/`（JSON + 每步截图）。
+**采样时刻**：2026-10-18T10:08 (+08:00)。**栈内数据**：客户 `RM Cust Demo`/`Acme Weekday`，集群 `rm-cust`，
+ReleaseDefinition `973456b9-…`，已审批 ValuesRevision、7 条历史 Operation，operator `rm-cust355` 会话 **离线**。
+
+| 判据 | 结论 | 实测证据 |
+| --- | --- | --- |
+| **H1 能登录** | **PASS** | 提交后 **621 ms** 离开 `/login`（< 4 s）；`Login` 响应带 `rm_access`/`rm_refresh`/`rm_csrf` 三个 `Set-Cookie`；刷新后仍在会话内。截图 `h1-after-login.png` |
+| **H2 关键页可达** | **PASS（12/12 hop，全程只点击）** | `/` → 客户 → 客户详情 → 集群 → 集群详情 → 发布清单 → 新建操作 → 返回发布清单 → 操作历史 → 操作详情，每一步都经可见链接；发布清单列出绑定的 `e2e-plan/release-fixture`。截图 `h2-*.png` |
+| **H3 危险操作有确认** | **PASS（可测三项）+ 数据缺口两项** | 停用客户 / 停用集群 / 撤销 Operator 三个入口都弹出自定义 `AppDialog`，**Esc 均可关闭**；`window.confirm/alert/prompt` 计数 **0**。**数据缺口**：回滚入口要求 `revision > 1`（库存 revision=1 ⇒ 0 个入口）、解除卡锁页为空态（无卡住的锁）、无待撤销令牌 ⇒ 这三条**未实测**，不是通过 |
+| **H4 失败原因可见** | **PASS** | ① 403（DevTools 改 `ListCustomers` 响应）⇒ `403 无权访问 permission denied`，**无**空态同屏；② 读取失败（abort `ListReleases`）⇒ `Release 列表加载失败` + 重试 + 技术细节，**无** `暂无 Release` 同屏；③ 服务端拒绝（`TriggerInventorySync` ⇒ 503 `operator is offline`）⇒ `Operator 离线，无法触发同步` + 技术细节。截图 `h4-*.png` |
+| **H5 焦点与可访问名** | **PASS** | 对话框打开时焦点在框内，**12 次 Tab 未出框**，Esc 关闭后焦点回到「停用客户」触发按钮；操作表单空提交后两个无效字段各带 `aria-invalid="true"` 且 `aria-describedby` 指向真实错误节点（`请选择制品` / `请选择已审批的配置版本`）。截图 `h5-*.png` |
+| **H6 紧急变更可用** | **BLOCKED（环境数据，不是前端缺陷）** | 入口存在（绑定行 1 个、未绑定行显示「未绑定 Definition」）；页面渲染目标与三条路径，但三条**全部不可用**：operator 会话离线 ⇒ 无容器/副本/注解观测（`镜像变更不可用 / 副本数变更不可用 / 注解变更不可用`）⇒ **无法提交任一路径**。kill switch 关闭态需改服务端投影，未构造 |
+| **H7 收敛闭环** | **BLOCKED（环境数据 + 缺第二凭据）** | 收敛页渲染正常且 `准备收敛` 在 0 选中时禁用；但 `ListConvergenceTasks` 返回空集（本环境无 APPLIED+REQUIRE_PROMOTION 的紧急变更，该定义 `promotionMappings` 为空 ⇒ 造不出待收敛任务）；第二账号 `rm-cust-approver` 存在但本会话无其凭据（不猜密码） |
+
+**控制台**：8 条 error，全部可归因、无未知错误 —— 2 条登录前 bootstrap 的 401、1 条 H4 注入的 403、
+1 条 H4 注入的 abort（`net::ERR_FAILED`）、4 条真实的 503（`ListSecrets`/`TriggerInventorySync`，operator 离线）。
+未见未捕获异常、未见 Vue 警告升级为 error。
+
+**走查发现的缺陷（已在本批次修）**：读取失败时 `ErrorState` 没有技术细节行，用户拿不到 `requestId` ⇒
+`ReleaseInventory` 现在把 `correlationLine(describeError(...))` 放进 `errorDetails`（`web/src/stores/releaseInventory.ts:191`），
+同步拒绝的 notice 也带「技术细节」。H4 的复测已从 FAIL 转为 PASS。
+
+### 10.1 本批次的前端交付（W14 / W16 / W17 / W19）
+
+| 项 | 实现 | 单测（含变异） |
+| --- | --- | --- |
+| W14 a11y 四件 | 见 §5.2 W14 行 | 新增 `StateAccessibility.test.ts`、`AuditEventDetail.test.ts`，扩 `AuditEventTable.test.ts`、`OperationTimeline.test.ts` |
+| W16 请求风暴 | 见 §5.2 W16 行 | `AuditPage.test.ts`（5 次按键 ⇒ 1 次 history 写）、`releaseInventory.test.ts`（并发刷新 1 个请求） |
+| W17 时间格式漂移 | 见 §5.2 W17 行 | 新增 `formatTimestamp.test.ts`（fallback / 三种输入 / 秒精度） |
+| W19 草稿安全 | 见 §5.2 W19 行 | `valuesEditor.test.ts` 新增 7 条（父变更、TTL、旧格式、scope、丢弃、配额失败、正常恢复） |
+
+**变异证明**（逐条改坏 ⇒ 目标测试必红 ⇒ 逐字还原并比对 sha256）：9/9 全红 —— 去 debounce、去刷新去重、
+去父 Revision 比对、去 TTL、去 key scope、恢复固定 id、去 `aria-live`、Esc 改为任意键关闭、去表格 Space 处理。
+
+### 10.2 未做 / 风险（如实）
+
+- **H6/H7 未闭环**：缺 operator 观测数据与待收敛任务，属环境数据缺口；要闭环需先把 operator 会话拉回在线，
+  或按 REQ 夹具造一条 APPLIED+REQUIRE_PROMOTION 的紧急变更（**写操作**，本批次未做）。
+- **H3 三条危险操作未实测**（回滚 / 解除卡锁 / 撤销令牌），原因同上（数据缺口）。
+- **镜像 tag 是临时构建**：`cc3ea91-w2` 不是 CI 产物；合并后的正式镜像应由发布流程重建。

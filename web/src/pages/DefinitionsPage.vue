@@ -10,6 +10,7 @@ import LoadingState from '@/components/common/LoadingState.vue';
 import Toast from '@/components/common/Toast.vue';
 import type { DefinitionView, PromotionMappingView } from '@/connect/definition-api';
 import { useDefinitionsStore } from '@/stores/definitions';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Release definitions and their promotion mappings (REQ-040, A9 of the UX plan).
@@ -228,9 +229,6 @@ async function submit(): Promise<void> {
   if (fresh && fresh.version !== target.version) editing.value = fresh;
 }
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
-}
 </script>
 
 <template>

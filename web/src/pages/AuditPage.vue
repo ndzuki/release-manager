@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -59,12 +59,14 @@ async function syncQuery(): Promise<void> {
 }
 
 async function submit(): Promise<void> {
+  cancelScheduledUrlSync();
   audit.setFilters(form);
   await syncQuery();
   await audit.query(queryOrganizationId.value, 'first', queryAllOrganizations.value);
 }
 
 async function reset(): Promise<void> {
+  cancelScheduledUrlSync();
   replaceForm(emptyAuditFilters());
   audit.setFilters(form);
   audit.clearResults();
@@ -89,6 +91,29 @@ async function pageNext(): Promise<void> {
   await audit.query(queryOrganizationId.value, 'next', queryAllOrganizations.value);
 }
 
+/**
+ * UX-011 (W16): the filter form used to call router.replace on EVERY keystroke,
+ * so a five-character search term produced five history writes while the user
+ * was still typing. The URL is only a shareable mirror of the form: debounce
+ * it, and let submit/reset (deliberate actions) write it immediately.
+ */
+const URL_SYNC_DEBOUNCE_MS = 300;
+let urlSyncTimer: ReturnType<typeof setTimeout> | undefined;
+
+function cancelScheduledUrlSync(): void {
+  if (urlSyncTimer) clearTimeout(urlSyncTimer);
+  urlSyncTimer = undefined;
+}
+
+function scheduleUrlSync(): void {
+  cancelScheduledUrlSync();
+  urlSyncTimer = setTimeout(() => {
+    urlSyncTimer = undefined;
+    void syncQuery();
+  }, URL_SYNC_DEBOUNCE_MS);
+}
+
+onBeforeUnmount(cancelScheduledUrlSync);
 
 onMounted(async () => {
   const filters = filtersFromQuery(route.query);
@@ -103,7 +128,7 @@ watch(
   () => {
     if (!initialized) return;
     audit.setFilters(form);
-    void syncQuery();
+    scheduleUrlSync();
   },
   { deep: true },
 );

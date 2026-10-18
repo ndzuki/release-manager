@@ -11,6 +11,7 @@ import type { OrganizationMemberView, OrganizationView } from '@/connect/organiz
 import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
 import { useOrganizationsStore } from '@/stores/organizations';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Organization membership (REQ-026 / A1 of the UX plan's missing surfaces).
@@ -190,9 +191,6 @@ async function changeRole(member: OrganizationMemberView, event: Event): Promise
   if (!ok) element.value = member.role;
 }
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
-}
 </script>
 
 <template>

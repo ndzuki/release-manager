@@ -4,6 +4,7 @@ import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
 import Pagination from '@/components/common/Pagination.vue';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 const props = defineProps<{
   events: AuditEvent[];
@@ -29,7 +30,7 @@ const actorKindLabels: Record<ActorKind, string> = {
 };
 
 function formatTime(event: AuditEvent): string {
-  return event.createdAt ? timestampDate(event.createdAt).toLocaleString() : '—';
+  return event.createdAt ? formatTimestamp(timestampDate(event.createdAt)) : '—';
 }
 
 function actorLabel(event: AuditEvent): string {
@@ -44,14 +45,17 @@ function actorLabel(event: AuditEvent): string {
     <p class="audit-results__count">{{ t('audit.table.showing') }} {{ props.events.length }} / {{ props.totalSize }}</p>
     <div class="audit-results__table-wrap">
       <table>
+        <!-- UX-017 (W14): a table without a caption has no accessible name, and
+             a header cell without scope makes screen readers guess the axis. -->
+        <caption class="visually-hidden">{{ t('audit.table.results') }}</caption>
         <thead>
           <tr>
-            <th>{{ t('audit.table.time') }}</th>
-            <th>{{ t('audit.table.actor') }}</th>
-            <th>{{ t('audit.table.resource') }}</th>
-            <th>{{ t('audit.table.action') }}</th>
-            <th>{{ t('audit.table.status') }}</th>
-            <th>{{ t('audit.table.duration') }}</th>
+            <th scope="col">{{ t('audit.table.time') }}</th>
+            <th scope="col">{{ t('audit.table.actor') }}</th>
+            <th scope="col">{{ t('audit.table.resource') }}</th>
+            <th scope="col">{{ t('audit.table.action') }}</th>
+            <th scope="col">{{ t('audit.table.status') }}</th>
+            <th scope="col">{{ t('audit.table.duration') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -62,6 +66,7 @@ function actorLabel(event: AuditEvent): string {
             tabindex="0"
             @click="emit('select', event)"
             @keydown.enter="emit('select', event)"
+            @keydown.space.prevent="emit('select', event)"
           >
             <td>{{ formatTime(event) }}</td>
             <td>

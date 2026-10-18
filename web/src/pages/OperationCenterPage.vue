@@ -7,6 +7,7 @@ import DataTable from '@/components/common/DataTable.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import Pagination from '@/components/common/Pagination.vue';
 import { useOperationFeed } from '@/composables/useOperationFeed';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Operation centre (REQ-100 handoff H9 / TASK-277).
@@ -79,12 +80,6 @@ const columns = [
   { key: COLUMN.createdAt, label: t('operationCenter.column.createdAt'), sortable: true },
   { key: COLUMN.operationId, label: t('operationCenter.column.operation') },
 ];
-
-function formatTimestamp(value: string | null): string {
-  return value
-    ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-    : '—';
-}
 
 /** The inline name is the point of the aggregate; fall back to the id when it is empty. */
 function customerOf(row: Record<string, unknown>): string {

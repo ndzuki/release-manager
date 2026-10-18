@@ -49,7 +49,7 @@ const emergencyResolved = computed(() => {
 
     <EmptyState v-if="entries.length === 0" title="暂无时间线事件" message="等待服务端推送事件…" />
 
-    <ol v-else class="operation-timeline__list">
+    <ol v-else class="operation-timeline__list" aria-live="polite">
       <TimelineEntryItem v-for="entry in sortedEntries" :key="entry.id" :entry="entry" />
     </ol>
 

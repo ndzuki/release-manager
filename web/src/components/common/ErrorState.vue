@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useId } from 'vue';
 import { t } from '@/i18n/messages';
 
 interface ErrorStateProps {
@@ -16,12 +17,20 @@ withDefaults(defineProps<ErrorStateProps>(), {
 });
 
 const emit = defineEmits<{ action: [] }>();
+
+/**
+ * UX-037 (W14): a fixed DOM id was shared by every instance, so two states on
+ * one page produced duplicate ids and the second one's aria-labelledby pointed
+ * at the first one's heading (or at nothing). useId() gives each instance its
+ * own pair.
+ */
+const titleId = useId();
 </script>
 
 <template>
-  <section class="error-state" role="alert" aria-labelledby="error-state-title">
+  <section class="error-state" role="alert" :aria-labelledby="titleId">
     <span class="error-state__icon" aria-hidden="true">!</span>
-    <h2 id="error-state-title" class="error-state__title">{{ title }}</h2>
+    <h2 :id="titleId" class="error-state__title">{{ title }}</h2>
     <p v-if="message" class="error-state__text">{{ message }}</p>
     <details v-if="details" class="error-state__details">
       <summary>{{ t('error.technicalDetails') }}</summary>

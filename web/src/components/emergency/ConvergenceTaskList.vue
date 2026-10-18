@@ -18,6 +18,9 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
 
 <template>
   <table class="task-table">
+    <!-- UX-017 (W14): the header cells already carry scope; the missing piece
+         was an accessible name for the table itself. -->
+    <caption class="visually-hidden">{{ t('emergency.tasks.caption') }}</caption>
     <thead>
       <tr>
         <th scope="col" aria-label="选择"></th>

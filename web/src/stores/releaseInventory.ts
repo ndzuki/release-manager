@@ -11,6 +11,7 @@ import {
   type ListReleasesResponse,
 } from '@/gen/orchestrator/v1/orchestrator_pb';
 import { orchestratorClient } from '@/connect/client';
+import { correlationLine, describeError } from '@/connect/error-copy';
 
 export type ReleaseStatus = 'active' | 'missing' | 'out_of_sync' | 'unknown';
 /**
@@ -123,9 +124,14 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
   const loading = ref(false);
   const appending = ref(false);
   const error = ref<string | null>(null);
+  // UX-015 (TASK-325 W1 walkthrough): the read failure copy dropped the
+  // correlation line, so a user reporting "the release list is broken" had no
+  // requestId to hand over. ErrorState already renders `details`.
+  const errorDetails = ref<string | null>(null);
   const syncRequestId = ref<string | null>(null);
   const syncing = ref(false);
   const syncError = ref<string | null>(null);
+  const syncErrorDetails = ref<string | null>(null);
   const lastLoadedAt = ref<number | null>(null);
   const customerId = ref<string | null>(null);
   const clusterId = ref<string | null>(null);
@@ -139,7 +145,9 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     totalCount.value = 0;
     lastLoadedAt.value = null;
     error.value = null;
+    errorDetails.value = null;
     syncError.value = null;
+    syncErrorDetails.value = null;
   }
 
   function setScope(nextCustomerId: string, nextClusterId: string): void {
@@ -147,6 +155,10 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     customerId.value = nextCustomerId;
     clusterId.value = nextClusterId;
     resetCache();
+    // The in-flight refresh belonged to the previous scope; do not let the new
+    // scope join it (the old response is allowed to finish, this only unblocks
+    // a fresh request for the new scope).
+    refreshInFlight = null;
   }
 
   async function load(options: { append?: boolean } = {}): Promise<void> {
@@ -156,6 +168,7 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     if (append) appending.value = true;
     else loading.value = true;
     error.value = null;
+    errorDetails.value = null;
     try {
       const response = await orchestratorClient.listReleases(create(ListReleasesRequestSchema, {
         customerId: customerId.value,
@@ -175,6 +188,7 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
         return;
       }
       error.value = reason;
+      errorDetails.value = correlationLine(describeError(requestError), 'ListReleases');
     } finally {
       loading.value = false;
       appending.value = false;
@@ -188,15 +202,30 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     totalCount.value = response.totalCount;
   }
 
-  async function refresh(): Promise<void> {
+  /**
+   * UX-057 (W16): refresh is reachable from four controls (header button, retry
+   * notice, empty state, error state) plus the 5-minute cache re-arm, and the
+   * in-flight state was never shared. A double click issued two ListReleases
+   * calls whose responses could land out of order. Concurrent refreshes now
+   * share one request; a deliberate filter change still goes through load().
+   */
+  let refreshInFlight: Promise<void> | null = null;
+
+  function refresh(): Promise<void> {
+    if (refreshInFlight) return refreshInFlight;
     nextCursor.value = null;
-    await load();
+    const run = load().finally(() => {
+      if (refreshInFlight === run) refreshInFlight = null;
+    });
+    refreshInFlight = run;
+    return run;
   }
 
   async function triggerSync(): Promise<void> {
     if (!customerId.value || !clusterId.value || syncing.value) return;
     syncing.value = true;
     syncError.value = null;
+    syncErrorDetails.value = null;
     try {
       const response = await orchestratorClient.triggerInventorySync({
         customerId: customerId.value,
@@ -209,6 +238,7 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
         syncRequestId.value = connectError.metadata.get('X-Sync-Request-ID');
       }
       syncError.value = errorReason(requestError);
+      syncErrorDetails.value = correlationLine(describeError(requestError), 'TriggerInventorySync');
     } finally {
       syncing.value = false;
     }
@@ -235,9 +265,11 @@ export const useReleaseInventoryStore = defineStore('releaseInventory', () => {
     loading,
     appending,
     error,
+    errorDetails,
     syncRequestId,
     syncing,
     syncError,
+    syncErrorDetails,
     lastLoadedAt,
     customerId,
     clusterId,

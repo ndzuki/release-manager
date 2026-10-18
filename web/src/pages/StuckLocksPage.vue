@@ -8,6 +8,7 @@ import LoadingState from '@/components/common/LoadingState.vue';
 import type { StuckLockView } from '@/connect/stuck-lock-api';
 import { useAuthStore } from '@/stores/auth';
 import { useStuckLocksStore } from '@/stores/stuckLocks';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Emergency stuck locks (REQ-087, A10 of the UX plan).
@@ -85,9 +86,6 @@ async function submit(): Promise<void> {
   if (ok) target.value = null;
 }
 
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
-}
 </script>
 
 <template>

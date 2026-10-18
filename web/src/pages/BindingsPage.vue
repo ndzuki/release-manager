@@ -8,6 +8,7 @@ import LoadingState from '@/components/common/LoadingState.vue';
 import { AUTHORIZATION_ACTIONS, type AuthorizationAction, type BindingView } from '@/connect/binding-api';
 import { useAuthStore } from '@/stores/auth';
 import { useGovernanceStore } from '@/stores/governance';
+import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * Bindings and capability grants (REQ-049 / REQ-027, A2 + A3 of the UX plan).
@@ -125,10 +126,6 @@ async function confirmRevoke(): Promise<void> {
   pendingRevoke.value = null;
   await nextTick();
   noticeRef.value?.focus();
-}
-
-function formatTimestamp(value: string | null): string {
-  return value ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
 }
 
 function statusLabel(binding: BindingView): string {

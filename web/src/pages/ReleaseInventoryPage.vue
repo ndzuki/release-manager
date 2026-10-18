@@ -117,7 +117,7 @@ function handleSearchInput(event: Event): void {
         <p>展示 operator 最近同步的 Helm Release；共 {{ inventory.totalCount }} 条。</p>
       </div>
       <div class="inventory-actions">
-        <button type="button" :disabled="inventory.loading" @click="inventory.refresh">刷新</button>
+        <button type="button" :disabled="inventory.loading" @click="inventory.refresh()">{{ t('action.refresh') }}</button>
         <button v-if="canSync" type="button" class="primary" :disabled="inventory.syncing" @click="inventory.triggerSync">
           {{ inventory.syncing ? '同步中…' : '触发同步' }}
         </button>
@@ -126,7 +126,13 @@ function handleSearchInput(event: Event): void {
 
     <AuthorizationStaleNotice :stale="writeBlocked" />
 
-    <div v-if="inventory.syncError" class="notice notice--warning" role="alert">{{ inventory.syncError }}</div>
+    <div v-if="inventory.syncError" class="notice notice--warning" role="alert">
+      <span>{{ inventory.syncError }}</span>
+      <details v-if="inventory.syncErrorDetails" class="sync-details">
+        <summary>技术细节</summary>
+        <pre>{{ inventory.syncErrorDetails }}</pre>
+      </details>
+    </div>
     <div v-else-if="inventory.syncRequestId" class="notice" role="status">
       同步请求已创建：<code>{{ inventory.syncRequestId }}</code>。完成后请手动刷新。
     </div>
@@ -152,20 +158,21 @@ function handleSearchInput(event: Event): void {
       v-else-if="inventory.error && inventory.releases.length === 0"
       title="Release 列表加载失败"
       :message="inventory.error"
+      :details="inventory.errorDetails ?? undefined"
       action-label="重试"
-      @action="inventory.refresh"
+      @action="inventory.refresh()"
     />
     <template v-else>
       <div v-if="inventory.error" class="notice notice--warning" role="alert">
         {{ inventory.error }}
-        <button type="button" @click="inventory.refresh">重试</button>
+        <button type="button" @click="inventory.refresh()">重试</button>
       </div>
       <EmptyState
         v-if="inventory.isEmpty"
         title="暂无 Release"
         message="operator 同步后将自动出现"
         action-label="刷新"
-        @action="inventory.refresh"
+        @action="inventory.refresh()"
       />
       <ReleaseInventoryTable
         v-else
