@@ -138,6 +138,7 @@ Operator 是跑在客户集群里的 agent，负责执行 Helm 操作并回传�
 本环境的 Operator 未上报能力，所以截图里只有两块。
 注册流程：`Generate token` 生成一次性注册令牌 → 按弹窗给出的 `Deployment command` 在客户集群部署 →
 勾选「已保存到密钥库」后关闭（未勾选则关闭会吊销待用令牌）。
+完整接入步骤（客户集群 YAML、网关地址替换、证书信任与排障）见 [客户集群接入手册](customer-onboarding.md)。
 
 ## 7. Release 清单
 
