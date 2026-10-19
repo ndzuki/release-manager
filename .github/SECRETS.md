@@ -149,7 +149,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 - `POSTGRES_TEST_DSN`：live-DB 集成测试的 DSN，**未设置即 `t.Skip`**（`docs/testing.md:21-23,411-412`；`CONTRIBUTING.md:49`）。CI 里**只有 `test-postgres-integration`（`.github/workflows/test.yml:222-271`）注入它** —— 该 job 起 `postgres:16-alpine`、`:265` 设 `POSTGRES_TEST_DSN`、`:267` 跑 `go test -tags integration -count=1`，覆盖 `./internal/store/postgres/...`、`./internal/postgres/...`、`./internal/migration/...`、`./internal/orchestrator/...` **四棵树**；**其余 18 个 job 未注入**，那些用例在它们里面是 skip 而非 fail。
 - `RELEASE_MANAGER_DATABASE_DSN`：`devseed --reset` 的 PostgreSQL DSN（`cmd/devseed/main.go:58`）。
 - `E2E_RUNNER_PASSWORD` 之外的 e2e 可调项：`E2E_ENV_CONFIG` / `OUTPUT_DIR` / `STAGES` / `TIMEOUT` / `TOTAL_TIMEOUT` / `PARALLEL` / `KEEP_ON_FAILURE` / `SNAPSHOT_FULL` / `BASELINE_FILE`（`Makefile:135-153`），均非机密。
-- 服务配置的可注入 env（`internal/config/config.go:272-299`）：`DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`REDIS_PASSWORD`、`GATEWAY_*`、`VALUES_SECRET_PATTERNS` 等。**这些是本仓库「配置文件 + env 覆盖」的通道，dev 环境由 kustomize 提供，生产由部署侧提供，不在 CI secrets 清单内。**
+- 服务配置的可注入 env（`internal/config/config.go:570-600`）：`DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`REDIS_PASSWORD`、`GATEWAY_*`、`VALUES_SECRET_PATTERNS` 等。**这些是本仓库「配置文件 + env 覆盖」的通道，dev 环境由 kustomize 提供，生产由部署侧提供，不在 CI secrets 清单内。**
 
 ### 7.3 「本地值与 CI 值分开管理」的约定
 

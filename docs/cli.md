@@ -34,7 +34,7 @@
 
 7 个服务共用 `internal/app.Run`（`internal/app/app.go:122`）：
 
-- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:541-559`，viper）。
+- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:609-634`，viper）。
   多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:569-607`）：
   `DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`MAINTENANCE`、`AUTHORIZATION_AUTH_URL`、
   `GATEWAY_ENABLED`、`GATEWAY_PORT`、`CUSTOMER_ID`、`CLUSTER_ID`、`OPERATOR_NAME`、
@@ -88,7 +88,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
   dev 集群里开在 8084 并暴露 NodePort 30084，`deploy/kustomize/dev/configs/orchestrator.dev.yaml:32-34`），
   `ca.cert_path/key_path`（`configs/orchestrator.dev.yaml:33-37`；CA 缺失 fail-closed，`main.go:85-90`）。
 - 鉴权快照拉取走配置 `authorization.auth_url`（`configs/orchestrator.dev.yaml:7`；
-  默认 `http://localhost:8085`，`internal/config/config.go:253-268`——`--auth-url` flag **不存在**，
+  默认 `http://localhost:8085`，`internal/config/config.go:550-551`——`--auth-url` flag **不存在**，
   `authURL` 字段没有任何赋值来源，见 `main.go:45,323-324`）。
 - 环境变量：`JWT_PUBLIC_KEY`（校验公钥，`main.go:983`）、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`。
   （REQ-065 AC-065-01 的 Ed25519 迁移删除了原先的对称哨兵 `JWT_SIGNING_KEY`/`change-me-in-production`，见 `docs/configuration.md:338`。）

@@ -9,7 +9,7 @@
 除 `cmd/e2e`、`cmd/devseed`、`cmd/store-migrate` 与各 CI 质量工具外，所有服务二进制都经 `internal/app/app.go` 的 `Run(configPath, svc)` 启动（`internal/app/app.go:122`），真实加载器是 `config.LoadService`（`internal/config/config.go:610`，基于 viper）。生效优先级：
 
 1. **CLI flag**（显式传入的 flag 值）——注意：flag 只决定「读哪个文件」和少量进程参数（signing key、db 路径等），**没有** `BindPFlag`，flag 不进 viper。
-2. **环境变量**——`bindDatabaseEnvironment`（`internal/config/config.go:569-607`，由 `LoadService` 在 `:616` 调用）对 29 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
+2. **环境变量**——`bindDatabaseEnvironment`（`internal/config/config.go:569-607`，由 `LoadService` 在 `:614` 调用）对 29 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
 3. **YAML 文件**（`--config` 指定路径）。
 4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:84/408/494/549`）。
 

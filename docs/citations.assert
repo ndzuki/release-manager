@@ -172,3 +172,15 @@ cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-384 f：
 cmd/auth/main.go	229	mux.Handle(authorizationPath, authorizationHandler)	TASK-384 f：全文 5 个 mux.Handle 的最后一个	docs/api.md:470
 internal/auth/external_idp_service.go	258	func (s *ExternalIdentityService) OIDCCallback(	TASK-384 f：OIDC 回调是 http.HandlerFunc（非 mux 挂载）	docs/api.md:470
 internal/auth/external_idp_service.go	277	DingTalkCallback	TASK-384 f：钉钉回调同为 http.HandlerFunc	docs/api.md:470
+
+# --- TASK-387/TASK-388: config.go line numbers fixed by hand, pinned so they cannot drift back (V13) ---
+internal/config/config.go	614	bindDatabaseEnvironment(	TASK-387/388 修正：configuration.md 称 LoadService 在 :614 调用 bindDatabaseEnvironment（原引 :616 实为 `}`）；核验：sed -n '614p' 见 if err := bindDatabaseEnvironment(v)	docs/configuration.md:12
+internal/config/config.go	610	func LoadService(	TASK-387/388 修正：cli.md 的 LoadService 区间 609-634（以注释行为起点，原引 541-559 实为 AuthorizationCfg）；核验：sed -n '609,634p' 见注释+函数体+闭合	docs/cli.md:37
+internal/config/config.go	551	c.AuthURL = "http://localhost:8085"	TASK-387/388 修正：cli.md 的 auth_url 默认值在 AuthorizationCfg.WithDefaults（原引 253-268 是 Notifier/VaultResolver 区域）；核验：sed -n '549,552p' 见 c.AuthURL 赋值	docs/cli.md:91
+internal/config/config.go	571	"database.driver"	TASK-387/388 修正：runbook.md 的 DATABASE_* env 映射首条（原引 274-281 是 VaultResolverCfg）；核验：sed -n '571,575p' 逐条比对 5 个绑定	docs/runbook.md:114
+internal/config/config.go	570	bindings := map[string]string{	TASK-387/388 修正：SECRETS.md 的可注入 env 绑定表 570-600（原引 272-299 是 ServiceConfig/VaultResolver）；核验：sed -n '570,600p' 数出 29 条键	.github/SECRETS.md:152
+internal/config/config.go	599	VALUES_SECRET_PATTERNS	TASK-387/388 修正：SECURITY.md 的 VALUES_SECRET_PATTERNS 绑定行（原引 297 实为 VaultResolverCfg 的 `}`）；核验：sed -n '599p' 见 values.secret_patterns 映射	SECURITY.md:178
+internal/config/config.go	150	LogLevel	TASK-387/388 修正：observability.md 的 ServiceConfig.LogLevel（原引 133 是 SecureCookies 注释）；核验：sed -n '148,156p' 见 ServiceConfig 字段	docs/observability.md:17
+internal/config/config.go	154	Maintenance	TASK-387/388 修正：api.md 的 ServiceConfig.Maintenance（原引 21 是死结构体 Config 的 Maintenance）；核验：sed -n '21p' 与 '154p' 对比两个声明	docs/api.md:215
+internal/config/config.go	154	Maintenance	TASK-387/388 修正：runbook.md 维护模式配置键（原引 21 是死结构体 Config）；核验：sed -n '148,156p' 见 ServiceConfig.Maintenance	docs/runbook.md:327
+internal/config/config.go	154	Maintenance	TASK-387/388 修正：runbook.md §7.4 维护窗口配置键；原句并列的 :21（死结构体 Config）已改指唯一活的 :154；核验：sed -n '148,156p'	docs/runbook.md:455

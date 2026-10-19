@@ -175,7 +175,7 @@ Connect 的读写都走 POST，因此按 procedure 名做白名单而不是按 H
 - 字面机密特征库（key 名正则 + 值形态：`AKIA…`、`BEGIN … PRIVATE KEY`、`scheme://user:pass@host`、
   高熵 hex/base64 ≥32）：`internal/values/secret.go:10-17`；双通道检测说明见 `internal/values/secret.go:19-21`；生产可追加正则
   `values.secret_patterns`（dev 默认为空：`configs/orchestrator.dev.yaml:12`；env 注入
-  `VALUES_SECRET_PATTERNS`：`internal/config/config.go:297`）。
+  `VALUES_SECRET_PATTERNS`：`internal/config/config.go:599`）。
 - 执行侧只在客户集群内解析引用，并绑定 `uid` / `resourceVersion` / 值指纹三重漂移检测，任一变化即
   `ErrSecretRefChanged` 拒绝执行：`internal/operator/k8s/secrets.go:27-58`、调用点
   `internal/operator/agent/agent.go:966`、错误语义 `internal/operator/helmengine/engine.go:79`、

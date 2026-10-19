@@ -111,7 +111,7 @@ curl -sS http://127.0.0.1:8083/readyz                                     # 期�
 
 **确认依据（现状）**
 
-- 配置键与位置：`database.driver`、`database.dsn`、`database.max_open_conns`、`database.max_idle_conns`、`database.conn_max_lifetime`、`database.conn_max_idle_time`（`internal/config/config.go:26-33`）。环境变量覆盖映射：`DATABASE_DRIVER`、`DATABASE_DSN`、`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、`DATABASE_CONN_MAX_LIFETIME`（`internal/config/config.go:274-281`）。
+- 配置键与位置：`database.driver`、`database.dsn`、`database.max_open_conns`、`database.max_idle_conns`、`database.conn_max_lifetime`、`database.conn_max_idle_time`（`internal/config/config.go:26-33`）。环境变量覆盖映射：`DATABASE_DRIVER`、`DATABASE_DSN`、`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、`DATABASE_CONN_MAX_LIFETIME`（`internal/config/config.go:571-575`）。
 - 集群内取值：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:3-5`（`postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`）、`deploy/kustomize/dev/configs/auth.dev.yaml:3-5`、`deploy/kustomize/dev/configs/notifier.dev.yaml:3-5`（后者指向独立库 `release_notifier`）。凭据来自静态 Secret `release-manager-dev-credentials`（`deploy/kustomize/base/secret.yaml:4-17`）；`release_notifier` 库由 `deploy/kustomize/postgres/init.sql:4` 创建。
 - **连接池参数只对 PostgreSQL 生效**：`internal/postgres/db.go:46-49` 才调用 `SetMaxOpenConns/SetMaxIdleConns/SetConnMaxLifetime/SetConnMaxIdleTime`；SQLite 路径的 `Open(dsn)` 只接受 DSN（`internal/store/sqlite/db.go:67-138`），并固定注入 `_pragma=busy_timeout(5000)&_txlock=immediate` + `journal_mode=WAL` + `foreign_keys=ON`（`internal/store/sqlite/db.go:72-75`）。**在 SQLite 路径上调池参数是无效操作**。
 - 池默认值：`max_open_conns` 缺省 25、`max_idle_conns` 缺省 10（`internal/postgres/config.go:26-34`）；`conn_max_lifetime` / `conn_max_idle_time` 无默认（0 = 不限制）。当前 `deploy/kustomize/dev/configs/*.dev.yaml` 都没写这些键，即跑默认值。
@@ -324,7 +324,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
   ① 指标 `auth_snapshot_stale_cause_total{cause}`（`internal/authorization/metrics.go:41-44`；写入点 `internal/authorization/module.go:425`）；`cause` 是**有界枚举**：`warmup`（正常首次拉取必 stale，随后自愈）、`gap`（checkpoint 跳跃超过 1 版）、`regression`（快照比本地 checkpoint 旧）、`not-fresh`、`snapshot-rpc-timeout`（快照 RPC 超过 200ms `snapshotDeadline`）、`snapshot-rpc-error`（其余快照 RPC 失败）、`snapshot-scope-mismatch`、`checkpoint-read-error`、`checkpoint-write-error`、`unknown`（`internal/authorization/stale_cause.go`）。
   ② 日志：失败路径的 **WARN** 记录带 `stale_cause=<枚举>` 与 `reason=AUTHORIZATION_SNAPSHOT_STALE`（`internal/authorization/module.go:173-188` 的「authorization snapshot pull failed during authorize」、`internal/authorization/module.go:199-210` 的「…not fresh during authorize」）。**WARN 里刻意不含原始 pull 错误文本**（它可能带凭据片段，项目硬约束禁止机密入日志）⇒ 定位靠 `stale_cause` + 该 cause 的指标；release-auth 侧会记录它自己的错误。正常 warm-up 只到 WARN、不会升级到 ERROR，所以 **WARN 里出现 `stale_cause` 才是要看的那条**。
   判读：单次 `warmup` 是健康路径，**连续**非 `warmup` 才是故障（RPC 超时/错误 ⇒ 查 auth 的 Load 与网络；`checkpoint-*-error` ⇒ 查 orchestrator 侧权威库；`gap`/`regression` ⇒ 查是否有多写者或回滚的快照源）。
-- 维护模式（`maintenance: true` 或 `MAINTENANCE=true`，`internal/config/config.go:21,579`）返回 `unavailable: maintenance`，且**只包 unary RPC**（`internal/app/maintenance.go:14-28` 用的是 `connect.UnaryInterceptorFunc`）⇒ 流式（`WatchOperation`、`CommandStream`）不受门禁。
+- 维护模式（`maintenance: true` 或 `MAINTENANCE=true`，`internal/config/config.go:154,579`）返回 `unavailable: maintenance`，且**只包 unary RPC**（`internal/app/maintenance.go:14-28` 用的是 `connect.UnaryInterceptorFunc`）⇒ 流式（`WatchOperation`、`CommandStream`）不受门禁。
 
 **处置动作**
 
@@ -452,7 +452,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 ### 7.4 维护窗口（把写路径整体停下来）
 
-**确认依据（现状）**：只有配置键 `maintenance`（`internal/config/config.go:21,154`）与环境变量 `MAINTENANCE`（`internal/config/config.go:579`）两个入口，**没有 `--maintenance` flag**（`grep maintenance cmd/orchestrator/main.go` 命中的是只读白名单与拦截器挂载）⇒ 生效时非白名单 unary 写全部 `unavailable: maintenance`（`internal/app/maintenance.go:14-28`），白名单是只读 procedures（`orchestratorReadOnlyProcedures`，`cmd/orchestrator/main.go:774`）。副作用必须同时知道：
+**确认依据（现状）**：只有配置键 `maintenance`（`internal/config/config.go:154`）与环境变量 `MAINTENANCE`（`internal/config/config.go:579`）两个入口，**没有 `--maintenance` flag**（`grep maintenance cmd/orchestrator/main.go` 命中的是只读白名单与拦截器挂载）⇒ 生效时非白名单 unary 写全部 `unavailable: maintenance`（`internal/app/maintenance.go:14-28`），白名单是只读 procedures（`orchestratorReadOnlyProcedures`，`cmd/orchestrator/main.go:774`）。副作用必须同时知道：
 
 1. 不创建审计 emitter ⇒ 窗口内无审计（`cmd/orchestrator/main.go:361-363`）；
 2. 不跑启动期恢复（`cmd/orchestrator/main.go:354-359`）、不跑 GC ticker、不跑紧急超时扫与 stuck 扫（`cmd/orchestrator/main.go:830-842,899`）；
