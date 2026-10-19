@@ -157,3 +157,18 @@ internal/orchestrator/service.go	648	connect.CodePermissionDenied	TASK-383 c：P
 internal/orchestrator/service.go	661	connect.CodePermissionDenied	TASK-383 c：PublishRelease 集群已停用（与 :648 同一处漂移）	docs/api.md:535
 internal/orchestrator/service.go	641	connect.CodeInternal	TASK-383 c：PublishRelease 定义查询失败（原引 :474 是 marshal bundle digests 错误）	docs/api.md:535
 internal/orchestrator/service.go	658	connect.CodeInternal	TASK-383 c：PublishRelease 集群查询失败（与 :641 同一处漂移）	docs/api.md:535
+# --- TASK-384: auth api.md pointers and the 13-entry maintenance whitelist ----
+cmd/auth/main.go	217	mux.Handle(authPath, authHandler)	TASK-384 h：auth 子树 pattern 的原样挂载点（文档原引 :191 是 publicMethods 首条）	docs/api.md:58
+cmd/auth/main.go	198	interceptorOpt := connect.WithInterceptors(	TASK-384 a：4 个 auth service 共用的拦截器栈构造点（原引 :181-187 是 maintenance/cleanup 块）	docs/api.md:130
+cmd/auth/main.go	203	auth.NewAuthInterceptor(jwtMgr, s.store, enforcer, publicMethods, logger)	TASK-384 a：拦截器栈末项 auth.NewAuthInterceptor（同一区间）	docs/api.md:130
+cmd/auth/main.go	190	publicMethods := map[string]bool{	TASK-384 b：release-auth 的 5 个公开方法定义点（原引 :173-179 是 enforcer 初始化）	docs/api.md:175
+cmd/auth/main.go	243	AuthServiceGetInitStatusProcedure	TASK-384 c：维护白名单首条（实测 13 条，文档原称 12 条）	docs/api.md:217
+cmd/auth/main.go	255	ExternalIdentityServiceGetDingTalkAuthURLProcedure	TASK-384 c：维护白名单末条，13 条计数的边界	docs/api.md:217
+cmd/auth/main.go	215	auth.NewAuthService(	TASK-384 d：4 个 service new/挂载区间起点（原引 :189-203 是 publicMethods/interceptorOpt）	docs/api.md:245
+cmd/auth/main.go	229	mux.Handle(authorizationPath, authorizationHandler)	TASK-384 d：4 个 service 挂载区间终点（原 :227-228 现为 AuthorizationService）	docs/api.md:245
+cmd/auth/main.go	254	ExternalIdentityServiceGetOIDCAuthURLProcedure	TASK-384 d：白名单里 ExternalIdentityService 的残留条目（原引 :227-228 现为 AuthorizationService）	docs/api.md:245
+cmd/auth/main.go	260	REQ-065 AC-065-01	TASK-384 e：EdDSA 私钥约定注释块首行（原引 :262-268 缺头两行）	docs/api.md:146
+cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-384 f：全文 5 个 mux.Handle 的第 1 个（文档原称 136-205 区间只有 4 个）	docs/api.md:470
+cmd/auth/main.go	229	mux.Handle(authorizationPath, authorizationHandler)	TASK-384 f：全文 5 个 mux.Handle 的最后一个	docs/api.md:470
+internal/auth/external_idp_service.go	258	func (s *ExternalIdentityService) OIDCCallback(	TASK-384 f：OIDC 回调是 http.HandlerFunc（非 mux 挂载）	docs/api.md:470
+internal/auth/external_idp_service.go	277	DingTalkCallback	TASK-384 f：钉钉回调同为 http.HandlerFunc	docs/api.md:470
