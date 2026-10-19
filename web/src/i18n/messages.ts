@@ -216,6 +216,17 @@ const zhCN = {
   'operator.token.copyFailed': '复制失败：浏览器未允许写入剪贴板，请手动选中并复制。',
   'operator.token.deploymentCommand': '部署命令',
   'operator.token.template': '模板 ·',
+  /*
+   * TASK-389: the install command is only executable once the console substitutes the
+   * gateway address the control plane advertises (`gateway.advertise_url`). The label
+   * names that fact in the dialog, and the warning is the fail-closed branch: an empty
+   * endpoint leaves the placeholder in the command, so the copy must say why instead of
+   * letting the customer discover it when the operator fails to connect.
+   */
+  'operator.token.gatewayAddress': '控制面网关地址',
+  'operator.token.gatewayMissing': '未配置',
+  'operator.token.gatewayMissingWarning':
+    '未配置控制面网关地址：安装命令中的 <CONTROL_PLANE_OPERATOR_GATEWAY> 未被替换，复制后请先填入该集群可访问的网关地址再执行。',
   'operator.token.copyCommand': '复制命令',
   'operator.token.saved': '我已把令牌保存到受认可的密钥存储中。',
   'operator.token.closeAndForget': '关闭并忘记令牌',

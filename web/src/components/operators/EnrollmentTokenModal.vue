@@ -31,9 +31,48 @@ const title = computed(() => {
   if (result.value && plaintext.value) return t('operator.token.title');
   return t('operator.token.failedTitle');
 });
+const GATEWAY_PLACEHOLDER = '<CONTROL_PLANE_OPERATOR_GATEWAY>';
+const gatewayEndpoint = computed(() => (result.value?.operatorEndpoint ?? '').trim().replace(/\/+$/, ''));
+const gatewayMissing = computed(() => gatewayEndpoint.value === '');
+
+/*
+ * The server template keeps the gateway address as a placeholder on purpose: which
+ * address a customer cluster can reach is a deployment fact, and `gateway.advertise_url`
+ * is the control plane's answer to it. Substituting it here is what makes the copied
+ * command executable instead of one the customer has to finish by hand.
+ *
+ * The template carries the placeholder twice: as the quoted argument, and inside the
+ * instruction comment that tells the reader to replace it. Substituting only the
+ * argument would leave a comment asking the user to replace a value the console just
+ * wrote, so that instruction block is dropped first. A comment is an instruction about
+ * the raw template, not part of the armed command.
+ */
+function substituteGateway(command: string, endpoint: string): string {
+  const kept: string[] = [];
+  let droppingInstruction = false;
+  for (const line of command.split('\n')) {
+    const isComment = line.trimStart().startsWith('#');
+    if (isComment && line.includes(GATEWAY_PLACEHOLDER)) {
+      droppingInstruction = true;
+      continue;
+    }
+    if (droppingInstruction) {
+      // The instruction spans a contiguous comment block; keep skipping its lines.
+      if (isComment) continue;
+      droppingInstruction = false;
+    }
+    kept.push(line);
+  }
+  return kept.join('\n').replaceAll(GATEWAY_PLACEHOLDER, endpoint);
+}
+
 const installCommand = computed(() => {
   if (!result.value || !plaintext.value) return '';
-  return result.value.installCommandTemplate.replace('${ENROLLMENT_TOKEN}', plaintext.value);
+  const withToken = result.value.installCommandTemplate.replaceAll('${ENROLLMENT_TOKEN}', plaintext.value);
+  // Without an endpoint the placeholder has to stay: the command is then not executable,
+  // and the dialog says so instead of presenting a half-substituted command as ready.
+  if (gatewayMissing.value) return withToken;
+  return substituteGateway(withToken, gatewayEndpoint.value);
 });
 // UX-039: a dialog owes the keyboard an exit, but what is irreversible here is the
 // PLAINTEXT, not the modal. While a token is on screen — or still being generated,
@@ -125,9 +164,21 @@ onUnmounted(clearPlaintext);
         <button type="button" class="modal-button" @click="copy(plaintext)">{{ t('operator.token.copy') }}</button>
       </div>
 
+      <!-- The deployment command only works against the gateway the control plane
+           advertises, so that address is a labelled row of its own rather than a suffix
+           of the template-version line — and an empty endpoint is loud here, before the
+           customer copies a command that cannot connect. -->
+      <p class="gateway">
+        <span class="gateway__label">{{ t('operator.token.gatewayAddress') }}</span>
+        <code data-testid="enrollment-gateway">{{ gatewayMissing ? t('operator.token.gatewayMissing') : gatewayEndpoint }}</code>
+      </p>
+      <p v-if="gatewayMissing" class="error" role="alert" data-testid="enrollment-gateway-missing">
+        {{ t('operator.token.gatewayMissingWarning') }}
+      </p>
+
       <details>
         <summary>{{ t('operator.token.deploymentCommand') }}</summary>
-        <p>{{ t('operator.token.template') }} {{ result.installCommandTemplateVersion }} · {{ result.operatorEndpoint }}</p>
+        <p>{{ t('operator.token.template') }} {{ result.installCommandTemplateVersion }}</p>
         <pre>{{ installCommand }}</pre>
         <button type="button" class="modal-button" @click="copy(installCommand)">{{ t('operator.token.copyCommand') }}</button>
       </details>
@@ -199,6 +250,25 @@ onUnmounted(clearPlaintext);
 
 .modal-note {
   margin: 0;
+}
+
+/* The gateway address is a deployment fact the operator needs for network
+   allowlisting, so it gets a labelled row of its own instead of sharing the
+   template-version line. */
+.gateway {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  margin: 0;
+}
+
+.gateway__label {
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .secret {

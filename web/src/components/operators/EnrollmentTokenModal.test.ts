@@ -16,15 +16,25 @@ vi.mock('@/connect/operator-api', async (importOriginal) => {
   };
 });
 
+const GATEWAY = 'https://10.10.33.122:8444';
 const result = {
   token: 'plaintext-token',
   expiresAt: '2026-07-27T13:00:00.000Z',
   customerId: 'customer-1',
   clusterId: 'cluster-1',
   clusterName: 'Staging',
-  operatorEndpoint: 'https://operator.example.com',
-  installCommandTemplateVersion: 'v1',
-  installCommandTemplate: 'release-operator --enrollment-token ${ENROLLMENT_TOKEN}',
+  operatorEndpoint: GATEWAY,
+  installCommandTemplateVersion: 'v2',
+  // The shape of the server template (internal/orchestrator/operator.go): the gateway
+  // placeholder appears both in the quoted argument and in the instruction comment that
+  // tells the reader to replace it. The console has to handle both to make the copy
+  // executable (TASK-389).
+  installCommandTemplate: [
+    '# Replace <CONTROL_PLANE_OPERATOR_GATEWAY> with the address this customer cluster',
+    '# can reach (TLS; e.g. an ingress or nodePort in front of the operator Service).',
+    'export ENROLLMENT_TOKEN=${ENROLLMENT_TOKEN}',
+    "release-operator --config operator.yaml --orchestrator-addr '<CONTROL_PLANE_OPERATOR_GATEWAY>'",
+  ].join('\n'),
 };
 
 function createStorage(): Storage {
@@ -54,6 +64,15 @@ beforeEach(() => {
 });
 
 describe('EnrollmentTokenModal', () => {
+  async function mountModal() {
+    const wrapper = mount(EnrollmentTokenModal, {
+      global: { stubs: { Teleport: true } },
+      props: { customerId: 'customer-1', clusterId: 'cluster-1' },
+    });
+    await flushPromises();
+    return wrapper;
+  }
+
   it('keeps plaintext local to the modal and clears it after confirmed close', async () => {
     const wrapper = mount(EnrollmentTokenModal, {
       // The overlay is teleported by AppDialog; this test is about secret
@@ -212,5 +231,66 @@ describe('EnrollmentTokenModal', () => {
     expect(notice.attributes('role')).toBe('status');
     expect(notice.text()).toContain(t('operator.token.copied'));
     expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith('plaintext-token');
+  });
+
+  /*
+   * TASK-389. The generated install command was not directly executable: the console
+   * substituted the enrollment token but left the gateway placeholder in place, so the
+   * customer had to notice it and fill it in by hand. The response already carries the
+   * control plane's advertised address (`gateway.advertise_url`).
+   */
+  it('arms the gateway placeholder from the server-advertised endpoint (TASK-389)', async () => {
+    const wrapper = await mountModal();
+
+    // The dialog names the deployment fact the command depends on instead of leaving it
+    // buried next to the template version.
+    expect(wrapper.text()).toContain(t('operator.token.gatewayAddress'));
+    expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe(GATEWAY);
+
+    const command = wrapper.find('pre').text();
+    expect(command).not.toContain('<CONTROL_PLANE_OPERATOR_GATEWAY>');
+    expect(command).not.toContain('${ENROLLMENT_TOKEN}');
+    expect(command).toContain('plaintext-token');
+    expect(command).toContain(`--orchestrator-addr '${GATEWAY}'`);
+    // The instruction to replace the placeholder is obsolete once the console has
+    // replaced it: left in, it would ask the customer to overwrite a correct value.
+    expect(command).not.toContain('Replace <CONTROL_PLANE_OPERATOR_GATEWAY>');
+
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === t('operator.token.copyCommand'))!
+      .trigger('click');
+    await flushPromises();
+
+    // The clipboard receives exactly the armed command on screen, not a partial one.
+    expect(vi.mocked(navigator.clipboard.writeText)).toHaveBeenCalledWith(command);
+  });
+
+  it('drops the endpoint trailing slash so the command has no double slash (TASK-389)', async () => {
+    vi.mocked(createEnrollmentToken).mockResolvedValueOnce({ ...result, operatorEndpoint: 'https://x:8444/' });
+    const wrapper = await mountModal();
+
+    expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe('https://x:8444');
+    const command = wrapper.find('pre').text();
+    expect(command).toContain("--orchestrator-addr 'https://x:8444'");
+    expect(command).not.toMatch(/8444\//);
+  });
+
+  it('keeps the placeholder and warns when the endpoint is missing (TASK-389)', async () => {
+    vi.mocked(createEnrollmentToken).mockResolvedValueOnce({ ...result, operatorEndpoint: '' });
+    const wrapper = await mountModal();
+
+    const command = wrapper.find('pre').text();
+    // Fail closed: an empty endpoint must not fabricate a command. The placeholder stays,
+    // and the dialog says why instead of presenting the command as ready to run.
+    expect(command).toContain("'<CONTROL_PLANE_OPERATOR_GATEWAY>'");
+    expect(command).toContain('plaintext-token');
+
+    expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe(t('operator.token.gatewayMissing'));
+    const notice = wrapper.find('[data-testid="enrollment-gateway-missing"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.attributes('role')).toBe('alert');
+    expect(notice.text()).toBe(t('operator.token.gatewayMissingWarning'));
+    expect(notice.text()).toContain('<CONTROL_PLANE_OPERATOR_GATEWAY>');
   });
 });
