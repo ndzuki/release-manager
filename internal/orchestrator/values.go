@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	jsonpatch "gopkg.in/evanphx/json-patch.v4"
 	"google.golang.org/protobuf/types/known/structpb"
+	jsonpatch "gopkg.in/evanphx/json-patch.v4"
 
 	"github.com/ndzuki/release-manager/internal/store"
 	valueutil "github.com/ndzuki/release-manager/internal/values"
@@ -26,10 +26,11 @@ type mergedValues struct {
 	effectiveDigest string
 }
 
-// prepareValues canonicalizes the JSON Merge Patch (AC-067-14), merges it onto
-// the approved revision, and runs the secret-literal scan on base, patch, and
+// prepareValues canonicalizes the JSON Merge Patch (AC-067-14), rejects paths
+// that reference an image outside the bundle (AC-056-01), merges it onto the
+// approved revision, and runs the secret-literal scan on base, patch, and
 // effective values (AC-067-12). A nil patch is equivalent to {}.
-func prepareValues(revision *store.ValuesRevision, patch *structpb.Struct) (*mergedValues, error) {
+func prepareValues(revision *store.ValuesRevision, patch *structpb.Struct, images []store.BundleImage) (*mergedValues, error) {
 	// CanonicalDocument is the store's canonical JSON (TASK-018 model):
 	// re-canonicalizing it is a no-op, but the secret scan must still run
 	// on the base (AC-067-12).
@@ -57,6 +58,12 @@ func prepareValues(revision *store.ValuesRevision, patch *structpb.Struct) (*mer
 	}
 	if valueutil.ContainsSecret(patchBytes) {
 		return nil, errSecretLiteralForbidden
+	}
+	// AC-056-01: the patch may only reach the bundle's own image paths. Checked
+	// before the merge so a rejected patch never becomes part of the document
+	// whose digests are persisted.
+	if err := validatePatchImageOwnership(patch, images); err != nil {
+		return nil, err
 	}
 
 	effective, err := jsonpatch.MergePatch(base, patchBytes)
