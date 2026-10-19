@@ -92,3 +92,13 @@ internal/store/store.go	916	release.emergency.execute	显式 deployer capability
 internal/orchestrator/rollback.go	24	func (s *Service) RollbackRelease(	RollbackRelease handler 定义	docs/api.md:536
 internal/orchestrator/values_revision.go	238	func (s *Service) ListValuesRevisions(	ListValuesRevisions handler 定义	docs/api.md:545
 internal/orchestrator/operations_query.go	34	func (s *Service) ListOperations(	ListOperations handler 定义	docs/api.md:584
+
+# --- TASK-381: remaining stale pointers (api.md RPC table / observability / runbook) ---
+internal/orchestrator/service.go	193	func (s *Service) CreateOperation(	TASK-381 a：CreateOperation handler 定义（原引 :174）	docs/api.md:534
+internal/orchestrator/service.go	628	func (s *Service) PublishRelease(	TASK-381 a：PublishRelease handler 定义（原引 :534）	docs/api.md:535
+internal/orchestrator/service.go	769	func (s *Service) WatchOperation(	TASK-381 a：WatchOperation handler 定义（原引 :543）	docs/api.md:538
+internal/orchestrator/service.go	1067	func (s *Service) CancelOperation(	TASK-381 a：CancelOperation handler 定义（原引 :914）	docs/api.md:539
+cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-381 b：auth /metrics 挂载点（原引 :136-137 是 Redis ping）	docs/observability.md:115
+cmd/auth/main.go	152	auth.NewJWTManager(jwtPrivateKey, 15*time.Minute, 7*24*time.Hour)	TASK-381 c：access 15m / refresh 7d 的硬编码 TTL（原引 :140）	docs/runbook.md:318
+internal/store/store.go	2848	redact.Sanitize(lastError)	TASK-381 d：last_error 的脱敏实现（原引 :2802-2803 是接口方法）	docs/runbook.md:384
+deploy/dev/dev.sh	1155	docker build "${build_args[@]}"	TASK-381 e：内容寻址 tag 的 docker build/push（原引 :960-1000 是 kubeconfig 与 content_hash）	docs/runbook.md:492
