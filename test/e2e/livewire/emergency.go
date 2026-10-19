@@ -87,7 +87,7 @@ func (c *Connector) Targets(ctx context.Context, definitionID string) ([]stages.
 
 // SetReplicas implements stages.EmergencyWriter via ExecuteEmergencyChange.
 //
-// Two contract details are deliberate and easy to get wrong:
+// Three contract details are deliberate and easy to get wrong:
 //
 //   - request_hash is left unset. The server derives the replay fingerprint by
 //     hashing the whole message itself (hashExecuteEmergencyRequest) and never
@@ -95,6 +95,9 @@ func (c *Connector) Targets(ctx context.Context, definitionID string) ([]stages.
 //     fingerprint depend on a value the server ignores.
 //   - set_replicas is mutually exclusive with container/artifact_ref (the image
 //     branch), so neither is sent.
+//   - reason is required (TASK-325 W3 / AC-058-12: 5-500 characters after
+//     trimming). The stage passes its own stable justification instead of
+//     leaving the field empty, which the server rejects as invalid_reason.
 func (c *Connector) SetReplicas(ctx context.Context, request stages.EmergencySetReplicasRequest) (stages.OperationRef, error) {
 	clients, err := c.clientsOrFail()
 	if err != nil {
@@ -116,6 +119,7 @@ func (c *Connector) SetReplicas(ctx context.Context, request stages.EmergencySet
 			OperationVersion:    strings.TrimSpace(request.OperationVersion),
 			ConvergenceStrategy: convergenceStrategyFor(request.Convergence),
 			SetReplicas:         request.Replicas,
+			Reason:              "e2e emergency stage set_replicas",
 			IdempotencyKey:      c.writeKey("emergency-set-replicas", request.DefinitionID, strconv.FormatInt(int64(request.Replicas), 10)),
 		}))
 	if err != nil {

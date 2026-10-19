@@ -45,6 +45,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     deadline: null,
     lastError: '',
     effectStatus: 'UNSPECIFIED',
+    reasonDisplay: '',
     ...overrides,
   };
 }

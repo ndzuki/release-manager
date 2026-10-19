@@ -340,6 +340,11 @@ message Operation {
   // effect_status is the authoritative cluster effect for EMERGENCY operations.
   // Non-EMERGENCY operations always project NOT_STARTED.
   EmergencyEffectStatus effect_status = 16;
+  // reason_display is the safe projection of operations.reason (AC-058-48):
+  // the server redacts it and truncates it to 500 runes before it leaves the
+  // process, so the raw column is never exposed. Empty when the operation
+  // recorded no reason (all non-EMERGENCY operations).
+  string reason_display = 17;
 }
 
 message GetOperationRequest {
@@ -1751,6 +1756,11 @@ message ExecuteEmergencyChangeRequest {
   // branch and with set_replicas.
   repeated AnnotationEntry annotations = 11;
   string annotation_scope = 12;
+  // Operator-supplied justification, persisted to operations.reason and
+  // projected back as Operation.reason_display (TASK-325 W3 / AC-058-12,
+  // decision D16=A). required; 5-500 Unicode characters after trimming, the
+  // same shape RevokeOperatorRequest.reason enforces.
+  string reason = 13;
 }
 
 message ExecuteEmergencyChangeResponse {

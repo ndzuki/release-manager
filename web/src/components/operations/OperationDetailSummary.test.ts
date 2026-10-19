@@ -30,6 +30,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     deadline: null,
     lastError: '',
     effectStatus: 'NOT_STARTED',
+    reasonDisplay: '',
     ...overrides,
   };
 }
@@ -75,5 +76,26 @@ describe('OperationDetailSummary', () => {
       props: { operation: operation({ operationType: 'EMERGENCY', effectStatus: 'APPLIED' }) },
     });
     expect(emergency.text()).toContain(statusLabel('effect', 'APPLIED'));
+  });
+
+  // AC-058-48 / TASK-325 W3: the page renders only the server's safe
+  // projection. A missing reason renders no row at all, so ordinary
+  // operations keep their existing summary shape.
+  it('renders the reason projection only when the operation carries one', () => {
+    const withoutReason = mount(OperationDetailSummary, { props: { operation: operation() } });
+    expect(withoutReason.text()).not.toContain('变更原因');
+
+    const withReason = mount(OperationDetailSummary, {
+      props: {
+        operation: operation({
+          operationType: 'EMERGENCY',
+          effectStatus: 'APPLIED',
+          reasonDisplay: 'incident-42 rotate password=****REDACTED****',
+        }),
+      },
+    });
+    expect(withReason.text()).toContain('变更原因');
+    expect(withReason.text()).toContain('incident-42 rotate password=****REDACTED****');
+    expect(withReason.findAll('.operation-detail__summary-reason')).toHaveLength(1);
   });
 });

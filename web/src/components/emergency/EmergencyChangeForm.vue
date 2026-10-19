@@ -6,7 +6,7 @@
 // Field-level validation errors render inline (D7 double-track).
 import { computed } from 'vue';
 import FormField from '@/components/common/FormField.vue';
-import { REASON_MAX_BYTES, utf8ByteLength, validateReason } from '@/features/emergency/validation';
+import { REASON_MAX_CHARS, codePointLength, validateReason } from '@/features/emergency/validation';
 import type { ConvergencePolicy } from '@/features/emergency/model';
 
 const props = defineProps<{
@@ -24,10 +24,13 @@ const emit = defineEmits<{
 }>();
 
 const reasonValidation = computed(() => validateReason(props.reason));
-const reasonBytes = computed(() => utf8ByteLength(props.reason.trim()));
-// TASK-275: the byte counter stays a description (it is a live hint, not the name);
+// TASK-325 W3: the counter is in Unicode characters, the unit the server
+// enforces (5-500 via utf8.RuneCountInString), so the number the operator sees
+// is the number the server checks.
+const reasonChars = computed(() => codePointLength(props.reason.trim()));
+// TASK-275: the counter stays a description (it is a live hint, not the name);
 // FormField cannot render it because it carries the `over` state class.
-const byteCountId = 'emergency-reason-byte-count';
+const charCountId = 'emergency-reason-char-count';
 
 const effectivePolicy = computed<ConvergencePolicy>(() =>
   props.requirePromotionAvailable ? props.convergencePolicy : 'REVERT_ON_NEXT_RECONCILE',
@@ -56,14 +59,14 @@ function setPolicy(policy: ConvergencePolicy): void {
           class="field-input reason-input"
           rows="4"
           :value="reason"
-          :aria-describedby="[describedBy, byteCountId].filter(Boolean).join(' ')"
+          :aria-describedby="[describedBy, charCountId].filter(Boolean).join(' ')"
           :aria-invalid="invalid"
           :disabled="disabled"
           placeholder="事故 ID / 现象 / 影响范围"
           @input="emit('update:reason', ($event.target as HTMLTextAreaElement).value)"
         />
-        <span :id="byteCountId" class="byte-count" :class="{ over: !reasonValidation.valid }">
-          {{ reasonBytes }} / {{ REASON_MAX_BYTES }} 字节
+        <span :id="charCountId" class="char-count" :class="{ over: !reasonValidation.valid }">
+          {{ reasonChars }} / {{ REASON_MAX_CHARS }} 字符
         </span>
       </template>
     </FormField>
@@ -106,8 +109,8 @@ function setPolicy(policy: ConvergencePolicy): void {
 /* TASK-275: `.field-label` and `.error-text` are gone — the label and the alert are FormField's. */
 .field-input { width: 100%; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
 .reason-input { resize: vertical; }
-.byte-count { font-size: var(--font-size-sm); color: var(--color-subtle); }
-.byte-count.over { color: var(--color-error); }
+.char-count { font-size: var(--font-size-sm); color: var(--color-subtle); }
+.char-count.over { color: var(--color-error); }
 .policy-fieldset { display: grid; gap: 0.4rem; border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.75rem; }
 .policy-fieldset label.disabled { color: var(--color-subtle); }
 .hint { color: var(--color-muted); font-size: var(--font-size-sm); }

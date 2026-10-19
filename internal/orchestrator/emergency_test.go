@@ -166,6 +166,12 @@ func emergencyAdminContext() context.Context {
 	})
 }
 
+// emergencyTestReason is the required justification every ExecuteEmergencyChange
+// fixture must carry (TASK-325 W3 / AC-058-12: 5-500 characters after trimming).
+// A request without it is rejected before any other validation runs, which is the
+// behaviour TestExecuteEmergencyChangeReasonValidation pins directly.
+const emergencyTestReason = "incident-42 mitigate impact"
+
 func emergencyImageRequest(key string) *connect.Request[orchestratorv1.ExecuteEmergencyChangeRequest] {
 	return connect.NewRequest(&orchestratorv1.ExecuteEmergencyChangeRequest{
 		ReleaseDefinitionId: "def-001",
@@ -175,6 +181,7 @@ func emergencyImageRequest(key string) *connect.Request[orchestratorv1.ExecuteEm
 		ArtifactRef:         "artifact-img",
 		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
 		IdempotencyKey:      key,
+		Reason:              emergencyTestReason,
 	})
 }
 
@@ -548,6 +555,7 @@ func emergencyReplicasRequest(key string, replicas int32) *connect.Request[orche
 		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
 		IdempotencyKey:      key,
 		SetReplicas:         replicas,
+		Reason:              emergencyTestReason,
 	})
 }
 

@@ -2364,7 +2364,12 @@ type Operation struct {
 	LastError  string                 `protobuf:"bytes,15,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	// effect_status is the authoritative cluster effect for EMERGENCY operations.
 	// Non-EMERGENCY operations always project NOT_STARTED.
-	EffectStatus  EmergencyEffectStatus `protobuf:"varint,16,opt,name=effect_status,json=effectStatus,proto3,enum=orchestrator.v1.EmergencyEffectStatus" json:"effect_status,omitempty"`
+	EffectStatus EmergencyEffectStatus `protobuf:"varint,16,opt,name=effect_status,json=effectStatus,proto3,enum=orchestrator.v1.EmergencyEffectStatus" json:"effect_status,omitempty"`
+	// reason_display is the safe projection of operations.reason (AC-058-48):
+	// the server redacts it and truncates it to 500 runes before it leaves the
+	// process, so the raw column is never exposed. Empty when the operation
+	// recorded no reason (all non-EMERGENCY operations).
+	ReasonDisplay string `protobuf:"bytes,17,opt,name=reason_display,json=reasonDisplay,proto3" json:"reason_display,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2509,6 +2514,13 @@ func (x *Operation) GetEffectStatus() EmergencyEffectStatus {
 		return x.EffectStatus
 	}
 	return EmergencyEffectStatus_EMERGENCY_EFFECT_STATUS_UNSPECIFIED
+}
+
+func (x *Operation) GetReasonDisplay() string {
+	if x != nil {
+		return x.ReasonDisplay
+	}
+	return ""
 }
 
 type GetOperationRequest struct {
@@ -9416,8 +9428,13 @@ type ExecuteEmergencyChangeRequest struct {
 	// branch and with set_replicas.
 	Annotations     []*AnnotationEntry `protobuf:"bytes,11,rep,name=annotations,proto3" json:"annotations,omitempty"`
 	AnnotationScope string             `protobuf:"bytes,12,opt,name=annotation_scope,json=annotationScope,proto3" json:"annotation_scope,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Operator-supplied justification, persisted to operations.reason and
+	// projected back as Operation.reason_display (TASK-325 W3 / AC-058-12,
+	// decision D16=A). required; 5-500 Unicode characters after trimming, the
+	// same shape RevokeOperatorRequest.reason enforces.
+	Reason        string `protobuf:"bytes,13,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExecuteEmergencyChangeRequest) Reset() {
@@ -9530,6 +9547,13 @@ func (x *ExecuteEmergencyChangeRequest) GetAnnotations() []*AnnotationEntry {
 func (x *ExecuteEmergencyChangeRequest) GetAnnotationScope() string {
 	if x != nil {
 		return x.AnnotationScope
+	}
+	return ""
+}
+
+func (x *ExecuteEmergencyChangeRequest) GetReason() string {
+	if x != nil {
+		return x.Reason
 	}
 	return ""
 }
@@ -11744,7 +11768,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\rfrom_revision\x18\x02 \x01(\x05R\ffromRevision\x12\x1f\n" +
 	"\vto_revision\x18\x03 \x01(\x05R\n" +
 	"toRevision\x12\x14\n" +
-	"\x05state\x18\x04 \x01(\tR\x05state\"\x8d\x06\n" +
+	"\x05state\x18\x04 \x01(\tR\x05state\"\xb4\x06\n" +
 	"\tOperation\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x122\n" +
 	"\x15release_definition_id\x18\x02 \x01(\tR\x13releaseDefinitionId\x12%\n" +
@@ -11766,7 +11790,8 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\bdeadline\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\x0f \x01(\tR\tlastError\x12K\n" +
-	"\reffect_status\x18\x10 \x01(\x0e2&.orchestrator.v1.EmergencyEffectStatusR\feffectStatus\"8\n" +
+	"\reffect_status\x18\x10 \x01(\x0e2&.orchestrator.v1.EmergencyEffectStatusR\feffectStatus\x12%\n" +
+	"\x0ereason_display\x18\x11 \x01(\tR\rreasonDisplay\"8\n" +
 	"\x13GetOperationRequest\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\"\xad\x02\n" +
 	"\x14GetOperationResponse\x128\n" +
@@ -12344,7 +12369,7 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"selectable\x18\n" +
 	" \x01(\bR\n" +
 	"selectable\x125\n" +
-	"\x16incompatibility_reason\x18\v \x01(\tR\x15incompatibilityReason\"\xbe\x04\n" +
+	"\x16incompatibility_reason\x18\v \x01(\tR\x15incompatibilityReason\"\xd6\x04\n" +
 	"\x1dExecuteEmergencyChangeRequest\x122\n" +
 	"\x15release_definition_id\x18\x01 \x01(\tR\x13releaseDefinitionId\x12!\n" +
 	"\fworkload_ref\x18\x02 \x01(\tR\vworkloadRef\x12\x1c\n" +
@@ -12358,7 +12383,8 @@ const file_orchestrator_v1_orchestrator_proto_rawDesc = "" +
 	"\fset_replicas\x18\n" +
 	" \x01(\x05R\vsetReplicas\x12B\n" +
 	"\vannotations\x18\v \x03(\v2 .orchestrator.v1.AnnotationEntryR\vannotations\x12)\n" +
-	"\x10annotation_scope\x18\f \x01(\tR\x0fannotationScope\"\xaa\x01\n" +
+	"\x10annotation_scope\x18\f \x01(\tR\x0fannotationScope\x12\x16\n" +
+	"\x06reason\x18\r \x01(\tR\x06reason\"\xaa\x01\n" +
 	"\x1eExecuteEmergencyChangeResponse\x128\n" +
 	"\x06result\x18\x01 \x01(\v2 .orchestrator.v1.EmergencyResultR\x06result\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12+\n" +

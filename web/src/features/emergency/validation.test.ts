@@ -3,7 +3,9 @@ import {
   ANNOTATION_MAX_ENTRIES,
   canonicalIntentJson,
   MAX_TASKS_PER_REVISION,
-  REASON_MAX_BYTES,
+  REASON_MAX_CHARS,
+  REASON_MIN_CHARS,
+  codePointLength,
   utf8ByteLength,
   validateAnnotationEntries,
   validateConvergenceSelection,
@@ -36,13 +38,32 @@ describe('UTF-8 byte validation', () => {
     expect(utf8ByteLength('🚀')).toBe(4);
   });
 
-  it('validates reason length/forbidden characters (AC-058-12)', () => {
+  it('counts Unicode code points, the unit the server enforces', () => {
+    expect(codePointLength('abc')).toBe(3);
+    expect(codePointLength('中文')).toBe(2);
+    // A surrogate pair is ONE code point but two UTF-16 units, which is why the
+    // reason bound cannot use String#length.
+    expect(codePointLength('🚀')).toBe(1);
+    expect('🚀'.length).toBe(2);
+  });
+
+  // AC-058-12 / TASK-325 W3: the form mirrors the server's 5-500 character
+  // window, so the operator is never told "valid" for a reason the server will
+  // reject as invalid_reason.
+  it('enforces the 5-500 character reason window (AC-058-12)', () => {
     expect(validateReason('  事故 ID 123  ')).toEqual({ valid: true });
     expect(validateReason('   ')).toMatchObject({ valid: false, code: 'reason_required' });
-    expect(validateReason('a'.repeat(REASON_MAX_BYTES + 1))).toMatchObject({ valid: false, code: 'reason_too_long' });
+    expect(validateReason('abcd')).toMatchObject({ valid: false, code: 'reason_too_short' });
+    expect(validateReason('abcde')).toEqual({ valid: true });
+    expect(validateReason('  abcde  ')).toEqual({ valid: true });
+    expect(validateReason('a'.repeat(REASON_MAX_CHARS))).toEqual({ valid: true });
+    expect(validateReason('a'.repeat(REASON_MAX_CHARS + 1))).toMatchObject({ valid: false, code: 'reason_too_long' });
+    expect(validateReason('🚀'.repeat(REASON_MAX_CHARS))).toEqual({ valid: true });
+    expect(validateReason('🚀'.repeat(REASON_MAX_CHARS + 1))).toMatchObject({ valid: false, code: 'reason_too_long' });
+    expect(REASON_MIN_CHARS).toBe(5);
     expect(validateReason(`nul\u0000char`)).toMatchObject({ valid: false, code: 'reason_invalid_chars' });
-    expect(validateReason('bad\ufffe')).toMatchObject({ valid: false, code: 'reason_invalid_chars' });
-    expect(validateReason('bad\uffff')).toMatchObject({ valid: false, code: 'reason_invalid_chars' });
+    expect(validateReason('abcd\ufffe')).toMatchObject({ valid: false, code: 'reason_invalid_chars' });
+    expect(validateReason('abcd\uffff')).toMatchObject({ valid: false, code: 'reason_invalid_chars' });
   });
 
   it('validates replicas range and HPA gating (AC-058-01)', () => {

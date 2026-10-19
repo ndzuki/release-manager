@@ -52,6 +52,7 @@ const BASE = {
   convergenceStrategy: 'REVERT_ON_NEXT_RECONCILE' as const,
   targetLocks: [],
   idempotencyKey: 'key-1',
+  reason: 'incident-42 mitigate impact',
 };
 
 afterEach(() => {
@@ -75,6 +76,24 @@ describe('executeEmergencyChange wire shape', () => {
     expect(populatedActions(sent)).toEqual(['image']);
     expect(sent.idempotencyKey).toBe('key-1');
     expect(sent.workloadRef).toBe('deployments/ns1/api');
+  });
+
+  // AC-058-12 / TASK-325 W3: the justification is a first-class request field.
+  // Without this assertion the store could keep validating a reason and never
+  // put it on the wire — exactly the drift the same class of bug produced for
+  // replicas/annotations before TASK-273.
+  it('sends the operator justification as reason', async () => {
+    const calls = stubFetch({ code: 'internal', message: 'boom' });
+    const input: ExecuteEmergencyInput = {
+      ...BASE,
+      action: 'replicas',
+      setReplicas: 2,
+      reason: 'incident-42 mitigate impact',
+    };
+
+    await expect(executeEmergencyChange(input)).rejects.toBeInstanceOf(ConnectError);
+
+    expect(sentRequest(calls).reason).toBe('incident-42 mitigate impact');
   });
 
   it('replicas-only sends the flat set_replicas scalar and nothing else', async () => {

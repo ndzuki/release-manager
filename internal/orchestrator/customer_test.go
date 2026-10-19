@@ -68,6 +68,7 @@ func TestEmergencyChange_RejectedForDisabledCustomer(t *testing.T) {
 		ArtifactRef:         "artifact-img",
 		ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
 		IdempotencyKey:      "customer-disabled-test",
+		Reason:              "customer disabled path",
 	}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is disabled")
