@@ -220,7 +220,7 @@ install verify`（`internal/devfixture/runner.go:68`），支持断点续跑（`
 | flag | 默认值 | 必填 | 含义 | 出处 |
 | --- | --- | --- | --- | --- |
 | `-print-fixture-version` | `false` | 否 | 打印权威夹具版本常量后退出（dev.sh 用它取版本） | `main.go:36`；常量 `v2`（`internal/devfixture/devfixture.go:42`） |
-| `-ensure-mtls-ca` | `-mtls-ca-dir` | `-mtls-ca-dir` 必填（否则报错） | 否 | dev mTLS CA 生成/复用后退出（AC-065-36） | `main.go:44,70-75`；实现 `mtls_ca.go`；dev.sh 调用 `deploy/dev/dev.sh:410` |
+| `-ensure-mtls-ca` | `-mtls-ca-dir` | `-mtls-ca-dir` 必填（否则报错） | 否 | dev mTLS CA 生成/复用后退出（AC-065-36） | `main.go:44,70-75`；实现 `mtls_ca.go`；dev.sh 调用 `deploy/dev/dev.sh:549` |
 | `-operator-timeout` | `0`→包默认 180s（env `DEV_TIMEOUT_OPERATOR`） | 否 | 等待 operator 上线的秒数 | `main.go:43`；默认 `internal/devfixture/devfixture.go:50` |
 | `-seed-retries` | `0`→包默认 3（env `DEV_TIMEOUT_SEED_RETRIES`） | 否 | 阶段写入重试（1s/2s/4s 退避） | `main.go:44`；默认 `devfixture.go:51` |
 | `-stop-after` | `""` | 否 | 提交到该阶段为止干净退出（如 `enrollment`） | `main.go:45` |

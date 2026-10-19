@@ -5,7 +5,7 @@
 - 读者：需要维护本仓库 Actions 的维护者。
 - 事实范围：`.github/workflows/test.yml`（978 行，21 个 job）与 `.github/workflows/sync-to-gitcode.yaml`（40 行，1 个 job）。**另有 `.github/workflows/codeql.yml`（103 行，1 个 job，`permissions: security-events: write`）—— 本文档的逐项清单未覆盖它**；`.github/workflows/` 之外没有其它 workflow。
 - 本文**不包含任何机密取值**。所有示例值一律写成 `<...>` 占位。
-- 生产部署侧的机密注入**不在本清单内**：`docs/architecture.md:113` 明确「生产 Secret manager 注入与生产配置加载仍由 REQ-011 owner 承接」，dev 范围只做了最小接线。
+- 生产部署侧的机密注入**不在本清单内**：`docs/architecture.md:134` 明确「生产 Secret manager 注入与生产配置加载仍由 REQ-011 owner 承接」，dev 范围只做了最小接线。
 
 ## 1. 全部 `secrets.*` 引用（逐个从 workflow 提取）
 
@@ -131,7 +131,7 @@ gh secret set DEV_M_TLS_CA_CERT       --body "$(cat data/dev-ca/ca.crt)"   --rep
 - **格式要求：必须是 PKCS#8 Ed25519 私钥 PEM**（`-----BEGIN PRIVATE KEY-----`，块类型 `PRIVATE KEY`）。dev.sh 把值交给 `cmd/devseed -ensure-jwt-keys`，helper 用**服务同款解析器**（`jwtauth.ParseEd25519PrivateKeyPEM`）校验并**派生公钥**写入 `jwt-public-key.pem`（`deploy/dev/dev.sh:360-383`、`cmd/devseed/jwt_keys.go`）⇒ 两半永不可能不一致，且**非法值直接失败**（fail-closed，不再"任何非空字节串都有效"）。
 - ⚠️ **旧值不可复用**：`DEV_JWT_SIGNING_KEY` 时代的值是 `head -c 64 /dev/urandom | base64`（64 随机字节的 base64，88 字符），**不是** PEM，helper 会拒绝。轮换这一项必须**重新生成一对 Ed25519 密钥**：本地跑 `make dev-jwt-keys`（或 `go run ./cmd/devseed/ -ensure-jwt-keys -jwt-key-dir data/dev-jwt`），再把 `data/dev-jwt/jwt-private-key.pem` 的内容设为 secret 值。
 - 三处 flag 默认值**已无哨兵**：`--jwt-private-key`（auth）/`--jwt-public-key`（orchestrator、api）默认空值，缺失或非 Ed25519 PEM 即**启动失败**（`cmd/auth/main.go:261`、`cmd/orchestrator/main.go:983`、`cmd/api/main.go:183`）。
-- 落盘语义：ci 下只在 kustomize build/apply 期间存在，apply 完**两个**文件立即删除（`deploy/dev/dev.sh:387-390`，调用点 `:84`/`:1239`）。
+- 落盘语义：ci 下只在 kustomize build/apply 期间存在，apply 完**两个**文件立即删除（删除函数 `deploy/dev/dev.sh:422-427`，调用点 `:1332`）。
 
 | CI secret | 本地对应物（`data/` 下，全部 gitignore：`.gitignore:35`） | 谁生成 |
 | --- | --- | --- |

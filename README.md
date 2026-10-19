@@ -94,7 +94,7 @@ make quality       # 聚合质量门禁
 make sdk-check     # SDK-only 静态门禁
 make check-reqs    # 原子需求模板校验
 make check-licenses # 依赖许可门禁（GPL/AGPL/LGPL 等一律拒绝）
-make check-docs    # 文档事实门禁（文档写下的 make 目标、仓库路径、链接、行号引用必须真实）
+make check-docs    # 文档事实门禁（目标/路径/链接存在；行号存在，白名单条目 token 相符）
 make lint-proto    # buf lint（契约命名与布局规则；COMMENT_* 故意不开，理由见 buf.yaml）
 make proto         # buf generate（生成 Go/TS 契约代码）
 ```

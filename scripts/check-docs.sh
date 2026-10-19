@@ -21,6 +21,14 @@
 #      filename-only citation whose basename names no repository file is COUNTED
 #      AND REPORTED as unresolved (WARN, not FAIL) instead of being skipped — see
 #      "Two more citation shapes" below
+#   7. the citations whitelisted in docs/citations.assert still point at a line
+#      that CONTAINS the declared token, and the document named by the entry
+#      still cites that same file:line (two directions, because either half can
+#      be edited alone). Checks 4 and 6 verify only that the line exists; a line
+#      number drifts on unrelated edits above it, so a green gate did not mean
+#      the cited line was about the claimed symbol (V13, TASK-379). The rest of
+#      the citations keep the weaker guarantee on purpose — hashing every
+#      citation in files that change often would produce noise, not truth.
 #
 # This repository documents by evidence (`文件:行号`), which only works if those
 # line numbers survive edits; a citation that has drifted off the end of its file
@@ -633,11 +641,161 @@ if [ -f "$VULN_EXC" ]; then
   done < <(grep -noE '(cmd|internal|api|web|docs|deploy|migrations|scripts|test|configs)/[A-Za-z0-9_./*-]+(:[0-9][0-9,./-]*)?' "$VULN_EXC" 2>/dev/null || true)
 fi
 
+# ---------------------------------------------------------------------------
+# 7. citation content contracts (docs/citations.assert, V13)
+#
+# Why: checks 4 and 6 only prove the cited LINE EXISTS. Sampling 20 citations on
+# 2026-10-19 found 7 drifted ones and the gate reported 2, because a line number
+# drifts on every unrelated edit above it. Hashing every citation is a non-goal
+# (the cited files change often, so a hash either fails constantly or is
+# exempted wholesale), and the `audit-citations` heuristic is not accurate
+# enough to block. So a WHITELIST of high-value citations carries a content
+# token, checked in both directions because either half can be edited alone:
+#   - forward: `file` exists, `line` is inside it, and that line contains
+#     `contains`;
+#   - reverse: the document named by `cited_at` still writes a citation to that
+#     file covering that line.
+# A missing reason is an ERROR, never a silent pass — the same invariant as the
+# markdown and vulncheck exemptions above. The `contains` token is required for
+# the same reason it is checked: an EMPTY token matches every line (`*""*`), so a
+# blank 3rd column would "verify" nothing and still be counted as verified. An
+# empty (or whitespace-only) token is therefore an error, not a vacuous pass. An
+# empty registry is also an error: a vacuous layer would look green without
+# proving anything.
+# ---------------------------------------------------------------------------
+ASSERT_FILE=${CHECK_DOCS_ASSERT_FILE:-docs/citations.assert}
+ASSERT_TOTAL=0
+n_assert=0
+bad_assert=()
+declare -A assert_lines=()
+assert_file_lines() {
+  local f=$1 n
+  n=${assert_lines[$f]:-}
+  if [ -z "$n" ]; then
+    n=$(awk 'END{print NR}' "$f" 2>/dev/null || echo 0)
+    assert_lines[$f]=$n
+  fi
+  printf '%s' "$n"
+}
+# doc_cites_line <document line text> <line>: does a citation written on the
+# document line cover <line>? Handles `path:N`, `path:N-M`, `path:N,M` and the
+# bare `:N`/`:N-M` shape used right after a path (`smoke.sh:171`、`:182`). The
+# caller already required the line to name the cited file, so a bare number is
+# attributable exactly the way check 6 attributes one.
+doc_cites_line() {
+  local text=$1 want=$2 m seg s e
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    m=${m#:}
+    local IFS=','
+    for seg in $m; do
+      s=${seg%%-*}
+      e=${seg#*-}
+      [ "$e" = "$seg" ] && e=$s
+      case "$s$e" in *[!0-9]*) continue ;; esac
+      [ "$want" -ge "$s" ] && [ "$want" -le "$e" ] && return 0
+    done
+  done < <(printf '%s\n' "$text" | grep -oE ':[0-9]+([-,][0-9]+)*' 2>/dev/null || true)
+  return 1
+}
+if [ ! -f "$ASSERT_FILE" ]; then
+  bad_assert+=("$ASSERT_FILE: missing citation contract registry (the V13 layer cannot run)")
+else
+  assert_lno=0
+  # Tab is IFS whitespace, so `read` would collapse an EMPTY reason slot and shift
+  # cited_at left — turning "missing reason" into "missing cited_at". Rewrite the
+  # separators to a non-whitespace byte first so empty fields are preserved and
+  # every missing column is reported by its own name.
+  while IFS= read -r araw; do
+    assert_lno=$((assert_lno + 1))
+    case "$araw" in ''|'#'*) continue ;; esac
+    araw=${araw//$'\t'/$'\x1f'}
+    IFS=$'\x1f' read -r afile aline acontains areason acited <<< "$araw"
+    ASSERT_TOTAL=$((ASSERT_TOTAL + 1))
+    where="$ASSERT_FILE:$assert_lno"
+    # An empty token is not "no opinion": `case $actual in *""*)` matches every
+    # line, so an empty 3rd column would pass while still counting toward the
+    # verified total. A whitespace-only token is the same placeholder written with
+    # spaces. Reject both explicitly instead of letting the case match run.
+    if [[ -z "${acontains//[[:space:]]/}" ]]; then
+      bad_assert+=("$where: empty contains token (3rd column is required)")
+      continue
+    fi
+    # Same invariant for the reason: a missing reason was already an error, but a
+    # whitespace-only one slipped through `[ -z ]` and passed as if it explained
+    # the contract.
+    if [[ -z "${areason//[[:space:]]/}" ]]; then
+      bad_assert+=("$where: missing reason (4th column is required: why this pointer matters)")
+      continue
+    fi
+    if [ -z "$acited" ]; then
+      bad_assert+=("$where: missing cited_at (5th column: <doc>:<line> where the citation is written)")
+      continue
+    fi
+    if ! [[ $aline =~ ^[0-9]+$ ]] || [ "$aline" -lt 1 ]; then
+      bad_assert+=("$where: line \"$aline\" is not a positive integer")
+      continue
+    fi
+    case "$afile" in
+      /*|*..*) bad_assert+=("$where: file \"$afile\" must be repository-relative"); continue ;;
+    esac
+    if [ ! -f "$afile" ]; then
+      bad_assert+=("$where: cited file $afile does not exist")
+      continue
+    fi
+    alen=$(assert_file_lines "$afile")
+    if [ "$aline" -gt "$alen" ]; then
+      bad_assert+=("$where: $afile:$aline is outside the file ($alen lines)")
+      continue
+    fi
+    actual=$(sed -n "${aline}p" "$afile")
+    case "$actual" in
+      *"$acontains"*) ;;
+      *) bad_assert+=("$where: $afile:$aline does not contain \"$acontains\" (the line reads: $actual)")
+         continue ;;
+    esac
+    adoc=${acited%:*}
+    adline=${acited##*:}
+    if [ ! -f "$adoc" ]; then
+      bad_assert+=("$where: cited_at document $adoc does not exist")
+      continue
+    fi
+    if ! [[ $adline =~ ^[0-9]+$ ]] || [ "$adline" -lt 1 ]; then
+      bad_assert+=("$where: cited_at \"$acited\" is not <document>:<line>")
+      continue
+    fi
+    dlen=$(assert_file_lines "$adoc")
+    if [ "$adline" -gt "$dlen" ]; then
+      bad_assert+=("$where: cited_at $acited is outside $adoc ($dlen lines)")
+      continue
+    fi
+    dtext=$(sed -n "${adline}p" "$adoc")
+    abase=${afile##*/}
+    case "$dtext" in
+      *"$abase"*|*"$afile"*) ;;
+      *) bad_assert+=("$where: $acited no longer names $abase, so the document and the registry have diverged")
+         continue ;;
+    esac
+    if ! doc_cites_line "$dtext" "$aline"; then
+      bad_assert+=("$where: $acited no longer cites $afile:$aline (doc-side pointer is stale; keep the document and the registry in step)")
+      continue
+    fi
+    n_assert=$((n_assert + 1))
+  done < "$ASSERT_FILE"
+  if [ "$ASSERT_TOTAL" -eq 0 ]; then
+    bad_assert+=("$ASSERT_FILE: no citation contracts declared (a vacuous gate is not a pass)")
+  fi
+fi
+
 echo "check-docs: ${#md[@]} markdown files; ${#targets[@]} Makefile rules; $n_spans code spans inspected; $n_exempt line exemptions"
 # Weak guarantee, stated so nobody reads more into the count than it earns: the
 # line-number citations are checked for the LINE EXISTING, not for the cited line
-# actually being about the named symbol (V13).
-echo "check-docs: $n_cites path:line citations checked for line existence ONLY (weak guarantee: cited-line content is not verified)"
+# actually being about the named symbol. The whitelist above is the exception:
+# those entries additionally verify the line's content and their document side.
+echo "check-docs: $n_cites path:line citations checked for line existence (content is verified only for the whitelist below; V13)"
+if [ -f "$ASSERT_FILE" ]; then
+  echo "check-docs: $n_assert citation contract(s) verified ($ASSERT_FILE)"
+fi
 echo "check-docs: $n_name filename-only citations (Foo.vue:12) resolved by unique basename and checked the same way"
 if [ "$n_bare" -gt 0 ]; then
   echo "check-docs: $n_bare bare :NNN citations; $n_bare_attr attributed to a file earlier on the same line and checked; $n_bare_unattr unattributed and NOT checked"
@@ -700,6 +858,10 @@ if [ ${#bad_exempt[@]} -gt 0 ]; then
   fail=1; echo "  invalid citation exemption or snapshot marker  ${#bad_exempt[@]}"
   printf '    %s\n' "${bad_exempt[@]}"
 fi
+if [ ${#bad_assert[@]} -gt 0 ]; then
+  fail=1; echo "  citation contract violated  ${#bad_assert[@]} (of $ASSERT_TOTAL declared in $ASSERT_FILE)"
+  printf '    %s\n' "${bad_assert[@]}"
+fi
 if [ "$fail" = 1 ]; then
   echo "check-docs: FAIL"
   echo "  Either fix the document, or ship what it promises. When a mention is"
@@ -710,6 +872,9 @@ if [ "$fail" = 1 ]; then
   echo "  In $VULN_EXC, use '# check-cite-ignore: <reason>' on the citation's line,"
   echo "  or list the exact path under 'cite_ignore:' with '# <reason>' — the"
   echo "  reason is required in both forms."
+  echo "  In $ASSERT_FILE, fix the cited line or the document, and keep the"
+  echo "  file/line/contains/reason/cited_at columns in step — a missing reason"
+  echo "  is an error, never an exemption."
   exit 1
 fi
 echo "check-docs: PASS"
