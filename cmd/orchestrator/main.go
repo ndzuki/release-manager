@@ -133,13 +133,13 @@ func (s *orchSvc) operatorRegistry() *operator.StreamRegistry {
 }
 
 // operatorEndpoint returns the agent-facing OperatorService URL embedded in
-// enrollment install templates (REQ-053).
+// enrollment install templates (REQ-053); a configured advertise URL wins.
 func (s *orchSvc) operatorEndpoint() string {
 	gatewayCfg := s.cfg.Gateway.WithDefaults()
-	if gatewayCfg.Enabled {
-		return fmt.Sprintf("https://operator-gateway.dev.release-manager.local:%d", gatewayCfg.Port)
+	if gatewayCfg.AdvertiseURL != "" {
+		return gatewayCfg.AdvertiseURL
 	}
-	return "http://operator:8084"
+	return legacyOperatorEndpoint(gatewayCfg)
 }
 
 // ExtraServers reports the agent gateway listener so app.Run starts and
@@ -170,10 +170,10 @@ func (s *orchSvc) buildGatewayServer(
 	syncService *orchestrator.Service,
 	logger *slog.Logger,
 ) (*http.Server, error) {
-	serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
-		"operator-gateway.dev.release-manager.local",
-		"localhost",
-	})
+	serverCertPEM, serverKeyPEM, err := caInst.SignServerCertWithIPSANs(
+		gatewayCfg.Hostnames,
+		gatewayCfg.IPAddresses,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("sign gateway server certificate: %w", err)
 	}

@@ -2166,7 +2166,7 @@ func TestBuildGatewayServerMountsSyncInventory(t *testing.T) {
 
 	svc := &orchSvc{store: st}
 	server, err := svc.buildGatewayServer(
-		config.GatewayCfg{},
+		(config.GatewayCfg{}).WithDefaults(),
 		gatewayCA,
 		operatorService,
 		syncService,
@@ -2258,6 +2258,104 @@ func TestBuildGatewayServerMountsSyncInventory(t *testing.T) {
 	_, err = syncClient.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// TestBuildGatewayServerUsesConfiguredSANs pins the TASK-388 wiring: the
+// listener's server certificate must carry the configured DNS and IP SANs, and
+// a zero-value GatewayCfg must still produce the legacy pair. The customer
+// failure this guards is a certificate whose SANs do not name the address the
+// agent dials (https://10.10.33.122:8444).
+func TestBuildGatewayServerUsesConfiguredSANs(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	gatewayCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
+	require.NoError(t, err)
+	operatorService, err := operator.NewService(st, slog.New(slog.DiscardHandler), operator.WithCA(gatewayCA))
+	require.NoError(t, err)
+	syncService := orchestrator.NewService(st, nil, "staging", slog.New(slog.DiscardHandler))
+	svc := &orchSvc{store: st}
+
+	build := func(cfg config.GatewayCfg) *x509.Certificate {
+		t.Helper()
+		server, err := svc.buildGatewayServer(cfg.WithDefaults(), gatewayCA, operatorService, syncService, slog.New(slog.DiscardHandler))
+		require.NoError(t, err)
+		require.Len(t, server.TLSConfig.Certificates, 1)
+		leaf, err := x509.ParseCertificate(server.TLSConfig.Certificates[0].Certificate[0])
+		require.NoError(t, err)
+		return leaf
+	}
+
+	t.Run("configured SANs reach the leaf", func(t *testing.T) {
+		leaf := build(config.GatewayCfg{
+			Hostnames:   []string{"rm-prod.local"},
+			IPAddresses: []string{"10.10.33.122"},
+		})
+		assert.Equal(t, []string{"rm-prod.local"}, leaf.DNSNames)
+		require.Len(t, leaf.IPAddresses, 1)
+		assert.Equal(t, "10.10.33.122", leaf.IPAddresses[0].String())
+		// The verification an agent performs when it dials the IP.
+		_, err := leaf.Verify(x509.VerifyOptions{DNSName: "10.10.33.122", Roots: gatewayCA.CertPool()})
+		assert.NoError(t, err)
+	})
+
+	t.Run("zero value keeps the legacy certificate", func(t *testing.T) {
+		leaf := build(config.GatewayCfg{})
+		assert.Equal(t, []string{"operator-gateway.dev.release-manager.local", "localhost"}, leaf.DNSNames)
+		assert.Empty(t, leaf.IPAddresses, "no IP SAN unless configured")
+		_, err := leaf.Verify(x509.VerifyOptions{DNSName: "localhost", Roots: gatewayCA.CertPool()})
+		assert.NoError(t, err)
+	})
+}
+
+// The enrollment response's operator_endpoint is what the console shows a
+// customer as their install target. A configured advertise URL must win
+// verbatim; an empty value must keep the legacy dev strings byte for byte.
+func TestOperatorEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		gateway config.GatewayCfg
+		want    string
+	}{
+		{
+			name:    "empty keeps the internal operator endpoint",
+			gateway: config.GatewayCfg{},
+			want:    "http://operator:8084",
+		},
+		{
+			name:    "enabled keeps the legacy dev host name",
+			gateway: config.GatewayCfg{Enabled: true},
+			want:    "https://operator-gateway.dev.release-manager.local:8084",
+		},
+		{
+			name:    "enabled with a custom port",
+			gateway: config.GatewayCfg{Enabled: true, Port: 9443},
+			want:    "https://operator-gateway.dev.release-manager.local:9443",
+		},
+		{
+			name:    "advertise URL is returned verbatim",
+			gateway: config.GatewayCfg{Enabled: true, Port: 8084, AdvertiseURL: "https://10.10.33.122:8444"},
+			want:    "https://10.10.33.122:8444",
+		},
+		{
+			name:    "advertise URL wins even when the listener is disabled",
+			gateway: config.GatewayCfg{AdvertiseURL: "https://10.10.33.122:8444"},
+			want:    "https://10.10.33.122:8444",
+		},
+		{
+			name:    "advertise URL trailing slash is trimmed",
+			gateway: config.GatewayCfg{Enabled: true, AdvertiseURL: "https://10.10.33.122:8444/"},
+			want:    "https://10.10.33.122:8444",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &orchSvc{cfg: config.ServiceConfig{Gateway: tt.gateway}}
+			require.Equal(t, tt.want, svc.operatorEndpoint())
+		})
+	}
 }
 
 // signOperatorIdentity issues an operator client certificate (clientAuth

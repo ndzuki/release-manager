@@ -27,12 +27,35 @@ gc:
 gateway:
   enabled: true
   port: 8084
+  # TASK-388: the gateway server certificate carries these SANs. Customer
+  # agents connect to https://10.10.33.122:8444 (NodePort 30844 -> host 8444),
+  # so the IP SAN is what their TLS name check verifies; a DNS-only SAN set
+  # fails the handshake. Omitting these keys keeps the legacy pair
+  # (operator-gateway.dev.release-manager.local, localhost) and no IP SAN.
+  hostnames:
+    - rm-prod.local
+  ip_addresses:
+    - 10.10.33.122
+  # Customer-reachable base URL (NodePort 30844 -> host 8444). Enrollment
+  # responses embed it in operator_endpoint so the console never hands a
+  # customer the internal dev host name. Empty keeps the legacy fallback.
+  # GATEWAY_ADVERTISE_URL overrides this value at deploy time.
+  advertise_url: https://10.10.33.122:8444
 # The mTLS CA is mounted from the release-manager-mtls-ca Secret on these
 # paths by ../services/orchestrator.yaml. That Secret is provisioned out of
 # band (batch 4); the orchestrator fails closed when it is absent.
 ca:
   key_path: /data/gateway-ca.key
   cert_path: /data/gateway-ca.crt
+  # TASK-388: the gateway re-signs its leaf only at startup, so the 7-day
+  # default would expire a long-running orchestrator's certificate and break
+  # every customer agent mid-flight. One year keeps the leaf valid between
+  # planned restarts. Unset keeps the 7-day default.
+  # Note: ca.cert_ttl also sizes the CA certificate itself at 10x this value
+  # (internal/operator/ca/ca.go, New: NotAfter = ttl * 10), so 8760h here gives
+  # the root a ten-year lifetime, not one year. That is intentional: the root
+  # must outlive every leaf the gateway re-signs.
+  cert_ttl: 8760h
 # REQ-081 (D2=A): the orchestrator seeds these keys into app_settings at
 # startup. The emergency kill switch stays available in production.
 emergency:

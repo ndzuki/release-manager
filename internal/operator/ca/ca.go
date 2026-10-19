@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"time"
 )
@@ -238,6 +239,23 @@ func (ca *CA) SignCSR(csr *x509.CertificateRequest, dnsNames []string) (*IssuedC
 	}, nil
 }
 
+// SignServerCertWithIPSANs is the configuration-facing form of
+// SignServerCertWithSANs: it parses each textual IP SAN with net.ParseIP and
+// fails closed on anything that is not an IP address. Configuration carries IP
+// SANs as strings, so keeping the parse-and-reject rule here leaves exactly one
+// interpretation of a configured address.
+func (ca *CA) SignServerCertWithIPSANs(hostnames, ipAddresses []string) (certPEM, keyPEM []byte, err error) {
+	ips := make([]net.IP, 0, len(ipAddresses))
+	for _, address := range ipAddresses {
+		ip := net.ParseIP(address)
+		if ip == nil {
+			return nil, nil, fmt.Errorf("server IP SAN %q is not an IP address", address)
+		}
+		ips = append(ips, ip)
+	}
+	return ca.SignServerCertWithSANs(hostnames, ips)
+}
+
 // CertPEM returns the CA certificate in PEM format.
 func (ca *CA) CertPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw})
@@ -253,6 +271,33 @@ func (ca *CA) SignServerCert(hostnames []string) (certPEM, keyPEM []byte, err er
 	if len(hostnames) == 0 {
 		return nil, nil, fmt.Errorf("server hostnames are required")
 	}
+	return ca.SignServerCertWithSANs(hostnames, nil)
+}
+
+// SignServerCertWithSANs issues a server certificate carrying exactly the given
+// DNS names and IP SANs, signed by this CA with the serverAuth EKU. It is the
+// TASK-388 widening of SignServerCert: customers reach the gateway by address
+// (for example https://10.10.33.122:8444), and a certificate that carries only
+// DNS SANs fails their agent's name check.
+//
+// The common name is hostnames[0]; when no hostname is given the first IP
+// address is used instead. An empty hostname list and an empty IP list is an
+// error: a certificate with no SAN at all can never be verified.
+func (ca *CA) SignServerCertWithSANs(hostnames []string, ips []net.IP) (certPEM, keyPEM []byte, err error) {
+	if len(hostnames) == 0 && len(ips) == 0 {
+		return nil, nil, fmt.Errorf("server hostnames or IP addresses are required")
+	}
+	for _, ip := range ips {
+		if ip == nil {
+			return nil, nil, fmt.Errorf("server IP addresses must not contain nil")
+		}
+	}
+	commonName := ""
+	if len(hostnames) > 0 {
+		commonName = hostnames[0]
+	} else {
+		commonName = ips[0].String()
+	}
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate server key: %w", err)
@@ -266,9 +311,10 @@ func (ca *CA) SignServerCert(hostnames []string) (certPEM, keyPEM []byte, err er
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName: hostnames[0],
+			CommonName: commonName,
 		},
-		DNSNames:    hostnames,
+		DNSNames:    append([]string(nil), hostnames...),
+		IPAddresses: append([]net.IP(nil), ips...),
 		NotBefore:   now,
 		NotAfter:    now.Add(ca.ttl),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
