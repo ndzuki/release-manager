@@ -215,7 +215,7 @@
 | # | 问题 | 证据 |
 | --- | --- | --- |
 | T1 | **kill switch 关闭后，发布清单仍渲染可点击的「紧急变更」入口**（点进去 404）——入口只判 `canExecuteEmergency`，未与 `featureEnabled` 合取 | `web/src/pages/ReleaseInventoryPage.vue:150`；违 `REQ-054`/`AC-033-06` |
-| T2 | **紧急变更新建流程当前不可提交**：容器列表恒空 ⇒ `canConfirm` 恒 false；且无 replicas 输入、`EmergencyAnnotationEditor` 无页面挂载 —— **三条变更路径全断** | `web/src/pages/EmergencyChangePage.vue:146-177`、`web/src/stores/emergencyChange.ts:170-177` |
+| T2 | **紧急变更新建流程当前不可提交**：容器列表恒空 ⇒ `canConfirm` 恒 false；且无 replicas 输入、`EmergencyAnnotationEditor` 无页面挂载 —— **三条变更路径全断** | `web/src/pages/EmergencyChangePage.vue:146-177`、`web/src/stores/emergencyChange.ts:170-177`。**2026-10-19 校正（TASK-325 W3）：本行结论已过期**——逐条更正见 `docs/delivery-evidence.md` §0 第 2 条：replicas 与 annotations 两条路径均已接线并真的随请求发出（`web/src/stores/emergencyChange.ts` 的 `replicasValue`/`annotationScope`、`web/src/connect/emergency-api.ts` 的 `setReplicas`/`annotations`），reason 也已随 W3 进入 Execute 请求并由服务端校验；容器列表为空是**环境数据**（无 VERIFIED 候选）而非代码缺口 |
 | T3 | `revision_conflict` **无冲突对话框、无「刷新页面」按钮**（`grep -rn "刷新页面" web/src` 零命中，且不在 retryable 集合 ⇒ 创建页渲染不出任何动作） | `web/src/connect/operation-api.ts:202-206`、`web/src/pages/OperationCreatePage.vue:113` |
 | T4 | 紧急变更**错误详情丢弃** `violations`/`existingOperationIds`/`convergenceTaskIds`/`refreshRequired` ⇒ 字段级定位与关联跳转全部缺失 | `web/src/features/emergency/errors.ts:8-14` |
 | T5 | **ROLLBACK 表单与规格相反**且无可提交路径（仍渲染 `bundleId`、无 `target_revision`；提交仍走只接受 INSTALL/UPGRADE 的 `CreateOperation`） | `web/src/components/operations/OperationForm.vue:9,56-67`、`web/src/stores/operationForm.ts:199-207` |
