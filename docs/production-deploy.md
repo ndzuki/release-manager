@@ -1655,6 +1655,225 @@ kubectl -n release-manager rollout status deploy/web --timeout=300s
 - `audit_events` 因真实探针增加了 13 条失败尝试记录；没有删除或改写任何审计事件（审计表只追加）。
 - 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
 
+### 8.13 实测：`f0f8d6b` 网关 `advertise_url` + 证书 IP SAN/1 年 TTL + 控制台安装命令发布（无迁移、8 个镜像全滚，2026-10-20，TASK-390）
+
+TASK-386 之后的第九次发布。本次把 `origin/main` 从 `de7b008` 前移到 **`f0f8d6b`**（`Merge pull request #476 from ndzuki/docs/customer-onboarding-final`，完整 sha `f0f8d6b4405c9fa0ae802cf6a0572ff01d173b5c`）。区间合并了：
+
+- PR [#475](https://github.com/ndzuki/release-manager/pull/475)（TASK-387）：`gateway.advertise_url`——注册响应里的 `operator_endpoint` 不再回落到开发夹具域名。
+- PR [#474](https://github.com/ndzuki/release-manager/pull/474)（TASK-388）：网关服务端证书的 SAN 可配置（`gateway.hostnames` / `gateway.ip_addresses`）+ 叶子 TTL 可配置（`ca.cert_ttl`）。
+- PR [#476](https://github.com/ndzuki/release-manager/pull/476)（TASK-390）：客户接入手册（`docs/customer-onboarding.md`）。
+- 以及 #472（TASK-325 交付证据文案）、#470（同前）与 TASK-389 的两笔 web 修复（安装命令替换网关地址、不可达地址 fail-closed）。
+
+**变更面**（`git diff --no-ext-diff --stat de7b008..f0f8d6b`）：**23 个文件，+1534/−74**。
+
+| 类别 | 实测 | 结论 |
+| --- | --- | --- |
+| 迁移 | `git diff --name-only de7b008..f0f8d6b -- migrations/` ⇒ **0 文件** | schema 保持 **`36\|f`**，回滚是**纯镜像级 + 配置级** |
+| Go 运行时 | `internal/config/config.go`（`GatewayCfg` 新增 `Hostnames`/`IPAddresses`/`AdvertiseURL` + `Validate`）、`internal/operator/ca/ca.go`（`SignServerCertWithSANs`/`SignServerCertWithIPSANs`）、`cmd/orchestrator/main.go`（`buildGatewayServer` 用配置 SAN）、新增 `cmd/orchestrator/gateway_endpoint.go` | `internal/config` 被**全部 7 个 Go 二进制**引用 ⇒ 7 个镜像都换字节 |
+| web 运行时 | `EnrollmentTokenModal.vue`、`i18n/messages.ts` | 弹窗新增「控制面网关地址」行，并把占位符替换成 `operator_endpoint` |
+| **生产配置** | `deploy/kustomize/production/configs/orchestrator.production.yaml`：`gateway.hostnames: [rm-prod.local]`、`gateway.ip_addresses: [10.10.33.122]`、`gateway.advertise_url: https://10.10.33.122:8444`、`ca.cert_ttl: 8760h` | **只滚镜像不生效**：这些键来自 mounted ConfigMap，见下方「配置面」 |
+
+**受影响镜像（实测，不是按文件猜）**：`go list -deps ./cmd/<svc> | grep -c 'internal/config$'` 对 7 个 Go 二进制全部 ≥1（`notification-sink` 也依赖），因此**预期 7 个 Go 镜像 + web 全部变化**。节点内 `crictl images` 的 image ID 与容器内二进制的 sha256 都证实了这一点（同一测量口径：部署前后都读 `k3d-rm-prod-server-0` 的 containerd）：
+
+| 服务 | 基线 tag | 基线 image ID | `:f0f8d6b` image ID | 变化 | 二进制 sha256（前 12）基线 → 新 |
+| --- | --- | --- | --- | --- | --- |
+| `api` | `de7b008` | `3e91cae2d6647` | `e974b98f7cb80` | **是** | `637e642b631a` → `9212d37a4aa3` |
+| `auth` | `de7b008` | `383d8c627b28c` | `1ad5fa70ca651` | **是** | `d3b7d8372404` → `bb02aef541ce` |
+| `orchestrator` | `de7b008` | `7cfb6625dd2b9` | `e6df24dfbb754` | **是** | `72480cfd164d` → `96390c74398d` |
+| `webhook` | `de7b008` | `092297251048e` | `64edb5cb8a5f6` | **是** | `765ab4aa2853` → `0b326e35039d` |
+| `notifier` | `de7b008` | `0db0aa612612e` | `6839691cb769c` | **是** | `6d762189709c` → `85d08fc03465` |
+| `operator`（未部署） | `de7b008` | `80ee36b7e3717` | `9e74bbaac6e06` | **是** | `9533d067df15` → `2d5f936755fe` |
+| `notification-sink`（未部署） | `de7b008` | `e949ff6e625cd` | `e309a48a143c4` | **是** | `63aec67edcc0` → `956714ea3444` |
+| `web` | `de7b008` | `31eb5384bfeea` | `aadbffb6f4a77` | **是** | 主 bundle `89c2d0a10ebc` → `c744459d0038`；`index.html` `9600fef8f397` → `1ddebf18adeb` |
+
+- 与 §8.12 记录的 `de7b008` 二进制 sha256 **逐位一致**（如 `api 637e642b631a`、`orchestrator 72480cfd164d`），说明本机 `de7b008` 镜像就是生产在跑的那一份，上表的「变化」不是重建噪声。
+- `notification-sink` 本次也变了（`internal/config` 是它的传递依赖），所以**本次是 8 个镜像全变**，与「`internal/config` 只影响 6 个服务」的直觉相反。
+- 因此**部署范围 = 6 个 Deployment 全滚**（`api`/`auth`/`orchestrator`/`webhook`/`notifier` + `web`）；`edge` 不动；`operator`/`notification-sink` 不在本集群，仅随 tar 导入以保持节点清单一致。
+
+**配置面（本次与 §8.5–§8.12 的关键差别）**
+
+`orchestrator.production.yaml` 是包在 `configMapGenerator` 里、以 `subPath` 挂到 `/configs/orchestrator.production.yaml` 的，**换镜像不会换配置**。本次在滚 `orchestrator` **之前**用 merge patch 只改这一个 key：
+
+```bash
+# 文件内容取自 worktree 的 deploy/kustomize/production/configs/orchestrator.production.yaml
+python3 -c 'import json;print(json.dumps({"data":{"orchestrator.production.yaml":open("deploy/kustomize/production/configs/orchestrator.production.yaml").read()}}))' \
+  > /tmp/rm-d1/orchestrator-config-patch.json
+kubectl --context k3d-rm-prod -n release-manager patch configmap orchestrator-config-hd8442g5k2 \
+  --type merge --patch-file /tmp/rm-d1/orchestrator-config-patch.json
+kubectl --context k3d-rm-prod -n release-manager get cm orchestrator-config-hd8442g5k2 \
+  -o jsonpath='{.data.orchestrator\.production\.yaml}' | diff - \
+  deploy/kustomize/production/configs/orchestrator.production.yaml && echo "configmap data == repo file"
+```
+
+- 实测：`diff` 无输出 ⇒ **ConfigMap 的该 key 与仓库文件逐字节相同**（`sha256 f752b3c2fc60ca8f689d88478048ed23f55faafd29e58968a2915a13f7ce8740`）。
+- **已知偏差（如实记录）**：patch 没有重算 `configMapGenerator` 的 name-suffix，所以 ConfigMap 名字仍是旧的 `orchestrator-config-hd8442g5k2`，不再等于新内容的 hash。将来一次 `kubectl apply -k`（先用 §2.3 的 `kustomize edit set image` 把 tag 从 `:dev` 改掉）会生成**新名字**的 ConfigMap 并顺带滚一次 orchestrator——这是预期内的收敛，不是漂移。
+- `subPath` 挂载不会热更新，所以配置只有在 Pod 重建时才生效；本次顺序是「先 patch ConfigMap → 再 `set image` 触发重建」，因此新 Pod 起来时读到的已经是新配置。
+- 证据边界：发布前的 ConfigMap 内容只在终端 dump 过（**没有落成文件**），所以「旧 CM 与 `de7b008` 的 git blob 逐字节相同」**未取证**；可核对的是 dump 里 `gateway` 段只有 `enabled`/`port`、`ca` 段只有 `key_path`/`cert_path`，与该 blob 一致。
+
+**⛔ 部署顺序：先 `web`，再 Go 服务（`orchestrator` 第二）**
+
+1. **新 web 对不可达 endpoint 是 fail-closed 的**：`EnrollmentTokenModal.vue` 只在 `operator_endpoint` 是可达 TLS 地址时才替换 `<CONTROL_PLANE_OPERATOR_GATEWAY>`；拿到旧服务端的 `https://operator-gateway.dev.release-manager.local:8084`（`.local`）时会**保留占位符并给出警告**，不会产生「看起来能用但连不上」的命令。所以 **新 web + 旧 orchestrator 安全**。
+2. **反向也安全**：旧 web 只是把 `operator_endpoint` 原样印在模板版本行上，不认识新值也不会拼错命令。
+3. 回滚顺序相反：**先回滚 Go（含 ConfigMap），最后回滚 `web`**。
+
+**基线（发布前实测，2026-10-20 00:46–00:48 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web` = `:de7b008`；`edge` = `nginx:1.27-alpine` |
+| revision | `api=15`、`auth=7`、`orchestrator=7`、`notifier=7`、`webhook=7`、`web=15`、`edge=4` |
+| Pod | 10 个工作负载 `1/1` + 2 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| schema | `36\|f` |
+| 数据面 | `release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**、`operations` **6 行** |
+| 网关叶子 | `CN=operator-gateway.dev.release-manager.local`；SAN `DNS:operator-gateway.dev.release-manager.local, DNS:localhost`；`notBefore=Oct 19 11:55:52 2026 GMT`、`notAfter=Oct 26 11:55:52 2026 GMT`（7 天） |
+| `operator_endpoint` | `https://operator-gateway.dev.release-manager.local:8084`（实测见下） |
+| 入口 | `https://10.10.33.122:8443/` → **200**；`/readyz` → **200** |
+| 回滚基线 | `kubectl --context k3d-rm-prod -n release-manager get deploy -o yaml` → `deploys-baseline.yaml`（**947 行**）；回滚用的旧配置 = `git show de7b008:deploy/kustomize/production/configs/orchestrator.production.yaml`（`sha256 f5739802beb38caaf16e53c462b9143987280487ca347538471ed92997d5b385`） |
+
+**构建与导入**（worktree `/tmp/rm-wt-d1`，HEAD = `f0f8d6b`）
+
+```bash
+git fetch origin -q && git worktree add -q /tmp/rm-wt-d1 -b chore/deploy-f0f8d6b origin/main
+cd /tmp/rm-wt-d1
+make docker-build-all IMAGE_TAG=f0f8d6b
+docker save --platform linux/amd64 -o /tmp/rm-d1/images-f0f8d6b.tar \
+  localhost:5001/release-api:f0f8d6b localhost:5001/release-auth:f0f8d6b \
+  localhost:5001/release-orchestrator:f0f8d6b localhost:5001/release-operator:f0f8d6b \
+  localhost:5001/release-webhook:f0f8d6b localhost:5001/release-notifier:f0f8d6b \
+  localhost:5001/release-notification-sink:f0f8d6b localhost:5001/release-web:f0f8d6b
+k3d image import -c rm-prod /tmp/rm-d1/images-f0f8d6b.tar 2>&1 | tee /tmp/rm-d1/import.log
+grep ERRO /tmp/rm-d1/import.log      # 0 命中
+```
+
+- 8 个镜像构建成功（`naming to ...:f0f8d6b` 8 行，无 `!! build failed`）；单 tar（`linux/amd64`）**113,166,848 B**（≈107.9 MiB）。导入 **约 5 s**，`grep ERRO` **0 命中**，节点内 `crictl images | grep f0f8d6b` 可见 **8 个**。
+- 没有走 registry 推送：镜像直接 import 进 `k3d-rm-prod-server-0`，Deployment 仍引用 `localhost:5001/...` 的 tag，`imagePullPolicy=IfNotPresent`。
+
+**滚动（严格按 `web` → `orchestrator` → `webhook` → `api` → `auth` → `notifier`；每步 `set image` → `rollout status --timeout=300s`；探针在滚动前先清残留 forward，滚动后新建 forward 再探测）**
+
+| 顺序 | 服务 | 滚动耗时 | revision | `/health` | `/readyz` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `web`（2 副本） | **8 s** | 15 → **16** | 200 | 200 |
+| 2 | `orchestrator`（含 ConfigMap 新配置） | **6 s** | 7 → **8** | 200 | 200 |
+| 3 | `webhook` | **6 s** | 7 → **8** | 200 | 200 |
+| 4 | `api` | **6 s** | 15 → **16** | 200 | 200 |
+| 5 | `auth` | **6 s** | 7 → **8** | 200 | 200 |
+| 6 | `notifier` | **6 s** | 7 → **8** | 200 | 200 |
+
+- 6 次滚动合计 **38 s**，没有失败，未触发 `undo`。所有新 Pod `RESTARTS=0`。
+- 每阶段后核对 schema 仍 **`36|f`**：基线 1 次 + 滚动中 6 次 + 收尾 1 次，**共 8 次**。
+- 发布后 revision：`web=16`、`orchestrator=8`、`webhook=8`、`api=16`、`auth=8`、`notifier=8`、`edge=4`（未动）。
+
+**⭐ 网关证书前后对比（叶子在 orchestrator 启动时重签）**
+
+```bash
+openssl s_client -connect 10.10.33.122:8444 -servername 10.10.33.122 </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+```
+
+| 项 | 发布前（`de7b008`） | 发布后（`f0f8d6b` + 新配置） |
+| --- | --- | --- |
+| subject | `CN=operator-gateway.dev.release-manager.local` | **`CN=rm-prod.local`**（`hostnames[0]`） |
+| issuer | `CN=release-manager-agent-ca` | `CN=release-manager-agent-ca`（**CA 未变**：Key/Cert 来自 Secret，`LoadOrCreateWithProvider` 复用） |
+| SAN | `DNS:operator-gateway.dev.release-manager.local, DNS:localhost` | **`DNS:rm-prod.local, IP Address:10.10.33.122`** |
+| 有效期 | `2026-10-19 11:55:52Z` → `2026-10-26 11:55:52Z`（**7 天**） | `2026-10-19 16:50:18Z` → `2027-10-19 16:50:18Z`（**365 天**，`ca.cert_ttl: 8760h`） |
+
+- **`localhost` 不再在 SAN 里**：`gateway.hostnames` 一旦非空就**替换**默认的 `(operator-gateway.dev.release-manager.local, localhost)`，所以用 `localhost` / `host.k3d.internal` 访问网关会**名不匹配**。这不是缺陷，是配置的必然结果；客户要用的名字是 `10.10.33.122`（IP SAN）。
+- `ca.cert_ttl` 同时会把**新建** CA 的有效期设成 10×，但本集群 CA 已存在（Secret `release-manager-mtls-ca`，`notAfter=Oct 14 2036`），所以**本次 CA 没有被重签**，只有叶子变了。
+
+**⭐ TLS 名匹配（用 Secret 里的 CA 验签，不是 `-k` 跳过）**
+
+```bash
+kubectl --context k3d-rm-prod -n release-manager get secret release-manager-mtls-ca \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/rm-d1/ca.crt
+openssl s_client -connect 10.10.33.122:8444 -verify_ip 10.10.33.122 -CAfile /tmp/rm-d1/ca.crt </dev/null 2>&1 \
+  | grep -E 'Verify return code|Verification'
+```
+
+| 检查 | 结果 |
+| --- | --- |
+| `-verify_ip 10.10.33.122` | **`Verification: OK` / `Verify return code: 0 (ok)`** |
+| 反向对照：`-connect 127.0.0.1:8444 -servername localhost -verify_hostname localhost` | `verify error:num=62:hostname mismatch` / **`62 (hostname mismatch)`**（证明 `localhost` 确实已不在 SAN 中） |
+
+**⭐ `operator_endpoint` 前后对比（同一台控制台、同一份 RPC、同一个 customer/cluster）**
+
+同一个真实控制台会话（`POST /auth.v1.AuthService/Login` 取 `rm_access`/`rm_refresh`/`rm_csrf`，再带 `Cookie` + `X-CSRF-Token` 调 `POST /orchestrator.v1.OrchestratorService/CreateEnrollmentToken`），body 固定 `customerId=56846183-8d57-401d-ba8c-ef81d3ae3749`、`clusterId=rm-cust`、`ttlMinutes=5`、`replacePendingToken=true`：
+
+| | `operatorEndpoint` | 模板里的网关占位符 |
+| --- | --- | --- |
+| 发布前（`de7b008` + 旧配置） | `https://operator-gateway.dev.release-manager.local:8084` | 保留 `<CONTROL_PLANE_OPERATOR_GATEWAY>` |
+| 发布后（`f0f8d6b` + `advertise_url`） | **`https://10.10.33.122:8444`** | 服务端模板仍保留占位符（设计如此：地址由前端按可达性决定是否替换） |
+
+- 两次调用都返回 **200**，`installCommandTemplateVersion` 都是 `v2`；差异只在 `operatorEndpoint`。
+- **一次性 token 没有打印、没有落盘**：探针脚本在写任何输出前就 `delete body.token`，只保留 `{present, length}`。发布前那次创建的 pending 记录已被后一次调用**显式替换**（DB：`77fc9d81…` = `rm-d1-probe` → `revoked`，`replaced_by_id=c0d0a177…`），没有用来注册任何 operator、没有提权。
+- 收尾时又把控制台验收遗留的 pending token 用 **`RevokePendingEnrollmentToken`**（同一会话、带 CSRF）撤销：返回 `changed:true, finalState:ENROLLMENT_TOKEN_STATE_REVOKED`；随后 `GetEnrollmentTokenStatus` 返回 `{}`（无 pending）。生产里**没有留下任何可用的注册令牌**。
+
+**⭐ 控制台安装命令自动填充（真 Chrome + 真登录；弹窗 1440×960，页面回归 375×812）**
+
+- 浏览器：系统 Chrome（`/opt/google/chrome/chrome`）+ `playwright-core`；`ignoreHTTPSErrors: false`，用 **SPKI 钉住**（`--ignore-certificate-errors-spki-list=6ltdVewBy2ICVTtisKz4wGFvsBFzOaJrIYNRfJc35J0=`，即 `release-manager-edge-tls` 叶子的公钥哈希）信任这张自签证书，而不是全局关掉证书校验。
+- 路径：`https://10.10.33.122:8443` → 登录 → `/customers/5684…/clusters/rm-cust/operators` → 「生成令牌」→（存在 pending，走「替换令牌 → 确认替换」）→ 弹窗自动生成。
+
+| 断言 | 实测 |
+| --- | --- |
+| 「控制面网关地址」行 | 标签 `控制面网关地址`，值 **`https://10.10.33.122:8444`** |
+| 不可达警告条 | **不存在**（`data-testid="enrollment-gateway-missing"` 计数 0） |
+| 命令里不含占位符 | `containsPlaceholder=false`（全文 575 字节 / 14 行，0 命中 `<CONTROL_PLANE_OPERATOR_GATEWAY>`） |
+| 命令里有 advertise 地址 | `release-operator --config operator.yaml --orchestrator-addr 'https://10.10.33.122:8444'` |
+| 占位符替换成明文 token | 是（`${ENROLLMENT_TOKEN}` 0 命中）；证据里的命令截图把该值替换为 `<REDACTED>` |
+| 遗留「请替换」注释 | **已删除**（模板里那段注释随占位符一起被丢弃，`hasRemediationComment=false`） |
+
+- 截图：`console-gateway-row.png`（地址行）、`console-install-command-redacted.png`（命令全文，**仅 token 值被替换为 `<REDACTED>`**，其余字节与渲染一致）。
+- 未归因控制台 error：**0**；登录前的 2 条 `401` 是 `ValidateToken` / `RefreshToken`（无会话探测，与 §8.12 同因，预期）。
+
+**不变量与回归（全部发布后实测）**
+
+| 项 | 结果 |
+| --- | --- |
+| schema | **`36\|f`**（巡检 8 次，最终仍 36\|f） |
+| 数据面 | `release_definitions` **5 行**；`owner_organization_id IS NULL` **0 行**；`operations` **6 行**（未创建业务数据） |
+| 工作负载 | 10 个 `1/1 Running`，`RESTARTS` 全 **0**（2 个 `Completed` 备份 Job Pod 不影响） |
+| 入口 | `https://10.10.33.122:8443/` **200**；`/readyz` **200**；6 服务 `/health` + `/readyz` 全 **200** |
+| 宿主转发 | `rm-edge-forwarder` 仍 `Up`（未动）；`k3d-rm-prod-serverlb` 映射 `127.0.0.1:8443→30443`、`127.0.0.1:8444→30844` 未变 |
+| 页面 | `/definitions` 200（**5 行**）、`/releases` 200、`/operations` 200、`/audit` 200（`QueryAuditEvents` **200**，无 405）、`/customers` 200、`/operators` 200 |
+| 375px | 6 个页面 `scrollWidth === innerWidth === 375`，**无横向溢出** |
+
+**回滚（顺序与发布相反：`notifier` → `auth` → `api` → `webhook` → `orchestrator`(+ConfigMap) → `web`；纯镜像 + 配置，无 schema 操作）**
+
+```bash
+# 1) 先把 orchestrator 的生产配置恢复成 de7b008 的版本（与镜像回滚同一波）
+git -C /tmp/rm-wt-d1 show de7b008:deploy/kustomize/production/configs/orchestrator.production.yaml > /tmp/rm-d1/cm-orchestrator-de7b008.yaml
+python3 -c 'import json;print(json.dumps({"data":{"orchestrator.production.yaml":open("/tmp/rm-d1/cm-orchestrator-de7b008.yaml").read()}}))' \
+  > /tmp/rm-d1/orchestrator-config-de7b008-patch.json
+kubectl --context k3d-rm-prod -n release-manager patch configmap orchestrator-config-hd8442g5k2 \
+  --type merge --patch-file /tmp/rm-d1/orchestrator-config-de7b008-patch.json
+
+# 2) Go 服务按相反顺序回滚
+kubectl --context k3d-rm-prod -n release-manager set image deploy/notifier     notifier=localhost:5001/release-notifier:de7b008
+kubectl --context k3d-rm-prod -n release-manager set image deploy/auth         auth=localhost:5001/release-auth:de7b008
+kubectl --context k3d-rm-prod -n release-manager set image deploy/api          api=localhost:5001/release-api:de7b008
+kubectl --context k3d-rm-prod -n release-manager set image deploy/webhook      webhook=localhost:5001/release-webhook:de7b008
+kubectl --context k3d-rm-prod -n release-manager set image deploy/orchestrator orchestrator=localhost:5001/release-orchestrator:de7b008
+for d in notifier auth api webhook orchestrator; do
+  kubectl --context k3d-rm-prod -n release-manager rollout status deploy/$d --timeout=300s
+done
+
+# 3) 最后回滚 web
+kubectl --context k3d-rm-prod -n release-manager set image deploy/web web=localhost:5001/release-web:de7b008
+kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web --timeout=300s
+```
+
+- **回滚后网关证书会退回旧形态**：叶子是 orchestrator **启动时重签**的，配置回到 `de7b008` 后不再有 `ip_addresses`/`hostnames`/`cert_ttl`，重启出来的叶子是 `CN=operator-gateway.dev.release-manager.local`、SAN 只有两个 DNS 名（含 `localhost`）、有效期 **7 天**。**旧的客户接入方式（按 IP 连）在回滚后会立刻名不匹配**——这是回滚的已知代价，不是新问题。
+- `operator_endpoint` 也会退回 `https://operator-gateway.dev.release-manager.local:8084`；旧 web 会把它原样印在模板版本行上，命令不可直接执行（与发布前行为一致）。
+- **不需要 `migrate … down`**：区间 0 个迁移文件，两侧 schema 都是 `36`，`de7b008` 二进制在 `36|f` 上已经跑过（§8.12）。
+- 也可以用 `kubectl rollout undo`，但每次 `undo` 会再开一个 revision（受 §8.2.1 的 revision 陷阱约束）；`set image` 是本次采用的确定性路径。
+
+**本次边界（如实记录）**
+
+- **配置是手工 patch 进 ConfigMap 的**（理由见上）：绕过了 `configMapGenerator` 的 name-suffix 重算，ConfigMap 名字与内容 hash 不再对应。正式发布仍应以 §2.3 的「改 tag + `kubectl apply -k`」为准。
+- **没有在客户侧跑通一次真实 operator 注册**：本次验证到「控制台给出的命令、地址、证书」为止；用 IP + 新 SAN 真实 enroll 一个 operator 会**新增** operator 与会话行，且需要一个能连通 `10.10.33.122:8444` 的客户集群，超出本次部署任务范围。因此「客户点开命令即可连上」只证明了命令与证书的**静态正确性**，未证明端到端注册。
+- **一次性 token 的处理**：探针创建的 token 全部是 pending/revoked 状态，未用于注册；收尾已把最后一个 pending 撤销。证据里没有任何明文 token（命令截图里 token 值被替换为 `<REDACTED>`）。
+- 没有做故障注入、SIGTERM、并发/长连接压测；没有验证「新 schema + 旧镜像」路径（本次无 schema 变更）。
+- 证据路径：`/tmp/rm-d1/` 下 `build.log`、`import.log`、`images-f0f8d6b.tar`、`crictl-both.txt`、`deploys-baseline.yaml`、`deploys-post.yaml`、`cm-orchestrator.yaml`、`cm-orchestrator-de7b008.yaml`、`gw-cert-baseline.txt`、`rpc-probe-rm-d1-probe.json`（发布前后各一份）、`console-check.json`、`console-gateway-row.png`、`console-install-command-redacted.png`、`regression-375.json`、`revoke-pending.json`。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
