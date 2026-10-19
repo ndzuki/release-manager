@@ -654,7 +654,13 @@ fi
 #   - forward: `file` exists, `line` is inside it, and that line contains
 #     `contains`;
 #   - reverse: the document named by `cited_at` still writes a citation to that
-#     file covering that line.
+#     file covering that line. `cited_at` is either `<doc>:<line>` (absolute) or
+#     `<doc>@<anchor>` (TASK-380). The anchor shape resolves a UNIQUE literal
+#     substring at run time, so a document that grows above the citation (the
+#     deployment log in docs/production-deploy.md appends a section per release)
+#     no longer invalidates the contract. Fail closed: zero matches and more than
+#     one matching line are both errors — taking the first of several would
+#     silently re-point the contract at unrelated text.
 # A missing reason is an ERROR, never a silent pass — the same invariant as the
 # markdown and vulncheck exemptions above. The `contains` token is required for
 # the same reason it is checked: an EMPTY token matches every line (`*""*`), so a
@@ -729,7 +735,7 @@ else
       continue
     fi
     if [ -z "$acited" ]; then
-      bad_assert+=("$where: missing cited_at (5th column: <doc>:<line> where the citation is written)")
+      bad_assert+=("$where: missing cited_at (5th column: <doc>:<line> or <doc>@<anchor> where the citation is written)")
       continue
     fi
     if ! [[ $aline =~ ^[0-9]+$ ]] || [ "$aline" -lt 1 ]; then
@@ -754,20 +760,59 @@ else
       *) bad_assert+=("$where: $afile:$aline does not contain \"$acontains\" (the line reads: $actual)")
          continue ;;
     esac
-    adoc=${acited%:*}
-    adline=${acited##*:}
+    # Two cited_at shapes:
+    #   <doc>:<line>    absolute line (legacy; drifts when text is inserted above)
+    #   <doc>@<anchor>  unique literal substring, located at run time (TASK-380)
+    # `@` selects the anchor shape: no tracked repository path contains `@` and
+    # the registry is TAB-separated, so an anchor cannot smuggle in a field.
+    ais_anchor=0
+    aanchor=
+    case "$acited" in
+      *@*)
+        ais_anchor=1
+        adoc=${acited%%@*}
+        aanchor=${acited#*@}
+        adline=
+        ;;
+      *)
+        adoc=${acited%:*}
+        adline=${acited##*:}
+        ;;
+    esac
     if [ ! -f "$adoc" ]; then
       bad_assert+=("$where: cited_at document $adoc does not exist")
       continue
     fi
-    if ! [[ $adline =~ ^[0-9]+$ ]] || [ "$adline" -lt 1 ]; then
-      bad_assert+=("$where: cited_at \"$acited\" is not <document>:<line>")
-      continue
-    fi
-    dlen=$(assert_file_lines "$adoc")
-    if [ "$adline" -gt "$dlen" ]; then
-      bad_assert+=("$where: cited_at $acited is outside $adoc ($dlen lines)")
-      continue
+    if [ "$ais_anchor" = 1 ]; then
+      if [ -z "$aanchor" ]; then
+        bad_assert+=("$where: cited_at \"$acited\" has an empty anchor")
+        continue
+      fi
+      # FAIL CLOSED on zero or multiple matching lines. A zero match means the
+      # prose moved; multiple matches mean the anchor no longer identifies one
+      # line, and silently picking the first would point the contract at
+      # unrelated text.
+      amatches=$(grep -cF -- "$aanchor" "$adoc" 2>/dev/null || true)
+      case "$amatches" in ''|*[!0-9]*) amatches=0 ;; esac
+      if [ "$amatches" -eq 0 ]; then
+        bad_assert+=("$where: cited_at anchor \"$aanchor\" not found in $adoc")
+        continue
+      fi
+      if [ "$amatches" -gt 1 ]; then
+        bad_assert+=("$where: cited_at anchor \"$aanchor\" is not unique in $adoc ($amatches matches)")
+        continue
+      fi
+      adline=$(grep -nF -- "$aanchor" "$adoc" | cut -d: -f1)
+    else
+      if ! [[ $adline =~ ^[0-9]+$ ]] || [ "$adline" -lt 1 ]; then
+        bad_assert+=("$where: cited_at \"$acited\" is neither <document>:<line> nor <document>@<anchor>")
+        continue
+      fi
+      dlen=$(assert_file_lines "$adoc")
+      if [ "$adline" -gt "$dlen" ]; then
+        bad_assert+=("$where: cited_at $acited is outside $adoc ($dlen lines)")
+        continue
+      fi
     fi
     dtext=$(sed -n "${adline}p" "$adoc")
     abase=${afile##*/}
@@ -874,7 +919,8 @@ if [ "$fail" = 1 ]; then
   echo "  reason is required in both forms."
   echo "  In $ASSERT_FILE, fix the cited line or the document, and keep the"
   echo "  file/line/contains/reason/cited_at columns in step — a missing reason"
-  echo "  is an error, never an exemption."
+  echo "  is an error, never an exemption. cited_at is <doc>:<line> or"
+  echo "  <doc>@<anchor>; an anchor must match exactly one line of <doc>."
   exit 1
 fi
 echo "check-docs: PASS"

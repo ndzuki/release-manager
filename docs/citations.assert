@@ -14,10 +14,24 @@
 #     line      the single cited line, 1-based
 #     contains  literal substring that line must contain
 #     reason    REQUIRED: why this pointer matters (an entry without one is an ERROR)
-#     cited_at  REQUIRED here: `<doc>:<line>` where the document writes the citation.
+#     cited_at  REQUIRED here: where the document writes the citation. Two shapes:
+#                 `<doc>:<line>`   absolute line number (legacy, still supported)
+#                 `<doc>@<anchor>` unique literal substring of ONE line in `<doc>`
 #               The document line must still cite the same file at a line covering
 #               `line`; otherwise the registry and the prose have diverged and the gate
 #               fails. This is the second direction of the check.
+#
+# Which shape to use: prefer the ANCHOR shape for documents that GROW. Inserting a
+# line above the citation shifts every absolute line below it — that is exactly how
+# PR #461 first went red, because docs/production-deploy.md appends a ~120-line
+# section per deployment and the citations after the append point drifted with it.
+# check-docs resolves an anchor with `grep -nF` at run time, so growth above it is
+# harmless. The anchor must match EXACTLY ONE line: zero matches ("anchor not found")
+# and several matches ("anchor is not unique") are both failures — never the first
+# match, which would silently re-point the contract at unrelated text. Keep the line
+# number form for stable files and for a citation line that has no unique literal.
+# Every anchor in this file must exist verbatim on the cited_at line: editing that
+# sentence now fails the gate instead of drifting silently.
 # Comment lines start with `#`. Blank lines are ignored.
 #
 # Both directions are checked because either half can be edited alone:
@@ -80,8 +94,8 @@ internal/orchestrator/service.go	183	X-Reason-Code	release_busy 原因码 header
 internal/orchestrator/service.go	244	emergency_effect_unresolved	UNKNOWN 标准发布门禁	docs/delivery-evidence.md:111
 internal/orchestrator/service.go	253	release_convergence_pending	门禁优先级：收敛 pending 在 UNKNOWN 之后	docs/delivery-evidence.md:117
 internal/orchestrator/service.go	1582	revision_not_approved	未批准 ValuesRevision 拒绝	docs/delivery-evidence.md:54
-internal/orchestrator/service.go	386	DigestValue	DigestAlg + ":" + DigestValue 拼接	docs/production-deploy.md:2113
-internal/orchestrator/service.go	1671	expected_current_revision	UPGRADE 的 expected_current_revision 校验	docs/production-deploy.md:1969
+internal/orchestrator/service.go	386	DigestValue	DigestAlg + ":" + DigestValue 拼接	docs/production-deploy.md@注意这个 hex 是**服务端对
+internal/orchestrator/service.go	1671	expected_current_revision	UPGRADE 的 expected_current_revision 校验	docs/production-deploy.md@必须等于 inventory 里的 revision，否则
 internal/store/store.go	38	ErrApprovalPending	store 稳定哨兵错误清单	docs/api.md:319
 internal/store/store.go	207	ValuesStatusPendingApproval	values revision pending_approval 状态	docs/runbook.md:381
 internal/store/store.go	652	type OperatorStatus string	OperatorStatus 状态机词汇	docs/runbook.md:168
