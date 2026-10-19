@@ -31,6 +31,16 @@ func TestExecuteEmergencyChangeReasonValidation(t *testing.T) {
 		{name: "five characters after trimming", reason: "\t abcde\n", wantText: "abcde"},
 		{name: "500 characters", reason: strings.Repeat("a", 500), wantText: strings.Repeat("a", 500)},
 		{name: "501 characters", reason: strings.Repeat("a", 501), rejected: true},
+		// Multibyte boundaries pin the character (rune) semantics rather than
+		// byte length: four emoji are 16 bytes but only four characters, so a
+		// byte-length check would wrongly accept them, and 500 CJK characters
+		// are 1500 bytes, so a byte-length check would wrongly reject them.
+		{name: "four emoji (4 runes, 16 bytes)", reason: "🚀🚀🚀🚀", rejected: true},
+		{name: "five emoji (5 runes, 20 bytes)", reason: "🚀🚀🚀🚀🚀", wantText: "🚀🚀🚀🚀🚀"},
+		{name: "four CJK characters (4 runes, 12 bytes)", reason: "中文中文", rejected: true},
+		{name: "mixed emoji and ASCII (5 runes, 8 bytes)", reason: "🚀ok!!", wantText: "🚀ok!!"},
+		{name: "500 CJK characters (500 runes, 1500 bytes)", reason: strings.Repeat("中", 500), wantText: strings.Repeat("中", 500)},
+		{name: "501 CJK characters (501 runes, 1503 bytes)", reason: strings.Repeat("中", 501), rejected: true},
 		{name: "NUL", reason: "abc\x00de", rejected: true},
 		{name: "U+FFFE", reason: "abc\ufffede", rejected: true},
 		{name: "U+FFFF", reason: "abc\uffffde", rejected: true},
