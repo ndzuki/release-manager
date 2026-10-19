@@ -50,8 +50,9 @@ in-memory storage + `kubefake`，**不需要集群**：
 `make web-install` / `make web-check`）；`make web-check` 已并入 `make quality`，所以本地的
 「全量质量门禁」覆盖前端三关。`lint` 这一关除 js/ts/vue 规则外还含 **a11y 最小子集**
 （19 条 `eslint-plugin-vuejs-accessibility` 规则，按实测违规数裁剪而来，TASK-267）；开了哪些规则、
-哪些规则故意没开及各自违规数，见 `web/README.md` 的「Accessibility gate」节。`test:e2e` 需要完整 dev 栈，由 CI 的 `e2e`/`e2e-prerequisite` job 承担：
-**PR 上不跑**，只在 push main / `workflow_dispatch` 跑（spec 车道归属与取证据命令见下文「控制台（浏览器）E2E：CI 车道与 spec 归属」）。
+哪些规则故意没开及各自违规数，见 `web/README.md` 的「Accessibility gate」节。`test:e2e` 需要完整 dev 栈：完整车道由 CI 的
+`e2e`/`e2e-prerequisite` job 承担、**只在 push main / `workflow_dispatch` 跑**；其中 `navigation.spec.ts`
+一个子集自 TASK-267 起另在 PR 车道 `e2e-pr` 上跑（spec 车道归属与取证据命令见下文「控制台（浏览器）E2E：CI 车道与 spec 归属」）。
 
 #### 控制台（浏览器）E2E：回滚路径（TASK-240）
 
@@ -364,6 +365,8 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `rollout-watch` | `make test-rollout-watch` | 全部触发 |
 | `e2e-prerequisite` | `make e2e-prerequisite-ci`（45 分钟超时，`if: always()` 上传 artifact） | **push main + 手动触发；PR 不跑**（不需要任何 secret） |
 | `e2e` | `make dev-up` → `make dev-seed` → `make e2e-all` → `if: always()` 上传 `e2e-results/` → `make dev-purge CONFIRM=1` | **push main + 手动触发；PR 不跑** |
+| `e2e-pr-paths` | `git diff --name-only "$BASE_SHA" HEAD` 判定 PR 是否触及 `web/**`、`test/e2e/**`、`.github/workflows/test.yml`，把命中结果写成 job output（5 分钟超时；GitHub Actions 没有 job 级 `paths` 过滤，故用独立 job 计算变更集） | **仅 PR** |
+| `e2e-pr` | `make dev-up dev-seed` → `bash test/e2e/prerequisite/console.sh`（`E2E_CONSOLE_SPECS=e2e/navigation.spec.ts`）→ `if: always()` 上传证据 → `make dev-purge CONFIRM=1`（40 分钟超时） | **仅 PR**（且 `e2e-pr-paths` 命中上列路径；未命中时该 job 为 skipped——skipped 不是 passed，合并门禁 `make pr-merge-check` 接受 skipping） |
 | `docs-check` | `make check-docs`（5 分钟超时；文档写出的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用必须为真） | 全部触发（只需 bash/grep/git，不需要 Go 与任何 secret） |
 | `proto-check` | `make lint-proto` + `make proto` 后要求 `api/gen`、`web/src/gen` 与提交内容一致（10 分钟超时） | 全部触发（`GITHUB_TOKEN` 仅用于 buf 版本查询） |
 | `web` | `npm ci` → `npm run lint` → `npm test` → `npm run build`（`vue-tsc -b` 类型门禁 + `vite build`；15 分钟超时；`working-directory: web`） | 全部触发 |
@@ -371,8 +374,9 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `dead-methods` | `make check-dead-methods`（5 分钟超时；**不在 required 清单**，见「死代码盲区」节） | 全部触发 |
 | `backup-script` | 跑 `bash scripts/test-backup-script.sh`（脚本 `scripts/test-backup-script.sh`）：从 `deploy/kustomize/production/backup-cronjob.yaml` 提取 CronJob 的内联脚本，在真实 `postgres:16` 的 dash 下跑 8 条失败/成功用例（`PATH` shim 注入 `pg_dump`/`psql`/`sync`/`mv` 失败），断言退出码 + `/backups` 的文件名集合；10 分钟超时；不需要 Go、集群、kubeconfig、PostgreSQL 服务或 secret，唯一网络依赖是一次 `postgres:16` 拉取 | 全部触发 |
 
-表里 19 行与 `test.yml` 的 job 名集合一致、`if:` 触发口径逐条对齐，这两条由 `make check-citations`
-的集合/触发判据强制（TASK-315）：**没有 job 级 `if:` 的 job 写「全部触发」，带 `if:` 的必须写「PR 不跑」**。
+表里 21 行与 `test.yml` 的 job 名集合一致、`if:` 触发口径逐条对齐，这两条由 `make check-citations`
+的集合/触发判据强制（TASK-315）：**没有 job 级 `if:` 的 job 写「全部触发」，只在 push/dispatch 跑的写「PR 不跑」，
+只在 PR 跑的写「仅 PR」**。
 
 `proto-check` 存在的原因不是「多跑一次生成」，而是补齐一个真实的检查缺口：`test` 与
 `test-sqlite` 都会在测试前执行 `make proto`，于是**忘提交生成物**时它们测的是新生成的代码，
@@ -459,13 +463,17 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
 | `web/e2e/emergency-smoke.spec.ts` | REQ-058 紧急变更走查（`REQUIRE_PROMOTION` 成功路径）+ **跨角色审批**（AC-058-41） | 同上（TASK-270 起纳入） |
 | `web/e2e/delivery-criteria.spec.ts` | 交付判据 H1–H5 中可无人介入判定的部分：登录成败、关键页可达、危险操作 Esc 取消、失败原因 + `requestId`、焦点陷阱（H5 的「表单字段错误有 `aria-describedby` 关联」一半由 `web/src/components/releases/RollbackReleaseDialog.test.ts` 钉住）（TASK-325；判据定义见 `docs/delivery-evidence.md` §4.2） | 同上（TASK-325 起纳入） |
 | `web/e2e/stuck-locks.spec.ts` | REQ-087 §4.1/§4.2 解锁页（`web/src/pages/StuckLocksPage.vue`）：工作台入口可达 + 空态/有锁态渲染（真实后端，不 mock）；`alertdialog` 确认的 Esc 取消且不发 `ReleaseEmergencyLock`；提交载荷与释放后可见反馈（读/写响应在途改写——真实 stuck lock 需 operator 漏掉观察窗口，本车道不制造）（TASK-328） | 同上（TASK-328 起纳入） |
-| `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑 | **不在 CI 车道**；本地手工跑（需 `E2E_VIEWER_PASS`，见 spec 头注释） |
+| `web/e2e/navigation.spec.ts` | 导航 / 只读拒绝 / 面包屑（TASK-267） | `e2e-pr`：**PR 车道**（仅在 PR 触及 `web/**`、`test/e2e/**`、`.github/workflows/test.yml` 时运行；只跑这一个 spec） |
 
-- **PR 上不跑任何浏览器 spec**：`e2e-prerequisite` job 的触发条件是 `push` 或 `workflow_dispatch`
-  （`.github/workflows/test.yml` 的 `e2e-prerequisite:` 段），`e2e` job 同理。这是 REQ-066 决策 ⑧ 的
-  刻意取舍——真实 k3d 车道实测约 16 分钟（2026-10-09 dispatch run `37987425510` 的 `e2e-prerequisite` job，
-  15m38s；同日的 55 分钟属于环境型取消，见上节），不该绑在 PR 门禁上。**因此浏览器 E2E 的证据只能在 push main 或
-  手动 dispatch 上取得**，取 run id 与日志：
+- **完整车道仍不在 PR 上跑，PR 只跑 `navigation.spec.ts` 一个子集**（TASK-267 / D8）：`e2e-prerequisite`
+  job 的触发条件是 `push` 或 `workflow_dispatch`（`.github/workflows/test.yml` 的 `e2e-prerequisite:` 段），
+  `e2e` job 同理。这是 REQ-066 决策 ⑧ 的刻意取舍——完整 k3d 车道实测 14m38s–22m34s（2026-10-18 的五个
+  push run `39141513344`/`39140014055`/`39136934157`/`39134893586`/`39130803444`，其中 run `39141513344`
+  的 `e2e-prerequisite` job 为 15:40:23–15:55:01；控制台步骤本身只占约 40s，成本几乎全在 `make dev-up`），
+  不该整条绑在 PR 门禁上。PR 车道只跑 `navigation.spec.ts`：它只依赖 `dev-up dev-seed`，不像
+  rollback/emergency-smoke/delivery-criteria 那样消费 `smoke.sh` 留下的 revision>1、`pending_promotion`
+  收敛任务与操作行，因此子集是可执行的（不是把会失败的 spec 塞进 PR）。**完整浏览器 E2E 的证据仍只能在
+  push main 或手动 dispatch 上取得**，取 run id 与日志：
 
   ```bash
   gh workflow run test.yml --repo ndzuki/release-manager --ref <branch>   # 手动 dispatch（可指定分支）
@@ -562,7 +570,7 @@ access/refresh token 仍有效」这一 restart 阶段前置。它是一条 **ta
   机器可读的 `e2e-results/console/results.json` 仍随 `e2e-prerequisite-diagnostics` 上传（`test.yml:487-493`）。
 
 > 事实源：`Makefile`（test* / sdk-check / lint / check-reqs / quality / e2e-* 目标逐条核对）、
-> `.github/workflows/test.yml`（19 个 job 与触发条件）、
+> `.github/workflows/test.yml`（21 个 job 与触发条件）、
 > `cmd/e2e/main.go`（flag、退出码 0/1/2 与 `exitLock=3`、cleanup 语义）、
 > `test/e2e/runner.go`（`canonicalStageOrder`、`CanonicalDependencies`、`batchFor`）、
 > `test/e2e/prerequisite/smoke.sh`、`test/e2e/prerequisite/console.sh`、`test/integration/`、
