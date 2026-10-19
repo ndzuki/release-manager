@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
@@ -83,12 +83,27 @@ async function createExport(): Promise<void> {
 // current page was queried with. Calling query() without the third argument
 // pins the request to the active organization, which silently turns an
 // "all organizations" or "system" page into a single-organization read.
+//
+// TASK-375: a settled page change also moves focus to the results region. The
+// pager never touches focus by design (Pagination.vue), and the control that was
+// activated can become disabled on arrival (last page), which lets the browser
+// blur it to <body>. `nextTick` runs first so the newly paged rows are in the DOM
+// when focus lands and the region is announced against the page now on screen.
+const resultsTable = ref<InstanceType<typeof AuditEventTable> | null>(null);
+
+async function focusResultsAfterPaging(): Promise<void> {
+  await nextTick();
+  resultsTable.value?.focusResults();
+}
+
 async function pagePrevious(): Promise<void> {
   await audit.query(queryOrganizationId.value, 'previous', queryAllOrganizations.value);
+  await focusResultsAfterPaging();
 }
 
 async function pageNext(): Promise<void> {
   await audit.query(queryOrganizationId.value, 'next', queryAllOrganizations.value);
+  await focusResultsAfterPaging();
 }
 
 /**
@@ -216,8 +231,10 @@ watch(organizationId, (next, previous) => {
         <button type="button" @click="submit">{{ t('action.retry') }}</button>
       </div>
       <AuditEventTable
+        ref="resultsTable"
         :events="audit.events"
         :total-size="audit.totalSize"
+        :page="audit.pageNumber"
         :loading="audit.loading"
         :has-previous="audit.hasPrevious"
         :has-more="audit.hasMore"

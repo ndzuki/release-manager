@@ -38,12 +38,18 @@ interface Props {
    * display (a keyset cursor feed whose position is only "before/after").
    */
   page?: number;
+  /**
+   * Total row count, when the source knows it. Adds the total to the announced
+   * position ("第 N 页，共 M 条"); omit it for a keyset feed with no count.
+   */
+  total?: number;
   /** Accessible name for the `<nav>`; defaults to the generic catalog label. */
   label?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   page: undefined,
+  total: undefined,
   label: undefined,
 });
 
@@ -57,7 +63,10 @@ const ariaLabel = computed(() => props.label ?? t('pagination.label'));
 /** Empty while `page` is absent, which is also what gates the indicator's render. */
 const pageLabel = computed(() => {
   const page = props.page;
-  return page === undefined ? '' : t('pagination.page', { page });
+  if (page === undefined) return '';
+  return props.total === undefined
+    ? t('pagination.page', { page })
+    : t('pagination.pageOfTotal', { page, total: props.total });
 });
 
 function goPrev(): void {

@@ -253,6 +253,11 @@ export const useAuditStore = defineStore('audit', () => {
   const exportTasks = shallowRef<AuditExportTask[]>([]);
   const hasMore = computed(() => nextCursor.value.length > 0);
   const hasPrevious = computed(() => cursorStack.value.length > 0);
+  // TASK-375: 1-based page index for the pager's visible/announced position. The
+  // stack holds one cursor per page already walked, so its length is the number of
+  // pages before this one — the same relation OperationCenterPage uses
+  // (`cursorIndex + 1`), and it resets to 1 whenever the stack is cleared.
+  const pageNumber = computed(() => cursorStack.value.length + 1);
   // The UI affordance behind the preflight: the server still decides (it returns
   // `max_window_days` per request), so this only keeps the console from refusing a
   // range the caller is actually allowed to query (TASK-344).
@@ -318,7 +323,13 @@ export const useAuditStore = defineStore('audit', () => {
           ? response.events.filter((event) => !seenEventIds.value.has(event.id))
           : response.events;
       for (const event of response.events) seenEventIds.value.add(event.id);
-      events.value = direction === 'next' ? [...events.value, ...incoming] : incoming;
+      // TASK-375: one page at a time — REPLACE, never append. Appending made the
+      // mixed model below observable ("next" accumulated, "previous" replaced) and
+      // made "previous" lose every row already accumulated once the cursor stack
+      // had more than one entry. The labels and the cursor stack
+      // (`cursorStack: 历史游标栈，支持"上一页"`) describe paging, not "load more";
+      // AC-059-03 only constrains duplicates, and the dedupe above still holds.
+      events.value = incoming;
       nextCursor.value = response.pagination?.nextPageToken ?? '';
       totalSize.value = response.pagination?.totalSize ?? events.value.length;
       selectedEvent.value = null;
@@ -385,6 +396,7 @@ export const useAuditStore = defineStore('audit', () => {
     exportTasks,
     hasMore,
     hasPrevious,
+    pageNumber,
     maxRangeDays,
     setFilters,
     clearResults,

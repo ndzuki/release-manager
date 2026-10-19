@@ -38,6 +38,7 @@ describe('audit event components', () => {
       props: {
         events: [fullIdEvent, maskedIdEvent],
         totalSize: 2,
+        page: 1,
         loading: false,
         hasPrevious: false,
         hasMore: false,
@@ -72,6 +73,7 @@ describe('audit event components', () => {
       props: {
         events: [fullIdEvent],
         totalSize: 1,
+        page: 1,
         loading: false,
         hasPrevious: true,
         hasMore: true,
@@ -91,6 +93,7 @@ describe('audit event components', () => {
       props: {
         events: [fullIdEvent],
         totalSize: 1,
+        page: 1,
         loading: false,
         hasPrevious: false,
         hasMore: false,

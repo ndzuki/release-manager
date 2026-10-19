@@ -44,16 +44,18 @@ function auditEvent(id: string): AuditEvent {
   };
 }
 
-function mountTable(overrides: Record<string, unknown> = {}) {
+function mountTable(overrides: Record<string, unknown> = {}, options: Record<string, unknown> = {}) {
   return mount(AuditEventTable, {
     props: {
       events: [auditEvent('e-1')],
       totalSize: 1,
+      page: 1,
       loading: false,
       hasPrevious: false,
       hasMore: false,
       ...overrides,
     },
+    ...options,
   });
 }
 
@@ -79,6 +81,41 @@ describe('AuditEventTable pager', () => {
     const [prev, next] = pagerButtons(wrapper);
     expect(prev!.text()).toBe(t('pagination.previous'));
     expect(next!.text()).toBe(t('pagination.next'));
+  });
+
+  /*
+   * TASK-375: the table owns the pager's page position. The consumer passes the
+   * 1-based index and the total, and the primitive renders them in its
+   * `role="status"` live region — that is what announces "page N of M" without
+   * moving focus. Before this task the audit pager rendered neither.
+   */
+  it('renders and announces the page position with the total (TASK-375)', () => {
+    const wrapper = mountTable({ page: 2, totalSize: 60 });
+
+    const indicator = wrapper.get('.pagination__page');
+    expect(indicator.text()).toBe(t('pagination.pageOfTotal', { page: 2, total: 60 }));
+    expect(indicator.attributes('role')).toBe('status');
+  });
+
+  /*
+   * TASK-375: paging must not strand focus on <body>. The pager never touches focus
+   * (its own contract), so the table exposes the move and the consumer calls it
+   * after a page settles. The target is the results region, which already carries an
+   * accessible name and is reachable only programmatically (`tabindex="-1"`).
+   */
+  it('moves focus to the named results region on demand, never to body (TASK-375)', () => {
+    const wrapper = mountTable({}, { attachTo: document.body });
+    const results = wrapper.get('section.audit-results');
+
+    expect(results.attributes('tabindex')).toBe('-1');
+    expect(results.attributes('aria-label')).toBe(t('audit.table.results'));
+
+    (wrapper.vm as unknown as { focusResults: () => void }).focusResults();
+
+    expect(document.activeElement).toBe(results.element);
+    expect(document.activeElement).not.toBe(document.body);
+
+    wrapper.unmount();
   });
 
   it('disables the previous control when the cursor cannot go back, and that control emits nothing', async () => {
