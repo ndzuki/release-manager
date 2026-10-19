@@ -108,3 +108,92 @@ func TestNotifierDeliveryDefaultsAndEnabled(t *testing.T) {
 	assert.Equal(t, "slack", custom.DeliveryChannel)
 	assert.Equal(t, time.Minute, custom.PollInterval)
 }
+
+func TestGatewayAdvertiseURLDefaultsAndValidation(t *testing.T) {
+	t.Run("empty advertise URL stays empty", func(t *testing.T) {
+		cfg := (GatewayCfg{}).WithDefaults()
+		require.Equal(t, 8084, cfg.Port)
+		require.Empty(t, cfg.AdvertiseURL, "empty must not be filled: the caller keeps the legacy dev endpoint")
+		require.NoError(t, GatewayCfg{}.Validate())
+	})
+
+	t.Run("trailing slash is normalized away", func(t *testing.T) {
+		cfg := (GatewayCfg{AdvertiseURL: "  https://10.10.33.122:8444/  "}).WithDefaults()
+		require.Equal(t, "https://10.10.33.122:8444", cfg.AdvertiseURL)
+	})
+
+	valid := []struct{ name, advertise string }{
+		{name: "https", advertise: "https://10.10.33.122:8444"},
+		{name: "http", advertise: "http://operator-gateway.internal:8084"},
+		{name: "trailing slash", advertise: "https://10.10.33.122:8444/"},
+	}
+	for _, tt := range valid {
+		t.Run("valid "+tt.name, func(t *testing.T) {
+			require.NoError(t, GatewayCfg{AdvertiseURL: tt.advertise}.Validate())
+		})
+	}
+
+	invalid := []struct{ name, advertise string }{
+		{name: "host and port without scheme", advertise: "10.10.33.122:8444"},
+		{name: "non-http scheme", advertise: "ftp://gateway.example"},
+		{name: "scheme without host", advertise: "https://"},
+	}
+	for _, tt := range invalid {
+		t.Run("invalid "+tt.name, func(t *testing.T) {
+			err := GatewayCfg{AdvertiseURL: tt.advertise}.Validate()
+			require.ErrorContains(t, err, "gateway.advertise_url")
+		})
+	}
+}
+
+func TestLoadServiceGatewayAdvertiseURLEnvironmentOverride(t *testing.T) {
+	t.Setenv("GATEWAY_ADVERTISE_URL", "https://10.10.33.122:8444")
+
+	cfg, err := LoadService("../../configs/orchestrator.dev.yaml")
+	require.NoError(t, err)
+	require.Equal(t, "https://10.10.33.122:8444", cfg.Gateway.AdvertiseURL)
+}
+
+// LoadService is the startup path shared by every service (app.Run exits on
+// its error), so a malformed advertise URL must stop the process at startup.
+func TestLoadServiceRejectsInvalidGatewayAdvertiseURL(t *testing.T) {
+	tests := []struct{ name, advertise string }{
+		{name: "host and port without scheme", advertise: "10.10.33.122:8444"},
+		{name: "non-http scheme", advertise: "ftp://gateway.example"},
+		{name: "scheme without host", advertise: "https://"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "orchestrator.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(`
+database:
+  driver: sqlite
+  dsn: data/management.db
+gateway:
+  enabled: true
+  port: 8084
+  advertise_url: `+tt.advertise+`
+`), 0o600))
+
+			_, err := LoadService(path)
+			require.ErrorContains(t, err, "gateway.advertise_url")
+		})
+	}
+
+	t.Run("valid advertise URL loads", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "orchestrator.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(`
+database:
+  driver: sqlite
+  dsn: data/management.db
+gateway:
+  enabled: true
+  port: 8084
+  advertise_url: https://10.10.33.122:8444/
+`), 0o600))
+
+		cfg, err := LoadService(path)
+		require.NoError(t, err)
+		require.Equal(t, "https://10.10.33.122:8444/", cfg.Gateway.AdvertiseURL)
+	})
+}

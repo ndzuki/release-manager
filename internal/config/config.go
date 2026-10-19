@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -459,6 +460,13 @@ func (c CAConfig) Validate() error {
 type GatewayCfg struct {
 	Enabled bool `mapstructure:"enabled"`
 	Port    int  `mapstructure:"port"`
+	// AdvertiseURL is the customer-reachable base URL of the agent gateway,
+	// scheme included (for example https://10.10.33.122:8444). Enrollment
+	// responses embed it as operator_endpoint, which the console shows to the
+	// customer as the address their cluster installs against. Empty keeps the
+	// legacy dev host name on purpose, so dev and e2e behavior is unchanged; a
+	// non-empty value must be an absolute http(s) URL or startup fails.
+	AdvertiseURL string `mapstructure:"advertise_url"`
 }
 
 // WithDefaults returns bounded defaults for omitted gateway configuration.
@@ -467,7 +475,25 @@ func (c GatewayCfg) WithDefaults() GatewayCfg {
 	if c.Port == 0 {
 		c.Port = 8084
 	}
+	// Normalize only: an empty AdvertiseURL must stay empty so the caller keeps
+	// the legacy dev endpoint as its fallback.
+	c.AdvertiseURL = strings.TrimRight(strings.TrimSpace(c.AdvertiseURL), "/")
 	return c
+}
+
+// Validate rejects a malformed advertise URL at startup. The value is handed to
+// customers as their installation target, so a typo must fail closed instead of
+// shipping an endpoint no cluster can reach.
+func (c GatewayCfg) Validate() error {
+	advertise := c.WithDefaults().AdvertiseURL
+	if advertise == "" {
+		return nil
+	}
+	parsed, err := url.Parse(advertise)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("gateway_invalid: gateway.advertise_url must be an absolute http:// or https:// URL")
+	}
+	return nil
 }
 
 // AuthorizationCfg controls Authorization Snapshot polling and policy reload.
@@ -520,6 +546,7 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"authorization.policy_reload_interval": "AUTHORIZATION_POLICY_RELOAD_INTERVAL",
 		"gateway.enabled":                      "GATEWAY_ENABLED",
 		"gateway.port":                         "GATEWAY_PORT",
+		"gateway.advertise_url":                "GATEWAY_ADVERTISE_URL",
 		"agent.customer_id":                    "CUSTOMER_ID",
 		"agent.cluster_id":                     "CLUSTER_ID",
 		"agent.operator_name":                  "OPERATOR_NAME",
@@ -552,6 +579,12 @@ func LoadService(path string) (*ServiceConfig, error) {
 	var cfg ServiceConfig
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
+	}
+	// gateway.advertise_url reaches customers as their installation target, so
+	// a malformed value fails startup here (fail closed) rather than shipping
+	// an unreachable endpoint.
+	if err := cfg.Gateway.Validate(); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil

@@ -27,6 +27,11 @@ gc:
 gateway:
   enabled: true
   port: 8084
+  # Customer-reachable base URL (NodePort 30844 -> host 8444). Enrollment
+  # responses embed it in operator_endpoint so the console never hands a
+  # customer the internal dev host name. Empty keeps the legacy fallback.
+  # GATEWAY_ADVERTISE_URL overrides this value at deploy time.
+  advertise_url: https://10.10.33.122:8444
 # The mTLS CA is mounted from the release-manager-mtls-ca Secret on these
 # paths by ../services/orchestrator.yaml. That Secret is provisioned out of
 # band (batch 4); the orchestrator fails closed when it is absent.
