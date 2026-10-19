@@ -28,9 +28,12 @@ func (e *nonBundleImageError) Error() string {
 // REQ-056 requires a DOUBLE rejection ("前端+后端双重拒绝"), and the console half
 // already exists (web/src/stores/operationForm.ts:266 rejects a patch path that
 // mentions "image" but is not under one of the bundle's image values paths).
-// The server mirrors that rule byte for byte instead of inventing a second
-// interpretation, so a non-browser client cannot smuggle in a patch the console
-// would have refused, and an input accepted by one side is accepted by both.
+// The server mirrors that path rule byte for byte instead of inventing a second
+// interpretation. A patch is a JSON Merge Patch, and RFC 7386 merges nested
+// objects recursively, so the rule is applied to every object path the merge can
+// reach, not just the top-level keys: `{"sidecar":{"image":{"tag":"v2"}}}` writes
+// the same value as the console's dotted path `sidecar.image.tag`, which the
+// console refuses.
 func validatePatchImageOwnership(patch *structpb.Struct, images []store.BundleImage) error {
 	if path := nonBundleImagePath(patch, images); path != "" {
 		return &nonBundleImageError{path: path}
@@ -38,18 +41,16 @@ func validatePatchImageOwnership(patch *structpb.Struct, images []store.BundleIm
 	return nil
 }
 
-// nonBundleImagePath returns the first patch path that references an image
-// outside the bundle, or "" when every image path is owned by it. Paths are
-// visited in sorted order so the reported path does not depend on Go's map
-// iteration.
+// nonBundleImagePath returns the first patch path (including every intermediate
+// object path) that references an image outside the bundle, or "" when every
+// image path is owned by it. Paths are visited in sorted order so the reported
+// path does not depend on Go's map iteration.
 func nonBundleImagePath(patch *structpb.Struct, images []store.BundleImage) string {
 	if patch == nil || len(patch.Fields) == 0 {
 		return ""
 	}
 	paths := make([]string, 0, len(patch.Fields))
-	for path := range patch.Fields {
-		paths = append(paths, path)
-	}
+	collectPatchPaths("", patch.Fields, &paths)
 	sort.Strings(paths)
 	for _, path := range paths {
 		// The console decides "is this path about an image?" case-insensitively
@@ -64,6 +65,25 @@ func nonBundleImagePath(patch *structpb.Struct, images []store.BundleImage) stri
 		}
 	}
 	return ""
+}
+
+// collectPatchPaths appends every path a JSON Merge Patch can write, joining
+// nested object keys with ".". RFC 7386 merges object values recursively and
+// replaces every other value (scalar, null, array) wholesale, so each object
+// path is itself writable and arrays are leaves whose contents are never
+// traversed. The dotted join matches the console's path syntax and the bundle
+// image values paths (store.BundleImage.ValuesPath).
+func collectPatchPaths(prefix string, fields map[string]*structpb.Value, paths *[]string) {
+	for key, value := range fields {
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		*paths = append(*paths, path)
+		if nested := value.GetStructValue(); nested != nil {
+			collectPatchPaths(path, nested.GetFields(), paths)
+		}
+	}
 }
 
 // patchPathIsBundleImage reports whether path IS one of the bundle image values

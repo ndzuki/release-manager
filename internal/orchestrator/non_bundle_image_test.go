@@ -43,6 +43,16 @@ func imagePatch(path, value string) *structpb.Struct {
 	return &structpb.Struct{Fields: map[string]*structpb.Value{path: structpb.NewStringValue(value)}}
 }
 
+// nestedPatch builds a nested patch fixture. JSON Merge Patch recurses into
+// object values, so a nested fixture has to use real structpb objects rather
+// than dotted top-level keys.
+func nestedPatch(t *testing.T, fields map[string]any) *structpb.Struct {
+	t.Helper()
+	patch, err := structpb.NewStruct(fields)
+	require.NoError(t, err)
+	return patch
+}
+
 func createOperationWithPatch(bundleID string, patch *structpb.Struct, key string) *connect.Request[orchestratorv1.CreateOperationRequest] {
 	return withIdempotencyKey(connect.NewRequest(&orchestratorv1.CreateOperationRequest{
 		OperationType:       "INSTALL",
@@ -96,6 +106,47 @@ func TestCreateOperation_ImagePatchOwnership(t *testing.T) {
 		// ValuesPath "image.tag" is owned, its parent "image" is not: setting the
 		// whole image subtree would replace values the bundle never bound.
 		{name: "parent of bundle image path", patch: imagePatch("image", "v2"), wantErr: "non_bundle_image"},
+		// Nested objects are merged recursively (RFC 7386), so every object
+		// path must be checked, not just the top-level key. `image` below is a
+		// child of `sidecar`, and the console would refuse the dotted path
+		// `sidecar.image.tag`.
+		{
+			name:    "nested image path outside bundle",
+			patch:   nestedPatch(t, map[string]any{"sidecar": map[string]any{"image": map[string]any{"tag": "v2"}}}),
+			wantErr: "non_bundle_image",
+		},
+		{
+			name:    "deeply nested image path outside bundle",
+			patch:   nestedPatch(t, map[string]any{"a": map[string]any{"b": map[string]any{"image": map[string]any{"tag": "v2"}}}}),
+			wantErr: "non_bundle_image",
+		},
+		{
+			name: "nested image path with array sibling",
+			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{
+				"image": map[string]any{"tag": "v2"},
+				"env":   []any{map[string]any{"name": "A"}},
+			}}),
+			wantErr: "non_bundle_image",
+		},
+		// Regression: the parent object of the bundle's own image path stays
+		// rejected, exactly as before the flattening change.
+		{
+			name:    "nested object at the parent of the bundle image path",
+			patch:   nestedPatch(t, map[string]any{"image": map[string]any{"tag": "v2"}}),
+			wantErr: "non_bundle_image",
+		},
+		// Negative controls: nested patches that never mention an image path
+		// are accepted; arrays, null and bool values must not panic.
+		{
+			name:  "nested non-image path",
+			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"message": "hello"}}),
+		},
+		{
+			name:  "array of image-like objects under a non-image path",
+			patch: nestedPatch(t, map[string]any{"sidecar": []any{map[string]any{"image": map[string]any{"tag": "v2"}}}}),
+		},
+		{name: "null value", patch: nestedPatch(t, map[string]any{"x": nil})},
+		{name: "bool value", patch: nestedPatch(t, map[string]any{"x": true})},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -114,6 +165,12 @@ func TestCreateOperation_ImagePatchOwnership(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), testCase.wantErr)
 			assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+			var connectErr *connect.Error
+			require.ErrorAs(t, err, &connectErr)
+			assert.Equal(t, "non_bundle_image", connectErr.Meta().Get("X-Reason-Code"))
+			operations, listErr := st.Operations().List(context.Background(), "def-001")
+			require.NoError(t, listErr)
+			assert.Empty(t, operations, "a rejected patch must not create an operation")
 		})
 	}
 }
@@ -139,6 +196,41 @@ func TestNonBundleImagePath(t *testing.T) {
 		{name: "bundle without images", patch: imagePatch("image.tag", "x"), images: nil, want: "image.tag"},
 		{name: "image without values path", patch: imagePatch("image.tag", "x"),
 			images: []store.BundleImage{{ValuesPath: ""}}, want: "image.tag"},
+		// Nested object paths: the merge recurses, so every dotted object path
+		// is checked and the first offending one in sorted order is reported
+		// (a container sorts before its descendants).
+		{name: "nested one level", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"image": map[string]any{"tag": "v2"}}}),
+			want:  "sidecar.image"},
+		{name: "nested two levels", images: images,
+			patch: nestedPatch(t, map[string]any{"a": map[string]any{"b": map[string]any{"image": map[string]any{"tag": "v2"}}}}),
+			want:  "a.b.image"},
+		{name: "nested image path with array sibling", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{
+				"image": map[string]any{"tag": "v2"},
+				"env":   []any{map[string]any{"name": "A"}},
+			}}),
+			want: "sidecar.image"},
+		{name: "nested object at the parent of the bundle image path", images: images,
+			patch: nestedPatch(t, map[string]any{"image": map[string]any{"tag": "v2"}}),
+			want:  "image"},
+		{name: "nested array at an image path", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"image": []any{map[string]any{"tag": "v2"}}}}),
+			want:  "sidecar.image"},
+		// Non-object values are leaves. Arrays are replaced wholesale by RFC
+		// 7386, so their contents are never traversed, and null/bool values
+		// must not panic.
+		{name: "nested non-image path", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"message": "hello"}})},
+		{name: "array of image-like objects under a non-image path", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecar": []any{map[string]any{"image": map[string]any{"tag": "v2"}}}})},
+		{name: "null value", images: images, patch: nestedPatch(t, map[string]any{"x": nil})},
+		{name: "bool value", images: images, patch: nestedPatch(t, map[string]any{"x": true})},
+		{name: "deterministic first nested offending path", images: images,
+			patch: nestedPatch(t, map[string]any{
+				"z": map[string]any{"image": "z"},
+				"a": map[string]any{"image": "a"},
+			}), want: "a.image"},
 		{name: "deterministic first offending path",
 			patch: &structpb.Struct{Fields: map[string]*structpb.Value{
 				"z.image": structpb.NewStringValue("z"),
