@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
 | REQ-058（50 AC） | ✅ 39 / ⚠️ 8 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**2026-10-18（W9）AC-058-50 由 ⚠️ 改判 ✅**（编译 fixture 成为显式工件并进门禁，见 §2 该行与 §5.1 W9 行）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
-| `docs/ux-review.md` 87 条 | ✅ 38 / ⚠️ 7 / ⏳ 40 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；UX-009、UX-055 ⏳→✅（W20）；各 PR 叠加后按 §3.2 表逐行重数（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status 并计数）。**2026-10-18（W15）**：UX-035 ⏳→✅（三态）、UX-073 ⏳→✅（窄屏卡片）、UX-065 ⏳→⚠️（虚拟滚动已交付、服务端分页被后端阻塞）。**2026-10-18（W9/W10/W12/W21）**：UX-024 ⏳→✅、UX-031 ⏳→✅、UX-032 ⏳→✅、UX-033 ⏳→✅、UX-041 ⏳→✅、UX-053 ⏳→✅、UX-028 ⏳→⚠️（provider 接线完成，但服务端不产生该违规）；采样 **2026-10-18 13:05 (+08:00)** 按 §3.2 表逐行复算 = ✅ 38 / ⚠️ 6 / ⏳ 41 / ⛔ 2，共 87（major：✅16 / ⚠️3 / ⏳17）。**注**：§3.2 中 UX-017/UX-019/UX-020/UX-037 四行仍写 ⏳，与 §5.2 W14 行自述的「已完成」不一致——**这是本 PR 之前就存在的口径缺口**，本轮未改（不在 W9/W10/W12/W21 范围），待单独一轮按 §5.2 W14 的落点逐条复核后再改状态与计数。**2026-10-18（W18）**：UX-070 ⏳→⚠️（`OperationDetailPage` 已拆分，`ValuesEditorPage`/`EmergencyChangePage` 未拆，见 §5.2 W18 行） |
+| `docs/ux-review.md` 87 条 | ✅ 40 / ⚠️ 7 / ⏳ 38 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；UX-009、UX-055 ⏳→✅（W20）；各 PR 叠加后按 §3.2 表逐行重数（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status 并计数）。**2026-10-18（W15）**：UX-035 ⏳→✅（三态）、UX-073 ⏳→✅（窄屏卡片）、UX-065 ⏳→⚠️（虚拟滚动已交付、服务端分页被后端阻塞）。**2026-10-18（W9/W10/W12/W21）**：UX-024 ⏳→✅、UX-031 ⏳→✅、UX-032 ⏳→✅、UX-033 ⏳→✅、UX-041 ⏳→✅、UX-053 ⏳→✅、UX-028 ⏳→⚠️（provider 接线完成，但服务端不产生该违规）；采样 **2026-10-18 13:05 (+08:00)** 按 §3.2 表逐行复算 = ✅ 38 / ⚠️ 6 / ⏳ 41 / ⛔ 2，共 87（major：✅16 / ⚠️3 / ⏳17）。**注**：§3.2 中 UX-017/UX-019/UX-020/UX-037 四行仍写 ⏳，与 §5.2 W14 行自述的「已完成」不一致——**这是本 PR 之前就存在的口径缺口**，本轮未改（不在 W9/W10/W12/W21 范围），待单独一轮按 §5.2 W14 的落点逐条复核后再改状态与计数。**2026-10-18（W18）**：UX-070 ⏳→⚠️（`OperationDetailPage` 已拆分，`ValuesEditorPage`/`EmergencyChangePage` 未拆，见 §5.2 W18 行）。**2026-10-19（TASK-267）**：UX-045 ⏳→✅（断线 banner 的 role/politeness 矛盾）；按 §3.2 表逐行复算 = **✅ 40 / ⚠️ 7 / ⏳ 38 / ⛔ 2**，共 87（major 仍 ✅16 / ⚠️3 / ⏳17）。**口径说明**：改动前同一张表的实际读数是 ✅39 / ⚠️7 / ⏳39 / ⛔2，上文 `13:05` 的 38/6/41 与 W18 后的 38/7/40 在本次之前就与表不符（非本 PR 造成），本次按表重算 |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
 四条**与卡面/文档自述相反**的实测更正（本会话重点核对项）：
@@ -203,7 +203,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-042 | minor | ✅ | 原判据 = `OperationDetailPage.vue` 里存在**从未被读取的死模板 ref**（`docs/ux-review.md:251`，处置建议「删死代码」）。**2026-10-18 修复（W18 / TASK-325，PR #439）**：`ref="cancelTrigger"` 与变量 `cancelTrigger` 已随页面拆分删除，全仓 `grep -rn cancelTrigger web/src` 零命中（页面现 246 行）；**取消后的焦点回归行为仍成立**——关闭对话框时把 `lastFocused` 记为 `document.activeElement`（`web/src/pages/OperationDetailPage.vue:112`），关闭时 `:114` 调 `lastFocused.focus()`，与已删除的 ref 无关 |
 | UX-043 | minor | ⏳ | `web/src/pages/OperationDetailPage.vue:237` 仍在模板里 `.then(...)` |
 | UX-044 | minor | ✅ | `web/src/components/operations/CancelOperationDialog.vue:38`（`close-on-escape="!submitting"`） |
-| UX-045 | minor | ⏳ | `web/src/components/operations/DisconnectBanner.vue:6` 仍 `role="status"` + `aria-live="assertive"` |
+| UX-045 | minor | ✅ | 2026-10-19 修复（TASK-267）：`role="status"` + `aria-live="assertive"` 是**自相矛盾**的声明 —— `status` 的隐式 politeness 是 `polite`，显式 `assertive` 在运行时覆盖它 ⇒ 读屏被打断，而角色声称不会；改为 `aria-live="polite"`（`web/src/components/operations/DisconnectBanner.vue:14`，`role="status"` 保留）。**为何选 polite 而非 `role="alert"`**：断线是「正在重连」的持续态而非新的失败事件，与 `OperatorPollingNotice.vue:12` 的自述约定一致；同页 `historyGap`（`web/src/components/operations/OperationTimeline.vue:71`，部分历史事件不可用）已用 `role="alert"` 承担 assertive 播报。测试 `web/src/components/operations/DisconnectBanner.test.ts`（visible ⇒ `role=status` + `aria-live=polite` + 文案；hidden ⇒ 不渲染）；**变异**：把 `polite` 改回 `assertive` ⇒ 用例红（rc=1），已逐字还原（sha256 前后一致） |
 | UX-046 | minor | ⏳ | `web/src/components/operations/OperationTimeline.vue:47` 只有 `historyGap` 带 `role="alert"`；500 条截断文案仍无 `role="status"` |
 | UX-047 | minor | ⏳ | `web/src/components/operations/TimelineEntryItem.vue:8` 仍单个 `copied` 供两个按钮共用（`:81`、`:90`） |
 | UX-048 | minor | ⏳ | `web/src/components/operations/TimelineEntryItem.vue:30` catch 块只清 timer，无失败提示 |
@@ -247,10 +247,10 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | UX-086 | nit | ⛔ | 属**证据口径**问题（`web/dist` 是构建产物、不能当首屏证据），`docs/ux-review.md:265` 已带 `check-docs:ignore` 说明（口径：`grep -n 'check-docs:ignore' docs/ux-review.md` 唯一命中 265；原引用的 257 是「现状：仓库级 CI 只跑 Go 门禁」那句，引用已漂移；采样 2026-10-17 15:52 (+08:00)）；无需修复 |
 | UX-087 | nit | ⛔ | 属**度量任务**（build 后看 chunk 划分），非缺陷；当前无 `manualChunks` 配置即为其现状记录 |
 
-**冻结计数：✅ 32 / ⚠️ 5 / ⏳ 48 / ⛔ 2（共 87）→ ✅ 38 / ⚠️ 7 / ⏳ 40 / ⛔ 2（共 87，2026-10-18 W9/W10/W12/W21 与 W18 之后）。**（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status；采样 **2026-10-18 13:05 (+08:00)** 复算一致，且与 §0 一致。本轮改判：UX-024 ⏳→✅、UX-031 ⏳→✅、UX-032 ⏳→✅、UX-033 ⏳→✅、UX-041 ⏳→✅、UX-053 ⏳→✅、UX-028 ⏳→⚠️，共 7 行；**W18** 再记 UX-070 ⏳→⚠️，共 8 行。）
+**冻结计数：✅ 32 / ⚠️ 5 / ⏳ 48 / ⛔ 2（共 87）→ ✅ 40 / ⚠️ 7 / ⏳ 38 / ⛔ 2（共 87，2026-10-19 TASK-267 之后）。**（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status；采样 **2026-10-19 (+08:00)** 复算 = 40/7/38/2，与 §0 同步。本轮改判：UX-024 ⏳→✅、UX-031 ⏳→✅、UX-032 ⏳→✅、UX-033 ⏳→✅、UX-041 ⏳→✅、UX-053 ⏳→✅、UX-028 ⏳→⚠️，共 7 行；**W18** 再记 UX-070 ⏳→⚠️，共 8 行；**TASK-267** 再记 UX-045 ⏳→✅，共 9 行。改动前表实读 39/7/39/2，此前两个冻结数字在本次之前已与表差 1。）
 
 按原严重度回看：4 条 blocker **全部** ✅ 或 ⚠️（UX-001/002/003 ✅、UX-004 ✅）⇒ **没有残留 blocker**。
-剩余 53 条 ⏳ 中 blocker 为 0 条、major 为 24 条（3–5 节据此排序）。
+剩余 38 条 ⏳ 中 blocker 为 0 条、major 为 17 条（3–5 节据此排序）。
 
 ---
 
