@@ -312,7 +312,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 配置与常量（现状）：
 
-- 签名算法与密钥（REQ-065 AC-065-01 / D1=A）：管理面 access token 是 **EdDSA（Ed25519）**。`cmd/auth` 是**唯一**持有私钥的服务（`--jwt-private-key`，默认取 `JWT_PRIVATE_KEY`；`cmd/auth/main.go:261`）；`cmd/orchestrator` 与 `cmd/api` **只校验**（`--jwt-public-key`，默认取 `JWT_PUBLIC_KEY`；`cmd/orchestrator/main.go:983`、`cmd/api/main.go:183`）。三个 flag **默认空值**，缺失或非 Ed25519 PEM 即**启动失败**（fail-closed，无哨兵默认值）。
+- 签名算法与密钥（REQ-065 AC-065-01 / D1=A）：管理面 access token 是 **EdDSA（Ed25519）**。`cmd/auth` 是**唯一**持有私钥的服务（`--jwt-private-key`，默认取 `JWT_PRIVATE_KEY`；`cmd/auth/main.go:269`）；`cmd/orchestrator` 与 `cmd/api` **只校验**（`--jwt-public-key`，默认取 `JWT_PUBLIC_KEY`；`cmd/orchestrator/main.go:988`、`cmd/api/main.go:223`）。三个 flag **默认空值**，缺失或非 Ed25519 PEM 即**启动失败**（fail-closed，无哨兵默认值）。
 - 集群里拆成**两把** Secret：`release-manager-jwt-private`（仅 auth，`deploy/kustomize/services/auth.yaml:35-39`）与 `release-manager-jwt-public`（仅 orchestrator，`deploy/kustomize/services/orchestrator.yaml:34-39`）；webhook/notifier **不挂任何 JWT 密钥**（它们本来就不校验 token）。两半由 `data/dev-jwt/jwt-{private,public}-key.pem` 生成（`deploy/kustomize/dev/kustomization.yaml:39-53`）。
 - ⇒ **auth 签发、orchestrator/api 校验，必须来自同一对密钥**（`cmd/auth/main.go:148`、`cmd/orchestrator/main.go:462`）。公钥与私钥不配对 ⇒ 全站 401 `invalid token`，且**只有 401 一个症状**（`/readyz` 全绿）。**校验方持有的是公钥，无法伪造 token**——这正是换 Ed25519 的目的。
 - TTL 硬编码：access 15 分钟、refresh 7 天（`cmd/auth/main.go:152`），无配置键。cookie 名 `rm_access` / `rm_refresh` / `rm_csrf` + header `X-CSRF-Token`（`internal/auth/service.go:17-20`）。
