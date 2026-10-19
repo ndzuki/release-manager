@@ -620,7 +620,7 @@ echo "check-citations: PASS"
 #.github/SECRETS.md;^\| `RUNS_ON`;166,175,298,306,347,355;^        if: vars\.RUNS_ON != 'self-hosted'$;^        if: vars\.RUNS_ON != 'self-hosted'$;
 #.github/SECRETS.md;^\| `RUNS_ON`;388,473;vars\.RUNS_ON.*self-hosted;vars\.RUNS_ON.*self-hosted;
 #.github/SECRETS.md;^\| `RUNS_ON`;404;WORKLOAD_IMAGE;WORKLOAD_IMAGE;
-#.github/SECRETS.md;^\| `RUNS_ON`;835;^    runs-on: \$\{\{ vars\.RUNS_ON;^    runs-on: \$\{\{ vars\.RUNS_ON;
+#.github/SECRETS.md;^\| `RUNS_ON`;886;^    runs-on: \$\{\{ vars\.RUNS_ON;^    runs-on: \$\{\{ vars\.RUNS_ON;
 #.github/SECRETS.md;^切换命令\(;29-34;^#   failed or your spending limit;gh variable delete RUNS_ON;
 #.github/SECRETS.md;^\*\*不是 secret 的固定值;384;KIND_SHA256;KIND_SHA256;
 #.github/SECRETS.md;^\*\*不是 secret 的固定值;404;WORKLOAD_IMAGE;WORKLOAD_IMAGE;
