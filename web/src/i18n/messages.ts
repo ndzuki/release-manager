@@ -216,6 +216,28 @@ const zhCN = {
   'operator.token.copyFailed': '复制失败：浏览器未允许写入剪贴板，请手动选中并复制。',
   'operator.token.deploymentCommand': '部署命令',
   'operator.token.template': '模板 ·',
+  /*
+   * TASK-389: the install command is only executable once the console substitutes the
+   * gateway address the control plane advertises (`gateway.advertise_url`). The label
+   * names that fact in the dialog, and the warning is the fail-closed branch: an endpoint
+   * that is empty OR known-unreachable leaves the placeholder in the command, so the copy
+   * must say why instead of letting the customer discover it when the operator fails to
+   * connect. Review block: until a separate change teaches the server to advertise a
+   * customer-reachable address, `operator_endpoint` is still the dev fixture `.local` name
+   * or a control-plane Service DNS name, and a plaintext `http` URL would send the
+   * enrollment token unencrypted — all of those fail closed, not just the empty value.
+   */
+  'operator.token.gatewayAddress': '控制面网关地址',
+  'operator.token.gatewayMissing': '未配置',
+  'operator.token.gatewayMissingWarning':
+    '未配置控制面网关地址：安装命令中的 <CONTROL_PLANE_OPERATOR_GATEWAY> 未被替换，复制后请先填入该集群可访问的网关地址再执行。',
+  'operator.token.gatewayUnreachableWarning':
+    '控制面网关地址不可达（{reason}）：安装命令中的 <CONTROL_PLANE_OPERATOR_GATEWAY> 未被替换，复制后请先换成客户集群能连到的 TLS 地址再执行。',
+  'operator.token.gatewayReasonDevLocal': '开发夹具域名 .local 只在夹具网络内解析',
+  'operator.token.gatewayReasonClusterDns': '集群内服务 DNS 只在控制面集群内可解析',
+  'operator.token.gatewayReasonPlaintext': 'http 地址会让注册令牌明文传输，客户网关必须使用 TLS',
+  'operator.token.gatewayReasonInvalid': '不是有效的 URL',
+  'operator.token.gatewayRemediation': '把 <CONTROL_PLANE_OPERATOR_GATEWAY> 换成客户集群能连到的 TLS 地址',
   'operator.token.copyCommand': '复制命令',
   'operator.token.saved': '我已把令牌保存到受认可的密钥存储中。',
   'operator.token.closeAndForget': '关闭并忘记令牌',
