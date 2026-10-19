@@ -1726,7 +1726,7 @@ kubectl --context k3d-rm-prod -n release-manager get cm orchestrator-config-hd84
 | schema | `36\|f` |
 | 数据面 | `release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**、`operations` **6 行** |
 | 网关叶子 | `CN=operator-gateway.dev.release-manager.local`；SAN `DNS:operator-gateway.dev.release-manager.local, DNS:localhost`；`notBefore=Oct 19 11:55:52 2026 GMT`、`notAfter=Oct 26 11:55:52 2026 GMT`（7 天） |
-| `operator_endpoint` | `https://operator-gateway.dev.release-manager.local:8084`（实测见下） |
+| `operator_endpoint` | `https://operator-gateway.dev.release-manager.local:8084`（**由代码推导、非实测**：`de7b008:cmd/orchestrator/main.go` 的 fallback + `gateway.port: 8084`；发布前的探针输出未保留，见下「证据边界」） |
 | 入口 | `https://10.10.33.122:8443/` → **200**；`/readyz` → **200** |
 | 回滚基线 | `kubectl --context k3d-rm-prod -n release-manager get deploy -o yaml` → `deploys-baseline.yaml`（**947 行**）；回滚用的旧配置 = `git show de7b008:deploy/kustomize/production/configs/orchestrator.production.yaml`（`sha256 f5739802beb38caaf16e53c462b9143987280487ca347538471ed92997d5b385`） |
 
@@ -1804,6 +1804,8 @@ openssl s_client -connect 10.10.33.122:8444 -verify_ip 10.10.33.122 -CAfile /tmp
 | 发布后（`f0f8d6b` + `advertise_url`） | **`https://10.10.33.122:8444`** | 服务端模板仍保留占位符（设计如此：地址由前端按可达性决定是否替换） |
 
 - 两次调用都返回 **200**，`installCommandTemplateVersion` 都是 `v2`；差异只在 `operatorEndpoint`。
+- **证据边界（2026-10-20 独立复核更正）**：本节早期草稿把 `operator_endpoint`「发布前」也写成**实测**，并列出 `rpc-probe-rm-d1-probe.json`「发布前后各一份」——**这是不准确的**。复核实测两份 JSON 都是发布后运行（`startedAt=2026-10-19T16:51:16Z`、内容仅差换行、endpoint 均为新值），发布前的输出被同路径第二次运行覆盖。**发布前的值 `https://operator-gateway.dev.release-manager.local:8084` 由代码可证**（`de7b008:cmd/orchestrator/main.go` 的 `legacy` fallback + `gateway.port: 8084`），但**没有产物支撑"发布前实测"**，故本行改为推导口径。
+- **ConfigMap 的注解隐患（复核补充）**：`orchestrator-config-hd8442g5k2` 的 `kubectl.kubernetes.io/last-applied-configuration` 注解仍保留**部署前**内容（四个新键 0 命中）。`apply --server-side`/`--dry-run` 与审计若只看该注解会误判"配置没更新"——判断配置真值请直接读 `.data`（sha256 `f752b3c2fc60ca8f689d88478048ed23f55faafd29e58968a2915a13f7ce8740`，与 `f0f8d6b` 的 git blob 逐字节相同）。
 - **一次性 token 没有打印、没有落盘**：探针脚本在写任何输出前就 `delete body.token`，只保留 `{present, length}`。发布前那次创建的 pending 记录已被后一次调用**显式替换**（DB：`77fc9d81…` = `rm-d1-probe` → `revoked`，`replaced_by_id=c0d0a177…`），没有用来注册任何 operator、没有提权。
 - 收尾时又把控制台验收遗留的 pending token 用 **`RevokePendingEnrollmentToken`**（同一会话、带 CSRF）撤销：返回 `changed:true, finalState:ENROLLMENT_TOKEN_STATE_REVOKED`；随后 `GetEnrollmentTokenStatus` 返回 `{}`（无 pending）。生产里**没有留下任何可用的注册令牌**。
 
@@ -1872,7 +1874,7 @@ kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web --tim
 - **没有在客户侧跑通一次真实 operator 注册**：本次验证到「控制台给出的命令、地址、证书」为止；用 IP + 新 SAN 真实 enroll 一个 operator 会**新增** operator 与会话行，且需要一个能连通 `10.10.33.122:8444` 的客户集群，超出本次部署任务范围。因此「客户点开命令即可连上」只证明了命令与证书的**静态正确性**，未证明端到端注册。
 - **一次性 token 的处理**：探针创建的 token 全部是 pending/revoked 状态，未用于注册；收尾已把最后一个 pending 撤销。证据里没有任何明文 token（命令截图里 token 值被替换为 `<REDACTED>`）。
 - 没有做故障注入、SIGTERM、并发/长连接压测；没有验证「新 schema + 旧镜像」路径（本次无 schema 变更）。
-- 证据路径：`/tmp/rm-d1/` 下 `build.log`、`import.log`、`images-f0f8d6b.tar`、`crictl-both.txt`、`deploys-baseline.yaml`、`deploys-post.yaml`、`cm-orchestrator.yaml`、`cm-orchestrator-de7b008.yaml`、`gw-cert-baseline.txt`、`rpc-probe-rm-d1-probe.json`（发布前后各一份）、`console-check.json`、`console-gateway-row.png`、`console-install-command-redacted.png`、`regression-375.json`、`revoke-pending.json`。
+- 证据路径：`/tmp/rm-d1/` 下 `build.log`、`import.log`、`images-f0f8d6b.tar`、`crictl-both.txt`、`deploys-baseline.yaml`、`deploys-post.yaml`、`cm-orchestrator.yaml`、`cm-orchestrator-de7b008.yaml`、`gw-cert-baseline.txt`、`rpc-probe-rm-d1-probe.json`（**仅发布后**：发布前的探针输出被同 `OPERATOR` 同路径的第二次运行覆盖，见「证据边界」）、`console-check.json`、`console-gateway-row.png`、`console-install-command-redacted.png`、`regression-375.json`、`revoke-pending.json`。
 
 ## 9. 可观测
 
