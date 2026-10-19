@@ -201,9 +201,10 @@ func (r *LiveRecovery) RollbackRelease(ctx context.Context, definitionID string,
 // dedupes the re-issue against the operation that just went nowhere.
 //
 // The Recovery interface takes a reason for symmetry with the other recovery
-// writes; ExecuteEmergencyChangeRequest carries no reason field, so it is
-// accepted and unused rather than silently appended to another field.
-func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRef string, replicas int32, _ string) error {
+// writes, and ExecuteEmergencyChangeRequest.reason is now a required field
+// (TASK-325 W3: 1-1000 UTF-8 bytes after trimming), so cleanup forwards the
+// reason it already composes.
+func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRef string, replicas int32, reason string) error {
 	if strings.TrimSpace(definitionID) == "" {
 		return errors.New("set replicas: empty definition id")
 	}
@@ -220,6 +221,7 @@ func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRe
 			WorkloadRef:         workloadRef,
 			ConvergenceStrategy: orchestratorv1.ConvergenceStrategy_REVERT_ON_NEXT_RECONCILE,
 			SetReplicas:         replicas,
+			Reason:              reason,
 			IdempotencyKey:      r.emergencyAttemptKey(definitionID+"/"+workloadRef, attempt),
 		})
 		operationID, err := recoveryWrite(ctx, func(ctx context.Context) (string, error) {

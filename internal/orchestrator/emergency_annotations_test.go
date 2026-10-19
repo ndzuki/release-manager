@@ -32,6 +32,7 @@ func annotationRequest(key string) *connect.Request[orchestratorv1.ExecuteEmerge
 		IdempotencyKey:      key,
 		AnnotationScope:     "deployment",
 		Annotations:         []*orchestratorv1.AnnotationEntry{{Key: "team", Value: "payments"}},
+		Reason:              emergencyTestReason,
 	})
 }
 

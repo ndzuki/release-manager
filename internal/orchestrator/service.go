@@ -1381,10 +1381,10 @@ func toProtoOperation(op *store.Operation) *orchestratorv1.Operation {
 			Organization: op.Actor.Organization,
 		},
 		LastError: op.LastError,
-		// effect_status is the authoritative cluster effect projection for
-		// EMERGENCY operations; non-EMERGENCY operations always project
-		// NOT_STARTED (AC-077-04).
+		// effect_status: authoritative cluster effect; non-EMERGENCY projects NOT_STARTED (AC-077-04).
 		EffectStatus: emergencyEffectToProto(op.EffectStatus),
+		// reason_display: redacted + truncated operations.reason (AC-058-48 / TASK-325 W3).
+		ReasonDisplay: operationReasonDisplay(op.Reason),
 	}
 	if op.TerminalAt != nil {
 		result.TerminalAt = timestamppb.New(*op.TerminalAt)

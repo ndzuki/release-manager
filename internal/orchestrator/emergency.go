@@ -246,8 +246,12 @@ func (s *Service) ExecuteEmergencyChange(
 		ID: opID, OperationType: store.OperationEmergency, Status: store.StatusPending,
 		ReleaseDefinitionID: definition.ID, IdempotencyKey: keyHash, IdempotencyScope: actor.OrganizationID + ":" + definition.ID,
 		RequestHash: requestHash,
-		Actor:       store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
-		CreatedAt:   now, UpdatedAt: now, Deadline: &deadline,
+		// TASK-325 W3: the trimmed reason is the durable justification and the
+		// source of Operation.reason_display. request_hash already covers it,
+		// so a reason edit changes the idempotent intent (AC-058-17).
+		Reason:    strings.TrimSpace(msg.GetReason()),
+		Actor:     store.ActorContext{UserID: actor.UserID, Organization: actor.OrganizationID},
+		CreatedAt: now, UpdatedAt: now, Deadline: &deadline,
 	}
 	var convergenceTask *store.ConvergenceTask
 	if convergence == store.EmergencyRequirePromotion {
@@ -483,6 +487,12 @@ func validateExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeR
 	if strings.TrimSpace(msg.GetIdempotencyKey()) == "" {
 		return emergencyError(connect.CodeInvalidArgument, "idempotency_key_required", "idempotency_key is required")
 	}
+	// AC-058-12 (TASK-325 W3, D16=A): the operator must justify the change.
+	// The window matches RevokeOperatorRequest.reason so the console enforces
+	// one shape for every audited human input.
+	if err := validateEmergencyReason(msg.GetReason()); err != nil {
+		return err
+	}
 	// AC-079-G7 / D13: UNSPECIFIED is rejected server-side.
 	if msg.GetConvergenceStrategy() == orchestratorv1.ConvergenceStrategy_CONVERGENCE_STRATEGY_UNSPECIFIED {
 		return emergencyError(connect.CodeInvalidArgument, "convergence_strategy_required", "convergence strategy is required")
@@ -506,6 +516,40 @@ func validateExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeR
 			orchestratorv1.EmergencyReasonCode_EMERGENCY_REASON_CODE_VERSION_INVALID,
 			"operation_version is invalid", false,
 		)
+	}
+	return nil
+}
+
+// Emergency reason bounds (TASK-325 W3 / AC-058-12). The window is the one the
+// contract pins (Notes/contracts/emergency-execution.md): "trim 后 1–1000 UTF-8
+// bytes". The unit is BYTES, not characters/runes, so 400 CJK characters
+// (1200 bytes) are rejected even though they are only 400 runes. Do not swap
+// these for a rune count.
+const (
+	emergencyReasonMinBytes = 1
+	emergencyReasonMaxBytes = 1000
+)
+
+// validateEmergencyReason enforces the required, trimmed, bounded reason.
+// The stable code is invalid_reason (carried as X-Reason-Code) and the message
+// is fixed prose, never the caller's text.
+//
+// The bound is measured in UTF-8 bytes: Go's len(string) already returns the
+// byte length, so len(reason) is the contract's unit and needs no conversion.
+//
+// The forbidden code points are the ones decision D16=A names (NUL, U+FFFE,
+// U+FFFF) and the console already rejects
+// (web/src/features/emergency/validation.ts), so both ends accept the same
+// subset instead of the server accepting text the form refuses to submit.
+func validateEmergencyReason(raw string) error {
+	reason := strings.TrimSpace(raw)
+	if length := len(reason); length < emergencyReasonMinBytes || length > emergencyReasonMaxBytes {
+		return emergencyError(connect.CodeInvalidArgument, "invalid_reason", "reason must contain 1 to 1000 UTF-8 bytes")
+	}
+	for _, r := range reason {
+		if r == 0x00 || r == 0xFFFE || r == 0xFFFF {
+			return emergencyError(connect.CodeInvalidArgument, "invalid_reason", "reason contains forbidden characters")
+		}
 	}
 	return nil
 }

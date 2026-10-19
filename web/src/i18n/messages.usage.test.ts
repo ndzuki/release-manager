@@ -439,7 +439,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationDetailSummary.vue',
-    allowed: ['ReleaseDefinition', 'StateVersion', 'TargetRevision', '创建时间', '更新时间', '终止时间'],
+    allowed: ['ReleaseDefinition', 'StateVersion', 'TargetRevision', '变更原因', '创建时间', '更新时间', '终止时间'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); W18 carved it out of OperationDetailPage without changing the rendered text',
   },
   {

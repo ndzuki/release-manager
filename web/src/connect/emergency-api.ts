@@ -88,6 +88,12 @@ interface ExecuteEmergencyBaseInput {
   convergenceStrategy: 'REQUIRE_PROMOTION' | 'REVERT_ON_NEXT_RECONCILE';
   targetLocks: string[];
   idempotencyKey: string;
+  /**
+   * Operator justification (AC-058-12 / TASK-325 W3). Required by the server,
+   * which trims it and rejects anything outside 1-1000 UTF-8 bytes as
+   * invalid_reason.
+   */
+  reason: string;
 }
 
 export interface ExecuteEmergencyImageInput extends ExecuteEmergencyBaseInput {
@@ -272,6 +278,7 @@ export async function executeEmergencyChange(
           : ConvergenceStrategy.REVERT_ON_NEXT_RECONCILE,
       targetLocks: input.targetLocks,
       idempotencyKey: input.idempotencyKey,
+      reason: input.reason,
       // Only the selected branch carries values; the others stay at their
       // proto3 zero values so the server cannot read two actions out of one
       // request.

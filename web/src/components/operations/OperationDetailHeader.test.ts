@@ -30,6 +30,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     deadline: null,
     lastError: '',
     effectStatus: 'NOT_STARTED',
+    reasonDisplay: '',
     ...overrides,
   };
 }

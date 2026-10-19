@@ -684,6 +684,10 @@ export const useEmergencyChangeStore = defineStore('emergencyChange', () => {
           : ('REVERT_ON_NEXT_RECONCILE' as const),
       targetLocks: fields.targetLocks,
       idempotencyKey: intent.idempotencyKey,
+      // AC-058-12 / TASK-325 W3: the server is the authoritative reason
+      // validator; send the trimmed value it will persist and project back as
+      // reason_display.
+      reason: reason.value.trim(),
     };
     const input: ExecuteEmergencyInput =
       fields.actionKind === 'replicas'

@@ -140,7 +140,7 @@ describe('emergency components (Step 4)', () => {
   it('ChangeForm gates REQUIRE_PROMOTION on mapping completeness (AC-058-14)', async () => {
     const wrapper = mount(EmergencyChangeForm, {
       props: {
-        reason: '修复镜像',
+        reason: '修复镜像回归',
         convergencePolicy: 'REQUIRE_PROMOTION',
         requirePromotionAvailable: false,
         mappingComplete: false,
@@ -154,7 +154,7 @@ describe('emergency components (Step 4)', () => {
     expect((revertRadio.element as HTMLInputElement).checked).toBe(true);
   });
 
-  it('ChangeForm shows field-level reason errors and byte count (AC-058-12)', () => {
+  it('ChangeForm shows field-level reason errors and character count (AC-058-12)', () => {
     const wrapper = mount(EmergencyChangeForm, {
       props: {
         reason: '',
@@ -172,7 +172,7 @@ describe('emergency components (Step 4)', () => {
    * TASK-275 (A11y subset ②, continued). The reason error used to render INSIDE the
    * wrapping <label> (as `<span class="error-text">`, which TASK-269's <small>-based scan
    * missed), so it was part of the textarea's accessible NAME. FormField (TASK-268) owns
-   * the clean shape; the byte counter rides in the slot and is described too. Both halves
+   * the clean shape; the character counter rides in the slot and is described too. Both halves
    * asserted separately, so dropping either relation fails here.
    */
   it('ChangeForm describes the reason error instead of naming the textarea with it (TASK-275)', () => {
@@ -195,18 +195,18 @@ describe('emergency components (Step 4)', () => {
     // ② ... it is the textarea's described alert instead, and the counter stays a hint.
     const describedBy = textarea.attributes('aria-describedby');
     expect(describedBy).toBeTruthy();
-    expect(describedBy!.split(' ')).toEqual(expect.arrayContaining([`${id}-error`, 'emergency-reason-byte-count']));
+    expect(describedBy!.split(' ')).toEqual(expect.arrayContaining([`${id}-error`, 'emergency-reason-char-count']));
     const errorNode = wrapper.get(`#${id}-error`);
     expect(errorNode.text()).toContain('请填写变更原因');
     expect(errorNode.attributes('role')).toBe('alert');
     expect(textarea.attributes('aria-invalid')).toBe('true');
-    expect(wrapper.get('#emergency-reason-byte-count').text()).toContain('0 / 1000 字节');
+    expect(wrapper.get('#emergency-reason-char-count').text()).toContain('0 / 1000 字节');
   });
 
   it('ChangeForm drops the reason alert and aria-invalid while the reason is valid (TASK-275)', () => {
     const wrapper = mount(EmergencyChangeForm, {
       props: {
-        reason: '修复镜像',
+        reason: '修复镜像回归',
         convergencePolicy: 'REQUIRE_PROMOTION',
         requirePromotionAvailable: true,
         mappingComplete: true,
@@ -217,7 +217,7 @@ describe('emergency components (Step 4)', () => {
 
     expect(wrapper.find('.form-field__error').exists()).toBe(false);
     expect(textarea.attributes('aria-invalid')).toBeUndefined();
-    expect(textarea.attributes('aria-describedby')).toBe('emergency-reason-byte-count');
+    expect(textarea.attributes('aria-describedby')).toBe('emergency-reason-char-count');
   });
 
   it('AnnotationEditor binds rows to the whitelist and validates duplicates (AC-058-02/13)', async () => {
@@ -382,7 +382,7 @@ describe('emergency components (Step 4)', () => {
         workload: target().workloadRef,
         container: 'app',
         artifact: artifact(),
-        reason: '修复镜像',
+        reason: '修复镜像回归',
         policy: 'REQUIRE_PROMOTION',
         riskAccepted: false,
         submitting: false,

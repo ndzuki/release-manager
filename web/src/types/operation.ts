@@ -58,6 +58,11 @@ export interface Operation {
   lastError: string;
   /** Authoritative cluster effect; only meaningful for EMERGENCY operations. */
   effectStatus: EffectStatus;
+  /**
+   * Safe projection of the operator's reason (AC-058-48 / TASK-325 W3). The
+   * server redacts and truncates it; empty when the operation recorded none.
+   */
+  reasonDisplay: string;
 }
 
 export interface TimelineEntry {
@@ -201,6 +206,7 @@ export function mapOperation(operation: ProtoOperation): Operation {
     deadline: timestampToISO(operation.deadline),
     lastError: operation.lastError,
     effectStatus: effectStatus(operation.effectStatus),
+    reasonDisplay: operation.reasonDisplay,
   };
 }
 

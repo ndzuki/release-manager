@@ -215,7 +215,7 @@ describe('emergencyChange store', () => {
     store.selectContainer('sidecar'); // no promotion mapping for sidecar
     await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
     store.selectArtifact(store.artifacts[0]);
-    store.setReason('x');
+    store.setReason('incident-42');
     expect(store.mappingComplete).toBe(false);
     expect(store.effectivePolicy).toBe('REVERT_ON_NEXT_RECONCILE');
 
@@ -254,6 +254,46 @@ describe('emergencyChange store', () => {
     expect(input.workloadRef).toBe('deployments/ns1/api');
     expect(input.convergenceStrategy).toBe('REQUIRE_PROMOTION');
     expect(input.targetLocks).toEqual(['image.app']);
+    expect(input.reason).toBe('修复镜像回归');
+  });
+
+  // AC-058-12 / TASK-325 W3: the store sends the trimmed justification the
+  // server persists and projects back. A reason that only passes after trimming
+  // must reach the wire trimmed, otherwise the server's 1-byte minimum
+  // would be measured against text the operator never meant to submit.
+  it('sends the trimmed reason and refuses to confirm without one', async () => {
+    setActivePinia(createPinia());
+    const store = useEmergencyChangeStore();
+    const execute = vi.fn().mockResolvedValue({ operationId: 'op1', operationVersion: 'v2' });
+    store.configure({
+      loadConflict: async () => noConflict(),
+      loadTargets: async () => [target()],
+      loadArtifacts: async () => [artifact()],
+      execute,
+    });
+
+    await store.loadScope(SCOPE);
+    store.selectContainer('app');
+    await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
+    store.selectArtifact(store.artifacts[0]);
+
+    store.setReason('   ');
+    expect(store.reasonValid).toBe(false);
+    store.openConfirm();
+    expect(store.confirmOpen).toBe(false);
+
+    // One byte is valid under the contract's byte window; the old rune rule
+    // refused anything shorter than five characters.
+    store.setReason('a');
+    expect(store.reasonValid).toBe(true);
+
+    store.setReason('  incident-42  ');
+    expect(store.reasonValid).toBe(true);
+    store.openConfirm();
+    store.setRiskAccepted(true);
+    await store.submit();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0].reason).toBe('incident-42');
   });
 
   it('keeps the key on network errors but invalidates it on deterministic rejections (AC-058-15/16)', async () => {
@@ -274,7 +314,7 @@ describe('emergencyChange store', () => {
     store.selectContainer('app');
     await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
     store.selectArtifact(store.artifacts[0]);
-    store.setReason('x');
+    store.setReason('incident-42');
     store.openConfirm();
     const key = store.confirmedIntent?.idempotencyKey;
     store.setRiskAccepted(true);
@@ -304,7 +344,7 @@ describe('emergencyChange store', () => {
     store.selectContainer('app');
     await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
     store.selectArtifact(store.artifacts[0]);
-    store.setReason('x');
+    store.setReason('incident-42');
     store.openConfirm();
     const firstKey = store.confirmedIntent?.idempotencyKey;
     store.setRiskAccepted(true);
@@ -340,7 +380,7 @@ describe('emergencyChange store', () => {
     store.selectContainer('app');
     await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
     store.selectArtifact(store.artifacts[0]);
-    store.setReason('x');
+    store.setReason('incident-42');
     store.openConfirm();
     const key = store.confirmedIntent?.idempotencyKey;
     store.setRiskAccepted(true);
@@ -370,7 +410,7 @@ describe('emergencyChange store', () => {
     store.selectContainer('app');
     await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
     store.selectArtifact(store.artifacts[0]);
-    store.setReason('x');
+    store.setReason('incident-42');
     store.openConfirm();
     store.setRiskAccepted(true);
     const callsBeforeSubmit = loadArtifacts.mock.calls.length;
@@ -403,7 +443,7 @@ describe('emergencyChange store', () => {
     expect(store.canConfirm).toBe(false); // reason empty
     store.setReason('  ');
     expect(store.canConfirm).toBe(false);
-    store.setReason('修复');
+    store.setReason('修复镜像回归');
     expect(store.canConfirm).toBe(true);
   });
 
@@ -575,7 +615,7 @@ describe('emergencyChange store', () => {
       { localId: 'l1', key: 'tier', value: 'web', scope: 'WORKLOAD_METADATA' },
       { localId: 'l2', key: 'zone', value: 'a', scope: 'WORKLOAD_METADATA' },
     ]);
-    store.setReason('修正注解');
+    store.setReason('修正注解配置');
     store.openConfirm();
     store.setRiskAccepted(true);
     await store.submit();
@@ -744,7 +784,7 @@ describe('emergencyChange store', () => {
     await store.loadScope(SCOPE);
     store.setReplicas(5);
     store.setAnnotationEntries([{ localId: 'l1', key: 'tier', value: 'web', scope: 'WORKLOAD_METADATA' }]);
-    store.setReason('组合态');
+    store.setReason('组合态切换');
 
     store.setActionKind('annotations');
     store.openConfirm();
@@ -783,7 +823,7 @@ describe('emergencyChange store', () => {
 
     await store.loadScope(SCOPE);
     store.setActionKind('replicas');
-    store.setReason('扩容');
+    store.setReason('扩容至三副本');
     store.setReplicas(9); // > max 8
     expect(store.canConfirm).toBe(false);
     expect(store.replicasError).not.toBeNull();
@@ -830,7 +870,7 @@ describe('emergencyChange store', () => {
 
     await store.loadScope(SCOPE);
     store.setActionKind('annotations');
-    store.setReason('注解');
+    store.setReason('注解配置变更');
 
     expect(store.canConfirm).toBe(false); // no rows yet
     store.setAnnotationEntries([{ localId: 'l1', key: 'not-approved', value: 'x', scope: 'WORKLOAD_METADATA' }]);
@@ -865,7 +905,7 @@ describe('emergencyChange store', () => {
     await store.loadScope(SCOPE);
     store.setActionKind('replicas');
     store.setReplicas(3);
-    store.setReason('扩容');
+    store.setReason('扩容至三副本');
     store.openConfirm();
     const firstKey = store.confirmedIntent?.idempotencyKey;
     store.setRiskAccepted(true);
@@ -897,7 +937,7 @@ describe('emergencyChange store', () => {
     await store.loadScope(SCOPE);
     store.setActionKind('annotations');
     store.setAnnotationEntries([{ localId: 'l1', key: 'tier', value: 'web', scope: 'WORKLOAD_METADATA' }]);
-    store.setReason('注解');
+    store.setReason('注解配置变更');
     store.openConfirm();
     store.setRiskAccepted(true);
     await store.submit();

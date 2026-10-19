@@ -1,7 +1,10 @@
 // Pure validation rules for the Emergency web form and convergence selection.
-// All limits come from the REQ-058 input contract and are enforced in UTF-8
-// bytes, not JS code points. These are client-side UX guards only — the
-// server stays the authoritative validator (ADR-006/ADR-011).
+// Annotation values keep the REQ-058 input contract's UTF-8 byte bound; the
+// reason follows the emergency-execution contract's UTF-8 BYTE window
+// (trim 后 1–1000 UTF-8 bytes, TASK-325 W3), so 400 CJK characters (1200 bytes)
+// are rejected even though they are only 400 code points. These are client-side
+// UX guards only — the server stays the authoritative validator
+// (ADR-006/ADR-011).
 import type { ConvergenceTaskDisplay, EmergencyActionKind, EmergencyTargetDisplay } from '@/features/emergency/model';
 
 export const REASON_MIN_BYTES = 1;
@@ -26,6 +29,7 @@ export function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
+/** Rejects the code points decision D16=A names (NUL, U+FFFE, U+FFFF). */
 function containsForbiddenCodePoints(value: string): boolean {
   for (const char of value) {
     if (FORBIDDEN_CODE_POINTS.has(char.codePointAt(0)!)) return true;
@@ -33,18 +37,23 @@ function containsForbiddenCodePoints(value: string): boolean {
   return false;
 }
 
-/** reason: trimmed, 1–1000 UTF-8 bytes; forbids NUL, U+FFFE, U+FFFF (decision D8). */
+/**
+ * reason: trimmed, 1-1000 UTF-8 BYTES; forbids NUL, U+FFFE, U+FFFF
+ * (AC-058-12 / TASK-325 W3; the server rejects the same subset as
+ * invalid_reason). The unit is bytes, not characters: 400 CJK characters are
+ * 1200 bytes and must be rejected, 300 CJK characters are 900 bytes and fit.
+ */
 export function validateReason(raw: string): ValidationResult {
   const reason = raw.trim();
-  if (reason.length === 0) {
+  const bytes = utf8ByteLength(reason);
+  if (bytes < REASON_MIN_BYTES) {
     return { valid: false, code: 'reason_required', message: '请填写变更原因' };
   }
-  const bytes = utf8ByteLength(reason);
   if (bytes > REASON_MAX_BYTES) {
     return {
       valid: false,
       code: 'reason_too_long',
-      message: `变更原因需为 1–${REASON_MAX_BYTES} UTF-8 字节（当前 ${bytes} 字节）`,
+      message: `变更原因最多 ${REASON_MAX_BYTES} 字节（当前 ${bytes} 字节）`,
     };
   }
   if (containsForbiddenCodePoints(reason)) {
