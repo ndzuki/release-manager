@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -34,6 +35,13 @@ func (e *nonBundleImageError) Error() string {
 // reach, not just the top-level keys: `{"sidecar":{"image":{"tag":"v2"}}}` writes
 // the same value as the console's dotted path `sidecar.image.tag`, which the
 // console refuses.
+//
+// Arrays are expanded by index for the same reason: RFC 7386 replaces an array
+// wholesale, but the replacement becomes effective values verbatim, so
+// `{"sidecars":[{"image":{"tag":"evil"}}]}` writes `sidecars.0.image` just as
+// surely as the object form writes `sidecar.image`. The console cannot build a
+// patch path containing `[`/`]` (operationForm.ts), so this shape is API-only,
+// which makes the server-side check the only line of defence.
 func validatePatchImageOwnership(patch *structpb.Struct, images []store.BundleImage) error {
 	if path := nonBundleImagePath(patch, images); path != "" {
 		return &nonBundleImageError{path: path}
@@ -42,9 +50,10 @@ func validatePatchImageOwnership(patch *structpb.Struct, images []store.BundleIm
 }
 
 // nonBundleImagePath returns the first patch path (including every intermediate
-// object path) that references an image outside the bundle, or "" when every
-// image path is owned by it. Paths are visited in sorted order so the reported
-// path does not depend on Go's map iteration.
+// object path and every index-expanded array element path) that references an
+// image outside the bundle, or "" when every image path is owned by it. Paths
+// are visited in sorted order so the reported path does not depend on Go's map
+// iteration.
 func nonBundleImagePath(patch *structpb.Struct, images []store.BundleImage) string {
 	if patch == nil || len(patch.Fields) == 0 {
 		return ""
@@ -68,11 +77,14 @@ func nonBundleImagePath(patch *structpb.Struct, images []store.BundleImage) stri
 }
 
 // collectPatchPaths appends every path a JSON Merge Patch can write, joining
-// nested object keys with ".". RFC 7386 merges object values recursively and
-// replaces every other value (scalar, null, array) wholesale, so each object
-// path is itself writable and arrays are leaves whose contents are never
-// traversed. The dotted join matches the console's path syntax and the bundle
-// image values paths (store.BundleImage.ValuesPath).
+// nested object keys with "." and expanding array elements with their index
+// (`sidecars.0.image`). RFC 7386 merges object values recursively and replaces
+// every other value (scalar, null, array) wholesale, so each object path is
+// itself writable. Arrays are therefore writable as a whole, and their contents
+// land in the effective values verbatim, so each expanded element path is
+// checked with the same rule as an object path. The dotted join matches the
+// console's path syntax and the bundle image values paths
+// (store.BundleImage.ValuesPath).
 func collectPatchPaths(prefix string, fields map[string]*structpb.Value, paths *[]string) {
 	for key, value := range fields {
 		path := key
@@ -80,8 +92,26 @@ func collectPatchPaths(prefix string, fields map[string]*structpb.Value, paths *
 			path = prefix + "." + key
 		}
 		*paths = append(*paths, path)
-		if nested := value.GetStructValue(); nested != nil {
-			collectPatchPaths(path, nested.GetFields(), paths)
+		collectPatchValuePaths(path, value, paths)
+	}
+}
+
+// collectPatchValuePaths descends into the value a merge patch carries: an
+// object contributes its keys, an array contributes one indexed path per element
+// plus that element's descendants, and scalars are leaves. Scalar array elements
+// are still expanded so the traversal is uniform; paths that do not mention
+// "image" are ignored by the caller, so `{"x":[1,2,3]}` and `{"sidecars":[]}`
+// stay accepted and cannot panic.
+func collectPatchValuePaths(path string, value *structpb.Value, paths *[]string) {
+	if nested := value.GetStructValue(); nested != nil {
+		collectPatchPaths(path, nested.GetFields(), paths)
+		return
+	}
+	if list := value.GetListValue(); list != nil {
+		for index, element := range list.GetValues() {
+			elementPath := path + "." + strconv.Itoa(index)
+			*paths = append(*paths, elementPath)
+			collectPatchValuePaths(elementPath, element, paths)
 		}
 	}
 }

@@ -141,12 +141,42 @@ func TestCreateOperation_ImagePatchOwnership(t *testing.T) {
 			name:  "nested non-image path",
 			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"message": "hello"}}),
 		},
+		// Arrays are replaced wholesale by RFC 7386, but the replacement
+		// becomes effective values verbatim, so an image nested in an array
+		// element is writable through the API. It is rejected exactly like the
+		// equivalent object path (`sidecar.image` / `a.b.c.image`).
 		{
-			name:  "array of image-like objects under a non-image path",
-			patch: nestedPatch(t, map[string]any{"sidecar": []any{map[string]any{"image": map[string]any{"tag": "v2"}}}}),
+			name:    "array element image path outside bundle",
+			patch:   nestedPatch(t, map[string]any{"sidecar": []any{map[string]any{"image": map[string]any{"tag": "v2"}}}}),
+			wantErr: "non_bundle_image",
 		},
+		{
+			name:    "nested array element image path outside bundle",
+			patch:   nestedPatch(t, map[string]any{"a": []any{[]any{map[string]any{"image": map[string]any{"tag": "v2"}}}}}),
+			wantErr: "non_bundle_image",
+		},
+		{
+			name: "object and array mixed image path outside bundle",
+			patch: nestedPatch(t, map[string]any{"a": map[string]any{
+				"b": []any{map[string]any{"c": map[string]any{"image": "x"}}},
+			}}),
+			wantErr: "non_bundle_image",
+		},
+		{
+			name:    "case-insensitive array element image path",
+			patch:   nestedPatch(t, map[string]any{"sidecars": []any{map[string]any{"Image": map[string]any{"Tag": "v2"}}}}),
+			wantErr: "non_bundle_image",
+		},
+		// Negative controls: arrays that never mention an image path are
+		// accepted, and empty/scalar arrays, null and bool values must not
+		// panic.
+		{name: "array without image path", patch: nestedPatch(t, map[string]any{"sidecars": []any{map[string]any{"name": "x"}}})},
+		{name: "empty array", patch: nestedPatch(t, map[string]any{"sidecars": []any{}})},
+		{name: "scalar array", patch: nestedPatch(t, map[string]any{"x": []any{1, 2, 3}})},
+		{name: "array of scalars containing image word", patch: nestedPatch(t, map[string]any{"args": []any{"image"}})},
 		{name: "null value", patch: nestedPatch(t, map[string]any{"x": nil})},
 		{name: "bool value", patch: nestedPatch(t, map[string]any{"x": true})},
+		{name: "array of null bool and empty array", patch: nestedPatch(t, map[string]any{"x": []any{nil, true, []any{}}})},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -217,15 +247,41 @@ func TestNonBundleImagePath(t *testing.T) {
 		{name: "nested array at an image path", images: images,
 			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"image": []any{map[string]any{"tag": "v2"}}}}),
 			want:  "sidecar.image"},
-		// Non-object values are leaves. Arrays are replaced wholesale by RFC
-		// 7386, so their contents are never traversed, and null/bool values
-		// must not panic.
+		// Array elements are expanded by index and checked with the same rule;
+		// the reported path names the exact element (`sidecar.0.image`).
+		{name: "array element image path", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecar": []any{map[string]any{"image": map[string]any{"tag": "v2"}}}}),
+			want:  "sidecar.0.image"},
+		{name: "nested array element image path", images: images,
+			patch: nestedPatch(t, map[string]any{"a": []any{[]any{map[string]any{"image": map[string]any{"tag": "v2"}}}}}),
+			want:  "a.0.0.image"},
+		{name: "object and array mixed image path", images: images,
+			patch: nestedPatch(t, map[string]any{"a": map[string]any{
+				"b": []any{map[string]any{"c": map[string]any{"image": "x"}}},
+			}}),
+			want: "a.b.0.c.image"},
+		{name: "case-insensitive array element image path", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecars": []any{map[string]any{"Image": map[string]any{"Tag": "v2"}}}}),
+			want:  "sidecars.0.Image"},
+		{name: "first indexed offending path", images: images,
+			patch: nestedPatch(t, map[string]any{"a": []any{map[string]any{"image": "x"}, map[string]any{"image": "y"}}}),
+			want:  "a.0.image"},
+		// Arrays that never mention an image path stay accepted, and
+		// empty/scalar arrays, null and bool values must not panic.
 		{name: "nested non-image path", images: images,
 			patch: nestedPatch(t, map[string]any{"sidecar": map[string]any{"message": "hello"}})},
-		{name: "array of image-like objects under a non-image path", images: images,
-			patch: nestedPatch(t, map[string]any{"sidecar": []any{map[string]any{"image": map[string]any{"tag": "v2"}}}})},
+		{name: "array without image path", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecars": []any{map[string]any{"name": "x"}}})},
+		{name: "empty array", images: images,
+			patch: nestedPatch(t, map[string]any{"sidecars": []any{}})},
+		{name: "scalar array", images: images,
+			patch: nestedPatch(t, map[string]any{"x": []any{1, 2, 3}})},
+		{name: "array of scalars containing image word", images: images,
+			patch: nestedPatch(t, map[string]any{"args": []any{"image"}})},
 		{name: "null value", images: images, patch: nestedPatch(t, map[string]any{"x": nil})},
 		{name: "bool value", images: images, patch: nestedPatch(t, map[string]any{"x": true})},
+		{name: "array of null bool and empty array", images: images,
+			patch: nestedPatch(t, map[string]any{"x": []any{nil, true, []any{}}})},
 		{name: "deterministic first nested offending path", images: images,
 			patch: nestedPatch(t, map[string]any{
 				"z": map[string]any{"image": "z"},
