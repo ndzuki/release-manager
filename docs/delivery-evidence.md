@@ -1,6 +1,6 @@
 # 交付证据与判据（D4/D5：REQ-056 / REQ-058 AC × 代码 + ux-review 冻结清单）
 
-基线：`origin/main` @ `56df3f4`（含本会话 #366–#392 全部合入）。
+基线：`origin/main` @ `de7b008`（2026-10-19 TASK-325 W2–W8 复核；本文原记录的 `56df3f4` 基线保留于历史，本轮所有引用按 `de7b008` 实读）。
 方法：只读取证（`read` / `grep` / `git log`），逐条 AC 现场核代码与测试；**不采信任务卡自述**。
 所有 `文件:行号` 引用均由本次会话读取该行确认；`make check-docs` 只验证「行存在」，不验证「内容相符」，
 因此本文件的行号一律以「读到的那一行」为准，读者复核时按引用行就地核对。
@@ -19,8 +19,8 @@
 
 | 对象 | 计数 | 备注 |
 | --- | --- | --- |
-| REQ-056（12 AC） | ✅ 11 / ⚠️ 1 / ❌ 0 | 唯一未闭合：AC-056-01 的**后端半边**（`non_bundle_image` 无发射者，已在 `errcodes.exceptions.yaml` 跟踪至 2026-12-31） |
-| REQ-058（50 AC） | ✅ 39 / ⚠️ 8 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**2026-10-18（W9）AC-058-50 由 ⚠️ 改判 ✅**（编译 fixture 成为显式工件并进门禁，见 §2 该行与 §5.1 W9 行）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行） |
+| REQ-056（12 AC） | ✅ 12 / ⚠️ 0 / ❌ 0 | 2026-10-19（W2）：AC-056-01 的后端半边已交付（`non_bundle_image` 有发射者，`errcodes.exceptions.yaml` 的例外已删除、现 6 条），12 条 AC 均有代码/测试证据。**注意**：vault `REQ-056` 的 AC 复选框只勾了 3/12（口径滞后）——是否置 `delivered` 由 REQ owner 另定，本文件不改 REQ 状态 |
+| REQ-058（50 AC） | ✅ 44 / ⚠️ 3 / ❌ 1 / ⛔ 2 | ⛔ = AC-058-44/45（决策 D18=C 已延期）；❌ = AC-058-33（已裁定不可达）；**2026-10-18（W9）AC-058-50 由 ⚠️ 改判 ✅**（编译 fixture 成为显式工件并进门禁，见 §2 该行与 §5.1 W9 行）；**AC-058-27 于 2026-10-17 由 ❌ 改判 ⚠️**——实质需求已由 REQ-087 覆盖（**授权面相反**，且**无 APPLIED 人工解析**入口），字面「resolver capability 门禁 + 人工解析 APPLIED」为 owner 裁决 A1/V2 的显式否决面（见 §0-4 与 §2 该行）。**2026-10-19（TASK-325 W3/W5–W8）**：AC-058-12/19 已由 Lead 在 vault 改写并勾选（服务端校验 / 响应形状按已合入契约），AC-058-28/40 由联合断言钉住，AC-058-48 的 reason 载体随 W3 落地 ⇒ 五条均改判 ✅；AC-058-10 仍 ⚠️（服务端过滤已由 W6 钉住，但前端 `operationVersion` 的值未接线）。按 §2 表逐行复算 = **✅ 44 / ⚠️ 3 / ❌ 1 / ⛔ 2**，共 50 |
 | `docs/ux-review.md` 87 条 | ✅ 40 / ⚠️ 7 / ⏳ 38 / ⛔ 2 | ⚠️ = 部分修复；⏳ = 按原判据仍成立；⛔ = 证据口径/度量类，非缺陷。**2026-10-17（TASK-325）**：UX-021 ⏳→✅、UX-039 ⚠️→✅（#405）；UX-061 ⏳→✅（#406，W13 已修）；UX-009、UX-055 ⏳→✅（W20）；各 PR 叠加后按 §3.2 表逐行重数（口径：逐行解析本表前 3 列 `UX-NNN`/severity/status 并计数）。**2026-10-18（W15）**：UX-035 ⏳→✅（三态）、UX-073 ⏳→✅（窄屏卡片）、UX-065 ⏳→⚠️（虚拟滚动已交付、服务端分页被后端阻塞）。**2026-10-18（W9/W10/W12/W21）**：UX-024 ⏳→✅、UX-031 ⏳→✅、UX-032 ⏳→✅、UX-033 ⏳→✅、UX-041 ⏳→✅、UX-053 ⏳→✅、UX-028 ⏳→⚠️（provider 接线完成，但服务端不产生该违规）；采样 **2026-10-18 13:05 (+08:00)** 按 §3.2 表逐行复算 = ✅ 38 / ⚠️ 6 / ⏳ 41 / ⛔ 2，共 87（major：✅16 / ⚠️3 / ⏳17）。**注**：§3.2 中 UX-017/UX-019/UX-020/UX-037 四行仍写 ⏳，与 §5.2 W14 行自述的「已完成」不一致——**这是本 PR 之前就存在的口径缺口**，本轮未改（不在 W9/W10/W12/W21 范围），待单独一轮按 §5.2 W14 的落点逐条复核后再改状态与计数。**2026-10-18（W18）**：UX-070 ⏳→⚠️（`OperationDetailPage` 已拆分，`ValuesEditorPage`/`EmergencyChangePage` 未拆，见 §5.2 W18 行）。**2026-10-19（TASK-267）**：UX-045 ⏳→✅（断线 banner 的 role/politeness 矛盾）；按 §3.2 表逐行复算 = **✅ 40 / ⚠️ 7 / ⏳ 38 / ⛔ 2**，共 87（major 仍 ✅16 / ⚠️3 / ⏳17）。**口径说明**：改动前同一张表的实际读数是 ✅39 / ⚠️7 / ⏳39 / ⛔2，上文 `13:05` 的 38/6/41 与 W18 后的 38/7/40 在本次之前就与表不符（非本 PR 造成），本次按表重算 |
 | `docs/ux-review.md` 覆盖度 | **62 / 87** | 该文 §4 用「`UX-017/018/019/023`」式简写覆盖 62 条；**25 条只存在于已归档清单**，正文无从核对（见 §3.1） |
 
@@ -50,7 +50,7 @@
 
 | AC | 判定 | 证据（本轮读取确认） | 缺口 / 最小改动落点 |
 | --- | --- | --- | --- |
-| **AC-056-01** 非 Bundle 镜像前后端拒绝 | ⚠️ 部分 | 前端：`web/src/stores/operationForm.ts:266`（`Patch 引用了 Bundle 外镜像`）+ 错误码映射 `web/src/connect/operation-api.ts:374` | **后端半边缺失**：`internal/**` 无 `non_bundle_image` 产生点，仅在 `errcodes.exceptions.yaml:14` 登记（`expires_at: 2026-12-31`）。落点：`CreateOperation` 的 patch 校验处比照 `internal/orchestrator/service.go:298` 的 bundle 加载结果做镜像归属校验 |
+| **AC-056-01** 非 Bundle 镜像前后端拒绝 | ✅ 已实现（2026-10-19，W2） | 前端：`web/src/stores/operationForm.ts:266`（`Patch 引用了 Bundle 外镜像`）+ 错误码映射 `web/src/connect/operation-api.ts:374`。后端：`internal/orchestrator/non_bundle_image.go:45`（`validatePatchImageOwnership`；`:57` 收集全部可写路径，`:105` 递归 object、`:114` 按 index 展开数组）+ `internal/orchestrator/values.go:65`（merge **前**校验）+ `internal/orchestrator/service.go:461` 调 `prepareValues`、`:466` 走 `prepareValuesError` + `internal/orchestrator/non_bundle_image.go:141`（`invalid_argument` + `X-Reason-Code: non_bundle_image`）。`errcodes.exceptions.yaml` 的 `non_bundle_image` 例外**已删除**（现 6 条）。测试：`internal/orchestrator/non_bundle_image_test.go:69`（端到端拒绝且不建 operation）、`:211`（路径规则：嵌套 object / 数组元素 / 大小写 / 无 image 的数组放行） | 无（数组/嵌套 object 形态均已覆盖） |
 | **AC-056-02** 未批准 ValuesRevision 拒绝 | ✅ 已实现 | 前端只列出已审批项：`web/src/components/operations/OperationForm.vue:99`（`approvedRevisions.length === 0` 时禁用）；成员校验 `web/src/stores/operationForm.ts:219`；测试 `web/src/stores/operationForm.test.ts:202`、`web/src/components/operations/OperationForm.test.ts:138`。后端：`internal/orchestrator/service.go:1582`（`revision_not_approved`） | 轻微不一致：前端消息表的键是 `values_not_approved`（`web/src/connect/operation-api.ts:373`），服务端实际发 `revision_not_approved` ⇒ 该条专属文案不可达（走兜底文案）。可在 `operation-api.ts` 的 `messages` 增加 `revision_not_approved` 键 |
 | **AC-056-03** Preflight 失败展示 | ✅ 已实现 | 面板 `web/src/components/operations/PreflightResultPanel.vue`（三态 overall，`:32`）；读失败单独态 `web/src/composables/useOperationPreflight.ts:43`（`failure`，W18 从页面下沉；置态 `:65-68`）、渲染于 `web/src/pages/OperationDetailPage.vue:187-195`；测试 `web/src/components/operations/PreflightResultPanel.test.ts`、`PreflightResultPanel.spec.ts` | — |
 | **AC-056-04** 幂等（重复点击只建一个） | ✅ 已实现 | 稳定键 + 提交门：`web/src/stores/operationForm.ts:286`（`submitting` 早退）、`:291`（`idempotencyKey ??= crypto.randomUUID()`）；后端去重：`internal/orchestrator/service.go:268-275`（同 scope+key 命中即回既有 operation，`RequestHash` 不同则 `AlreadyExists`）；契约测试 `internal/orchestrator/idempotency_contract_test.go:18`、`:45` | 缺一条「同 key 两次 submit 只发一次 RPC」的前端用例（代码层守卫在，测试未钉住） |
@@ -63,7 +63,7 @@
 | **AC-056-11** 空态引导 | ✅ 已实现 | `web/src/pages/OperationCreatePage.vue:77`（`store.isEmpty` → `EmptyState`）；`web/src/stores/operationForm.ts:75-77`（`isEmpty` 定义）、`web/src/components/operations/OperationForm.vue:26`（无可审批版本时的说明）；测试 `web/src/components/operations/OperationForm.test.ts:113` | — |
 | **AC-056-12** `release_busy` 带已有操作链接 | ✅ 已实现 | 服务端发两个 header：`internal/orchestrator/service.go:183`（`X-Reason-Code: release_busy`）、`:185`（`X-Operation-ID`）；前端读取 `web/src/connect/operation-api.ts:367`、`:370`；门禁测试 `internal/orchestrator/creation_gate_test.go` | — |
 
-**REQ-056 三态计数：✅ 11 / ⚠️ 1 / ❌ 0。**
+**REQ-056 三态计数：✅ 12 / ⚠️ 0 / ❌ 0（共 12）。**
 
 ---
 
@@ -92,16 +92,16 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-07** 授权投影过期 | ✅ | `internal/orchestrator/values_revision.go:170`、`:325`、`:432`、`:463`、`:494`（`authorization_snapshot_stale` fail-closed）；审批侧 `internal/orchestrator/values_approval.go:127` | — |
 | **058-08** 标准 Operation 入口冲突 | ✅ | 服务端 `internal/orchestrator/emergency_queries.go:410`（`CheckEmergencyConflict`）；前端整页阻断 `web/src/pages/EmergencyChangePage.vue:170-177`（含 operation 链接） | 未实测「Inventory 行按钮同步置灰且无 N+1」的运行时行为（仅静态：入口受同一 capability 门） |
 | **058-09** 目标可用性 | ✅ | `internal/orchestrator/emergency_queries.go:345`（replicas 动作投影）+ 前端 `web/src/stores/emergencyChange.ts:198-205` | — |
-| **058-10** 同 repository Artifact | ⚠️ 部分 | 前端确实带上 `operationVersion`（`web/src/stores/emergencyChange.ts:340` 构造、`web/src/connect/emergency-api.ts:237` 发送）；候选加载在 `web/src/components/emergency/EmergencyArtifactSelector.vue` | 未逐条取证「服务端只返回同 logical repository 的 VERIFIED IMAGE」这条过滤链（`internal/` 侧本轮未读到对应断言）；`operationVersion` 是否为 `ListEmergencyTargets` 回填值也需在真机网络面板确认 |
+| **058-10** 同 repository Artifact | ⚠️ 部分（服务端过滤已由 W6 钉住） | 服务端过滤链：`internal/orchestrator/emergency_queries.go:465`（`emergencyArtifactRepositoryScope` 由 container + 观测推导 repository）、`:491-505`（`candidateArtifactSummaries` 只留 `ArtifactImage` + `ValidatedAt` 非空 + 同 repository）。测试 `internal/orchestrator/emergency_queries_test.go:610`（`TestListCandidateArtifactsFiltersByTargetRepository`：`Len=2`、精确 ID 集合、`repository == registry.example/team/api`、排除 other-repo 与 CHART，本轮补请求 `OperationVersion`）。前端：候选只来自服务端列表（`web/src/components/emergency/EmergencyArtifactSelector.vue:2-4`，无手写 digest/repository 输入）；请求映射 `web/src/connect/emergency-api.ts:237-244` | **仍缺「请求携带 operationVersion 的值」**：store 的 `operationVersion` 初值为空串（`web/src/stores/emergencyChange.ts:149`），唯一赋值来自 Execute 响应（`:702`）⇒ 首次加载候选时 `operation_version` 发的是空串（字段在、token 不在）。要闭合需把 `ReleaseSummary.operation_version` 接进 store（当前无此接线） |
 | **058-11** Trust 撤销竞态 | ✅ | `internal/orchestrator/emergency.go:900`、`:903`、`:917`（三条 `artifact_not_trusted` 分支）；测试 `internal/orchestrator/emergency_artifact_trust_test.go` | — |
-| **058-12** Reason 校验 | ⚠️ 部分 | 前端必填 + 长度校验（`web/src/stores/emergencyChange.ts:191` `reasonValid`）；**后端**：`ExecuteEmergencyChangeRequest` **无 reason 字段**（`api/proto/orchestrator/v1/orchestrator.proto:1718-1742` 只有 12 个字段，无 reason） | 决策 **D16=A** 已把它划为独立后端承接项；「伪造请求 ⇒ 服务端返回 VERSION_INVALID」这一半当前**不可验证**。补齐后 AC 才完整闭合 |
+| **058-12** Reason 校验 | ✅ 已实现（2026-10-19，W3；AC 已由 Lead 在 vault 改写并勾选） | 契约：`api/proto/orchestrator/v1/orchestrator.proto:1763`（`reason = 13`），字段注释 `:1759-1762` 定义 trim 后 1–1000 UTF-8 bytes。服务端：`internal/orchestrator/emergency.go:493`（`validateExecuteEmergencyRequest` 的**第 4 个校验**）、`:544-555`（`validateEmergencyReason`：`len(bytes)` ∈ [1,1000] + 禁 NUL/U+FFFE/U+FFFF；`:547`/`:551` 固定文案、不回显输入；稳定码 `invalid_reason` 经 `emergencyError` 落 `X-Reason-Code`，见 `:1023-1026`）。前端：`web/src/features/emergency/validation.ts:46-63`（`TextEncoder` 字节口径）+ `web/src/stores/emergencyChange.ts:191`（`reasonValid` 进 `canConfirm` `:391`）。测试：`internal/orchestrator/emergency_reason_test.go:23`（14 个表驱动用例：边界/字节-vs-rune/禁止码点 + 拒绝无副作用 + 投影） | 无。AC 变更记录已把「Web 映射到 reason 字段」标为不可达（前端提交前即阻断，见 `emergencyChange.ts:191`/`:391`）；`VERSION_INVALID` 只用于 `operation_version` 形状（AC-058-18） |
 | **058-13** Annotation 批量边界 | ✅ | 0 条/超量/重复/跨 scope 四个码见 058-02 行；测试 `internal/orchestrator/emergency_annotations_test.go:41`（校验）+ `:133`（正例） | — |
 | **058-14** Mapping 完整性 | ✅ | `internal/orchestrator/emergency.go:732`、`:764`（`promotion_not_supported`）；测试 `internal/orchestrator/emergency_test.go:774` | 前端「REQUIRE_PROMOTION 不可选并固定 REVERT」：`web/src/stores/emergencyChange.ts:243-263`（mapping 完整性 + `effectivePolicy`） |
 | **058-15** 幂等响应丢失 | ✅ | 服务端按 key hash 回放：`internal/orchestrator/emergency.go:151`（`hashEmergencyIdempotencyKey`）、`:247`（落库 scope+key）；测试 `internal/orchestrator/emergency_test.go:317`（`TestExecuteEmergencyChangeIdempotency`）、`:801`（replicas 同族） | — |
 | **058-16** 幂等冲突 | ✅ | 同 scope/key 异 intent ⇒ `idempotency_conflict`（发射点：多处；主判在 emergency 幂等分支；口径与命令见本节「发射点」） | 前端不自动换 key：`web/src/stores/emergencyChange.ts:86` 的 `KEY_INVALIDATING_CODES` 已按 AC-058-16 收窄（`idempotency_conflict` 不在其中） |
 | **058-17** Intent 变化换 key | ✅ | 冻结/失效逻辑 `web/src/stores/emergencyChange.ts:630`（freeze）、`:645`（`randomUUID`）、`:653`（关窗保留 snapshot）、`:705`（按码失效）；测试 `web/src/stores/emergencyChange.test.ts` | — |
 | **058-18** `operation_version` 形状校验 | ✅ | `internal/orchestrator/emergency.go:502-508`：非空且不匹配 `^v?\d+\.\d+\.\d+$` ⇒ `EMERGENCY_REASON_CODE_VERSION_INVALID`（`CodeInvalidArgument`）；为空跳过 | 原「目标漂移 ⇒ `target_changed`」断言已由 2026-09-28 `scope-change` 显式标 `deferred`；本次不改（`errcodes.exceptions.yaml` 仍跟踪该字面量） |
-| **058-19** 异步接受响应 | ⚠️ 部分 | `ExecuteEmergencyChangeResponse` 只回 `result` / `operation_id` / `operation_version`（`api/proto/orchestrator/v1/orchestrator.proto:1744-1748`），`EmergencyResult.requested` 表示「已受理」 | AC 要求响应含 **`acceptedAt`** —— proto 无该字段；也不返回 task id（这一半符合）。落点：要么补 `accepted_at`，要么按已合入契约改写 AC |
+| **058-19** 异步接受响应 | ✅ 已实现（2026-10-19，W5；AC 已由 Lead 在 vault 改写并勾选） | 响应形状：`api/proto/orchestrator/v1/orchestrator.proto:1766-1770`（`result` / `operation_id` / `operation_version`，无 `state`/`acceptedAt`/Convergence Task ID）。异步：`internal/orchestrator/emergency.go:294-319`（事务提交后只把命令投递给 operator 流并置 queued，不等待 Operator ACK 即返回）。编译期钉住：`web/src/contracts/req058-emergency-contract.fixture.ts:135`（`responseOperationVersion`）+ `:144-147`（`legacyResponseFieldsAbsent`：`state`/`acceptedAt` 重现即具名 `TS2344`），由 `make web-check` 串上（`Makefile:416`） | 无。`p95 目标内返回`这一腿由 AC-058-49 承载（该项仍 ⚠️：服务端 p95 无观测载体），本行只判响应契约与异步性 |
 | **058-20** 直达结果恢复 | ✅ | 详情页从 `GetOperation` 重建（`web/src/pages/OperationDetailPage.vue`）；EMERGENCY 结果面板 `web/src/components/emergency/EmergencyResultPanel.vue` | 未做真机复测（§5.2） |
 | **058-21** Evidence 正交 | ✅ | `effect_status` 与 `state` 在 proto 分列（`api/proto/orchestrator/v1/orchestrator.proto:1811-1824`）；晚到解析路径 `internal/store/sqlite/emergency_intents.go:320` | — |
 | **058-22** Late Result 事务 | ✅ | `internal/store/sqlite/emergency_intents.go:320`（`ResolveEmergencyEffect`）+ `:328`（effect 快照写入）；timeline `EMERGENCY_EFFECT_RESOLVED` 见 REQ-057 侧 | — |
@@ -110,7 +110,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-25** Annotation scope 锁 | ✅ | 同 key 跨 scope 不冲突、同 scope 被拒：`internal/orchestrator/emergency.go:679`（`annotation_scope_mismatch`）；测试 `internal/orchestrator/emergency_annotations_test.go` | — |
 | **058-26** UNKNOWN 标准发布门禁 | ✅ | `internal/orchestrator/service.go:244`（`emergency_effect_unresolved` + `UnresolvedOperationIds`/`ConvergenceTaskIds`）；ROLLBACK 同门 `internal/orchestrator/rollback.go:91` | — |
 | **058-27** UNKNOWN 人工处置权限 | ⚠️ 部分（2026-10-17 改判，原判 ❌） | **实质半条已交付 = 受审计证据 ⇒ NOT_APPLIED（或保留 UNKNOWN）并按规则释放锁**：RPC `ReleaseEmergencyLock`（`api/proto/orchestrator/v1/orchestrator.proto:1458`；消息 `:1905-1922`；`ReleaseMode` `:1867-1878`）+ handler `internal/orchestrator/emergency_stuck.go:127`（reason 必填 ≤1000 / evidence ≤500 / mode 枚举），审计含 who/when/mode/evidence/reason + before/after effect（`:217`）；授权 `release_admin/platform_admin + active binding`（`:45-50`），Connect 面 `internal/auth/procedure_policy.go:167`；非管理员被拒 `internal/orchestrator/emergency_stuck_handler_test.go:253`。**前端入口已存在**：路由 `web/src/router/index.ts:148`、页 `web/src/pages/StuckLocksPage.vue`、store `web/src/stores/stuckLocks.ts:21`、client `web/src/connect/stuck-lock-api.ts:84` | **字面半条不存在，且是 owner 裁决的显式否决面（不是待补缺口）**：`api/proto/**` 无任何 `Resolve*Emergency*` RPC（`grep` 空）；`ResolveEmergencyEffect` 只有 store 原语 `internal/store/sqlite/emergency_intents.go:320`，非测试调用者 **0**（4 处全在测试：`internal/store/sqlite/emergency_store_test.go:172`、`:191`、`:213`、`internal/orchestrator/service_test.go:2685`），且原语**只改 effect + 写 timeline，不释放锁、不建/撤收敛任务**（`:381-441`）⇒ 单独接一个 RPC 也补不齐本 AC。`release.emergency.resolve` 只有授权投影（`internal/auth/authorization_snapshot.go:111`、`internal/authorization/module.go:375`）**无 RPC 消费**（前端只把 `canResolveEmergency` 映射进快照模型、无 resolver 动作：`web/src/connect/emergency-api.ts:47`、`:176`）；REQ-027 变更记录（2026-09-28 A1/V2）：「**不加 RPC**…若将来确实需要解除流程 ⇒ 应**新开 REQ**（含新 RPC + 前端入口），不回填本 AC」。且 REQ-087 反向规定 `ReleaseEmergencyLock` 供 **release_admin** 使用（AC-087-08/09），与「release_admin 必被拒绝」冲突 ⇒ 补齐需知识库裁决，非本仓实现 |
-| **058-28** Queued 取消不确定性 | ⚠️ 部分 | 取消路径 `internal/orchestrator/service.go:1067`（`CancelOperation`）存在；`cancel_not_allowed` 于 `:1102` | 未取证「cancelled 后 `effect_status` 保持 UNKNOWN、锁保留、页面继续观察」的联合断言（需一条 queued→cancelled 的 effect 测试） |
+| **058-28** Queued 取消不确定性 | ✅ 已实现（2026-10-19，W7） | 取消路径 `internal/orchestrator/service.go:1067`（`CancelOperation`）存在；`cancel_not_allowed` 于 `:1102`。联合断言 `internal/orchestrator/emergency_stuck_test.go:185`（`TestCancelEmergency_QueuedRetainsUnknown`）：`:195` 状态 cancelled + `:196` effect UNKNOWN + `:203-206` 锁保留（`HasUnresolvedForDefinition`）+ `:209-210` 无反向补偿（`Outbox().GetByOperationID` = `ErrNotFound`） | 无 |
 | **058-29** Running 取消拒绝 | ✅ | `internal/orchestrator/service.go:1102`（`cancel_not_allowed`）；前端按状态隐藏 Cancel（`web/src/components/operations/CancelOperationDialog.vue` + 详情页条件） | — |
 | **058-30** APPLIED 后单 task | ✅ | 建 task 唯一入口 `internal/orchestrator/emergency.go:257`；重放走幂等分支不重复建（`internal/orchestrator/emergency_test.go:317`） | — |
 | **058-31** NOT_APPLIED 无 task | ✅ | 同事务删除 pending task：`internal/store/sqlite/emergency_converge.go:249-259`（`abandonConvergenceTaskTx`，`WHERE operation_id = ? AND status = 'pending_promotion'`）；双引擎同构见 `internal/store/postgres/emergency_intents.go` | — |
@@ -122,7 +122,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-37** Prepare 过期 | ✅ | `internal/orchestrator/values_revision.go:130`（`ExpiresAt` 比较）+ `prepare_token_expired` 发射点（多处；口径与命令见本节「发射点」） | — |
 | **058-38** Draft 不自动提交 | ✅ | `CreateValuesRevision` 只建 draft（REQ-068 契约，服务端实现于 `internal/orchestrator/values_revision.go`）；前端显式 Submit 由 `web/src/components/values/ValuesRevisionActions.vue:68` 独立按钮承载 | — |
 | **058-39** 显式 Discard | ✅ | `internal/orchestrator/values_revision.go:280-283`（`DiscardValuesRevision`）+ `:467`（`discard_not_allowed`） | — |
-| **058-40** Reject 解绑 | ⚠️ 部分 | 绑定关系以 revision 的 `ConvergenceTaskIds` 表达（`internal/orchestrator/values_approval.go:484-485` 读取该字段） | **未找到** Reject 事务里清除 binding 的显式语句或专属测试 ⇒ 「tasks 保持 pending_promotion 且 active binding 清空」属推论，需一条 reject→task 可重新 Prepare 的测试钉住 |
+| **058-40** Reject 解绑 | ✅ 已实现（2026-10-19，W8） | Reject 事务内清绑定：`internal/store/sqlite/values_approval.go:145-155`（`UPDATE convergence_tasks SET active_revision_id = NULL, active_revision_status = NULL, last_rejection_reason = ?`，任务保持 `pending_promotion`），PostgreSQL 同构 `internal/store/postgres/values_approval.go:143-153`；RPC 入口 `internal/orchestrator/values_approval.go:74`（revision 的 `ConvergenceTaskIds` 只读投影见 `:485`）。测试 `internal/orchestrator/values_revision_reject_unbind_test.go:24`：reject 后 revision=REJECTED、task 仍 `pending_promotion`、`ActiveRevisionID`/`ActiveRevisionStatus` 为 nil、记下 rejection reason，且同一 task 能重新 `CreatePrepareSession`（含 reject 前的 `convergence_conflict` 负向对照） | 无 |
 | **058-41** Approve 收敛 | ✅ | `internal/orchestrator/values_approval.go:151`（注释直指 AC-058-41）、`:530`（canonical document 必须覆盖全部 locked paths，否则整次回滚） | — |
 | **058-42** 多 task 上限 | ✅ | 服务端 `internal/orchestrator/prepare_sessions.go:24`（`maxTaskIDs = 50`）、`:48-50`（越界拒）；前端 `web/src/stores/convergenceSelection.test.ts:112`（越量选择被拒） | — |
 | **058-43** 门禁优先级 | ✅ | `internal/orchestrator/service.go:238-253`：先 `emergency_effect_unresolved`，再 `release_convergence_pending`；授权类门在其前（同函数上文 `authorization_snapshot_stale` 分支） | — |
@@ -130,11 +130,11 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | **058-45** Invalid cursor | ⛔ 非目标 | 同上 | 同上 |
 | **058-46** 未绑定 Definition | ✅ | 前端对无 `releaseDefinitionId` 的行不渲染入口并给出说明：`web/src/components/releases/ReleaseInventoryTable.vue:110`（`title="未关联 ReleaseDefinition，紧急变更入口不可用"`） | — |
 | **058-47** Convergence 路由权限 | ✅ | `web/src/pages/ConvergenceTasksPage.vue:105-108`（`ForbiddenState` + 403 文案，`canCreateValuesRevision`） | — |
-| **058-48** Display projection | ⚠️ 部分 | 前端只消费服务端投影（`EmergencyTypedValues` / `EmergencyResult`，`api/proto/orchestrator/v1/orchestrator.proto:1811-1835`） | proto 无 `reason_display` 字段，且 Execute 无 reason（见 058-12）⇒「reason 被标记敏感后只渲染 masked projection」这一半**无载体**。落点：随 D16 的 reason 字段一并补 |
+| **058-48** Display projection | ✅ 已实现（2026-10-19，W3） | 投影载体：`api/proto/orchestrator/v1/orchestrator.proto:347`（`reason_display = 17`）+ `internal/orchestrator/operation_reason.go:22-28`（**先 `redact.Sanitize` 再 `Truncate(…, 500)`**）+ `internal/orchestrator/service.go:1387`（`toProtoOperation` 唯一出口）；测试 `internal/orchestrator/emergency_reason_test.go:108`（`TestOperationReasonDisplay`：secret 被遮、超长截断到 500 rune、短文本原样、空串为空）与 `:132`（`TestExecuteEmergencyChangeRedactsReasonOnlyInTheProjection`：库里保留原值、wire 上只有 masked 投影） | 无。annotation-value 一侧本轮未发现「服务端标记敏感」的生产者（`internal/orchestrator/emergency.go` 与 `emergency_queries.go` 内 `redact`/`Sanitize` 零命中），故该分支不可触发 |
 | **058-49** 性能容量 | ⚠️ 部分 | Web 侧 TTI 断言已落地：`web/e2e/emergency-smoke.spec.ts:36-40`（预算 `E2E_TTI_BUDGET_MS` 默认 1500）、`:124-125`（断言）；该 spec 已进 CI（`.github/workflows/test.yml:460` 注释列出 rollback + emergency-smoke） | 服务端 p95 三档仍**无验证载体**（决策 D19=A 归 REQ-065/066 + 指标）；「≤20 并发/同字段互斥」也只在服务端实现层，无观测断言 |
 | **058-50** Canonical 契约门禁 | ✅ 已实现（2026-10-18，W9） | 旧形态零匹配：全仓无 `EmergencyChange(payload, actor)`，只有 typed `ExecuteEmergencyChange`（`api/proto/orchestrator/v1/orchestrator.proto:1411`）。**显式工件**：`web/src/contracts/req058-emergency-contract.fixture.ts`——`:48` 的 `AssertNever` 让「缺符号」报成带名字的 `TS2344`，`:86` 列 19 个必需导出（execute/conflict/targets/candidate-artifacts/结果投影/枚举/`ReleaseEmergencyLock`/`OperationVersion`/`OrchestratorService`）+ auth 快照，`:94` 断言 RPC 方法存在，`:104` 断言 canonical 请求字段，`:122` 断言 legacy `payload`/`actor` **缺席**且无 `EmergencyChange` 三兄弟符号。纯类型文件（全 `declare`，零 JS 产出），由 `npm run build` 与专用 `npm run check:contract`（`web/package.json:13` → `web/tsconfig.contract.json`）编译，`make web-check` 已串上（`Makefile:416`）。**变异 3/3 全红**并逐字还原（sha256 `c9c6fa93…`）：塞入不存在的必需符号 ⇒ 报 `Type "ThisSymbolDoesNotExist" does not satisfy the constraint 'never'`；把合法字段名塞进 legacy 缺席集 ⇒ 同一断言红；把 `workloadRef` 改名 ⇒ 报 `Type "workloadRefGone" ...`。**遗留说明**：`web/prototype/emergency-contract-gate.ts` 是 2026-08-22 的一次性原型，位于 `tsconfig.json` 的 include 之外（从未被编译），其「MISSING」段已全部落地 ⇒ 文件头已标注 superseded，不再作为门禁 |
 
-**REQ-058 三态计数：✅ 38 / ⚠️ 9 / ❌ 1 / ⛔ 2（共 50）。**
+**REQ-058 三态计数：✅ 44 / ⚠️ 3 / ❌ 1 / ⛔ 2（共 50）。**
 
 ---
 
@@ -263,7 +263,7 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | M1 | 前端三关全绿：lint + test + build | `cd web && npm run lint && npm test && npm run build`（等价 `make web-check`，`Makefile:413`） | CI `web` job（`.github/workflows/test.yml:673`）/ 本机 | 可验（需 `make web-install` 一次） |
 | M2 | 仓文档事实门禁 | `make check-docs` | CI `docs-check` job / 本机 | 可验 |
 | M3 | 任务台账门禁 | `make check-tasks` | CI / 本机 | 可验 |
-| M4 | 错误码可发射门禁（REQ-056 AC-01 的缺口就登记在此） | `make check-error-codes`（例外条目须带未过期 `expires_at`） | CI / 本机 | 可验 |
+| M4 | 错误码可发射门禁（REQ-056 AC-01 的缺口曾登记在此，2026-10-19 W2 已关闭） | `make check-error-codes`（例外条目须带未过期 `expires_at`） | CI / 本机 | 可验 |
 | M5 | 迁移与双引擎一致性 | `make check-migrations` | CI / 本机 | 可验 |
 | M6 | 许可与依赖 | `make check-licenses` | CI / 本机 | 可验 |
 | M7 | 聚合门禁（含 M1–M6 + `make test`/`lint`/`sdk-check`） | `make quality`（等价 `make quality-vault REQS_DIR=<vault>/Requirements`，`Makefile:697`/`:701`） | CI 全量 / 本机（需 Node） | 可验（`make quality-vault` 需 vault 路径） |
@@ -290,8 +290,8 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 
 按 `requirement-lifecycle` 的证据门禁，REQ 置 `delivered` 需**逐条 AC 有证据**。因此：
 
-- **REQ-056**：AC-056-01 仍 ⚠️ ⇒ 保持 `accepted`，**不置 `delivered`**（与 REQ 正文现状一致）。
-- **REQ-058**：仍有 ⚠️9 / ❌1 ⇒ 保持 `accepted`，**不置 `delivered`**。
+- **REQ-056**：AC-056-01 已交付（2026-10-19，W2）⇒ 本文件 12 条 AC 均有证据；**但 vault `REQ-056` 的 AC 复选框只勾了 3/12（口径滞后）**——是否置 `delivered` 由 REQ owner 另定，本文件不改 REQ 状态。
+- **REQ-058**：仍有 ⚠️3 / ❌1（⚠️ = AC-058-10/27/49）⇒ 保持 `accepted`，**不置 `delivered`**。
 - ⛔ 的 AC-058-44/45 与 ❌ 的 AC-058-33 属**用户已裁定**的延期/不可达，计数时应单列，不计入「未达标」。
 
 ---
@@ -305,13 +305,13 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
 | # | 一句话 | 证据 / 落点 | 估计 | 前置依赖 |
 | --- | --- | --- | --- | --- |
 | W1 | **浏览器真机走查 wave**（H1–H7）：本机 `dev-up` 不可用，只能在 CI/有栈环境做 | TASK-293（`status: blocked`）；判据见 §4.2 | **L**（大头是起栈与清理） | 需要可用 dev 栈 |
-| W2 | REPLACE 级：**AC-056-01 后端半边**——`CreateOperation` 补 `non_bundle_image` 产生点 | `errcodes.exceptions.yaml:14`（2026-12-31 到期）；前端已就绪 `web/src/connect/operation-api.ts:374` | **S** | 无 |
-| W3 | **AC-058-48/12 的 reason 载体**：Execute 请求补 `reason` 字段 + 服务端校验 + `reason_display` 投影 | `api/proto/orchestrator/v1/orchestrator.proto:1718-1742`（无 reason）；决策 D16=A | **M** | 契约变更（改 proto + 双端） |
+| W2 | ~~REPLACE 级：**AC-056-01 后端半边**——`CreateOperation` 补 `non_bundle_image` 产生点~~ **2026-10-19 已交付（W2，PR #469 / `de7b008`）**：`internal/orchestrator/non_bundle_image.go:45`（校验；`:105`/`:114` 覆盖嵌套 object 与数组）+ `internal/orchestrator/values.go:65`（merge 前）+ `internal/orchestrator/service.go:466` + `X-Reason-Code` 于 `non_bundle_image.go:141`；`errcodes.exceptions.yaml` 的例外**已删**（现 6 条） | AC-056-01；测试 `internal/orchestrator/non_bundle_image_test.go:69`/`:211`；前端映射仍在 `web/src/connect/operation-api.ts:374` | **S**（已完成） | 无 |
+| W3 | ~~**AC-058-48/12 的 reason 载体**：Execute 请求补 `reason` 字段 + 服务端校验 + `reason_display` 投影~~ **2026-10-19 已交付（W3，PR #466 / `267c5d8`）**：`api/proto/orchestrator/v1/orchestrator.proto:1763`（`reason = 13`）、校验 `internal/orchestrator/emergency.go:544`、持久化 `internal/orchestrator/emergency.go:252`（列来自既有 `migrations/000016_operations_summary_columns.up.sql:13`，**无新迁移**）、投影 `api/proto/orchestrator/v1/orchestrator.proto:347` + `internal/orchestrator/operation_reason.go:22-28`（先 `redact.Sanitize` 再 `Truncate(…, 500)`） | AC-058-12、AC-058-48；测试 `internal/orchestrator/emergency_reason_test.go:23`/`:108`/`:132` | **M**（已完成） | 无 |
 | W4 | ~~**AC-058-27 resolution RPC**（原判「需契约 + 实现 + 前端接线」）~~ **2026-10-17 撤回**：实质已由 REQ-087 交付，字面半条为裁决否决面 ⇒ 不是实现项 | `api/proto/orchestrator/v1/orchestrator.proto:1458`；`internal/orchestrator/emergency_stuck.go:127`；`web/src/router/index.ts:148`；否决依据见 §2 的 `058-27` 行 | **0**（无需实现） | 若仍要字面 AC ⇒ 需知识库新开 REQ（含 RPC + 前端入口），**不回填 AC-058-27** |
-| W5 | **AC-058-19 `accepted_at`**：响应补字段或按已合入契约改写 AC | `api/proto/orchestrator/v1/orchestrator.proto:1744-1748` | **S** | 契约变更 |
-| W6 | **AC-058-10 同 repository 过滤取证**：补一条服务端断言（或确认已有测试名） | `web/src/connect/emergency-api.ts:237`；服务端过滤链本轮未取证 | **S** | 无 |
-| W7 | **AC-058-28 联合断言**：queued→cancelled 后 `effect_status` 仍 UNKNOWN、锁保留 | `internal/orchestrator/service.go:1067`、`:1102` | **S** | 无 |
-| W8 | **AC-058-40 Reject 解绑测试**：钉住 reject 后 task 可重新 Prepare | `internal/orchestrator/values_approval.go:484-485`（仅有读取） | **S** | 无 |
+| W5 | ~~**AC-058-19 `accepted_at`**：响应补字段或按已合入契约改写 AC~~ **2026-10-19 已交付（W5，PR #469 / `de7b008`）**：按 **D20=A** 以已合入契约为准改写 AC（Lead 已在 vault 落地 `REQ-058` AC-058-19 + TS 片段 + 变更记录），响应仍是 `result`/`operation_id`/`operation_version`（`api/proto/orchestrator/v1/orchestrator.proto:1766-1770`）；代码侧由 `web/src/contracts/req058-emergency-contract.fixture.ts:135` + `:144-147` 编译期钉住 | AC-058-19 | **S**（已完成） | 无 |
+| W6 | ~~**AC-058-10 同 repository 过滤取证**：补一条服务端断言（或确认已有测试名）~~ **2026-10-19 已交付（W6，PR #469 / `de7b008`）**：`internal/orchestrator/emergency_queries_test.go:610`（`TestListCandidateArtifactsFiltersByTargetRepository`：`Len=2`、精确 ID 集合、`repository` 断言、排除 other-repo/CHART，本轮补请求 `OperationVersion`）；断言对象 `internal/orchestrator/emergency_queries.go:491-505` | AC-058-10 的**服务端**半边；**残余**：前端 `operationVersion` 的值未接线（`web/src/stores/emergencyChange.ts:702` 只从 Execute 响应赋值） | **S**（服务端已完成） | 无 |
+| W7 | ~~**AC-058-28 联合断言**：queued→cancelled 后 `effect_status` 仍 UNKNOWN、锁保留~~ **2026-10-19 已交付（W7，PR #469 / `de7b008`）**：`internal/orchestrator/emergency_stuck_test.go:185`（`TestCancelEmergency_QueuedRetainsUnknown`），断言 cancelled（`:195`）、UNKNOWN（`:196`）、锁保留（`:203-206`）、无 outbox 反向补偿（`:209-210`） | AC-058-28；取消入口 `internal/orchestrator/service.go:1067` | **S**（已完成） | 无 |
+| W8 | ~~**AC-058-40 Reject 解绑测试**：钉住 reject 后 task 可重新 Prepare~~ **2026-10-19 已交付（W8，PR #469 / `de7b008`）**：`internal/orchestrator/values_revision_reject_unbind_test.go:24`；解绑语句 `internal/store/sqlite/values_approval.go:145-155` + `internal/store/postgres/values_approval.go:143-153`（`active_revision_id = NULL`，task 仍 `pending_promotion`） | AC-058-40；`internal/orchestrator/values_approval.go:74`（Reject RPC） | **S**（已完成） | 无 |
 | W9 | ~~**AC-058-50 编译 fixture**~~ **2026-10-18 已交付（W9）**：`web/src/contracts/req058-emergency-contract.fixture.ts`——`:48` 的 `AssertNever` 把「缺符号」变成带名字的 `TS2344`；`:86` 列 19 个必需导出 + auth 快照导出；`:94` 断言 `OrchestratorService.method.executeEmergencyChange`；`:104` 断言 canonical 请求字段；`:122` 断言 legacy `payload`/`actor` 缺席、且 `EmergencyChange`/`EmergencyChangeRequest`/`EmergencyChangeResponse` 三个符号不存在。**纯类型工件**（全 `declare`，零 JS），由 `npm run build`（`vue-tsc -b`，`tsconfig.json` 的 `src/**` include 覆盖）与专用 `npm run check:contract`（`web/package.json:13` → `web/tsconfig.contract.json`）编译；`make web-check` 已串上（`Makefile:416`）。**变异 3/3 全红**、逐字还原 sha256 `c9c6fa93…`（见 §9 记录）。**遗留**：`web/prototype/emergency-contract-gate.ts`（2026-08-22 一次性原型，不在任何 tsconfig include 内 ⇒ 从未被编译）文件头已标 superseded | 现由 `web/src/gen/**` + `vue-tsc` 隐式承担 | **S**（已完成） | 无 |
 
 ### 5.2 体验债（UX 冻结表里的 major，按用户可感知度）
@@ -376,9 +376,9 @@ AC-058-24 的要求码已改为 canonical `LOCKED_PATH`）。已由用户裁定�
    未跑 `make quality`。文档最终以 `make check-docs` 收口（见 §9）。
 3. **UX-085 未实测**：本机没有 `web/node_modules`，`node -p require('js-yaml/package.json').version` 不可执行； <!-- check-docs:ignore web/node_modules 本机未安装依赖，此处是「没有它」的否定陈述 -->
    结论基于 `web/package.json:25` 与 `web/package-lock.json` 一致 + CI `npm ci`（`.github/workflows/test.yml:690` 注释即该漂移）。
-4. **REQ-058 若干条只做了「有实现」级取证，未做「行为等价」级取证**：058-10（同 repository 过滤）、
-   058-20/21（真机直达恢复与 evidence 正交渲染）、058-22（Late Result 时序）、058-28（queued 取消的 effect 保持）、
-   058-40（Reject 解绑）。这些我标了 ⚠️ 并写了落点，**不当作已验收**。
+4. **未做「行为等价/真机」级取证的行（2026-10-19 复核后如实列出）**：058-10 的前端 `operationVersion` 值（§2 该行已写缺口）、
+   058-20/21/22 的真机直达恢复 / evidence 正交渲染 / Late Result 时序（表中判 ✅ 的依据是实现与单测，不是真机）、
+   058-49 的服务端 p95（无观测载体）。058-28/40 已由 W7/W8 的联合断言钉住，不再列在这里。
 5. **AC-058-49 的服务端 p95 无任何可跑载体**：三档 p95（500ms / 1s）在仓库内没有断言或指标门禁，
    只有 web 侧 TTI 断言（`web/e2e/emergency-smoke.spec.ts:124-125`）。我按 D19=A 记为 ⚠️。
 6. **87 条清单的第二来源已消失**：`Notes/Audit-2026-09-28/` 目录在当前 vault 不存在，本文件用 git 历史版本
@@ -496,3 +496,12 @@ generation/签名）⇒ 同一用例的「旧响应不覆盖新筛选」必红�
   或按 REQ 夹具造一条 APPLIED+REQUIRE_PROMOTION 的紧急变更（**写操作**，本批次未做）。
 - **H3 三条危险操作未实测**（回滚 / 解除卡锁 / 撤销令牌），原因同上（数据缺口）。
 - **镜像 tag 是临时构建**：`cc3ea91-w2` 不是 CI 产物；合并后的正式镜像应由发布流程重建。
+
+---
+
+- **2026-10-19 修订（TASK-325 W2/W3/W5–W8 文档真值）**：本次**只改本文件**，逐行核实 §1 / §2 / §4.3 / §5.1 / §8 的判定与
+  `文件:行号`（所有新行号均在 `origin/main @ de7b008` 的 worktree 内 `read`/`grep -n` 实读）。
+  `make check-docs` → **PASS**：53 markdown files、1799 path:line citations、109 citation contracts（`docs/citations.assert`）、
+  21 line exemptions；未改 `docs/production-deploy.md`、`docs/citations.assert`、任何代码/测试/生成物，未触集群。
+  `docs/citations.assert` 钉住的 7 处 `cited_at` 行号（本文件第 54、64、91、111、113、114、117 行）全部保持原位与同一引用——
+  本次所有改动都是**行内替换**（未在这些行之前增删行），新增说明只追加在文末。
