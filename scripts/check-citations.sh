@@ -407,7 +407,7 @@ while IFS=';' read -r doc line_re sed_re metric; do
 done < <(sed -n '/^#COUNTS-BEGIN$/,/^#COUNTS-END$/p' "${BASH_SOURCE[0]}" | sed '1d;$d' | sed 's/^#//' | grep -v '^[[:space:]]*$')
 
 check_doc_set() { # $1 doc, $2 header_re, $3 set|trigger (trigger implies set)
-  local doc=$1 header_re=$2 mode=$3 rows names name missing extra
+  local doc=$1 header_re=$2 mode=$3 rows names name missing extra job_condition
   if [ ! -f "$doc" ]; then
     fail "  [FAIL] job-set rule for $doc is stale — file does not exist (/$(printf '%s' "$header_re" | cut -c1-60)/)" ""
     return 0
@@ -435,8 +435,19 @@ check_doc_set() { # $1 doc, $2 header_re, $3 set|trigger (trigger implies set)
     [ -n "${text:-}" ] || continue
     name=$(row_job_name "$text" | head -1) || true
     [ -n "$name" ] || continue
-    if [ -n "$(job_if "$name")" ]; then
-      if ! printf '%s' "$text" | grep -qF 'PR 不跑'; then
+    # Three trigger classes, derived from the job's own `if:` text:
+    #   no job-level if:      -> 全部触发
+    #   if selects PR events -> 仅 PR        (e.g. `github.event_name == 'pull_request'`)
+    #   any other if:         -> PR 不跑    (push/dispatch-only lanes)
+    # The class comes from the workflow, never from the document: a lane that
+    # changes its trigger cannot leave the table claiming the old one.
+    job_condition=$(job_if "$name")
+    if [ -n "$job_condition" ]; then
+      if printf '%s' "$job_condition" | grep -qF 'pull_request'; then
+        if ! printf '%s' "$text" | grep -qF '仅 PR'; then
+          fail "  [FAIL] $doc:$lno — job '$name' has a job-level \`if:\` selecting pull_request events in $TARGET (it runs only on PRs), so its row must state «仅 PR» — row: $(printf '%s' "$text" | cut -c1-110)" ""
+        fi
+      elif ! printf '%s' "$text" | grep -qF 'PR 不跑'; then
         fail "  [FAIL] $doc:$lno — job '$name' has a job-level \`if:\` in $TARGET (it does not run on pull requests), so its row must state «PR 不跑» — row: $(printf '%s' "$text" | cut -c1-110)" ""
       fi
     else
@@ -609,7 +620,7 @@ echo "check-citations: PASS"
 #.github/SECRETS.md;^\| `RUNS_ON`;166,175,298,306,347,355;^        if: vars\.RUNS_ON != 'self-hosted'$;^        if: vars\.RUNS_ON != 'self-hosted'$;
 #.github/SECRETS.md;^\| `RUNS_ON`;388,473;vars\.RUNS_ON.*self-hosted;vars\.RUNS_ON.*self-hosted;
 #.github/SECRETS.md;^\| `RUNS_ON`;404;WORKLOAD_IMAGE;WORKLOAD_IMAGE;
-#.github/SECRETS.md;^\| `RUNS_ON`;766;^    runs-on: \$\{\{ vars\.RUNS_ON;^    runs-on: \$\{\{ vars\.RUNS_ON;
+#.github/SECRETS.md;^\| `RUNS_ON`;886;^    runs-on: \$\{\{ vars\.RUNS_ON;^    runs-on: \$\{\{ vars\.RUNS_ON;
 #.github/SECRETS.md;^切换命令\(;29-34;^#   failed or your spending limit;gh variable delete RUNS_ON;
 #.github/SECRETS.md;^\*\*不是 secret 的固定值;384;KIND_SHA256;KIND_SHA256;
 #.github/SECRETS.md;^\*\*不是 secret 的固定值;404;WORKLOAD_IMAGE;WORKLOAD_IMAGE;
@@ -689,9 +700,10 @@ echo "check-citations: PASS"
 #   `$TARGET` — adding or removing a job without updating the document fails.
 #
 # TRIGGERS: doc;header_re
-#   As SETS, plus every row must carry the trigger class of its job: a row whose
-#   job has a job-level `if:` must state «PR 不跑», a row whose job has none must
-#   state «全部触发». The words are the document's own vocabulary for
+#   As SETS, plus every row must carry the trigger class of its job: no job-level
+#   `if:` must state «全部触发», a job-level `if:` selecting pull_request events
+#   must state «仅 PR», any other job-level `if:` (push/dispatch lanes) must
+#   state «PR 不跑». The words are the document's own vocabulary for
 #   `if: github.event_name == …`; a job that starts or stops running on pull
 #   requests therefore cannot leave the table claiming the opposite.
 # ---------------------------------------------------------------------------

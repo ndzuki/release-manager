@@ -65,8 +65,10 @@ make e2e-prerequisite                               # AC-066-17 冒烟（依赖 
 | --- | --- | --- |
 | `e2e-prerequisite`（test.yml:420） | `make e2e-prerequisite-ci`（:485），`if: always()` 上传 `e2e-results/`（:487-493） | **仅 push main / 手动 `workflow_dispatch`；PR 不跑**（job `if:` :421）——是无 secret 的版本化 main 分支门禁（job 注释 :407-419） |
 | `e2e`（test.yml:519） | `make dev-up`（:582）→ `make dev-seed`（:585）→ `make e2e-all`（:590）→ 上传 `e2e-results/`（:592-599）→ `make dev-purge CONFIRM=1`（:601-603） | **仅 push main，或 workflow_dispatch 且 `run-e2e=true`**（:520；输入默认 true :9-13）；**PR 不跑**（:510-512 注释） |
+| `e2e-pr-paths`（test.yml:810） | 先 `git cat-file -e` 显式校验 base 可达、`git merge-base` 求三点的语义 base，再 `git diff --name-only` 判定 PR 是否触及 `web/**`、`test/e2e/**`、`.github/workflows/test.yml`（:833-881），结果写成 job output；**base/merge-base 求不出 ⇒ job 红色失败，绝不退化成 `web=false`** | **仅 PR**（job `if:` :811）——GitHub Actions 没有 job 级 `paths` 过滤，故用独立 job 算变更集（TASK-267） |
+| `e2e-pr`（test.yml:883） | `make dev-up dev-seed`（:960）→ `bash test/e2e/prerequisite/console.sh`（:963，`E2E_CONSOLE_SPECS=e2e/navigation.spec.ts`）→ `if: always()` 上传证据（:965-974）→ `make dev-purge CONFIRM=1`（:978） | **仅 PR 且 `e2e-pr-paths` 命中**（`needs` :884，job `if:` :885）；未命中时 skipped——**skipped 不是 passed**（TASK-267 的 navigation 子集车道） |
 
-`e2e` job 需要 12 个 repository secret 并以 `DEV_PROFILE=ci`、`E2E_ENVIRONMENT=ci` 运行（:528-554），超时 30 分钟（:522），同仓并发互不取消（:525-527）。历史上曾因 secret 未配置收窄为仅手动（D-034），偏离已于 2026-09-14 解除（:514-518 注释）。除此之外没有任何 npm/浏览器 E2E job（§ web/README 已核实）。
+`e2e` job 需要 12 个 repository secret 并以 `DEV_PROFILE=ci`、`E2E_ENVIRONMENT=ci` 运行（:528-554），超时 30 分钟（:522），同仓并发互不取消（:525-527）。历史上曾因 secret 未配置收窄为仅手动（D-034），偏离已于 2026-09-14 解除（:514-518 注释）。除此之外没有其它 npm/浏览器 E2E job：PR 侧只有 `e2e-pr`（navigation 子集，TASK-267），完整车道仍未进 PR（§ web/README 已核实）。
 
 ## 5. 写新 E2E 阶段的约束
 

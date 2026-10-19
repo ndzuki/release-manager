@@ -33,7 +33,7 @@
 #                         Playwright's bundled Chromium (CI installs it)
 #   E2E_ADMIN_B_USER      second-approver username (default e2e-runner, the
 #                         seeded release_admin account); its password comes from
-#                         E2E_RUNNER_PASSWORD in the credentials file
+#                         E2E_RUNNER_PASSWORD in the credentials file; the navigation spec's viewer is E2E_VIEWER_USER / E2E_VIEWER_PASS (defaults dev-reader / DEV_READER_PASSWORD)
 #   E2E_DEFINITION_ID     ReleaseDefinition the emergency scenario drives
 #                         (default: e2e-release-target from the fixture manifest,
 #                         the definition smoke.sh operates on last)
@@ -76,6 +76,13 @@ CLUSTER_KEY="${E2E_CONSOLE_CLUSTER_KEY:-dev-customer-a-direct}"
 # keeps the credential in data/dev-credentials.env / the CI Secret — never in the
 # repository — and needs no schema change.
 ADMIN_B_USER="${E2E_ADMIN_B_USER:-e2e-runner}"
+# TASK-267: navigation.spec.ts's read-only case (N4) needs the seeded viewer
+# account. data/dev-credentials.env already carries DEV_READER_PASSWORD (the
+# credential file is sourced above), so the lane maps it to the spec's own
+# variables; an explicit E2E_VIEWER_* still wins. When the password is absent the
+# spec skips for a reason the expected-case guard rejects, so a misconfigured
+# lane goes red instead of reporting a phantom pass.
+VIEWER_USER="${E2E_VIEWER_USER:-dev-reader}"
 
 fail() { printf 'FAIL console-e2e: %s\n' "$*" >&2; exit 1; }
 
@@ -196,6 +203,8 @@ cd "$WEB_DIR"
 # Playwright's conventional, gitignored web/test-results/ and are uploaded as their
 # own CI artifact; the JSON report stays under e2e-results/console/ with the smoke
 # results so the guard's evidence sits next to the rest of the diagnostics.
+# E2E_VIEWER_PASS is expanded HERE (not at the top of the script): the credentials
+# file is sourced above, so DEV_READER_PASSWORD only exists from this point on.
 playwright_rc=0
 E2E_BACKEND=true \
 E2E_BASE_URL="$BASE_URL" \
@@ -204,6 +213,8 @@ E2E_ADMIN_A_USER="${E2E_ADMIN_A_USER:-dev-admin}" \
 E2E_ADMIN_A_PASS="$DEV_ADMIN_PASSWORD" \
 E2E_ADMIN_B_USER="$ADMIN_B_USER" \
 E2E_ADMIN_B_PASS="$E2E_RUNNER_PASSWORD" \
+E2E_VIEWER_USER="$VIEWER_USER" \
+E2E_VIEWER_PASS="${E2E_VIEWER_PASS:-${DEV_READER_PASSWORD:-}}" \
 E2E_CUSTOMER_ID="$CUSTOMER_ID" \
 E2E_CLUSTER_ID="$CLUSTER_ID" \
 E2E_DEFINITION_ID="$DEFINITION_ID" \

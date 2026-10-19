@@ -109,6 +109,30 @@
       "title": "S3 释放提交：空原因被服务前守卫拦住，提交后载荷与可见反馈一致",
       "expect": "passed",
       "covers": "AC-087-08/09 (TASK-328) — an empty reason is refused before any request; the accepted submission carries intentId/reason/mode/evidence as the server requires (decoded from the outgoing frame), and the store's own re-read removes the row and shows the release notice. Both RPC responses are rewritten in flight; the server-side release semantics live in internal/orchestrator/emergency_stuck_handler_test.go"
+    },
+    {
+      "spec": "navigation.spec.ts",
+      "title": "home page is a workbench whose tiles all resolve",
+      "expect": "passed",
+      "covers": "REQ-100 plan §5.1 N1 (TASK-267) — the home workbench has more than four tiles and the CustomerList tile navigates to /customers. Needs only a seeded stack (dev-up dev-seed), which is why it is the one console spec the PR lane runs."
+    },
+    {
+      "spec": "navigation.spec.ts",
+      "title": "every customer row links to its clusters, and the detail page too",
+      "expect": "passed",
+      "covers": "REQ-100 plan §5.1 N2 (TASK-267) — a /customers row links to /customers/<id>/clusters, and the customer detail page (E2E_CUSTOMER_ID) offers the 集群 link. The seeded fixture supplies two customers and four clusters."
+    },
+    {
+      "spec": "navigation.spec.ts",
+      "title": "a read-only role gets an explained refusal instead of a silent redirect",
+      "expect": "passed",
+      "covers": "REQ-100 plan §5.1 N4 (TASK-267) — dev-reader (viewer) following /customers/<id>/clusters/new lands on /forbidden with the 写权限 explanation. console.sh supplies E2E_VIEWER_USER/E2E_VIEWER_PASS from the credentials file; a missing viewer password makes the case skip for a reason this manifest rejects, so the lane cannot go green without executing it."
+    },
+    {
+      "spec": "navigation.spec.ts",
+      "title": "breadcrumbs resolve names instead of printing identifiers on direct entry",
+      "expect": "passed",
+      "covers": "REQ-100 plan §5.1 N7 (TASK-267) — a direct URL (no customerName/clusterName query) still renders resolved names: the breadcrumb reads 发布清单 and contains no raw UUID."
     }
   ]
 }

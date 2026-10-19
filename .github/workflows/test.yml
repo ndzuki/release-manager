@@ -773,3 +773,206 @@ jobs:
 
       - name: Run the backup script failure matrix
         run: bash scripts/test-backup-script.sh
+
+  # ---------------------------------------------------------------------------
+  # TASK-267 (D8): the console (browser) lane enters the pull-request gate.
+  #
+  # Appended after the static-gates block on purpose: documents cite this file by
+  # line number, and inserting a job in the middle would invalidate citations
+  # unrelated to this change (same reason the static gates were appended).
+  #
+  # Scope: `navigation.spec.ts` only. It is the one console spec that needs
+  # nothing from smoke.sh — rollback/emergency-smoke/delivery-criteria consume
+  # smoke state (revision > 1, a pending_promotion task, the rows of
+  # E2E_DEFINITION_ID), so on a bare `dev-up dev-seed` stack they would fail on
+  # their documented preconditions rather than on the console. The full lane
+  # stays on push main (`e2e-prerequisite`).
+  #
+  # Cost measured on push runs 2026-10-18: `e2e-prerequisite` 14m38s-22m34s wall
+  # clock, while the console step itself was ~40s (run 39141513344: job
+  # 15:40:23-15:55:01, console 15:54:17-15:54:57). The environment build
+  # (`make dev-up`) is the cost floor, so the path gate below keeps the lane off
+  # pull requests that cannot affect the console.
+  #
+  # Why two jobs: GitHub Actions has NO job-level `paths` filter — `paths` only
+  # exists on the workflow trigger, and filtering `on.pull_request.paths` here
+  # would silently skip every other job for a non-web PR. `e2e-pr-paths`
+  # therefore computes the changed-file set and `e2e-pr` consumes its output.
+  # When the PR touches none of the three paths `e2e-pr` is SKIPPED (not passed).
+  # The merge gate (`make pr-merge-check`: every check must be pass or skipping)
+  # accepts that; a future required-check rule would also have to accept
+  # "skipped", or unrelated PRs would hang on a pending check.
+  #
+  # `e2e-pr-paths` fails — it never falls back to `web=false` — when the base
+  # commit or the merge base cannot be resolved: "the diff is unavailable" is not
+  # "the PR touches nothing", and reporting the latter would turn a broken base
+  # into a green check that ran nothing.
+  e2e-pr-paths:
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      web: ${{ steps.changed.outputs.web }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the diff needs the pull-request base commit
+
+      - name: Decide whether the console lane can be affected
+        id: changed
+        env:
+          # Through env, never interpolated into the shell: event payload values
+          # are untrusted input.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          BASE_SHA="${BASE_SHA:-}"
+
+          # Fail CLOSED when the base cannot be resolved. The first version of
+          # this step put the diff inside the `if` condition, so a `git diff`
+          # that failed at runtime (bad object, a base branch force-pushed away,
+          # a clone that never fetched it) took the else branch and reported
+          # `web=false`: the console lane was silently skipped and the pull
+          # request still read as passing. `set -e` cannot see a failure that is
+          # an `if` condition, which is exactly how that hole survived. Every
+          # step below therefore checks its own exit status and exits 1.
+          if [ "${#BASE_SHA}" -ne 40 ] || printf '%s' "$BASE_SHA" | grep -q '[^0-9a-f]'; then
+            echo "::error::pull-request base sha is missing or malformed: '$BASE_SHA'"
+            exit 1
+          fi
+          if ! git cat-file -e "${BASE_SHA}^{commit}"; then
+            echo "::error::base commit $BASE_SHA is not in this checkout (fetch-depth: 0 did not reach it, or the base branch was force-pushed away); refusing to guess the changed-file set"
+            exit 1
+          fi
+
+          # Three-dot semantics made explicit: on a fork PR HEAD is the
+          # synthetic merge commit, so `git merge-base BASE_SHA HEAD` IS the
+          # base tip that `git diff BASE_SHA...HEAD` would have used. Computing
+          # and logging it makes "which base did this decision use" auditable
+          # instead of implicit in a two-dot range. No merge base means the
+          # comparison is meaningless, so that fails the job too.
+          if ! merge_base=$(git merge-base "$BASE_SHA" HEAD); then
+            echo "::error::no merge base between $BASE_SHA and HEAD"
+            exit 1
+          fi
+
+          changed="${RUNNER_TEMP:-/tmp}/e2e-pr-changed.txt"
+          git diff --no-ext-diff --name-only "$merge_base" HEAD >"$changed"
+          echo "base sha:   $BASE_SHA"
+          echo "merge-base: $merge_base"
+          echo "head:       $(git rev-parse HEAD)"
+          echo "changed files: $(wc -l <"$changed") — first 20:"
+          head -n 20 "$changed"
+
+          # `grep` exit 1 is "no match" (web=false). Any OTHER failure must fail
+          # the job: an unreadable change list that reads as `web=false` is the
+          # same silent skip this step exists to prevent.
+          rc=0
+          grep -qE '^(web/|test/e2e/|\.github/workflows/test\.yml$)' "$changed" || rc=$?
+          case "$rc" in
+            0) echo "web=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "web=false" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::the path filter could not read $changed (grep rc=$rc)"
+              exit 1
+              ;;
+          esac
+
+  e2e-pr:
+    needs: e2e-pr-paths
+    if: github.event_name == 'pull_request' && needs.e2e-pr-paths.outputs.web == 'true'
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # The environment build dominates the runtime (14m38s-22m34s measured on push
+    # runs 2026-10-18, the `make dev-up` step alone is 14m44s-17m30s); 40 minutes leaves room for a slow image
+    # build without letting a hung lane hold a runner for an hour.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    # The workflow-level `concurrency` already cancels superseded runs for the
+    # same branch/PR. This job-level group is the environment lane's own guard:
+    # it serialises e2e-pr against itself so two runs for the same PR can never
+    # both drive the k3d stack, and cancels the stale one.
+    concurrency:
+      group: e2e-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      # The lane runs the local dev profile exactly like `e2e-prerequisite`: its
+      # own `data/dev-credentials.env` supplies every account, so this job reads
+      # no repository secret and needs no write permission.
+      E2E_CONSOLE_SPECS: e2e/navigation.spec.ts
+      # Empty (not unset) selects Playwright's bundled Chromium; console.sh
+      # treats "unset" as "use the system Chrome" (the local convention).
+      E2E_CONSOLE_CHANNEL: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+          cache: ${{ vars.RUNS_ON != 'self-hosted' }}
+
+      # dev-up requires k3d >= 5.8 and kustomize on PATH and only detects them
+      # (deploy/dev/lib/host.sh); hosted runners ship neither. Same install as
+      # the `e2e-prerequisite`/`e2e` jobs.
+      - name: Install dev environment tools
+        run: |
+          set -euo pipefail
+          base="https://github.com/k3d-io/k3d/releases/download/v5.8.3"
+          curl -fsSL -o /tmp/k3d-linux-amd64 "${base}/k3d-linux-amd64"
+          curl -fsSL -o /tmp/k3d-checksums.txt "${base}/checksums.txt"
+          (cd /tmp && grep -E ' _dist/k3d-linux-amd64$' k3d-checksums.txt | sed 's#_dist/##' | sha256sum -c -)
+          mkdir -p "$(go env GOPATH)/bin"
+          install -m 0755 /tmp/k3d-linux-amd64 "$(go env GOPATH)/bin/k3d"
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.8.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          k3d version
+          kustomize version
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies and the Chromium browser
+        working-directory: web
+        env:
+          # Through env, never interpolated into the shell (SECRETS.md §9 item 3):
+          # `vars.*` is admin-controlled today, but the value belongs in the
+          # environment, not in the script text.
+          RUNS_ON: ${{ vars.RUNS_ON }}
+        run: |
+          set -euo pipefail
+          npm ci
+          if [ "$RUNS_ON" = "self-hosted" ]; then
+            # No sudo on the local runner; the system libraries are pre-provisioned.
+            npx playwright install chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      # No smoke.sh: the navigation spec needs only a seeded stack (login,
+      # customers/clusters, the release inventory breadcrumb). Keeping the smoke
+      # out also keeps environment-mutation flakes attributable to the push lane.
+      - name: Start the development stack
+        run: make dev-up dev-seed
+
+      - name: Run the console lane (navigation subset)
+        run: bash test/e2e/prerequisite/console.sh
+
+      - name: Upload the console lane evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-pr-console-diagnostics
+          path: |
+            e2e-results/console/
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+
+      - name: Purge the development environment
+        if: always()
+        run: make dev-purge CONFIRM=1
