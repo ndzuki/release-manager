@@ -1271,6 +1271,111 @@ done
 - 没有做故障注入、SIGTERM、并发/长连接压测；没有重跑 `go test -race ./...`（本次没有改生产代码，CI 已覆盖 PR #454）。
 - 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
 
+### 8.10 实测：`182bd4e` 审计分页修复发布（无迁移、无 Go 运行时变更，2026-10-19，TASK-376）
+
+TASK-373 之后的第六次发布。本次把 `origin/main` 从 `ee3afae` 前移到 **`182bd4e`**（`Merge pull request #457 from ndzuki/fix/375-audit-replace`，修复提交 `633d95f` `fix(web): replace audit pages instead of appending and restore pager a11y`，TASK-375）；区间内另有 PR [#456](https://github.com/ndzuki/release-manager/pull/456) 的 CI/e2e 门禁改动（TASK-267）与 PR [#453](https://github.com/ndzuki/release-manager/pull/453)/[#455](https://github.com/ndzuki/release-manager/pull/455) 的文档提交。
+
+**变更面**（`git diff --no-ext-diff --stat ee3afae..182bd4e`）：**19 个文件，+773/−47**。三类：
+
+| 类别 | 文件 | 结论 |
+| --- | --- | --- |
+| 迁移 | —（`git diff --name-only ee3afae..182bd4e -- migrations/` ⇒ **0 文件**） | schema 保持 **`36\|f`**，回滚是**纯镜像级** |
+| Go 运行时 | —（`git diff --name-only ee3afae..182bd4e -- 'internal/**' 'cmd/**' 'api/**' \| grep -v _test.go` ⇒ **空**） | 后端**零功能变化**，5 个 Go 服务与 `ee3afae` 功能等价 |
+| web 运行时 | `web/src/stores/audit.ts`、`web/src/components/audit/AuditEventTable.vue`、`web/src/components/common/Pagination.vue`、`web/src/pages/AuditPage.vue`、`web/src/i18n/messages.ts` | **只有 web 有功能变化** |
+
+其余文件是测试（`web/src/**/*.test.ts`、`*.spec.ts`）、CI（`.github/workflows/test.yml`、`.github/SECRETS.md`）、e2e 脚本（`test/e2e/**`）、引用检查脚本与文档。
+
+**滚动范围 = 只滚 `web`**。依据就是上表第二行：区间内 Go 运行时文件为 0，任何 Go 服务的镜像内容只可能因构建时间不同而不同，不承载本次行为变化。但**仍构建并导入了全部 8 个镜像**（`:182bd4e`），以保持节点镜像清单与 tag 一致、便于回滚时二次切换；`api`/`auth`/`orchestrator`/`notifier`/`webhook` 的 Deployment **没有动**，仍是 `:ee3afae`（revision 不变）。
+
+**基线（发布前实测，2026-10-19 09:31–09:34 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web` 全部 `:ee3afae`；`edge=nginx:1.27-alpine` |
+| revision | `api=14`、`auth=6`、`orchestrator=6`、`notifier=6`、`webhook=6`、`web=12`、`edge=1` |
+| Pod | 10 个工作负载 `1/1` + 1 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| schema | `36\|f` |
+| 数据面 | `release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**；`audit_events` **39 行**（其中最近 24 h **7 行**） |
+| 入口 | `https://localhost:8443/` → 200 |
+| 登录 | 离开 `/login` **835–844 ms**（真 Chrome，playwright-core + 系统 Chrome，两次采样） |
+| 6 服务健康 | `/health` 与 `/readyz` 全 200（`web` 的两条路径仍是 nginx 反代到 orchestrator） |
+| 回滚基线 | `kubectl -n release-manager get deploy -o yaml` 落盘 `/tmp/rm376/deploys-baseline-ee3afae.yaml`（945 行） |
+
+**构建与导入**（worktree `/tmp/rm-wt376`，HEAD = `182bd4e`）
+
+```bash
+git fetch origin && git worktree add /tmp/rm-wt376 -b chore/376-deploy-182bd4e origin/main
+cd /tmp/rm-wt376
+make docker-build-all IMAGE_TAG=182bd4e
+for svc in api auth orchestrator operator webhook notifier notification-sink web; do
+  docker save --platform linux/amd64 -o "/tmp/rm376/images/$svc.tar" "localhost:5001/release-$svc:182bd4e"
+done
+k3d image import -c rm-prod /tmp/rm376/images/*.tar 2>&1 | tee /tmp/rm376/import-all.log
+grep ERRO /tmp/rm376/import-all.log      # 0 命中
+```
+
+- 8 个镜像全部 `linux/amd64`；构建 **74.973 s**；8 个 tar 合计 **118,374,912 B**（≈112.9 MiB）。
+- 导入 **15.189 s**，输出 `Successfully imported 8 image(s) into 1 cluster(s)`，`grep ERRO` **0 命中**；节点内 `crictl images | grep 182bd4e` 可见 8 个 `:182bd4e`。
+
+**滚动（只滚 `web`：`set image` → `rollout status --timeout=300s` → 立即验 `/health` + `/readyz`）**
+
+| 服务 | 滚动耗时 | revision | `/health` | `/readyz` |
+| --- | --- | --- | --- | --- |
+| `web`（2 副本） | **8,164 ms** | 12 → **13** | 200 | 200 |
+
+- 没有失败，未触发 `undo`。**取证口径说明**：滚动完成时，先前建立的 `kubectl port-forward svc/web` 仍绑在已终止的旧 Pod 上，两个探测返回 `000`（连接层失败，不是服务返回错误）；对同一个 Service 重建 port-forward 后 `/health`、`/readyz` 均 **200**，`/readyz` body 为 `{"checks":{"cleanup_gc":"ok","database":"ok","noop":"ok"},"status":"ok"}`，`https://localhost:8443/` 200（13.6 ms）。这个 `000` 是探针自身失效，不计为发布失败。
+- 发布后 revision：`web=13`，`api=14`、`auth=6`、`orchestrator=6`、`notifier=6`、`webhook=6`、`edge=1` **全部不变**。
+
+**⭐ 审计分页验收（本次核心：生产数据上的改前/改后对照）**
+
+生产库 `audit_events` 共 39 行，`/audit` 默认时间范围是最近 24 h（**7 行 ⇒ 1 页**），不足以触发分页。因此用 UI 支持的只读 URL 时间筛选把区间放宽到 **30 天**（`/audit?from=…&to=…`，平台管理员策略上限 366 天），得到 **39 条 ⇒ 2 页**；不造任何数据。同一脚本 `audit-probe.mjs` 在**改前**（`:ee3afae`）与**改后**（`:182bd4e`）各跑一次，均从 `/login` 真登录、点真实按钮、逐项取 DOM。
+
+| # | 检查项 | 改前 `ee3afae` | 改后 `182bd4e` |
+| --- | --- | --- | --- |
+| 1 | 首屏行数 | 20 | **20** |
+| 2 | 首屏页码文本 | 无（`nav` 内 `role="status"` **0 个**） | **「第 1 页，共 39 条」**（`nav` 内 `role="status"` **恰 1 个**） |
+| 3 | 首屏「上一页」 | disabled | **disabled** |
+| 4 | 点「下一页」后行数 | **39 行（累积）** | **19 行（第 2 页 = 39−20，不累积）** |
+| 5 | 第 2 页与第 1 页行交集 | 20（第 1 页的行全部仍在） | **0** |
+| 6 | 第 2 页页码文本 | 无 | **「第 2 页，共 39 条」**（随页码变化） |
+| 7 | 翻页后 `document.activeElement` | `BODY` | **`SECTION.audit-results`**（`aria-label=审计结果`） |
+| 8 | 「上一页」回到第 1 页 | 20 行、行文本与首屏一致 | **20 行、行文本与首屏逐行一致**；焦点仍在 `SECTION.audit-results` |
+| 9 | 末页「下一页」 | disabled | **disabled** |
+| 10 | 对 disabled 的「下一页」click（原生 + 合成事件） | 无 RPC、无行增量 | **无 RPC、无行增量**（`rpc delta = 0`，`row delta = 0`） |
+| 11 | 控制台 error | 登录前 2×401 | 登录前 **2×401**，其余 0 条未归因 error |
+
+- 逐页 RPC 次数：首屏 1 次、「下一页」1 次、「上一页」1 次（脚本监听到 `QueryAuditEvents` 的实际响应数）；disabled 按钮未产生额外 RPC。
+- 行身份口径：该 RPC 走 Connect/protobuf（不是 JSON），因此用**渲染行的文本**作身份（时间 + 操作者 + 资源 + 动作 + 状态 + 耗时）。改前 39 行文本两两不同、改后第 1 页 20 行与第 2 页 19 行无交集，与 TASK-293 的采样口径一致。
+- 截图：`/tmp/rm376-evidence/before-01…03-*.png`、`after-01…05-*.png`；DOM/RPC 断言 JSON：`before-audit-probe.json`、`after-audit-probe.json`。
+
+**其他回归**
+
+1. 10 个工作负载 Pod `1/1`（`RESTARTS` 全 0）；`https://localhost:8443/` → 200；6 个服务 `/health` 与 `/readyz` 全 200。
+2. `/definitions` 200、**5 行**；`/operations` 200（空态）；`/customers` 200（2 个客户卡片）；`/settings/organization` 200（2 行成员）。
+3. 375px：`/definitions` `innerWidth=375`、`docScrollWidth=375`、`bodyScrollWidth=375`，无页面级横向溢出；表格容器 `role=region`、`tabindex=0`、`scrollWidth 653 > clientWidth 279`（横向滚动在容器内）。
+4. schema 仍 **`36|f`**；`release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**、`audit_events` **39 行**——与基线逐项一致。
+5. 控制台只有登录前 2 条 401（`ValidateToken`/`RefreshToken` 未登录探测）；未归因 error 0。
+6. 证据：`/tmp/rm376-evidence/regression.json`、`before-audit-probe.json`、`after-audit-probe.json` 及上述截图；集群侧 `/tmp/rm376/{build,import-all}.log`、`deploys-baseline-ee3afae.yaml`。
+
+**回滚（纯镜像级，不需要任何 schema 操作）**
+
+```bash
+kubectl -n release-manager set image deploy/web web=localhost:5001/release-web:ee3afae
+kubectl -n release-manager rollout status deploy/web --timeout=300s
+```
+
+- 上一版 `web` 是 revision **12**、镜像 `:ee3afae`；也可以 `kubectl -n release-manager rollout undo deploy/web`（`undo` 会再开一个 revision，受 §8.2.1 的 revision 陷阱约束）。
+- 5 个 Go 服务本次没有滚，无需回滚；`edge` 未动。
+- **不需要 `migrate … down`**：区间没有迁移文件，`ee3afae` 与 `182bd4e` 两侧 schema 都是 `36`，`ee3afae` 的二进制已在 36 上运行过（§8.9）。
+
+**本次边界与一个未修的分页缺陷（如实记录）**
+
+- **只滚了 `web`**：`api`/`auth`/`orchestrator`/`notifier`/`webhook` 只做了滚动后的健康检查与只读页面回归，没有逐页复验；依据是区间 Go 运行时零文件（见上表），镜像里的 Go 代码与 `:ee3afae` 等价。
+- 本次没有改生产代码，**没有重跑 `go test -race ./...`**（`make test`）；web 单测与 e2e 由 PR #457 的 CI 覆盖。发布门禁只跑了文档门禁（`make check-docs`）与 kustomize 渲染计数（**45** 个对象）。
+- ⭐ **发现的遗留缺陷（不属于 TASK-375 验收项，未修）**：第 1 页 → 第 2 页 → 「上一页」→ 再点「下一页」时，结果区显示**空态「暂无审计事件」**（实测 0 行，`/tmp/rm376-evidence/after-04-audit-revisit-page2.png`）。成因是 `stores/audit.ts` 的前向分页仍按「本会话已见 id」去重（AC-059-03 的既有设计，用于新事件插入时保持游标稳定），而回看过的页把 id 全放进了 `seenEventIds`，于是再次前向进入同一页时 19 行全部被过滤。改前（累积模型）同样不正常，只是表现为「停在 20 行、不前进」。该缺陷需要产品口径决定（回看后再前进是否应原样恢复），不在本次发布范围。
+- 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
+- 没有做故障注入、SIGTERM、并发/长连接压测。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
