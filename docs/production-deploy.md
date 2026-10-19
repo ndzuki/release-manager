@@ -907,7 +907,7 @@ grep ERRO /tmp/rm366/import-all.log      # 0 命中
 
 **其余验证**
 
-- Pod：10 个工作负载 `1/1` + 1 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0。
+- Pod：10 个工作负载 `1/1` + 2 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0。
 - 服务：6 个 `/health`/`/readyz` 全 200（`web` 的两条路径仍是 nginx 反代到 orchestrator，不是 web 自身检查）。
 - 迁移：`schema_migrations` 保持 `35|f`；`git diff 778ded6..6f343cf` 不含 `migrations/` 变更，本次不执行迁移。
 - 数据面：`release_definitions=4`、`sessions=9`、`operations=6` 不变；`audit_events` **34 → 35**，新增一行是 orchestrator 重启时写下的 `cleanup.gc`（资源 `gc-startup-1`，`2026-10-18T07:12:00Z`，审计页可检索），不是发布引入的业务写入。
@@ -1189,7 +1189,7 @@ TASK-372 之后的第五次发布，本次是 **P1 安全修复上线**：把 `o
 | --- | --- |
 | Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web` 全部 `:f06c6e7`；`edge=nginx:1.27-alpine` |
 | revision | `api=13`、`auth=5`、`orchestrator=5`、`notifier=5`、`webhook=5`、`web=11`、`edge=1` |
-| Pod | 10 个工作负载 `1/1` + 1 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| Pod | 10 个工作负载 `1/1` + 2 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
 | schema | `36\|f` |
 | 数据面 | `release_definitions` **5 行**，`owner_organization_id IS NULL` **0 行**；5 行的 customer 都有组织 `2142e4dd-…` 的 `active` 绑定（只读 SQL） |
 | 入口 | `https://localhost:8443/` → 200 |
@@ -1293,7 +1293,7 @@ TASK-373 之后的第六次发布。本次把 `origin/main` 从 `ee3afae` 前移
 | --- | --- |
 | Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web` 全部 `:ee3afae`；`edge=nginx:1.27-alpine` |
 | revision | `api=14`、`auth=6`、`orchestrator=6`、`notifier=6`、`webhook=6`、`web=12`、`edge=1` |
-| Pod | 10 个工作负载 `1/1` + 1 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| Pod | 10 个工作负载 `1/1` + 2 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
 | schema | `36\|f` |
 | 数据面 | `release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**；`audit_events` **39 行**（其中最近 24 h **7 行**） |
 | 入口 | `https://localhost:8443/` → 200 |
@@ -1494,6 +1494,165 @@ kubectl -n release-manager rollout status deploy/web --timeout=300s
 - **「改前」没有在本次发布流程里重测**：`web` 一旦滚到 `:996c6f3` 就无法再回到 `:182bd4e` 采集同一时刻数据而不多滚一次；因此「改前 = 0 行空态」引用 TASK-376 在同一环境、同一只读 30 天筛选下的记录（§8.10 最后一段与其截图），不是本次新测。
 - 数据口径是**只读 URL 时间筛选**（30 天），没有新增审计事件、没有改任何业务表；`audit_events` 发布前后都是 39。
 - 没有做故障注入、SIGTERM、并发/长连接压测；没有验证「新 schema + 旧镜像」路径（本次根本没有 schema 变更）。
+- 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
+
+### 8.12 实测：`de7b008` 紧急变更 reason + W2 `non_bundle_image` 发布（无迁移、7 个镜像全滚，2026-10-19，TASK-386）
+
+TASK-378 之后的第八次发布。本次把 `origin/main` 从 `996c6f3` 前移到 **`de7b008`**（`Merge pull request #469 from ndzuki/feat/325-w2-w5-w8`，完整 sha `de7b008d6b2675681eed04a1a8a4226e7f44b921`）。区间合并了：
+
+- PR [#466](https://github.com/ndzuki/release-manager/pull/466)（TASK-325 **W3**）：紧急变更**服务端强制要求 `reason`**（1–1000 UTF-8 bytes），并把 `operations.reason` 投影为 `Operation.reason_display`；前端把计数器语义从 rune 改成 byte。
+- PR [#468](https://github.com/ndzuki/release-manager/pull/468)（TASK-267）：重连横幅 `role=status` 的 a11y 收口。
+- PR [#469](https://github.com/ndzuki/release-manager/pull/469)（TASK-325 **W2**）：`non_bundle_image` 校验（含嵌套 patch path 展开的两个 follow-up）。
+- PR #464/#465（TASK-382/383/384）：过期 `文件:行号` 引用修正，纯文档。
+
+**变更面**（`git diff --no-ext-diff --stat 996c6f3..de7b008`）：**53 个文件，+1844/−131**。
+
+| 类别 | 实测 | 结论 |
+| --- | --- | --- |
+| 迁移 | `git diff --name-only 996c6f3..de7b008 -- migrations/` ⇒ **0 文件** | schema 保持 **`36\|f`**，回滚是**纯镜像级** |
+| Go 运行时 | `api/gen/orchestrator/v1/orchestrator.pb.go`、`internal/orchestrator/{emergency,service,values,non_bundle_image,operation_reason}.go` | 新增请求字段 `reason = 13`（`api/proto/orchestrator/v1/orchestrator.proto:1763`）与 reason/非 Bundle 镜像两道校验 |
+| web 运行时 | 9 个非测试文件（`EmergencyChangeForm.vue`、`features/emergency/validation.ts`、`connect/emergency-api.ts`、`stores/emergencyChange.ts`、`gen/.../orchestrator_pb.ts` 等） | 计数器改 byte 语义，并**真正把 `reason` 放进请求**（`web/src/connect/emergency-api.ts:281`） |
+
+**受影响二进制（实测，不是按文件猜）**：`go list -deps ./cmd/<svc>` 显示除 `notification-sink` 外，**7 个 Go 二进制都（直接或传递）依赖 `api/gen/orchestrator/v1`**，因此新增字段的生成代码会改变它们的镜像内容。发布后 `crictl images` 的 image ID 与二进制的 sha256 都证实了这一点：
+
+| 服务 | 基线 tag | 基线 image ID | `:de7b008` image ID | 变化 | 二进制 sha256（前 12）基线 → 新 |
+| --- | --- | --- | --- | --- | --- |
+| `api` | `ee3afae` | `096487fe238a9` | `3e91cae2d6647` | **是** | `aa6e3ef66b35` → `637e642b631a` |
+| `auth` | `ee3afae` | `d0dcb23944345` | `383d8c627b28c` | **是** | `2ef3eb45fd8d` → `d3b7d8372404` |
+| `orchestrator` | `ee3afae` | `c8ba829bfb47a` | `7cfb6625dd2b9` | **是** | `036564815e02` → `72480cfd164d` |
+| `webhook` | `ee3afae` | `e7bb5cb110a18` | `092297251048e` | **是** | `5b4f13189a88` → `765ab4aa2853` |
+| `notifier` | `ee3afae` | `01122e9a3d798` | `0db0aa612612e` | **是** | `a9554d1d7b64` → `6d762189709c` |
+| `operator`（未部署） | `ee3afae` | `b497fc0455dab` | `80ee36b7e3717` | **是** | `7ce9b92a78c5` → `9533d067df15` |
+| `web` | `996c6f3` | `8abe5c477cde4` | `31eb5384bfeea` | **是** | 98 个前端文件的合并指纹 `170716f4a878` → `5a5b0ffb8ea6` |
+| `notification-sink`（未部署） | `ee3afae` | `e949ff6e625cd` | `e949ff6e625cd` | **否** | `63aec67edcc0` → `63aec67edcc0` |
+
+- `notification-sink` 的 image ID **一位不差**，说明这套构建是内容可复现的：其余 7 个 ID 的变化不是「重新构建的时间戳噪声」，而是真实的字节变化。
+- 因此**部署范围 = 7 个 Deployment 全滚**（`api`/`auth`/`orchestrator`/`webhook`/`notifier` + `web` + `edge` 不动）。`operator` 与 `notification-sink` 不在本集群，仅随 8 镜像 tar 导入以保持节点清单一致。
+- 交叉验证：`reason_display` 的生成代码字符串只出现在 `:de7b008` 的二进制里，基线 7 个二进制 **0 命中**。
+
+**⛔ 部署顺序：先 `web`，后 Go 服务**
+
+理由不是风格，而是双向兼容性：
+
+1. **新服务端要求 reason ≥ 1 byte**（`internal/orchestrator/emergency.go:546`）。基线 `web=:996c6f3` 的表单虽然已经收集 reason，但 `executeEmergencyChange` 的请求体里**根本没有 `reason` 字段**（`git show 996c6f3:web/src/connect/emergency-api.ts` 可证），新服务端会把旧控制台的每一次紧急执行判为 `invalid_reason`。所以 Go 必须让路给 `web`。
+2. **反方向安全**：浏览器走二进制 protobuf（`web/src/connect/client.ts:195`）。新 web 把未知的 `reason` 字段发给旧 orchestrator 时，proto3 语义**忽略未知字段**，旧服务端照常服务。本次在滚 Go 之前用新 web + 旧 orchestrator 实测过紧急变更页与其它页面，全部 200（证据 `pre-go-browser.json`）。
+3. 回滚顺序相反：**先回滚 Go，再回滚 `web`**。
+
+**基线（发布前实测，2026-10-19 19:50–19:52 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook` = `:ee3afae`；`web` = `:996c6f3`；`edge` = `nginx:1.27-alpine` |
+| revision | `api=14`、`auth=6`、`orchestrator=6`、`notifier=6`、`webhook=6`、`web=14`、`edge=1` |
+| Pod | 10 个工作负载 `1/1` + 2 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| PVC | 5 个全部 `Bound`（未动；`data-postgres-0`、`data-redis-0`、`release-manager-{api,orchestrator}-data`、`release-manager-backups`） |
+| schema | `36\|f` |
+| 数据面 | `release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**、`operations` **6 行** |
+| 入口 | `https://localhost:8443/` → **200** |
+| 登录 | 离开 `/login` **931 ms**（真 Chrome / playwright-core + 系统 Chrome，一次采样） |
+| 6 服务健康 | `/health` 与 `/readyz` 全 **200** |
+| 回滚基线 | `kubectl -n release-manager get deploy -o yaml` → `/tmp/rm386/deploys-baseline.yaml`（**945 行**） |
+
+**构建与导入**（worktree `/tmp/rm-wt386`，HEAD = `de7b008`）
+
+```bash
+git fetch origin -q && git worktree add -q /tmp/rm-wt386 -b chore/386-deploy-de7b008 origin/main
+cd /tmp/rm-wt386
+make docker-build-all IMAGE_TAG=de7b008
+docker save --platform linux/amd64 -o /tmp/rm386/images-de7b008.tar \
+  localhost:5001/release-api:de7b008 localhost:5001/release-auth:de7b008 \
+  localhost:5001/release-orchestrator:de7b008 localhost:5001/release-operator:de7b008 \
+  localhost:5001/release-webhook:de7b008 localhost:5001/release-notifier:de7b008 \
+  localhost:5001/release-notification-sink:de7b008 localhost:5001/release-web:de7b008
+k3d image import -c rm-prod /tmp/rm386/images-de7b008.tar 2>&1 | tee /tmp/rm386/import.log
+grep ERRO /tmp/rm386/import.log      # 0 命中
+```
+
+- 8 个镜像构建成功；单 tar（`linux/amd64`）**113,241,600 B**（≈108.0 MiB）。导入 **约 5 s**，`grep ERRO` **0 命中**，节点内 `crictl images | grep de7b008` 可见 **8 个**。
+- 没有走 registry 推送：镜像直接 import 进 `k3d-rm-prod-server-0`，Deployment 仍引用 `localhost:5001/...` 的 tag，`imagePullPolicy=IfNotPresent`。
+
+**滚动（严格按 `web` → `orchestrator` → `webhook` → `api` → `auth` → `notifier`；每步 `set image` → `rollout status --timeout=300s` → 新建 port-forward 验 `/health` + `/readyz`）**
+
+| 顺序 | 服务 | 滚动耗时 | revision | `/health` | `/readyz`（见下方口径） |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `web`（2 副本） | **7 s** | 14 → **15** | 200 | 200 |
+| 2 | `orchestrator` | **6 s** | 6 → **7** | 200 | 200 |
+| 3 | `webhook` | **5 s** | 6 → **7** | 200 | 200 |
+| 4 | `api` | **5 s** | 14 → **15** | 200 | 200 |
+| 5 | `auth` | **6 s** | 6 → **7** | 200 | 200 |
+| 6 | `notifier` | **6 s** | 6 → **7** | 200 | 200 |
+
+- 6 次滚动合计 **35 s**，没有失败，未触发 `undo`。所有新 Pod `RESTARTS=0`。`web` 与 `orchestrator` 在滚动完成后**立即**新建 forward 探测；`webhook`/`api`/`auth`/`notifier` 的 `/health`、`/readyz` 是该步 `rollout status` 的探针通过后，在全部滚动完成时统一新建 forward 复验的结果（表格不声称四者是「秒级立即」采样）。
+- **port-forward 纪律**：每次滚动前确认没有残留 forward，滚动完成后**新建** forward 再探测，避免把探针失效误判成发布失败；本次没有出现 `000`。
+- 每阶段后核对 schema 仍 **`36|f`**（`web` 后、`orchestrator` 后、全部完成后各一次）。
+- 发布后 revision：`web=15`、`orchestrator=7`、`webhook=7`、`api=15`、`auth=7`、`notifier=7`、`edge=1`；6 服务 `/health` 与 `/readyz` 全 200。
+
+**⭐ 服务端差分验收（核心；直连 Connect，请求 `Content-Type: application/proto`）**
+
+登录 `auth.v1.AuthService/Login` 取 JWT 后，用 `buf curl --protocol connect`（`--schema` 指向 worktree 的 `api/proto`）调用 `OrchestratorService/ExecuteEmergencyChange`。其余必填字段固定为合法值：`release_definition_id` = 生产定义 `a8777ebf-ebfd-4caa-bf93-d6b38b4315fb`（`acme-web`）、`workload_ref` = `deployments/prod-acme/acme-web`、`convergence_strategy` = `REVERT_ON_NEXT_RECONCILE`、`idempotency_key` 每次唯一；`artifact_ref` 用一个格式合法但不存在的 UUID，使**合法 reason** 的请求停在 artifact 门禁，而不是创建 Operation。
+
+| # | `reason` | 期望 | 基线（旧 orchestrator `:ee3afae`） | 发布后（`:de7b008`） |
+| --- | --- | --- | --- | --- |
+| 1 | `""`（0 B） | `invalid_argument` + `X-Reason-Code: invalid_reason` | `not_found` / `ARTIFACT_NOT_FOUND`（旧服务端忽略 reason） | **`400` / `invalid_argument` / `X-Reason-Code: invalid_reason`** |
+| 2 | 1001 × `a`（1001 B） | 同上 | `not_found` / `ARTIFACT_NOT_FOUND` | **`400` / `invalid_argument` / `invalid_reason`** |
+| 3 | 400 × `中`（**1200 B**） | 同上（按字节，不按 rune） | `not_found` / `ARTIFACT_NOT_FOUND` | **`400` / `invalid_argument` / `invalid_reason`** |
+| 4 | `de7b008 smoke: emergency reason accepted`（40 B） | **不是** `invalid_reason`，在更后面的门禁失败 | `not_found` / `ARTIFACT_NOT_FOUND` | **`404` / `not_found` / `X-Reason-Code: ARTIFACT_NOT_FOUND`**（`EMERGENCY_REASON_CODE_ARTIFACT_NOT_FOUND`） |
+
+- 1–3 三条的 message 都是固定的 `reason must contain 1 to 1000 UTF-8 bytes`，不回显调用方文本；4 越过了 reason 校验，停在 artifact 解析（在授权、幂等与任何写入之前）。
+- 请求头实测 `Content-Type: application/proto`、`Connect-Protocol-Version: 1`；响应为 Connect JSON 错误体。
+- 差分结论：**旧服务端对 4 种 reason 一视同仁（全部到 artifact 门禁），新服务端只对 1–3 返回 `invalid_reason`，对 4 放行**——证明校验位置正确、且不误拒合法理由。
+
+**⭐ 前端 W3 UI 验收（真 Chrome，`https://localhost:8443`，真登录）**
+
+打开定义 `973456b9-cbeb-4ab9-8cfe-18f8a06b5106`（`e2e-plan/release-fixture`，生产库中唯一有 inventory 观测的定义，页面因此渲染变更表单）的紧急变更路由 `/customers/<cid>/clusters/rm-cust/releases/<def>/emergency`：
+
+| 检查 | 期望 | 实测（新 web + 旧 Go，滚动前） | 实测（全部滚完后） |
+| --- | --- | --- | --- |
+| 理由字段与计数器 | `textarea.reason-input` + `#emergency-reason-char-count` = `0 / 1000 字节` | 1 个输入框、计数 `0 / 1000 字节`（旧 id `emergency-reason-byte-count` 已为 0） | 同左 |
+| 400 个 `中`（1200 B） | 前端阻止：计数 `1200 / 1000 字节`、`role=alert` 文案 `变更原因最多 1000 字节（当前 1200 字节）`、「确认变更」禁用 | 全部满足，`char-count over` | 同左 |
+| 1 个 `a`（1 B） | 允许：计数 `1 / 1000 字节`、无 reason 错误 | 满足（无 alert、`aria-invalid` 为空） | 同左 |
+
+- 说明：该目标当前三类动作都不可用（inventory 观测里没有可用容器/副本/HPA/注解数据），所以「确认变更」按钮对所有输入都保持禁用；对 1 B 的「允许」以**字段级校验通过**（无错误、计数正确）为准，不能用按钮状态反推。
+- 前端计数器实现见 `web/src/components/emergency/EmergencyChangeForm.vue:69`；服务端按 `len(string)`（字节）判定，两端单位一致。
+
+**其他回归**
+
+1. `/definitions` **200 + 5 行**；`/releases`（RM Cust Demo / rm-cust）200 + 2 行；`/operations` 200（空态）；`/audit` 200（19 行，含本次失败尝试的审计）；`/customers` 200（2 个客户卡片）。均未渲染 forbidden/error 态。
+2. 375px：`/definitions` `scrollWidth=375`、`clientWidth=375`、`bodyScrollWidth=375`，无页面级横向溢出。
+3. 控制台未归因 error：**0**；仅登录前 2 条 `401`（`ValidateToken`、`RefreshToken`，未登录探测，预期）。
+4. 不变量：schema **`36|f`**；`release_definitions` **5 行**；`owner_organization_id IS NULL` **0 行**；5 个 PVC 全 `Bound`；`operators` 仍 `active:1 / superseded:2`；`sessions` **9 行**（`offline:3` + `revoked:6`，无在线 operator；浏览器登录态在 `auth_sessions`，不是这张 operator 控制流表）。
+5. **没有创建业务数据**：`operations` 发布前后都是 **6 行**，`release_definitions` 不变。差分请求触发了 **13 条 `emergency_change` 失败审计事件**（滚动前 5 次 + 发布后 8 次；这是真实校验路径的审计副作用，事件关联到定义而不是 Operation），另 1 条 `cleanup.gc` 是服务周期事件；`audit_events` 总计 55 行。
+6. 证据：`/tmp/rm386-evidence/steps.json`（机器可读，逐步骤 `{step,url,expect,actual,consoleErrors}`）、`post-*.png` / `pre-go-*.png`、`rpc-final.json`、`pre-go-browser.json`、`post-browser.json`；集群侧 `/tmp/rm386/{build.log,import.log,deploys-baseline.yaml,deploys-post.yaml,crictl-baseline.txt,crictl-de7b008.txt}`。
+
+**回滚（纯镜像级，不需要任何 schema 操作；顺序与发布相反：先 Go，后 web）**
+
+```bash
+# 1) 先回滚 Go 服务（新 web 可以继续对新旧 orchestrator 工作）
+kubectl -n release-manager set image deploy/notifier notifier=localhost:5001/release-notifier:ee3afae
+kubectl -n release-manager set image deploy/auth auth=localhost:5001/release-auth:ee3afae
+kubectl -n release-manager set image deploy/api api=localhost:5001/release-api:ee3afae
+kubectl -n release-manager set image deploy/webhook webhook=localhost:5001/release-webhook:ee3afae
+kubectl -n release-manager set image deploy/orchestrator orchestrator=localhost:5001/release-orchestrator:ee3afae
+for d in notifier auth api webhook orchestrator; do
+  kubectl -n release-manager rollout status deploy/$d --timeout=300s
+done
+
+# 2) 最后回滚 web
+kubectl -n release-manager set image deploy/web web=localhost:5001/release-web:996c6f3
+kubectl -n release-manager rollout status deploy/web --timeout=300s
+```
+
+- 上一版镜像是 `ee3afae`（6 个 Go 服务）与 `996c6f3`（`web`）；`edge` 未动。
+- **不能反过来先回滚 `web`**：旧 web 不发送 reason，而新 orchestrator 仍在时，旧控制台的紧急执行会全部 `invalid_reason`。先回滚 orchestrator 后，旧 web 的请求按 proto3 忽略未知字段的语义正常通过。
+- **不需要 `migrate … down`**：区间没有迁移文件，`996c6f3` 与 `de7b008` 两侧 schema 都是 `36`，`ee3afae`/`996c6f3` 的二进制都已在 36 上运行过（§8.9、§8.11）。
+- 也可以用 `kubectl rollout undo`，但每次 `undo` 会再开一个 revision（受 §8.2.1 的 revision 陷阱约束）；`set image` 是本次采用的确定性路径。
+
+**本次边界（如实记录）**
+
+- **没有真正执行一次成功的紧急变更**：合法 reason 的请求停在 artifact 门禁（artifact 不存在），因此没有 Operation、没有命令下发、没有收敛任务。这是刻意的：本任务的验收目标是 reason 校验的差分，不是端到端紧急执行。
+- 前端「400 CJK 阻止 / 1 ASCII 允许」是在**唯一有 inventory 观测的定义**上验证的；该定义三类动作均不可用，所以无法用「确认变更」按钮的启用状态作为端到端提交证据。
+- 没有做故障注入、SIGTERM、并发/长连接压测；没有验证「新 schema + 旧镜像」路径（本次没有 schema 变更）。
+- `audit_events` 因真实探针增加了 13 条失败尝试记录；没有删除或改写任何审计事件（审计表只追加）。
 - 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
 
 ## 9. 可观测
