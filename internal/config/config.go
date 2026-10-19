@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -469,6 +470,13 @@ type GatewayCfg struct {
 	// reach the gateway by address (for example https://10.10.33.122:8444), and
 	// a DNS-only SAN set fails their TLS verification.
 	IPAddresses []string `mapstructure:"ip_addresses"`
+	// AdvertiseURL is the customer-reachable base URL of the agent gateway,
+	// scheme included (for example https://10.10.33.122:8444). Enrollment
+	// responses embed it as operator_endpoint, which the console shows to the
+	// customer as the address their cluster installs against. Empty keeps the
+	// legacy dev host name on purpose, so dev and e2e behavior is unchanged; a
+	// non-empty value must be an absolute http(s) URL or startup fails.
+	AdvertiseURL string `mapstructure:"advertise_url"`
 }
 
 // defaultGatewayHostnames is the server certificate SAN set the gateway used
@@ -490,14 +498,19 @@ func (c GatewayCfg) WithDefaults() GatewayCfg {
 	if len(c.Hostnames) == 0 {
 		c.Hostnames = append([]string(nil), defaultGatewayHostnames...)
 	}
+	// Normalize only: an empty AdvertiseURL must stay empty so the caller keeps
+	// the legacy dev endpoint as its fallback.
+	c.AdvertiseURL = strings.TrimRight(strings.TrimSpace(c.AdvertiseURL), "/")
 	return c
 }
 
-// Validate rejects SAN values the TLS listener cannot serve. The certificate is
-// what a customer's agent verifies, so a malformed entry fails startup (fail
-// closed) instead of shipping a certificate no client can accept. Both lists
-// may be empty after WithDefaults: hostnames then fall back to the legacy
-// names and no IP SAN is added.
+// Validate rejects gateway values the TLS listener and the enrollment response
+// cannot serve. The certificate is what a customer's agent verifies, so a
+// malformed SAN entry fails startup (fail closed) instead of shipping a
+// certificate no client can accept; for the same reason a malformed advertise
+// URL fails startup rather than shipping an unreachable install target. Both
+// SAN lists may be empty after WithDefaults: hostnames then fall back to the
+// legacy names and no IP SAN is added.
 func (c GatewayCfg) Validate() error {
 	c = c.WithDefaults()
 	for _, hostname := range c.Hostnames {
@@ -512,6 +525,14 @@ func (c GatewayCfg) Validate() error {
 		if net.ParseIP(address) == nil {
 			return fmt.Errorf("gateway_invalid: gateway.ip_addresses must be IP addresses, got %q", address)
 		}
+	}
+	advertise := c.AdvertiseURL
+	if advertise == "" {
+		return nil
+	}
+	parsed, err := url.Parse(advertise)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("gateway_invalid: gateway.advertise_url must be an absolute http:// or https:// URL")
 	}
 	return nil
 }
@@ -568,6 +589,7 @@ func bindDatabaseEnvironment(v *viper.Viper) error {
 		"gateway.port":                         "GATEWAY_PORT",
 		"gateway.hostnames":                    "GATEWAY_HOSTNAMES",
 		"gateway.ip_addresses":                 "GATEWAY_IP_ADDRESSES",
+		"gateway.advertise_url":                "GATEWAY_ADVERTISE_URL",
 		"agent.customer_id":                    "CUSTOMER_ID",
 		"agent.cluster_id":                     "CLUSTER_ID",
 		"agent.operator_name":                  "OPERATOR_NAME",
@@ -601,9 +623,9 @@ func LoadService(path string) (*ServiceConfig, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshalling config: %w", err)
 	}
-	// The gateway certificate is verified by customer agents, so a malformed
-	// SAN entry fails startup here (fail closed) rather than at the first TLS
-	// handshake.
+	// The gateway certificate and the advertised endpoint both face customer
+	// clusters, so a malformed SAN entry or advertise URL fails startup here
+	// (fail closed) rather than at the first TLS handshake or failed install.
 	if err := cfg.Gateway.Validate(); err != nil {
 		return nil, err
 	}

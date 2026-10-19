@@ -111,11 +111,11 @@ curl -sS http://127.0.0.1:8083/readyz                                     # 期�
 
 **确认依据（现状）**
 
-- 配置键与位置：`database.driver`、`database.dsn`、`database.max_open_conns`、`database.max_idle_conns`、`database.conn_max_lifetime`、`database.conn_max_idle_time`（`internal/config/config.go:24-31`）。环境变量覆盖映射：`DATABASE_DRIVER`、`DATABASE_DSN`、`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、`DATABASE_CONN_MAX_LIFETIME`（`internal/config/config.go:272-279`）。
+- 配置键与位置：`database.driver`、`database.dsn`、`database.max_open_conns`、`database.max_idle_conns`、`database.conn_max_lifetime`、`database.conn_max_idle_time`（`internal/config/config.go:26-33`）。环境变量覆盖映射：`DATABASE_DRIVER`、`DATABASE_DSN`、`DATABASE_MAX_OPEN_CONNS`、`DATABASE_MAX_IDLE_CONNS`、`DATABASE_CONN_MAX_LIFETIME`（`internal/config/config.go:274-281`）。
 - 集群内取值：`deploy/kustomize/dev/configs/orchestrator.dev.yaml:3-5`（`postgres://release_manager:dev-release-manager@postgres:5432/release_manager?sslmode=disable`）、`deploy/kustomize/dev/configs/auth.dev.yaml:3-5`、`deploy/kustomize/dev/configs/notifier.dev.yaml:3-5`（后者指向独立库 `release_notifier`）。凭据来自静态 Secret `release-manager-dev-credentials`（`deploy/kustomize/base/secret.yaml:4-17`）；`release_notifier` 库由 `deploy/kustomize/postgres/init.sql:4` 创建。
 - **连接池参数只对 PostgreSQL 生效**：`internal/postgres/db.go:46-49` 才调用 `SetMaxOpenConns/SetMaxIdleConns/SetConnMaxLifetime/SetConnMaxIdleTime`；SQLite 路径的 `Open(dsn)` 只接受 DSN（`internal/store/sqlite/db.go:67-138`），并固定注入 `_pragma=busy_timeout(5000)&_txlock=immediate` + `journal_mode=WAL` + `foreign_keys=ON`（`internal/store/sqlite/db.go:72-75`）。**在 SQLite 路径上调池参数是无效操作**。
 - 池默认值：`max_open_conns` 缺省 25、`max_idle_conns` 缺省 10（`internal/postgres/config.go:26-34`）；`conn_max_lifetime` / `conn_max_idle_time` 无默认（0 = 不限制）。当前 `deploy/kustomize/dev/configs/*.dev.yaml` 都没写这些键，即跑默认值。
-- DSN 校验很硬：必须以 `postgres://` 或 `postgresql://` 开头且 scheme/host/path 完整（`internal/postgres/config.go:12-24`），driver 只接受 `postgres|sqlite`（`internal/config/config.go:41-56`）。任一不满足 → `dsn_invalid: ...` → 服务不起。
+- DSN 校验很硬：必须以 `postgres://` 或 `postgresql://` 开头且 scheme/host/path 完整（`internal/postgres/config.go:12-24`），driver 只接受 `postgres|sqlite`（`internal/config/config.go:43-58`）。任一不满足 → `dsn_invalid: ...` → 服务不起。
 - 失败文案：连不上库是 `connection_unavailable: ping PostgreSQL: ...`（`internal/postgres/db.go:50-53`）或 `connection_unavailable: initialize GORM: ...`（`internal/postgres/db.go:55-59`）。这两个前缀就是「依赖不可达」的确证，不是迁移问题。
 - **迁移的真实入口**（现状）：
   1. PostgreSQL：**每个连接该库的服务进程启动时自动跑**（当前为 auth/notifier/orchestrator；`cmd/operator` 走 SQLite 且不跑迁移，`cmd/api` 默认 SQLite、`DATABASE_DRIVER=postgres` 时同样跑迁移，见 TASK-338）。`postgresstore.Open(context.Background(), s.cfg.Database, migrations.FS)`（`cmd/orchestrator/main.go:617`、`cmd/auth/main.go:97`），notifier 用另一个 embed 源 `migrations.ReleaseNotifierFS()`（`cmd/notifier/main.go:157`）。底层是 golang-migrate `m.Up()`（`internal/postgres/migrate.go:25-29`），迁移文件由 `//go:embed *.sql` 打进二进制（`migrations/embed.go:12-13,19-20`）——**镜像里没有 `migrations/` 目录，改迁移必须重建镜像**。
@@ -316,7 +316,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 - 集群里拆成**两把** Secret：`release-manager-jwt-private`（仅 auth，`deploy/kustomize/services/auth.yaml:35-39`）与 `release-manager-jwt-public`（仅 orchestrator，`deploy/kustomize/services/orchestrator.yaml:34-39`）；webhook/notifier **不挂任何 JWT 密钥**（它们本来就不校验 token）。两半由 `data/dev-jwt/jwt-{private,public}-key.pem` 生成（`deploy/kustomize/dev/kustomization.yaml:39-53`）。
 - ⇒ **auth 签发、orchestrator/api 校验，必须来自同一对密钥**（`cmd/auth/main.go:148`、`cmd/orchestrator/main.go:462`）。公钥与私钥不配对 ⇒ 全站 401 `invalid token`，且**只有 401 一个症状**（`/readyz` 全绿）。**校验方持有的是公钥，无法伪造 token**——这正是换 Ed25519 的目的。
 - TTL 硬编码：access 15 分钟、refresh 7 天（`cmd/auth/main.go:152`），无配置键。cookie 名 `rm_access` / `rm_refresh` / `rm_csrf` + header `X-CSRF-Token`（`internal/auth/service.go:17-20`）。
-- 限流默认 5 次/60s（按用户名），可用 `login_rate_limit.max_attempts` / `.window` 覆盖（`cmd/auth/main.go:158-166`；键定义 `internal/config/config.go:123-126`）。集群 dev 配置已把它调高，dev 播种重试因此不会触发（`deploy/kustomize/dev/configs/auth.dev.yaml`）。
+- 限流默认 5 次/60s（按用户名），可用 `login_rate_limit.max_attempts` / `.window` 覆盖（`cmd/auth/main.go:158-166`；键定义 `internal/config/config.go:125-128`）。集群 dev 配置已把它调高，dev 播种重试因此不会触发（`deploy/kustomize/dev/configs/auth.dev.yaml`）。
 - 会话缓存 fail-closed（ADR-019）：Redis 只作缓存 + refresh 黑名单，键前缀 `auth:sess:` / `auth:blacklist:` / `auth:user:`（`internal/store/redis/adapter.go:17-21`）。`Create` 在 Redis 发布失败时**回滚权威行的 family**（`internal/store/redis/adapter.go:39-56`）；黑名单读取的非 `redis.Nil` 错误转成 `unavailable(...)`（`internal/store/redis/adapter.go:63-81`）。Redis 客户端超时是 1s 级（dial/read/write，`cmd/auth/main.go:114-133`），启动 ping 失败 ⇒ `Register` 失败 ⇒ 进程退出（`cmd/auth/main.go:136-138`）。
 - 只有 `redis.address` 非空才启用 Redis（`cmd/auth/main.go:114`）；宿主机 `configs/auth.dev.yaml` 没有该段 ⇒ 本地进程路径本来就不依赖 Redis，**不要把集群内的 Redis 故障形态套到本地**。
 - 授权快照陈旧是另一类「鉴权风暴」：`auth_policy_health = 0` 与 `auth_snapshot_stale_total` 增长（`internal/authorization/metrics.go:37-56`、`internal/authorization/module.go:313-319`），业务侧表现为 `unavailable: authorization_snapshot_stale`（`internal/orchestrator/rollback.go:166-169,188-190`）。拉取节奏由 `authorization.pull_interval` / `pull_backoff_max` 控制（dev 1s / 30s，`deploy/kustomize/dev/configs/orchestrator.dev.yaml:6-9`）。
@@ -324,7 +324,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
   ① 指标 `auth_snapshot_stale_cause_total{cause}`（`internal/authorization/metrics.go:41-44`；写入点 `internal/authorization/module.go:425`）；`cause` 是**有界枚举**：`warmup`（正常首次拉取必 stale，随后自愈）、`gap`（checkpoint 跳跃超过 1 版）、`regression`（快照比本地 checkpoint 旧）、`not-fresh`、`snapshot-rpc-timeout`（快照 RPC 超过 200ms `snapshotDeadline`）、`snapshot-rpc-error`（其余快照 RPC 失败）、`snapshot-scope-mismatch`、`checkpoint-read-error`、`checkpoint-write-error`、`unknown`（`internal/authorization/stale_cause.go`）。
   ② 日志：失败路径的 **WARN** 记录带 `stale_cause=<枚举>` 与 `reason=AUTHORIZATION_SNAPSHOT_STALE`（`internal/authorization/module.go:173-188` 的「authorization snapshot pull failed during authorize」、`internal/authorization/module.go:199-210` 的「…not fresh during authorize」）。**WARN 里刻意不含原始 pull 错误文本**（它可能带凭据片段，项目硬约束禁止机密入日志）⇒ 定位靠 `stale_cause` + 该 cause 的指标；release-auth 侧会记录它自己的错误。正常 warm-up 只到 WARN、不会升级到 ERROR，所以 **WARN 里出现 `stale_cause` 才是要看的那条**。
   判读：单次 `warmup` 是健康路径，**连续**非 `warmup` 才是故障（RPC 超时/错误 ⇒ 查 auth 的 Load 与网络；`checkpoint-*-error` ⇒ 查 orchestrator 侧权威库；`gap`/`regression` ⇒ 查是否有多写者或回滚的快照源）。
-- 维护模式（`maintenance: true` 或 `MAINTENANCE=true`，`internal/config/config.go:19,512`）返回 `unavailable: maintenance`，且**只包 unary RPC**（`internal/app/maintenance.go:14-28` 用的是 `connect.UnaryInterceptorFunc`）⇒ 流式（`WatchOperation`、`CommandStream`）不受门禁。
+- 维护模式（`maintenance: true` 或 `MAINTENANCE=true`，`internal/config/config.go:21,579`）返回 `unavailable: maintenance`，且**只包 unary RPC**（`internal/app/maintenance.go:14-28` 用的是 `connect.UnaryInterceptorFunc`）⇒ 流式（`WatchOperation`、`CommandStream`）不受门禁。
 
 **处置动作**
 
@@ -431,7 +431,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 **确认依据（现状）**
 
 - 入口：`ExecuteEmergencyChange`（`internal/orchestrator/emergency.go:97`）。**kill switch 是最高优先级门禁**：`enabled = false` ⇒ `failed_precondition` + `EMERGENCY_REASON_CODE_KILL_SWITCH_DISABLED`（`internal/orchestrator/emergency.go:116-130`，reason code 在 `:125`）。
-- 开关没有 RPC：唯一的写入口是 orchestrator 启动时把配置 `emergency.*` upsert 进 `app_settings`（`cmd/orchestrator/main.go:328`、`seedEmergencyConfig` `cmd/orchestrator/main.go:737`）。配置缺失时保留既有值、新库默认 fail-closed（`internal/config/config.go:382-386`）。⇒ **改开关 = 改 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:51-54` 再 `make dev-up`**。
+- 开关没有 RPC：唯一的写入口是 orchestrator 启动时把配置 `emergency.*` upsert 进 `app_settings`（`cmd/orchestrator/main.go:328`、`seedEmergencyConfig` `cmd/orchestrator/main.go:737`）。配置缺失时保留既有值、新库默认 fail-closed（`internal/config/config.go:384-388`）。⇒ **改开关 = 改 `deploy/kustomize/dev/configs/orchestrator.dev.yaml:51-54` 再 `make dev-up`**。
 - deadline = `emergency.operation_timeout`（dev `30s`）；过期后 `pending` ⇒ `effect = NOT_APPLIED`（可证明未投递，释放锁），`queued/running` ⇒ `effect = UNKNOWN`（保留锁观察，`internal/orchestrator/emergency.go:350-354`）。
 - 投递通道是**进程内**紧急流，agent 不在流上就直接失败（见 §3 的 `DispatchEmergency` 语义）。
 **处置动作**：调用 `ExecuteEmergencyChange`，随后按 §6/§7.3 跟踪收敛。
@@ -452,7 +452,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 ### 7.4 维护窗口（把写路径整体停下来）
 
-**确认依据（现状）**：只有配置键 `maintenance`（`internal/config/config.go:19,152`）与环境变量 `MAINTENANCE`（`internal/config/config.go:512`）两个入口，**没有 `--maintenance` flag**（`grep maintenance cmd/orchestrator/main.go` 命中的是只读白名单与拦截器挂载）⇒ 生效时非白名单 unary 写全部 `unavailable: maintenance`（`internal/app/maintenance.go:14-28`），白名单是只读 procedures（`orchestratorReadOnlyProcedures`，`cmd/orchestrator/main.go:774`）。副作用必须同时知道：
+**确认依据（现状）**：只有配置键 `maintenance`（`internal/config/config.go:21,154`）与环境变量 `MAINTENANCE`（`internal/config/config.go:579`）两个入口，**没有 `--maintenance` flag**（`grep maintenance cmd/orchestrator/main.go` 命中的是只读白名单与拦截器挂载）⇒ 生效时非白名单 unary 写全部 `unavailable: maintenance`（`internal/app/maintenance.go:14-28`），白名单是只读 procedures（`orchestratorReadOnlyProcedures`，`cmd/orchestrator/main.go:774`）。副作用必须同时知道：
 
 1. 不创建审计 emitter ⇒ 窗口内无审计（`cmd/orchestrator/main.go:361-363`）；
 2. 不跑启动期恢复（`cmd/orchestrator/main.go:354-359`）、不跑 GC ticker、不跑紧急超时扫与 stuck 扫（`cmd/orchestrator/main.go:830-842,899`）；
@@ -493,7 +493,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 - apply 时才把 manifest 里的 `release-<svc>:dev` 就地替换成内容寻址 tag（内存里 sed，仓库文件不变，`deploy/dev/dev.sh:1313-1321`），客户 agent overlay 同理（`deploy/dev/dev.sh:1557-1566`）。⇒ **`deploy/kustomize/**` 里永远写着 `:dev`，不要据此判断线上镜像**。
 - 已核实存在的 `make` 入口（`Makefile`）：`dev-up`（:108-110）、`dev-down`（:112-114）、`dev-seed`（:116-118）、`dev-status`（:124-126）、`dev-reset-data`（:120-122）、`dev-purge`（:128-130）、`build-all`/`build-<svc>`（:50-76）、`run-<svc>`（:78-101）、`proto`（:274-275）、`dev-stage-*`（:285-357）、`e2e-*`（:155-243）、`api-*`（:247-268）、`quality`（:517-518）、`docker-build-operator`（:496-500）、`test-operator-image-sdk-only`（:502-516）、`check-docs`（:490-492）、`clean`（:533）、`help`（:540）。
 - ⚠️ **`make docker-build-operator` 不是升级入口**：它 build 后 `docker save` 成 tarball，产物与 tag 是 `$(OPERATOR_IMAGE)`，供 REQ-061 的 SDK-only 镜像门禁（`Makefile:496-516`，门禁变量见 `Makefile:37-38`），不 push、不参与 `deploy/kustomize` 渲染。全仓**没有** `make docker-build`/`make docker-push`/`make images-up` 这类目标（`grep -E '^[a-z][a-zA-Z0-9_.-]*:' Makefile` 全量核对）。 <!-- check-docs:ignore 在陈述这些 make 目标不存在，不是可运行入口 -->
-- 配置兼容性现状：viper 只反序列化已知键，**未写的键取 Go 零值/默认**（`internal/config/config.go:15-40`）；`log_level` 已接线（TASK-094：`startupLogger`/`applyLogLevel`，`internal/app/app.go:123/133`——空/非法值回落 debug）。`gc.*` 是 GC 唯一真读的段（`cmd/orchestrator/main.go:547-560`），`retention:` 块**没有任何消费者**（全仓 `UnmarshalKey` 只有 `gc`/`emergency`/`trust`）——dev overlay 曾恰好只写 `retention:` 导致集群 GC 跑默认值，TASK-094 已换成规范 `gc:` 块（`deploy/kustomize/dev/configs/orchestrator.dev.yaml:23-31`，§7-3），写错键名会被 `make check-config-keys` 拒绝。
+- 配置兼容性现状：viper 只反序列化已知键，**未写的键取 Go 零值/默认**（`internal/config/config.go:17-42`）；`log_level` 已接线（TASK-094：`startupLogger`/`applyLogLevel`，`internal/app/app.go:123/133`——空/非法值回落 debug）。`gc.*` 是 GC 唯一真读的段（`cmd/orchestrator/main.go:547-560`），`retention:` 块**没有任何消费者**（全仓 `UnmarshalKey` 只有 `gc`/`emergency`/`trust`）——dev overlay 曾恰好只写 `retention:` 导致集群 GC 跑默认值，TASK-094 已换成规范 `gc:` 块（`deploy/kustomize/dev/configs/orchestrator.dev.yaml:23-31`，§7-3），写错键名会被 `make check-config-keys` 拒绝。
 - 迁移与回退风险：升级会在新进程启动时自动 `m.Up()`（§2.现状）；**没有与镜像同批的 schema 降级通道**（`RunMigrationsDown` 只被 dev 重置路径使用）。因此「新 schema + 旧二进制」通常是**不可逆**的（旧代码不认识新列/新约束）。
 
 **处置动作（推荐顺序）**

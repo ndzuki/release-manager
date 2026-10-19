@@ -34,8 +34,8 @@
 
 7 个服务共用 `internal/app.Run`（`internal/app/app.go:122`）：
 
-- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:474-492`，viper）。
-  多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:502-537`）：
+- 读 `--config` 指向的 YAML（`internal/config.LoadService`，`internal/config/config.go:541-559`，viper）。
+  多个键支持环境变量覆盖（`bindDatabaseEnvironment`，`internal/config/config.go:569-607`）：
   `DATABASE_DRIVER`、`DATABASE_DSN`、`REDIS_ADDRESS`、`MAINTENANCE`、`AUTHORIZATION_AUTH_URL`、
   `GATEWAY_ENABLED`、`GATEWAY_PORT`、`CUSTOMER_ID`、`CLUSTER_ID`、`OPERATOR_NAME`、
   `ENROLLMENT_TOKEN_FILE`、`CA_CERT_PATH`、`VALUES_MAX_DOCUMENT_BYTES` 等。
@@ -88,7 +88,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
   dev 集群里开在 8084 并暴露 NodePort 30084，`deploy/kustomize/dev/configs/orchestrator.dev.yaml:32-34`），
   `ca.cert_path/key_path`（`configs/orchestrator.dev.yaml:33-37`；CA 缺失 fail-closed，`main.go:85-90`）。
 - 鉴权快照拉取走配置 `authorization.auth_url`（`configs/orchestrator.dev.yaml:7`；
-  默认 `http://localhost:8085`，`internal/config/config.go:251-266`——`--auth-url` flag **不存在**，
+  默认 `http://localhost:8085`，`internal/config/config.go:253-268`——`--auth-url` flag **不存在**，
   `authURL` 字段没有任何赋值来源，见 `main.go:45,323-324`）。
 - 环境变量：`JWT_PUBLIC_KEY`（校验公钥，`main.go:983`）、`DEV_WEBHOOK_SERVICE_TOKEN`、`DEV_WEBHOOK_SERVICE_TOKEN_PREVIOUS`。
   （REQ-065 AC-065-01 的 Ed25519 迁移删除了原先的对称哨兵 `JWT_SIGNING_KEY`/`change-me-in-production`，见 `docs/configuration.md:338`。）
@@ -118,7 +118,7 @@ proto 见 `api/proto/webhook/v1/webhook.proto:46-57`），把请求连同 servic
 | `--install-timeout` | `5m` | 否 | Helm install 默认超时 | `main.go:437` |
 
 - agent 模式硬性前置：`agent.customer_id` 与 `agent.cluster_id` 必须非空，否则启动失败
-  （`main.go:152-155`；可用环境变量 `CUSTOMER_ID`/`CLUSTER_ID` 覆盖，`internal/config/config.go:523`）；
+  （`main.go:152-155`；可用环境变量 `CUSTOMER_ID`/`CLUSTER_ID` 覆盖，`internal/config/config.go:593`）；
   enrollment token 来自 `agent.enrollment_token_file`（dev 为 `data/enrollment.token`，
   `configs/operator.dev.yaml:8`）或环境变量 `ENROLLMENT_TOKEN`（`cmd/operator/main.go:169`、
   `internal/operator/bootstrap/token.go:14-27`，用后删除 token 文件 `bootstrap.go:96-100`）；

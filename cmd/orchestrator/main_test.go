@@ -2306,6 +2306,58 @@ func TestBuildGatewayServerUsesConfiguredSANs(t *testing.T) {
 	})
 }
 
+// The enrollment response's operator_endpoint is what the console shows a
+// customer as their install target. A configured advertise URL must win
+// verbatim; an empty value must keep the legacy dev strings byte for byte.
+func TestOperatorEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		gateway config.GatewayCfg
+		want    string
+	}{
+		{
+			name:    "empty keeps the internal operator endpoint",
+			gateway: config.GatewayCfg{},
+			want:    "http://operator:8084",
+		},
+		{
+			name:    "enabled keeps the legacy dev host name",
+			gateway: config.GatewayCfg{Enabled: true},
+			want:    "https://operator-gateway.dev.release-manager.local:8084",
+		},
+		{
+			name:    "enabled with a custom port",
+			gateway: config.GatewayCfg{Enabled: true, Port: 9443},
+			want:    "https://operator-gateway.dev.release-manager.local:9443",
+		},
+		{
+			name:    "advertise URL is returned verbatim",
+			gateway: config.GatewayCfg{Enabled: true, Port: 8084, AdvertiseURL: "https://10.10.33.122:8444"},
+			want:    "https://10.10.33.122:8444",
+		},
+		{
+			name:    "advertise URL wins even when the listener is disabled",
+			gateway: config.GatewayCfg{AdvertiseURL: "https://10.10.33.122:8444"},
+			want:    "https://10.10.33.122:8444",
+		},
+		{
+			name:    "advertise URL trailing slash is trimmed",
+			gateway: config.GatewayCfg{Enabled: true, AdvertiseURL: "https://10.10.33.122:8444/"},
+			want:    "https://10.10.33.122:8444",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &orchSvc{cfg: config.ServiceConfig{Gateway: tt.gateway}}
+			require.Equal(t, tt.want, svc.operatorEndpoint())
+		})
+	}
+}
+
 // signOperatorIdentity issues an operator client certificate (clientAuth
 // EKU) from the gateway CA and returns the identity private key PEM
 // (TASK-080, AC-080-04).

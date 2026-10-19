@@ -6,18 +6,18 @@
 
 ### 1.1 统一入口与优先级
 
-除 `cmd/e2e`、`cmd/devseed`、`cmd/store-migrate` 与各 CI 质量工具外，所有服务二进制都经 `internal/app/app.go` 的 `Run(configPath, svc)` 启动（`internal/app/app.go:122`），真实加载器是 `config.LoadService`（`internal/config/config.go:474`，基于 viper）。生效优先级：
+除 `cmd/e2e`、`cmd/devseed`、`cmd/store-migrate` 与各 CI 质量工具外，所有服务二进制都经 `internal/app/app.go` 的 `Run(configPath, svc)` 启动（`internal/app/app.go:122`），真实加载器是 `config.LoadService`（`internal/config/config.go:610`，基于 viper）。生效优先级：
 
 1. **CLI flag**（显式传入的 flag 值）——注意：flag 只决定「读哪个文件」和少量进程参数（signing key、db 路径等），**没有** `BindPFlag`，flag 不进 viper。
-2. **环境变量**——`bindDatabaseEnvironment`（`internal/config/config.go:502-537`，由 `LoadService` 在 `:544` 调用）对 22 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
+2. **环境变量**——`bindDatabaseEnvironment`（`internal/config/config.go:569-607`，由 `LoadService` 在 `:616` 调用）对 29 个键做 `viper.BindEnv`，绑定键一旦在环境中存在即**覆盖文件值**（viper 语义：env > config file）。
 3. **YAML 文件**（`--config` 指定路径）。
-4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:176/195/236/252`）。
+4. **代码默认值**——各配置块的 `WithDefaults()`（如 `internal/config/config.go:84/408/494/549`）。
 
 部分 flag 的**默认值本身**来自环境变量（`envOr`/`os.Getenv` 模式，如 `--jwt-private-key` 默认 `envOr("JWT_PRIVATE_KEY", "")`，`cmd/auth/main.go:261`），所以这类参数上的链条是：显式 flag > 对应环境变量 > flag 默认常量。
 
 **例外（原始二次读取，env 不参与）**：`cmd/orchestrator` 在 `LoadService` 之外另起裸 viper 直接重读同一个 YAML 文件解析 `gc`（`cmd/orchestrator/main.go:555`）、`emergency`（`:625`）、`trust`（`:677`）三个块（`UnmarshalKey`）。这三块只能改文件，不能用环境变量覆盖。
 
-**死代码（勿作依据）**：`config.Load` 与包级 `Config` 结构体（含 `RuntimePullPreflight` 字段，`internal/config/config.go:66/93`）无任何调用方；`WatchConfigFile`（`internal/config/config.go:497`，fsnotify 防抖 500ms 的热加载工具）在 `cmd/` 中无调用方——本仓库**没有**运行时热改配置机制，改文件必须重启进程或滚动 Deployment。TASK-094 已把配置文件侧对应的死键删除（§7-2/§7-3/§7-4），结构体保留待后续独立重构；`make check-config-keys` 门禁保证任何配置键不得再指向无人读取的声明。
+**死代码（勿作依据）**：`config.Load` 与包级 `Config` 结构体（含 `RuntimePullPreflight` 字段，`internal/config/config.go:68/95`）无任何调用方；`WatchConfigFile`（`internal/config/config.go:639`，fsnotify 防抖 500ms 的热加载工具）在 `cmd/` 中无调用方——本仓库**没有**运行时热改配置机制，改文件必须重启进程或滚动 Deployment。TASK-094 已把配置文件侧对应的死键删除（§7-2/§7-3/§7-4），结构体保留待后续独立重构；`make check-config-keys` 门禁保证任何配置键不得再指向无人读取的声明。
 
 ### 1.2 各二进制的 CLI flag（摘自 `cmd/*/main.go` 的 `flag.` 定义）
 
@@ -138,7 +138,7 @@
 |---|---|---|---|---|
 | `http_port` | int | 无 | 监听端口 | 8084。必填 |
 | `log_level` | — | — | | 生效（§7-1 闭环） |
-| `agent.mode` | `agent`\|`gateway` | `agent`（`AgentCfg.WithDefaults`，`internal/config/config.go:344`） | 运行模式 | `gateway` 为管理面遗留模式（`cmd/operator/main.go:38`）；env 无绑定 |
+| `agent.mode` | `agent`\|`gateway` | `agent`（`AgentCfg.WithDefaults`，`internal/config/config.go:408`） | 运行模式 | `gateway` 为管理面遗留模式（`cmd/operator/main.go:38`）；env 无绑定 |
 | `agent.customer_id` | string/UUID | 无 | 客户身份 | **agent 模式必填**：与 cluster_id 任一为空则 Register 失败（`cmd/operator/main.go:154`）；env `CUSTOMER_ID` |
 | `agent.cluster_id` | string | 无 | 集群身份 | 同上；env `CLUSTER_ID` |
 | `agent.operator_name` | string | 无 | 操作器显示名 | env `OPERATOR_NAME`；空则 bootstrap 用 cluster_id 兜底 |
@@ -155,10 +155,10 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `log_level` | — | — | | 生效（§7-1 闭环） |
 | `database.driver` | `sqlite`\|`postgres` | 无 | | 必填；`cmd/orchestrator/main.go:525` 校验；postgres 路径跑 `migrations.FS` |
 | `database.dsn` | string | 无 | | 机密（含口令）；本地 `data/management.db`（与 release-auth 同一个文件，TASK-104 的共享权威库契约），集群 `postgres://...@postgres:5432/release_manager` |
-| `authorization.auth_url` | URL | `http://localhost:8085`（`internal/config/config.go:483-484`） | 授权快照拉取源（release-auth） | 集群 `http://auth:8085`；env `AUTHORIZATION_AUTH_URL` |
+| `authorization.auth_url` | URL | `http://localhost:8085`（`internal/config/config.go:550-551`） | 授权快照拉取源（release-auth） | 集群 `http://auth:8085`；env `AUTHORIZATION_AUTH_URL` |
 | `authorization.pull_interval` | duration | 1s | 授权快照轮询周期 | env `AUTHORIZATION_PULL_INTERVAL` |
 | `authorization.pull_backoff_max` | duration | 30s | 拉取失败退避上限 | env `AUTHORIZATION_PULL_BACKOFF_MAX` |
-| `values.max_document_bytes` | int | 1 MiB（`ValuesConfig.WithDefaults`，`internal/config/config.go:82`） | ValuesRevision 文档大小上限 | 必填性无——缺省安全；env `VALUES_MAX_DOCUMENT_BYTES` |
+| `values.max_document_bytes` | int | 1 MiB（`ValuesConfig.WithDefaults`，`internal/config/config.go:84`） | ValuesRevision 文档大小上限 | 必填性无——缺省安全；env `VALUES_MAX_DOCUMENT_BYTES` |
 | `values.secret_patterns` | []string | [] | Values 明文机密拦截模式 | 消费点 `internal/orchestrator/values_revision.go:154`；env `VALUES_SECRET_PATTERNS`（逗号分隔） |
 | `trust.verification_timeout` | duration | 5s（`trust.DefaultVerificationTimeout`，`internal/trust/ed25519.go:22`） | 信任策略解析/根查找超时 | 仅文件（裸 viper `UnmarshalKey("trust")`，`cmd/orchestrator/main.go:722`），无 env 绑定 |
 | `maintenance` | bool | false | 维护模式：拦截写 RPC、跳过启动恢复与策略热载 | `cmd/orchestrator/main.go:449/467/516` 三类拦截器；env `MAINTENANCE` |
@@ -171,8 +171,8 @@ TASK-094 前本文件还写有 `runtime_pull_preflight.*`（6 键，整块无读
 | `gc.gc_max_duration_minutes` | int | 55 | 单轮 GC 时长预算 | min 5 |
 | `gc.cleanup_idempotency_retention_hours` | int | 24 | cleanup 幂等记录保留 | min 1 |
 | `gateway.enabled` | bool | false | 是否启 agent mTLS 网关（:8084） | dev 本地 false、集群 overlay true（agent 接入必需）；env `GATEWAY_ENABLED` |
-| `gateway.port` | int | 8084（`GatewayCfg.WithDefaults`，`internal/config/config.go:466`） | 网关端口 | 集群 NodePort 30084；env `GATEWAY_PORT` |
-| `ca.key_path` | path | 无 | CA 私钥文件（dev 文件模式） | **机密**；与 `ca.cert_path` 成对，`ca.LoadConfigured` 缺失即 Register 失败（`cmd/orchestrator/main.go:89`、`CAConfig.Validate` `internal/config/config.go:204-216`）；集群由 Secret `release-manager-mtls-ca` 挂到 `/data/gateway-ca.key`（0600） |
+| `gateway.port` | int | 8084（`GatewayCfg.WithDefaults`，`internal/config/config.go:494`） | 网关端口 | 集群 NodePort 30844；env `GATEWAY_PORT`。同节另支持 `gateway.advertise_url`（URL，默认空）：客户集群可达的网关对外地址，写入 `CreateEnrollmentTokenResponse.operator_endpoint`；production 显式设 `https://10.10.33.122:8444`（NodePort 30844→宿主 8444），空值逐字保留旧 dev 主机名（兼容 dev/e2e），非 `http(s)://` 绝对地址或解析失败即启动失败 `gateway_invalid`；env `GATEWAY_ADVERTISE_URL`。另有 TASK-388 的两个 SAN 键：`gateway.hostnames`（[]string，默认 `[operator-gateway.dev.release-manager.local, localhost]`）与 `gateway.ip_addresses`（[]string，默认空=不签 IP SAN），决定 `buildGatewayServer` 签出的服务端证书 DNS/IP SAN；客户 agent 按地址 `https://10.10.33.122:8444` 拨号，只有 DNS SAN 时 TLS 名校验失败，production 显式设 `hostnames: [rm-prod.local]`、`ip_addresses: [10.10.33.122]`。空值逐字保留旧证书形状（兼容 dev/e2e），空白 hostname 或非 IP 地址即启动失败 `gateway_invalid`；env `GATEWAY_HOSTNAMES` / `GATEWAY_IP_ADDRESSES`（逗号分隔） |
+| `ca.key_path` | path | 无 | CA 私钥文件（dev 文件模式） | **机密**；与 `ca.cert_path` 成对，`ca.LoadConfigured` 缺失即 Register 失败（`cmd/orchestrator/main.go:89`、`CAConfig.Validate` `internal/config/config.go:440-452`）；集群由 Secret `release-manager-mtls-ca` 挂到 `/data/gateway-ca.key`（0600） |
 | `ca.cert_path` | path | 无 | CA 证书（网关信任锚） | 与 key_path 成对；网关启用时两者都必须可得 |
 | `ca.cert_ttl` | duration | 168h | 签发操作器证书有效期 | 消费方仅 orchestrator（`LoadConfigured`） |
 | `ca.renew_before_ratio` | float (0,1] | 0.5 | 到期前续租比例 | 越界报 `ca_invalid` 启动失败 |
@@ -200,7 +200,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `agent.cluster_id` | string | dev-customer-a-direct / -a-cache / -b-replicated / -b-mixed | 集群身份 | 必填 |
 | `agent.operator_name` | string | = cluster_id | 操作器名 | |
 | `ca.cert_path` | path | /data/gateway-ca.crt | 网关 CA 信任锚 | Secret `operator-gateway-ca` 挂载 |
-| `agent.registry_plain_http` | bool | true | 允许对 HTTP-only OCI registry 拉 chart | **生效**（§7-5 闭环）：读取链 `AgentCfg.RegistryPlainHTTP`（`internal/config/config.go:340`）→ `cmd/operator/main.go:70` → `internal/operator/agent/agent.go` Install/UpgradeOptions → `internal/operator/helmengine/real.go:118/248`（helm SDK `PlainHTTP`）；放错位置（顶层）时静默为 false。解码断言测试 `TestCustomerAgentOverlaysWirePlainHTTPRegistry` |
+| `agent.registry_plain_http` | bool | true | 允许对 HTTP-only OCI registry 拉 chart | **生效**（§7-5 闭环）：读取链 `AgentCfg.RegistryPlainHTTP`（`internal/config/config.go:404`）→ `cmd/operator/main.go:70` → `internal/operator/agent/agent.go` Install/UpgradeOptions → `internal/operator/helmengine/real.go:118/248`（helm SDK `PlainHTTP`）；放错位置（顶层）时静默为 false。解码断言测试 `TestCustomerAgentOverlaysWirePlainHTTPRegistry` |
 
 令牌走环境变量 `ENROLLMENT_TOKEN`（Secret `operator-enrollment`，`agents_up` 命令式创建，文件名固定不参与 hash）；`enrollment_token_file` 键在这四个 overlay 中不存在。
 
@@ -216,7 +216,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 | `audit.archive.archive_dir` | path | data/archives | 归档输出目录 | 要求非空 |
 | `audit.archive.compression` | `gzip_jsonl` | gzip_jsonl | 归档编码 | 仅支持此值，其它值 Validate 报错 |
 | `audit.archive.checksum_algorithm` | `sha256` | sha256 | 校验算法 | 仅支持此值 |
-| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:482`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:283`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
+| `authorization.auth_url` | url | `http://localhost:8085`（`AuthorizationCfg.WithDefaults` `internal/config/config.go:549`） | release-auth 的 Connect 地址；审计面按 ADR-021 调 `AuthorizeAccess` 取授权判定 | env `AUTHORIZATION_AUTH_URL`（`internal/config/config.go:580`）；判定 200ms 超时，失败即 `unavailable`（fail closed） |
 
 ### 3.8 release-notification-sink（kustomize 唯一副本，2 键）
 
@@ -265,7 +265,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 
 ### 4.1 viper 绑定（所有走 `LoadService` 的服务可覆盖；env > 文件）
 
-`internal/config/config.go:274-297` 的完整映射（点号键 → env 名，共 22 个）：`database.driver`→`DATABASE_DRIVER`、`database.dsn`→`DATABASE_DSN`（机密）、`database.max_open_conns`→`DATABASE_MAX_OPEN_CONNS`、`database.max_idle_conns`→`DATABASE_MAX_IDLE_CONNS`、`database.conn_max_lifetime`→`DATABASE_CONN_MAX_LIFETIME`、`redis.address`→`REDIS_ADDRESS`、`redis.password`→`REDIS_PASSWORD`（机密）、`redis.db`→`REDIS_DB`、`maintenance`→`MAINTENANCE`、`authorization.auth_url`→`AUTHORIZATION_AUTH_URL`、`authorization.pull_interval`→`AUTHORIZATION_PULL_INTERVAL`、`authorization.pull_backoff_max`→`AUTHORIZATION_PULL_BACKOFF_MAX`、`authorization.policy_reload_interval`→`AUTHORIZATION_POLICY_RELOAD_INTERVAL`、`gateway.enabled`→`GATEWAY_ENABLED`、`gateway.port`→`GATEWAY_PORT`、`agent.customer_id`→`CUSTOMER_ID`、`agent.cluster_id`→`CLUSTER_ID`、`agent.operator_name`→`OPERATOR_NAME`、`agent.enrollment_token_file`→`ENROLLMENT_TOKEN_FILE`（机密）、`ca.cert_path`→`CA_CERT_PATH`、`values.max_document_bytes`→`VALUES_MAX_DOCUMENT_BYTES`、`values.secret_patterns`→`VALUES_SECRET_PATTERNS`（逗号分隔）。TASK-094 前的 24 键映射含 `gateway.ca_key_path`/`gateway.ca_cert_path` 两个死绑定，已随字段一并删除（§7-4）。
+`internal/config/config.go:570-600` 的完整映射（点号键 → env 名，共 29 个）：`database.driver`→`DATABASE_DRIVER`、`database.dsn`→`DATABASE_DSN`（机密）、`database.max_open_conns`→`DATABASE_MAX_OPEN_CONNS`、`database.max_idle_conns`→`DATABASE_MAX_IDLE_CONNS`、`database.conn_max_lifetime`→`DATABASE_CONN_MAX_LIFETIME`、`redis.address`→`REDIS_ADDRESS`、`redis.password`→`REDIS_PASSWORD`（机密）、`redis.db`→`REDIS_DB`、`maintenance`→`MAINTENANCE`、`authorization.auth_url`→`AUTHORIZATION_AUTH_URL`、`authorization.pull_interval`→`AUTHORIZATION_PULL_INTERVAL`、`authorization.pull_backoff_max`→`AUTHORIZATION_PULL_BACKOFF_MAX`、`authorization.policy_reload_interval`→`AUTHORIZATION_POLICY_RELOAD_INTERVAL`、`notifier.url`→`NOTIFIER_URL`、`notifier.recipient`→`NOTIFIER_RECIPIENT`、`notifier.delivery_channel`→`NOTIFIER_DELIVERY_CHANNEL`、`notifier.poll_interval`→`NOTIFIER_POLL_INTERVAL`、`gateway.enabled`→`GATEWAY_ENABLED`、`gateway.port`→`GATEWAY_PORT`、`gateway.hostnames`→`GATEWAY_HOSTNAMES`、`gateway.ip_addresses`→`GATEWAY_IP_ADDRESSES`、`gateway.advertise_url`→`GATEWAY_ADVERTISE_URL`、`agent.customer_id`→`CUSTOMER_ID`、`agent.cluster_id`→`CLUSTER_ID`、`agent.operator_name`→`OPERATOR_NAME`、`agent.enrollment_token_file`→`ENROLLMENT_TOKEN_FILE`（机密）、`ca.cert_path`→`CA_CERT_PATH`、`values.max_document_bytes`→`VALUES_MAX_DOCUMENT_BYTES`、`values.secret_patterns`→`VALUES_SECRET_PATTERNS`（逗号分隔）。TASK-094 前的 24 键映射含 `gateway.ca_key_path`/`gateway.ca_cert_path` 两个死绑定，已随字段一并删除（§7-4）。
 
 ### 4.2 Go 代码直接读取（`os.Getenv`/`LookupEnv`）
 
@@ -380,7 +380,7 @@ TASK-094 前 dev overlay 还含 `retention.*` 5 键死块（`bundle_days`/`candi
 本节原为「写了但查不到读取点」的未核实清单；TASK-094 逐项处置如下，防止回潮的机制在末尾。
 
 1. **`log_level`（15 个运行时配置文件，`configs/e2e.dev.yaml` 无此键）**：曾为解析后无人读取——`internal/app/app.go:123` 原先硬编码 `Level: slog.LevelDebug`。**已接线**：`startupLogger()` 以 `slog.LevelVar` 安装进程默认 logger，`applyLogLevel`（app.go:133 调用）按 `config.ParseLogLevel`（`internal/config/loglevel.go`）解析 `ServiceConfig.LogLevel` 并生效到 handler；空=debug（与接线前行为一致，不改变默认噪声水平），非法值 Warn 后保持 debug。行为测试：`internal/app/loglevel_test.go`、`internal/config/loglevel_test.go`。由于 `slog.SetDefault` 此前全仓零调用，各包 `slog.Default()` 的调用点自动随级别生效，无需逐包改动。
-2. **`runtime_pull_preflight.*`（原 `configs/operator.dev.yaml` 6 键）**：整块无运行时读取（`config.Load` 零调用方；`ServiceConfig` 无此字段，`LoadService` 静默丢弃）。**已从文件删除**，`ca:` 块旁留注释说明。对应的 `Config.Load`/`RuntimePullConfig` 死结构体仍在 `internal/config/config.go:66/93`（删除属结构重构，另议），门禁不再为其放行任何文件键。
+2. **`runtime_pull_preflight.*`（原 `configs/operator.dev.yaml` 6 键）**：整块无运行时读取（`config.Load` 零调用方；`ServiceConfig` 无此字段，`LoadService` 静默丢弃）。**已从文件删除**，`ca:` 块旁留注释说明。对应的 `Config.Load`/`RuntimePullConfig` 死结构体仍在 `internal/config/config.go:68/95`（删除属结构重构，另议），门禁不再为其放行任何文件键。
 3. **`retention.*`（原 dev overlay `deploy/kustomize/dev/configs/orchestrator.dev.yaml` 5 键）**：orchestrator 只 `UnmarshalKey` `gc`/`emergency`/`trust`，`retention:` 无人读、集群 GC 实跑 `DefaultGcConfig`。**已换成与本地文件同构的规范 `gc:` 8 键块**（overlay :23-31），值与 `configs/orchestrator.dev.yaml` 一致；此后集群 GC 参数真实受文件控制，写错会按 `GcConfig.Validate()` 启动失败。
 4. **`gateway.ca_key_path`/`gateway.ca_cert_path`**：`GatewayCfg` 遗留字段零消费者（CA 实际走顶层 `ca:`）。**字段、mapstructure 路径、env 绑定（`GATEWAY_CA_KEY_PATH`/`GATEWAY_CA_CERT_PATH`）与本地文件两行全部删除**；防漂移测试 `TestOrchestratorDevConfigWiresTopLevelCA`（`deploy/dev/dev_test.go`）改为直接断言 overlay `gateway:` 中这两个键不得出现。<!-- check-docs:ignore 陈述已删除的字段/键不存在 -->
 5. **`registry_plain_http`（4 个 customer-agent overlay）**：复验推翻「死字段」假设——该键有完整活读取链（§3.6），真正的缺陷是**位置放错**：写在顶层时 `AgentCfg.RegistryPlainHTTP` 不接收，解码恒 false，agent 实际以 HTTPS-only 拉 OCI chart（与 overlay 注释声明的 dev-fixture 意图相反，属静默失效）。**修复 = 把键移进 `agent:` 块**（每 overlay :12），保留字段与读取链；解码断言 `TestCustomerAgentOverlaysWirePlainHTTPRegistry` + 键路径门禁防回潮。

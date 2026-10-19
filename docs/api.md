@@ -212,7 +212,7 @@ TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToO
 
 ### 3.6 维护模式白名单
 
-`app.MaintenanceInterceptor(enabled, readOnly, logger)` 在 `maintenance: true` 时对不在白名单内的 unary procedure 返回 `unavailable`，message 恰为 `"maintenance"`（`internal/app/maintenance.go:14-28`）。配置项 `maintenance`（`internal/config/config.go:135` 的 `ServiceConfig.Maintenance`），env 名 `MAINTENANCE` 在 `internal/config/config.go:282` 的绑定表里登记（该表由 `bindDatabaseEnvironment` `:272` 装载）。
+`app.MaintenanceInterceptor(enabled, readOnly, logger)` 在 `maintenance: true` 时对不在白名单内的 unary procedure 返回 `unavailable`，message 恰为 `"maintenance"`（`internal/app/maintenance.go:14-28`）。配置项 `maintenance`（`internal/config/config.go:21` 的 `ServiceConfig.Maintenance`），env 名 `MAINTENANCE` 在 `internal/config/config.go:579` 的绑定表里登记（该表由 `bindDatabaseEnvironment` `:570` 装载）。
 
 - release-auth 白名单 13 条（`cmd/auth/main.go:241-256`），其中 `Login`/`RefreshToken`/`ChangePassword`/成员与绑定写操作被刻意挡住。
 - release-orchestrator 的 `OrchestratorService` 白名单 15 条读方法（`cmd/orchestrator/main.go:733-751`）。
