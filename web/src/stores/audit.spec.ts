@@ -239,8 +239,14 @@ describe('audit query store', () => {
     // New event 'c' arrives before the next page; 'b' repeats on page two.
     queryAuditEvents.mockResolvedValueOnce(queryResponse([auditEvent('b'), auditEvent('c')], ''));
     await store.query(ORG, 'next');
-    expect(store.events.map((event) => event.id)).toEqual(['a', 'b', 'c']);
+    // TASK-375: the page is REPLACED, and the session dedupe still drops the id
+    // page one already showed — page two holds only what page one did not.
+    expect(store.events.map((event) => event.id)).toEqual(['c']);
+    expect(store.seenEventIds.has('a')).toBe(true);
+    expect(store.seenEventIds.has('b')).toBe(true);
+    expect(store.seenEventIds.has('c')).toBe(true);
     expect(store.hasMore).toBe(false);
+    expect(store.pageNumber).toBe(2);
   });
 
   it('restores the previous page verbatim when paging backward (AC-059-03)', async () => {
@@ -251,13 +257,82 @@ describe('audit query store', () => {
       .mockResolvedValueOnce(queryResponse([auditEvent('a'), auditEvent('b')], 'cursor-1'));
     await store.query(ORG);
     await store.query(ORG, 'next');
-    expect(store.events.map((event) => event.id)).toEqual(['a', 'b', 'c']);
+    // TASK-375: page two replaces page one; 'b' was already seen on page one.
+    expect(store.events.map((event) => event.id)).toEqual(['c']);
+    expect(store.pageNumber).toBe(2);
 
     // 回看已浏览页必须原样恢复，不得被全会话去重清空。
     await store.query(ORG, 'previous');
     expect(store.events.map((event) => event.id)).toEqual(['a', 'b']);
     expect(store.hasPrevious).toBe(false);
     expect(store.hasMore).toBe(true);
+    expect(store.pageNumber).toBe(1);
+  });
+
+  /*
+   * TASK-375 (Lead ruling: replace, not "load more"). `next` used to append while
+   * `previous` replaced, so stepping back from page three kept only that one page's
+   * rows (measured: 60 rows -> 20, 40 rows lost) and the cursor stack could not
+   * describe where the user was. The pager's own labels are "上一页/下一页", and
+   * AC-059-03 constrains duplicates only — it never asks for accumulation.
+   */
+  it('replaces the page on every cursor step instead of accumulating (TASK-375)', async () => {
+    const store = useAuditStore();
+    const page1 = Array.from({ length: 20 }, (_, index) => auditEvent(`p1-${index}`));
+    const page2 = Array.from({ length: 20 }, (_, index) => auditEvent(`p2-${index}`));
+    const page3 = Array.from({ length: 20 }, (_, index) => auditEvent(`p3-${index}`));
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse(page1, 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse(page2, 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse(page3, ''));
+
+    await store.query(ORG);
+    expect(store.events).toHaveLength(20);
+
+    await store.query(ORG, 'next');
+    // Appending would leave 40 rows; page two is exactly page two's 20 rows.
+    expect(store.events.map((event) => event.id)).toEqual(page2.map((event) => event.id));
+    expect(store.events).toHaveLength(20);
+    expect(store.pageNumber).toBe(2);
+
+    await store.query(ORG, 'next');
+    expect(store.events.map((event) => event.id)).toEqual(page3.map((event) => event.id));
+    expect(store.events).toHaveLength(20);
+    expect(store.pageNumber).toBe(3);
+  });
+
+  it('pushes the cursor on next and pops it on previous, keeping pageNumber in step (TASK-375)', async () => {
+    const store = useAuditStore();
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse([auditEvent('a')], 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('b')], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('c')], 'cursor-3'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('b')], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse([auditEvent('a')], 'cursor-1'));
+
+    await store.query(ORG);
+    expect(store.cursorStack).toEqual([]);
+    expect(store.pageNumber).toBe(1);
+
+    await store.query(ORG, 'next');
+    expect(store.cursorStack).toEqual(['']);
+    expect(store.cursor).toBe('cursor-1');
+    expect(store.pageNumber).toBe(2);
+
+    await store.query(ORG, 'next');
+    expect(store.cursorStack).toEqual(['', 'cursor-1']);
+    expect(store.cursor).toBe('cursor-2');
+    expect(store.pageNumber).toBe(3);
+
+    await store.query(ORG, 'previous');
+    expect(store.cursorStack).toEqual(['']);
+    expect(store.cursor).toBe('cursor-1');
+    expect(store.pageNumber).toBe(2);
+
+    await store.query(ORG, 'previous');
+    expect(store.cursorStack).toEqual([]);
+    expect(store.cursor).toBe('');
+    expect(store.pageNumber).toBe(1);
   });
 
   it('requests the next page with the server cursor (AC-059-03)', async () => {

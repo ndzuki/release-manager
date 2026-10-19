@@ -114,6 +114,16 @@ describe('Pagination', () => {
     expect(mountPagination().find('.pagination__page').exists()).toBe(false);
   });
 
+  it('adds the total to the announcement when the source reports one (TASK-375)', () => {
+    const wrapper = mountPagination({ page: 2, total: 60 });
+
+    expect(wrapper.get('.pagination__page').text()).toBe('第 2 页，共 60 条');
+    // The total is additive: a source that does not know its size keeps the short
+    // form, and a page index without any page prop still renders no indicator.
+    expect(mountPagination({ page: 2 }).get('.pagination__page').text()).toBe('第 2 页');
+    expect(mountPagination({ total: 60 }).find('.pagination__page').exists()).toBe(false);
+  });
+
   it('leaves activeElement alone when a props change disables a different control', async () => {
     const wrapper = mount(Pagination, {
       attachTo: document.body,

@@ -2,6 +2,7 @@
 import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
+import { ref } from 'vue';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
 import Pagination from '@/components/common/Pagination.vue';
 import { formatTimestamp } from '@/utils/formatTimestamp';
@@ -12,6 +13,8 @@ const props = defineProps<{
   loading: boolean;
   hasPrevious: boolean;
   hasMore: boolean;
+  /** 1-based page index, rendered and announced by the pager (TASK-375). */
+  page: number;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +22,23 @@ const emit = defineEmits<{
   previous: [];
   next: [];
 }>();
+
+/*
+ * TASK-375: paging must not strand focus on <body>. The pager deliberately never
+ * touches focus (Pagination.vue documents that), so the caller owns this move.
+ * A cursor page can disable the button that was just used ("next" on the last
+ * page), and a browser blurs a focused control the moment it becomes disabled —
+ * focus lands on <body> and a keyboard/screen-reader user loses their place.
+ * The consumer calls this AFTER a page settled; the region carries an accessible
+ * name (the section's aria-label), so the move is also announced.
+ */
+const resultsRef = ref<HTMLElement | null>(null);
+
+function focusResults(): void {
+  resultsRef.value?.focus();
+}
+
+defineExpose({ focusResults });
 
 const actorKindLabels: Record<ActorKind, string> = {
   [ActorKind.UNSPECIFIED]: t('audit.table.unknownActor'),
@@ -41,7 +61,10 @@ function actorLabel(event: AuditEvent): string {
 </script>
 
 <template>
-  <section class="audit-results" :aria-label="t('audit.table.results')">
+  <!-- tabindex="-1": a programmatic focus target only; it does not add a tab stop.
+       The section already carries an aria-label, so a screen reader announces the
+       region by name when the consumer moves focus here after a page change. -->
+  <section ref="resultsRef" class="audit-results" tabindex="-1" :aria-label="t('audit.table.results')">
     <p class="audit-results__count">{{ t('audit.table.showing') }} {{ props.events.length }} / {{ props.totalSize }}</p>
     <div class="audit-results__table-wrap">
       <table>
@@ -95,6 +118,8 @@ function actorLabel(event: AuditEvent): string {
       class="audit-results__pagination"
       :has-prev="props.hasPrevious && !props.loading"
       :has-next="props.hasMore && !props.loading"
+      :page="props.page"
+      :total="props.totalSize"
       :label="t('audit.table.pagination')"
       @prev="emit('previous')"
       @next="emit('next')"
@@ -106,6 +131,17 @@ function actorLabel(event: AuditEvent): string {
 .audit-results {
   display: grid;
   gap: 1rem;
+}
+
+/*
+ * The region is a programmatic focus target (TASK-375). It is never a tab stop, so
+ * the ring only appears after a page change moved focus here — that is exactly when
+ * a sighted keyboard user needs to see where the focus went.
+ */
+.audit-results:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0.25rem;
+  border-radius: var(--radius-md);
 }
 
 .audit-results__count {

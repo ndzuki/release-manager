@@ -199,6 +199,9 @@ const zhCN = {
   'pagination.previous': '上一页',
   'pagination.next': '下一页',
   'pagination.page': '第 {page} 页',
+  // Called with a source that also reports its size (the audit list pages a known
+  // total). The page index alone cannot say how much data is behind it.
+  'pagination.pageOfTotal': '第 {page} 页，共 {total} 条',
   // Wave 4: operator management
   'operator.token.oneTimeSecret': '一次性密钥',
   'operator.token.closeWarning': '关闭该对话框会从浏览器中永久移除明文。',

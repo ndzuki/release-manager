@@ -41,11 +41,11 @@ function auditEvent(id: string): AuditEvent {
   };
 }
 
-function queryResponse(events: AuditEvent[], nextPageToken = ''): QueryAuditEventsResponse {
+function queryResponse(events: AuditEvent[], nextPageToken = '', totalSize = 100): QueryAuditEventsResponse {
   return {
     $typeName: 'audit.v1.QueryAuditEventsResponse' as const,
     events,
-    pagination: { $typeName: 'common.v1.PaginationResponse' as const, nextPageToken, totalSize: 100 },
+    pagination: { $typeName: 'common.v1.PaginationResponse' as const, nextPageToken, totalSize },
   };
 }
 
@@ -67,12 +67,12 @@ function signInAs(activeOrgId: string, roles: string[] = ['platform_admin']): vo
   auth.organizations = ORGANIZATIONS;
 }
 
-function mountAuditPage(): ReturnType<typeof mount> {
+function mountAuditPage(options: Record<string, unknown> = {}): ReturnType<typeof mount> {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/audit', name: 'Audit', component: AuditPage }],
   });
-  return mount(AuditPage, { global: { plugins: [router] } });
+  return mount(AuditPage, { global: { plugins: [router] }, ...options });
 }
 
 function pagerButton(wrapper: ReturnType<typeof mount>, label: '上一页' | '下一页') {
@@ -241,6 +241,58 @@ describe('AuditPage', () => {
     const previousRequest = queryAuditEvents.mock.calls[2][0];
     expect(previousRequest.pagination?.pageToken).toBe('');
     expect(previousRequest.filter).toMatchObject({ allOrganizations: true, organizationId: '' });
+  });
+
+  /*
+   * TASK-375: three user-visible defects of the audit pager in one flow.
+   *
+   *  - "下一页" replaced the page (it used to append 20 rows to the 20 already on
+   *    screen, which the label never promised);
+   *  - the pager showed/announced no position at all;
+   *  - focus fell to <body> as soon as the activated control became disabled (the
+   *    last page disables "next"), leaving keyboard and screen-reader users with no
+   *    place on the results.
+   */
+  it('replaces the page, announces the position and keeps focus on the results (TASK-375)', async () => {
+    signInAs('org-1');
+    const page1 = Array.from({ length: 20 }, (_, index) => auditEvent(`p1-${index}`));
+    const page2 = Array.from({ length: 20 }, (_, index) => auditEvent(`p2-${index}`));
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse(page1, 'cursor-1', 40))
+      .mockResolvedValueOnce(queryResponse(page2, '', 40))
+      .mockResolvedValueOnce(queryResponse(page1, 'cursor-1', 40));
+
+    const wrapper = mountAuditPage({ attachTo: document.body });
+    await flushPromises();
+
+    expect(wrapper.findAll('tbody tr')).toHaveLength(20);
+    expect(wrapper.get('.pagination__page').text()).toBe('第 1 页，共 40 条');
+
+    await pagerButton(wrapper, '下一页').trigger('click');
+    await flushPromises();
+
+    const nextRows = wrapper.findAll('tbody tr');
+    // Accumulating would leave 40 rows; page two is the 20 rows of page two.
+    expect(nextRows).toHaveLength(20);
+    expect(nextRows[0]!.text()).toContain('p2-0');
+    expect(wrapper.text()).not.toContain('p1-0');
+    const indicator = wrapper.get('.pagination__page');
+    expect(indicator.text()).toBe('第 2 页，共 40 条');
+    expect(indicator.attributes('role')).toBe('status');
+    // Focus is moved to the named results region, never left on <body>.
+    expect(document.activeElement).toBe(wrapper.get('section.audit-results').element);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // "上一页" restores page one verbatim and rewinds the position.
+    await pagerButton(wrapper, '上一页').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.findAll('tbody tr')).toHaveLength(20);
+    expect(wrapper.findAll('tbody tr')[0]!.text()).toContain('p1-0');
+    expect(wrapper.get('.pagination__page').text()).toBe('第 1 页，共 40 条');
+    expect(document.activeElement).toBe(wrapper.get('section.audit-results').element);
+
+    wrapper.unmount();
   });
 
   // TASK-339 review P1: the static "system" scope must survive paging too.
