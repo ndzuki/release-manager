@@ -14,7 +14,7 @@
 | PVC | **5 个全部 `Bound`**（含自动备份卷 `release-manager-backups`） | 同上 + `kubectl -n release-manager get pvc` |
 | 渲染对象 | **45 个**（1 Namespace / 8 ConfigMap / 7 Deployment / 2 StatefulSet / 4 PDB / 10 Service / 3 PVC / 9 NetworkPolicy / 1 CronJob） | `kubectl kustomize`，纯本地渲染，不接触集群 |
 | 自动备份 | `CronJob release-manager-backup`，每日 `02:00 UTC`，dump 落 `release-manager-backups`（5Gi） | 2026-10-17 实测，见 §7.4 |
-| 镜像 tag | `ee3afae`（6 个服务与 `web`；`edge` 仍 `nginx:1.27-alpine`） | 2026-10-18 TASK-373，见 §8.9 |
+| 镜像 tag | `api`/`auth`/`orchestrator`/`notifier`/`webhook` = `ee3afae`；`web` = `996c6f3`；`edge` 仍 `nginx:1.27-alpine` | 2026-10-19 TASK-378，见 §8.11 |
 | 入口 | `https://localhost:8443`（同源，TLS） | 见 §6 |
 | operator 网关 | `https://127.0.0.1:8444`（mTLS；2026-10-18 12:28 起仅 loopback，跨机接入见 §10-5） | 2026-10-18 实测 `bash /dev/tcp`、`openssl s_client`、`curl`，见 §4-⑦ |
 | 宿主端口绑定 | 8443/8444 → `127.0.0.1`（无 `0.0.0.0`/`[::]`）；6443 API 仍是 `0.0.0.0:44609` | 2026-10-18 12:28 `docker port`，见 §10-5 |
@@ -1375,6 +1375,126 @@ kubectl -n release-manager rollout status deploy/web --timeout=300s
 - ⭐ **发现的遗留缺陷（不属于 TASK-375 验收项，未修）**：第 1 页 → 第 2 页 → 「上一页」→ 再点「下一页」时，结果区显示**空态「暂无审计事件」**（实测 0 行，`/tmp/rm376-evidence/after-04-audit-revisit-page2.png`）。成因是 `stores/audit.ts` 的前向分页仍按「本会话已见 id」去重（AC-059-03 的既有设计，用于新事件插入时保持游标稳定），而回看过的页把 id 全放进了 `seenEventIds`，于是再次前向进入同一页时 19 行全部被过滤。改前（累积模型）同样不正常，只是表现为「停在 20 行、不前进」。该缺陷需要产品口径决定（回看后再前进是否应原样恢复），不在本次发布范围。
 - 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
 - 没有做故障注入、SIGTERM、并发/长连接压测。
+
+### 8.11 实测：`996c6f3` 审计回看往返修复发布（无迁移、无 Go 运行时变更，2026-10-19，TASK-378）
+
+TASK-376 之后的第七次发布。本次把 `origin/main` 从 `182bd4e` 前移到 **`996c6f3`**（`Merge pull request #459 from ndzuki/fix/377-audit-revisit`，修复提交 `ad07de1` `fix(web): scope audit pagination dedupe to the current forward chain (TASK-377)`）；区间内另有 PR [#458](https://github.com/ndzuki/release-manager/pull/458) 的 §8.10 文档提交（`f9953f9`）。
+
+**变更面**（`git diff --no-ext-diff --stat 182bd4e..996c6f3`）：**3 个文件，+219/−4**。
+
+| 类别 | 文件 | 结论 |
+| --- | --- | --- |
+| 迁移 | —（`git diff --name-only 182bd4e..996c6f3 -- migrations/` ⇒ **0 文件**） | schema 保持 **`36\|f`**，回滚是**纯镜像级** |
+| Go 运行时 | —（`git diff --name-only 182bd4e..996c6f3 -- 'internal/**' 'cmd/**' 'api/**' \| grep -v _test.go` ⇒ **空**） | 后端**零功能变化**，5 个 Go 服务与 `:ee3afae` 功能等价 |
+| web 运行时 | `web/src/stores/audit.ts`（+33/−4） | **只有 web 有功能变化** |
+
+其余文件：`web/src/stores/audit.spec.ts`（+81 回归测试）与 `docs/production-deploy.md`（+105，§8.10 的记录）。
+
+修复本身只有一处语义变更：`seenEventIds` 不再按「本会话累计」去重，而是由**每条已走页的 id 列表**（`pageIdStack`，与 `cursorStack` 平行）重新推导；回看（`previous`）会丢掉「正在离开的那一页」的 id，再用实际渲染的行重记当前页。于是「第 1 页 → 第 2 页 → 上一页 → 下一页」再次进入第 2 页时，去重集合只包含第 1 页的 id，19 行正常渲染。这就是 §8.10 末尾记录的那个遗留缺陷的修复。
+
+**滚动范围 = 只滚 `web`**。依据就是上表第二行：区间内 Go 运行时文件为 0。但**仍构建并导入了全部 8 个镜像**（`:996c6f3`），保持节点镜像清单与 tag 一致、便于回滚；`api`/`auth`/`orchestrator`/`notifier`/`webhook` 的 Deployment **没有动**，仍是 `:ee3afae`（revision 不变）。
+
+**基线（发布前实测，2026-10-19 10:04–10:06 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook` = `:ee3afae`；`web` = `:182bd4e`；`edge` = `nginx:1.27-alpine` |
+| revision | `api=14`、`auth=6`、`orchestrator=6`、`notifier=6`、`webhook=6`、`web=13`、`edge=1` |
+| Pod | 10 个工作负载 `1/1` + 2 个 `Completed` 备份 Job Pod（CronJob 于 10-19 02:00 UTC 又跑了一次）；`RESTARTS` 全 0 |
+| schema | `36\|f` |
+| 数据面 | `release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**；`audit_events` **39 行**（其中最近 24 h **7 行**） |
+| 入口 | `https://localhost:8443/` → 200 |
+| 登录 | 离开 `/login` **819 ms**（真 Chrome，playwright-core + 系统 Chrome，一次采样） |
+| 6 服务健康 | `/health` 与 `/readyz` 全 200（`web` 的两条路径仍是 nginx 反代到 orchestrator） |
+| 回滚基线 | `kubectl -n release-manager get deploy -o yaml` 落盘 `/tmp/rm378/deploys-baseline-182bd4e.yaml`（945 行） |
+
+**构建与导入**（worktree `/tmp/rm-wt378`，HEAD = `996c6f3`）
+
+```bash
+git fetch origin -q && git worktree add -q /tmp/rm-wt378 -b chore/378-deploy-996c6f3 origin/main
+cd /tmp/rm-wt378
+make docker-build-all IMAGE_TAG=996c6f3
+docker save --platform linux/amd64 -o /tmp/rm378/images-996c6f3.tar \
+  localhost:5001/release-api:996c6f3 localhost:5001/release-auth:996c6f3 \
+  localhost:5001/release-orchestrator:996c6f3 localhost:5001/release-operator:996c6f3 \
+  localhost:5001/release-webhook:996c6f3 localhost:5001/release-notifier:996c6f3 \
+  localhost:5001/release-notification-sink:996c6f3 localhost:5001/release-web:996c6f3
+k3d image import -c rm-prod /tmp/rm378/images-996c6f3.tar 2>&1 | tee /tmp/rm378/import.log
+grep ERRO /tmp/rm378/import.log      # 0 命中
+```
+
+- 构建于 **10:06:33** 完成：只有 `release-web:996c6f3` 是新层（`created=2026-10-19 10:06:33`），其余 7 个镜像命中缓存层（`created=2026-10-18 23:20`）——这本身就是「区间内 Go 运行时零文件」的旁证。
+- 单个 tar（8 镜像，`linux/amd64`）**113,137,664 B**（≈107.9 MiB），落盘 `/tmp/rm378/images-996c6f3.tar`。
+- 导入 **约 4 s**（`[0004] Successfully imported`），`grep ERRO` **0 命中**。k3d 的汇总行写的是 `Successfully imported 1 image(s)`——它按 **tar 包**计数，不是按镜像数；节点内 `crictl images | grep 996c6f3` 实际可见 **8 个**（`web` 的 image ID 为 `8abe5c477cde4`）。
+- 没有走 registry 推送：镜像直接 import 进 `k3d-rm-prod-server-0`，Deployment 仍引用 `localhost:5001/...` 的 tag，`imagePullPolicy=IfNotPresent`。
+
+**滚动（只滚 `web`：`set image` → `rollout status --timeout=300s` → 立即验 `/health` + `/readyz`）**
+
+| 服务 | 滚动耗时 | revision | `/health` | `/readyz` |
+| --- | --- | --- | --- | --- |
+| `web`（2 副本） | **7,911 ms** | 13 → **14** | 200 | 200 |
+
+- 没有失败，未触发 `undo`。两个新 Pod 的容器 imageID 都是 `sha256:8abe5c477cde…`，与节点内 `:996c6f3` 一致。
+- **port-forward 纪律**（TASK-376 踩过的坑）：滚动前先确认没有残留 forward（`pgrep -af "kubectl.*port-forward"` 无命中），滚动完成后再**新建** `kubectl port-forward --address 127.0.0.1 svc/web 18087:8087` 并探测，两条都是 **200**；同时用 `edge` Pod 从集群内探测 `http://web:8087/health`、`/readyz` 也是 200。本次没有出现 `000`。
+- 发布后 revision：`web=14`，`api=14`、`auth=6`、`orchestrator=6`、`notifier=6`、`webhook=6`、`edge=1` **全部不变**。
+
+**⭐ 审计往返序列验收（本次核心：改前 vs 改后的同一序列）**
+
+生产库 `audit_events` 共 39 行，`/audit` 默认时间范围是最近 24 h（**7 行 ⇒ 1 页**），不足以触发分页。因此用 UI 支持的只读 URL 时间筛选把区间放宽到 **30 天**（`/audit?from=…&to=…`，平台管理员策略上限 366 天），得到 **39 条 ⇒ 2 页（20 + 19）**；不造任何数据。脚本 `/tmp/rm378/acceptance.mjs` 从 `/login` 真登录、点真实按钮、逐项取 DOM，每步写一条记录到 `/tmp/rm378-evidence/steps.json`（`{step, name, rows, pageLabel, activeElement, emptyVisible, roleStatusCount, consoleErrors, rpcQueriesTotal}`）。
+
+| # | 动作 | 行数 | 页码文本 | 空态 | `role=status` | `document.activeElement` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 首屏（第 1 页） | **20** | 「第 1 页，共 39 条」 | 不显示 | **1** | `body`（首屏不移动焦点） |
+| 2 | 下一页 → 第 2 页 | **19** | 「第 2 页，共 39 条」 | 不显示 | 1 | `section.audit-results` |
+| 3 | 上一页 → 第 1 页 | **20** | 「第 1 页，共 39 条」 | 不显示 | 1 | `section.audit-results` |
+| 4 | 下一页 → 第 2 页（⭐ 回看后再前进） | **19** | 「第 2 页，共 39 条」 | **不显示** | 1 | `section.audit-results` |
+| 5 | 上一页 → 第 1 页（第二轮） | 20 | 「第 1 页，共 39 条」 | 不显示 | 1 | `section.audit-results` |
+| 6 | 下一页 → 第 2 页 | 19 | 「第 2 页，共 39 条」 | 不显示 | 1 | `section.audit-results` |
+| 7 | 上一页 → 第 1 页 | 20 | 「第 1 页，共 39 条」 | 不显示 | 1 | `section.audit-results` |
+| 8 | 下一页 → 第 2 页 | 19 | 「第 2 页，共 39 条」 | 不显示 | 1 | `section.audit-results` |
+| 9 | 末页对 disabled 的「下一页」合成 click ×3 | **19（不变）** | 「第 2 页，共 39 条」（不变） | 不显示 | 1 | — |
+
+- **改前 / 改后对照**：
+
+| 检查项 | 改前 `:182bd4e` | 改后 `:996c6f3` |
+| --- | --- | --- |
+| 第 1 页 → 第 2 页 → 「上一页」→ 再点「下一页」 | **0 行 + 空态「暂无审计事件」**（TASK-376 实测，截图 `/tmp/rm376-evidence/after-04-audit-revisit-page2.png`） | **19 行，无空态**（`steps.json` step 4，截图 `/tmp/rm378-evidence/step-04-next-page2-again.png`） |
+| 再往返一轮（prev→next→prev→next） | 未测（缺陷已复现，未继续） | **稳定**：20 / 19 / 20 / 19，无累积、无空态（step 5–8） |
+| 页码文本 / `role=status` | 有（TASK-375 起） | 每步恰 **1** 个，文本随页变化 |
+| 翻页后焦点 | 结果区（TASK-375 起） | 每步都在 `section.audit-results[aria-label="审计结果"]` |
+
+- 逐页 RPC：9 步共 **8 次** `QueryAuditEvents`（首屏 1 次 + 7 次真实翻页；第 9 步的 3 次合成 click **0 次 RPC、0 行增量**，`rpcDelta=0`、`rowDelta=0`、页码不变）。
+- 控制台：仅登录前 2 条 401（未登录探测，预期）；进入审计页后 **0 条**未归因 error，9 步每步 `consoleErrors` 均为空数组。
+- 末页「下一页」在 DOM 上是原生 `disabled=true`；上一页在第 1 页同样 `disabled=true`。
+
+**其他回归**
+
+1. 10 个工作负载 Pod `1/1`（api/auth/edge/notifier/orchestrator/webhook 各 1 + web 2 + postgres-0 + redis-0），`RESTARTS` 全 0；另有 2 个 `Completed` 备份 Job Pod（不计入 10）。`https://localhost:8443/` 连测 3 次全 **200**；6 个服务 `/health` 与 `/readyz` 全 200。
+2. `/definitions` 200、**5 行**；`/operations` 200（空态）；`/customers` 200（客户卡片）；`/settings/organization` 200（组织成员）。四页都未渲染 forbidden/error 态。
+3. 375px：`/definitions` `scrollWidth=375`、`clientWidth=375`、`bodyScrollWidth=375`，无页面级横向溢出（截图 `/tmp/rm378-evidence/375-definitions.png`）。
+4. schema 仍 **`36|f`**；`release_definitions` **5 行**、`owner_organization_id IS NULL` **0 行**、`audit_events` **39 行**——与基线逐项一致（只读筛选，没有写入任何数据）。
+5. 控制台未归因 error 0（见上）。
+6. 证据：`/tmp/rm378-evidence/steps.json`（机器可读，9 步）、`step-01…08-*.png`、`375-definitions.png`、`regression.json`；集群侧 `/tmp/rm378/{build.log,import.log,rollout.log,deploys-baseline-182bd4e.yaml}`。登录基线 `/tmp/rm378/baseline-login.json`。
+
+**回滚（纯镜像级，不需要任何 schema 操作）**
+
+```bash
+kubectl -n release-manager set image deploy/web web=localhost:5001/release-web:182bd4e
+kubectl -n release-manager rollout status deploy/web --timeout=300s
+```
+
+- 上一版 `web` 是 revision **13**、镜像 `:182bd4e`；也可以 `kubectl -n release-manager rollout undo deploy/web`（`undo` 会再开一个 revision，受 §8.2.1 的 revision 陷阱约束）。
+- 5 个 Go 服务本次没有滚，无需回滚；`edge` 未动。
+- **不需要 `migrate … down`**：区间没有迁移文件，`182bd4e` 与 `996c6f3` 两侧 schema 都是 `36`，`182bd4e` 的二进制已在 36 上运行过（§8.10）。
+
+**本次边界（如实记录）**
+
+- **只滚了 `web`**：`api`/`auth`/`orchestrator`/`notifier`/`webhook` 只做了滚动后的健康检查与只读页面回归，没有逐页复验；依据是区间 Go 运行时零文件（见上表）。
+- 本次没有改生产代码，**没有重跑 `go test -race ./...`**（`make test`）；`web/src/stores/audit.spec.ts` 的回归测试由 PR #459 的 CI 覆盖。发布门禁只跑了文档门禁（`make check-docs`）与 kustomize 渲染计数（**45** 个对象）。
+- **「改前」没有在本次发布流程里重测**：`web` 一旦滚到 `:996c6f3` 就无法再回到 `:182bd4e` 采集同一时刻数据而不多滚一次；因此「改前 = 0 行空态」引用 TASK-376 在同一环境、同一只读 30 天筛选下的记录（§8.10 最后一段与其截图），不是本次新测。
+- 数据口径是**只读 URL 时间筛选**（30 天），没有新增审计事件、没有改任何业务表；`audit_events` 发布前后都是 39。
+- 没有做故障注入、SIGTERM、并发/长连接压测；没有验证「新 schema + 旧镜像」路径（本次根本没有 schema 变更）。
+- 用 `kubectl set image` 直改 Deployment，仓库 overlay 的 tag 仍是 `:dev`；正式发布仍走 §2.3。
 
 ## 9. 可观测
 
