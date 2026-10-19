@@ -1928,6 +1928,8 @@ kubectl -n release-manager exec postgres-0 -- psql -U release_manager -d release
 
 ## 12. 客户集群接入（operator enroll）
 
+> **2026-10-19 更新**：交付用的接入步骤以 [客户集群接入手册](customer-onboarding.md) 为准。本节是 2026-10-18 的实测记录；其中 §12.2 的 `hostAliases` 约束对应“网关 SAN 硬编码”的旧代码，新代码已支持 `gateway.ip_addresses` 与 `gateway.advertise_url`。
+
 本节是**拿第二个 k3d 集群当客户集群**接入 `rm-prod` 的最小可行路径，2026-10-18 在本机实测走通：
 enroll → 会话 → `release_inventory`（含 000024 身份四列 + 000030 观测投影）→ plan（预检）→ apply → observe。
 命令里的 `<...>` 是要替换的占位符。
