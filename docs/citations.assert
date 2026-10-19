@@ -116,3 +116,25 @@ cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-381 b：
 cmd/auth/main.go	152	auth.NewJWTManager(jwtPrivateKey, 15*time.Minute, 7*24*time.Hour)	TASK-381 c：access 15m / refresh 7d 的硬编码 TTL（原引 :140）	docs/runbook.md:318
 internal/store/store.go	2848	redact.Sanitize(lastError)	TASK-381 d：last_error 的脱敏实现（原引 :2802-2803 是接口方法）	docs/runbook.md:384
 deploy/dev/dev.sh	1155	docker build "${build_args[@]}"	TASK-381 e：内容寻址 tag 的 docker build/push（原引 :960-1000 是 kubeconfig 与 content_hash）	docs/runbook.md:492
+
+# --- TASK-382: api.md bare error-code sub-citations / observability / runbook -----------------
+internal/orchestrator/service.go	205	connect.CodeInvalidArgument	TASK-382 a：CreateOperation 仅接受 INSTALL/UPGRADE 的 invalid_argument 行（原裸引 :124）	docs/api.md:534
+internal/orchestrator/service.go	212	connect.CodeUnauthenticated	TASK-382 a：CreateOperation 要求 actor 来自认证上下文（原裸引 :131）	docs/api.md:534
+internal/orchestrator/service.go	218	connect.CodeNotFound	TASK-382 a：CreateOperation 定义查询 not_found（原裸引 :137）	docs/api.md:534
+internal/orchestrator/service.go	222	connect.CodeInternal	TASK-382 a：CreateOperation 定义查询 internal（原裸引 :141）	docs/api.md:534
+internal/orchestrator/service.go	776	connect.CodeUnauthenticated	TASK-382 b：WatchOperation 无 actor 即 unauthenticated（原裸引 :550）	docs/api.md:538
+internal/orchestrator/service.go	779	connect.CodeInvalidArgument	TASK-382 b：WatchOperation operation_id/after_sequence 校验（原裸引 :553）	docs/api.md:538
+internal/orchestrator/service.go	783	connect.CodeNotFound	TASK-382 b：WatchOperation 快照 not_found（原裸引 :557）	docs/api.md:538
+internal/orchestrator/service.go	786	connect.CodeInternal	TASK-382 b：WatchOperation 快照 internal（原裸引 :560）	docs/api.md:538
+internal/orchestrator/service.go	876	connect.CodeOutOfRange	TASK-382 c：OutOfRange 的唯一构造点（原引 :723）	docs/api.md:291
+internal/orchestrator/service.go	668	not_implemented	TASK-382 d：PublishRelease 骨架的 not_implemented 返回（原引 :571-575）	docs/api.md:246
+internal/orchestrator/service.go	199	idempotencyKey := req.Header().Get("Idempotency-Key")	TASK-382 e：CreateOperation 的 Idempotency-Key 读取行（原引 :180）	docs/api.md:368
+internal/orchestrator/service.go	1072	idempotencyKey := req.Header().Get("Idempotency-Key")	TASK-382 e：CancelOperation 的 Idempotency-Key 读取行（原引 :919）	docs/api.md:368
+internal/orchestrator/service.go	239	CreateOperationGateDetail	TASK-382 f：emergency_effect_unresolved 门禁 detail 构造（原引 :1327-1335 是 canCancelOperation）	docs/api.md:307
+internal/orchestrator/service.go	254	CreateOperationGateDetail	TASK-382 f：release_convergence_pending 门禁 detail 构造（同一表行的第二构造点）	docs/api.md:307
+cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-382 g：auth /metrics 挂载点（observability §2 原引 :136-137 是 Redis ping）	docs/observability.md:50
+cmd/orchestrator/main.go	343	mux.Handle("GET /metrics", metrics.Handler())	TASK-382 g：orchestrator /metrics 挂载点（原引 :332-336 是 emergency seed）	docs/observability.md:115
+cmd/orchestrator/main.go	340	registry := prometheus.NewRegistry()	TASK-382 g：orchestrator 共享 registry 起点（原引 :332-336）	docs/observability.md:51
+cmd/auth/main.go	148	ParseEd25519PrivateKeyPEM	TASK-382 h：auth 解析 Ed25519 私钥（原引 :145 是 /metrics 挂载）	docs/runbook.md:317
+cmd/orchestrator/main.go	462	ParseEd25519PublicKeyPEM	TASK-382 h：orchestrator 解析 Ed25519 公钥（原引 :459 是 preflight resume 日志）	docs/runbook.md:317
+cmd/auth/main.go	158	maxAttempts := 5	TASK-382 i：登录限流默认值与覆盖的起点（原引 :141-154）	docs/runbook.md:319

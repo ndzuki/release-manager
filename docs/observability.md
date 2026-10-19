@@ -47,8 +47,8 @@
 
 - 依赖确实存在：`go.mod:19` 引入 `github.com/prometheus/client_golang v1.24.1`；`docs/dependencies.md:111-114` 把它列进「会随产物分发」的 Go 模块清单（同表 `docs/dependencies.md:133-137` 亦列 OTel）。
 - 端点：**只有两个服务暴露 `/metrics`**（全仓 `grep 'GET /metrics'` 只有这两处非测试命中）：
-  - `cmd/auth/main.go:136-137`（私有 registry，挂在 8085 的单端口 mux 上）；
-  - `cmd/orchestrator/main.go:332-336`（**共享 registry**，同时注册授权与身份指标）。
+  - `cmd/auth/main.go:144-145`（私有 registry，挂在 8085 的单端口 mux 上）；
+  - `cmd/orchestrator/main.go:340-343`（**共享 registry**，同时注册授权与身份指标）。
   路径挂在既有 HTTP 监听上，符合 `docs/decisions/ADR-016-prometheus-otel.md` 的「现有单端口 ServeMux 上注册 /metrics」决策。
 - **webhook、notifier、notification-sink、operator agent、release-api 没有 `/metrics`**（同上 grep 结论）⇒ 这五类进程没有任何指标面。
 - 指标清单一（授权，ADR-016 规定，实现见 `internal/authorization/metrics.go:28-80`）：
@@ -112,7 +112,7 @@
 | `GET /health` | liveness 目标；`{"status":"ok"}`，orchestrator 附 `gc` 子对象 | **不可能**（无条件 200） | `internal/handler/health.go:12-28`、`internal/app/app.go:139-143` |
 | `GET /readyz` | readiness 目标；全通过 200，任一失败 503 + `{"status":"degraded","checks":{...}}` | 可能 | `internal/handler/ready.go:11-34`、`internal/app/app.go:152-158` |
 | `GET /environment` | 环境指纹（service/environment/environment_id/production） | 不可能 | `internal/app/app.go:91-116,144` |
-| `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:144-145`、`cmd/orchestrator/main.go:332-336` |
+| `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:144-145`、`cmd/orchestrator/main.go:340-343` |
 | `GET /notifications` | notification-sink 的 dev 投递观测（含 `dropped_count`） | 可能 5xx | `cmd/notification-sink/main.go:87-132` |
 
 - readiness 贡献项（TASK-099 后**七个进程全部有真实检查**）：orchestrator `database`（2s 超时 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:267-285`，GC 不健康的定义是「距上次成功 ≥ 2×interval」，`internal/orchestrator/gc_health.go:113`）；auth `database` + `redis`（`cmd/auth/main.go:75-95`）；notifier `database`（`cmd/notifier/main.go:60-71`）；**webhook `orchestrator`**——GET 上游 `/readyz`，非 200/不可达即 NotReady（`cmd/webhook/main.go:137-158`，超时 2s，上游地址与 Register 客户端同源 `orchestratorBaseURL` `cmd/webhook/main.go:126`）；**operator agent `gateway_session`**——agent 与网关的 CommandStream 存活才 Ready，重连退避期间如实 NotReady（`cmd/operator/main.go:454-467` + `Agent.Connected()`，`internal/operator/agent/connected_test.go` 锁定生命周期；gateway 模式无出站会话，保持无检查）；**notification-sink `config`**——dev 测试替身无外部依赖，唯一前置是解码出的 `http_port` 可用，缺失即 fail-closed（`cmd/notification-sink/main.go:151`）。
@@ -198,7 +198,7 @@
 | 信号 | 现状 | 证据 | 缺口 |
 | --- | --- | --- | --- |
 | 日志 | slog JSON → stderr，级别由 `log_level` 控制（缺省/非法=debug） | `internal/app/app.go:123`（`startupLogger`/`applyLogLevel`）、`internal/config/loglevel.go` | 无 request-id 字段；级别收敛已可用（TASK-094 闭环） |
-| 指标 | 仅授权 + 身份收敛，仅 auth/orchestrator 两个 `/metrics` | `internal/authorization/metrics.go:23-71`、`internal/operator/identity_metrics.go:42-58`、`cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:332-336` | 无运行时/进程指标（`grep collectors\.` 零命中）；无抓取配置；其余 5 类进程 0 指标 |
+| 指标 | 仅授权 + 身份收敛，仅 auth/orchestrator 两个 `/metrics` | `internal/authorization/metrics.go:23-71`、`internal/operator/identity_metrics.go:42-58`、`cmd/auth/main.go:144-145`、`cmd/orchestrator/main.go:340-343` | 无运行时/进程指标（`grep collectors\.` 零命中）；无抓取配置；其余 5 类进程 0 指标 |
 | 追踪 | 只装 provider + W3C 传播，无 exporter | `internal/authorization/tracing.go:17-29` | 无跨进程追踪能力；agent 侧未装配；trace id 不进日志 |
 | liveness | `/health` 恒 200＝纯 liveness（REQ-099 裁定），orchestrator 附 `gc` | `internal/handler/health.go:12-28` | 无「前进性」判据（§4 建议 1）；`gc` 的 disabled 被报成 healthy（`cmd/orchestrator/main.go:275-277`） |
 | readiness | `/readyz` 200/503 + checks；七进程全真实 | `internal/handler/ready.go:11-34` | 探针层已有 startupProbe + 显式超时（`make check-probes`）；`auth_policy_health` 未入检查 |

@@ -243,7 +243,7 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 | 项 | 认证归属 / 事实 | 检索依据 |
 | --- | --- | --- |
 | `auth.v1.ExternalIdentityService`（3 个 RPC：`AuthenticateLDAP`、`GetOIDCAuthURL`、`GetDingTalkAuthURL`） | **预认证** IdP 入口（登录前调用），登记为 `modePublic`；契约存在，Go 侧类型 `ExternalIdentityService` 已定义（`internal/auth/external_idp_service.go:28`）并实现了三个 handler 方法（`:55`、`:69`、`:80`），构造函数 `NewExternalIdentityService` 也在（`:36`），文件末尾还有接口断言（`:325`），但**从未被构造、从未被挂载**；归属 REQ-028 | `cmd/auth/main.go:189-203` 只 new/挂载 4 个 service；检索 `NewExternalIdentityService(`、`ExternalIdentityServiceHandler`、`mux.Handle` 于 `cmd/**`、`internal/**` 的非测试代码中零命中，唯一残留是维护白名单里两条永不命中的条目（`cmd/auth/main.go:227-228`）。`docs/architecture.md:80` 已把它记为遗留项 |
-| `orchestrator.v1.OrchestratorService/PublishRelease` | 已挂载，校验通过后返回 `Status: "not_implemented"`、`OperationId: ""`，不产生 Operation；发布流水线属 REQ-014/REQ-040 的后续实现 | `internal/orchestrator/service.go:571-575` |
+| `orchestrator.v1.OrchestratorService/PublishRelease` | 已挂载，校验通过后返回 `Status: "not_implemented"`、`OperationId: ""`，不产生 Operation；发布流水线属 REQ-014/REQ-040 的后续实现 | `internal/orchestrator/service.go:666-669` |
 | `orchestrator.v1.OrchestratorService/SyncInventory` | 两条挂载：JWT 面按 `(release, write)` 裁决；agent 网关面走客户端证书身份（见 3.4） | `internal/auth/procedure_policy.go` 的 `SyncInventory` 行、`cmd/orchestrator/main.go:195-204` |
 | `audit.v1.AuditService/ExportAuditEvents` | 只登记一行 `pending` 导出记录（按 release-auth 判定的有效组织归属），仓库内**没有消费者**，导出不会真正完成 | `internal/audit/audit_service_handler.go:180-247`；检索 `AuditExports()` 的非测试命中只有接口与实现自身 |
 | `orchestrator.v1.BundleService/RecordArtifactEvent` 的 Harbor 入口 | **TASK-102 已实现**：`POST /webhooks/harbor` 由 Harbor key 认证并挂载 adapter，出站以 `service:release-harbor` 调 `RecordArtifactEvent`（scope 仅该 procedure） | `cmd/webhook/main.go`、`internal/webhook/harbor_adapter.go`、`internal/webhook/harbor_ingress_test.go`、`cmd/orchestrator/main.go` 的 Harbor 腿 |
@@ -288,7 +288,7 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 | `AlreadyExists` | 33（构造 13） | 幂等键冲突、重名、初始化已完成 |
 | `Aborted` | 22（构造 9） | 乐观锁冲突（organization/cluster/`RevokeBinding` 路径） |
 | `ResourceExhausted` | 5（构造 3） | 登录限流（`internal/auth/service.go:66`）、values 体积超限（`internal/orchestrator/values_revision.go:89`、`:415`）、cleanup 并发配额（`internal/orchestrator/cleanup.go:218`） |
-| `OutOfRange` | 1（构造 1） | `WatchOperation` 游标过期（`internal/orchestrator/service.go:723`） |
+| `OutOfRange` | 1（构造 1） | `WatchOperation` 游标过期（`internal/orchestrator/service.go:876`） |
 | `Unimplemented` | **0**（构造 0） | 未使用：唯一的桩 `ListOperations` 已由 TASK-095 实现 |
 | `DeadlineExceeded` | 2（构造 0） | 仅出现在比较/透传，不作主动返回 |
 | `Conflict` | **0**（构造 0） | 未使用：冲突一律映射到 `Aborted`/`FailedPrecondition`/`AlreadyExists` |
@@ -304,13 +304,13 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 | --- | --- | --- |
 | `orchestrator.v1.OperatorErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:802-805` | `internal/orchestrator/operator.go:426-436` |
 | `orchestrator.v1.EmergencyErrorDetail` | `api/proto/orchestrator/v1/orchestrator.proto:1765-1769` | `internal/orchestrator/emergency.go:740-752` |
-| `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:229-232` | `internal/orchestrator/service.go:1327-1335` |
+| `orchestrator.v1.CreateOperationGateDetail` | `api/proto/orchestrator/v1/orchestrator.proto:229-232` | `internal/orchestrator/service.go:239`、`:254`（`RollbackRelease` 同型构造在 `internal/orchestrator/rollback.go:86`、`:101`） |
 | `orchestrator.v1.RouteValidationDetail` | `api/proto/orchestrator/v1/orchestrator.proto:842-847` | `internal/orchestrator/cluster.go:323-330` |
 
 未见使用 Google `errdetails`（检索 `google.golang.org/genproto/googleapis/rpc/errdetails` 零命中）。更常见的是 **metadata 承载 reason**：
 
 - `X-Reason-Code` — 写入点包括 `internal/operator/errors.go:30`、`internal/orchestrator/values_revision.go:476-479`、`internal/orchestrator/emergency.go:731-742`、`internal/orchestrator/service.go:630`、`internal/auth/interceptor.go:293-302`。取值如 `invalid_actor_context`、`policy_unavailable`、`cursor_expired`、`size_exceeded`、`optimistic_lock_conflict`。
-- `X-Policy-Version`（授权策略版本，`internal/auth/interceptor.go:300`）、`X-Conflict-Task-Ids`、`X-Sync-Request-ID`、`X-Snapshot-Sequence`、`X-Retained-From-Sequence`、`X-Snapshot-Proto`（base64 protojson 快照，`internal/orchestrator/service.go:628-638`）。
+- `X-Policy-Version`（授权策略版本，`internal/auth/interceptor.go:300`）、`X-Conflict-Task-Ids`、`X-Sync-Request-ID`、`X-Snapshot-Sequence`、`X-Retained-From-Sequence`、`X-Snapshot-Proto`（base64 protojson 快照，`internal/orchestrator/service.go:878-884`）。
 
 reason code 风格不统一：同一份代码里存在三种做法——类型化 detail、纯 metadata、把 reason 拼进 message 前缀（`internal/orchestrator/bundle_service.go:651-653`）。写新代码时按所在包的既有风格对齐，不要跨包发明第四种。
 
@@ -341,7 +341,7 @@ reason code 风格不统一：同一份代码里存在三种做法——类型�
 
 游标实现：`EncodeCursor` 把 `"<unixnano>|<id>"` 做 base64url（`internal/contracts/pagination.go:25-28`），`KeysetPredicate` 生成 `(created_at < ? OR (created_at = ? AND id < ?))` 形式的严格排除条件（`:65-71`），因此排序稳定、翻页期间新增行不影响已取页。游标与查询形状绑定（bundle/values/inventory/operators 都把 filter 或 snapshot 版本编进 query_hash，例如 `internal/store/postgres/bundles.go:329-337`、`internal/orchestrator/operator.go:377-391`），改 filter 会被拒绝而不是悄悄重定位。非法/过期游标一律 `invalid_argument`（`invalid_cursor`、`invalid_page_token`、`invalid or expired cursor`）。
 
-流式续传是另一套机制：`WatchOperation` 的 `after_sequence`（`api/proto/orchestrator/v1/orchestrator.proto:387` 的 `WatchOperationRequest`，字段在 `:391`），游标过界返回 `out_of_range` + `X-Reason-Code: cursor_expired` 及快照 metadata（`internal/orchestrator/service.go:628-638`）。
+流式续传是另一套机制：`WatchOperation` 的 `after_sequence`（`api/proto/orchestrator/v1/orchestrator.proto:387` 的 `WatchOperationRequest`，字段在 `:391`），游标过界返回 `out_of_range` + `X-Reason-Code: cursor_expired` 及快照 metadata（`internal/orchestrator/service.go:876-884`）。
 
 **无分页的列表 RPC**（契约层就没有分页字段）：`ListOrganizations`、`ListMembers`、`ListBindings`、`ListReleaseDefinitions`、`ListCustomers`、`ListCustomerEvents`、`ListClusters`、`GetClusterRoutes`、`ListSecrets`、`ListEmergencyTargets`、`ListCandidateArtifacts`、`ListConvergenceTasks`、`ListStuckLocks`、`ListReleaseInventory`（后者请求为空消息，注释明确「返回全部行」）。新增列表 RPC 时应显式选择分页形态，不要再发明第四套字段名。
 
@@ -365,7 +365,7 @@ ID 归属不统一：多数由服务端生成（`CreateReleaseDefinitionRequest`
 
 ### 5.5 幂等
 
-写 RPC 的幂等键是 **HTTP 头 `Idempotency-Key`**（`docs/architecture.md:92`），适用范围：`CreateOperation`（`internal/orchestrator/service.go:180`）、`RollbackRelease`（`internal/orchestrator/rollback.go:30`）、`CancelOperation`（`internal/orchestrator/service.go:919`）、`CreateValuesRevision`（`internal/orchestrator/values_revision.go:83`）、`SubmitValuesRevision`/`Approve`/`Reject`（`internal/orchestrator/values_approval.go:47`、`:62`、`:77`）、`SubmitBundle`（`internal/orchestrator/bundle_service.go:70`）。长度限制 1-64 字符（`internal/orchestrator/values_revision.go:402-408`、`internal/auth/local_users.go:41-43`）。
+写 RPC 的幂等键是 **HTTP 头 `Idempotency-Key`**（`docs/architecture.md:92`），适用范围：`CreateOperation`（`internal/orchestrator/service.go:199`）、`RollbackRelease`（`internal/orchestrator/rollback.go:30`）、`CancelOperation`（`internal/orchestrator/service.go:1072`）、`CreateValuesRevision`（`internal/orchestrator/values_revision.go:83`）、`SubmitValuesRevision`/`Approve`/`Reject`（`internal/orchestrator/values_approval.go:47`、`:62`、`:77`）、`SubmitBundle`（`internal/orchestrator/bundle_service.go:70`）。长度限制 1-64 字符（`internal/orchestrator/values_revision.go:402-408`、`internal/auth/local_users.go:41-43`）。
 
 两个例外把键放在**请求体字段**：`ExecuteEmergencyChangeRequest.idempotency_key`（`internal/orchestrator/emergency.go:451-452`）与 `RunCleanupRequest.idempotency_key`（`api/proto/orchestrator/v1/cleanup.proto:50-51`，`internal/orchestrator/cleanup.go:185`）。同键同请求 → 静默重放首次结果；同键不同请求 → `already_exists` + `idempotency_conflict`。`CreateLocalUser` 只校验长度、未见幂等去重（`internal/auth/local_users.go:41-43`）。`RunCleanup` 的幂等在 SQLite 下不可用（`internal/store/sqlite/cleanup_idempotency_unsupported.go` 整文件返回 `ErrCleanupIdempotencyUnavailable`）。
 
@@ -531,11 +531,11 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
-| `CreateOperation` | 创建发布 Operation（幂等 + 门禁） | authz(release/write) | `internal/orchestrator/service.go:193` | `invalid_argument`（`:124` `operation_type` 只接受 `INSTALL`/`UPGRADE`）、`unauthenticated`（`:131`，actor 必须来自认证上下文）、`not_found`（`:137`）、`internal`（`:141`）；`Idempotency-Key`；门禁拒绝带 `CreateOperationGateDetail` |
+| `CreateOperation` | 创建发布 Operation（幂等 + 门禁） | authz(release/write) | `internal/orchestrator/service.go:193` | `invalid_argument`（`:205` `operation_type` 只接受 `INSTALL`/`UPGRADE`）、`unauthenticated`（`:212`，actor 必须来自认证上下文）、`not_found`（`:218`）、`internal`（`:222`）；`Idempotency-Key`；门禁拒绝带 `CreateOperationGateDetail` |
 | `PublishRelease` | 直接发布（骨架） | authz(release/write) | `internal/orchestrator/service.go:628` | `not_found`（`:470`）、`permission_denied`（`:481`）、`internal`（`:474`）；成功时返回 `not_implemented` 且无 Operation → **未实现** |
 | `RollbackRelease` | 回滚到指定 revision（响应 `to_revision` = **内容目标** = 请求 `target_revision`，不是回滚追加的新 Helm revision；新号要看 inventory `revision` / Helm history，TASK-354） | authz(release/write) | `internal/orchestrator/rollback.go:24` | `unauthenticated`（`:35`）、`invalid_argument`（`:41`）、`not_found`（`:66`）、`internal`（`:70`）；`Idempotency-Key` |
 | `GetOperation` | 查询 Operation 详情 | authz(release/read) | `internal/orchestrator/service.go:674` | `unauthenticated`（`:513`）、`not_found`（`:517`）、`internal`（`:521`） |
-| `WatchOperation` | **server-streaming** 订阅状态流转 | authz(release/read)；流式由 `NewAuthStreamInterceptor` 裁决 | `internal/orchestrator/service.go:769` | `unauthenticated`（`:550`）、`invalid_argument`（`:553`）、`not_found`（`:557`）、`internal`（`:560`）；游标过界 `out_of_range`+`cursor_expired`（`:628-638`）；维护模式**不拦截**流式 |
+| `WatchOperation` | **server-streaming** 订阅状态流转 | authz(release/read)；流式由 `NewAuthStreamInterceptor` 裁决 | `internal/orchestrator/service.go:769` | `unauthenticated`（`:776`）、`invalid_argument`（`:779`）、`not_found`（`:783`）、`internal`（`:786`）；游标过界 `out_of_range`+`cursor_expired`（`:876-877`）；维护模式**不拦截**流式 |
 | `CancelOperation` | 取消非终态 Operation | authz(release/write) | `internal/orchestrator/service.go:1067` | `unauthenticated`（`:829`）、`not_found`（`:838`）、`failed_precondition`（`:855`）、`internal`（`:842`）；`Idempotency-Key` |
 | `SubmitValuesRevision` | 提交 values revision 进入审批 | JWT，handler 自校验（`modeHandler`，登记表 `internal/auth/procedure_policy.go`） | `internal/orchestrator/values_approval.go:41` | 由 `handleValuesApproval` 决定：`unauthenticated`（`:99`）、`not_found`（`:108`）、`unavailable`（`:124`）、`invalid_argument`（`:187`）；`Idempotency-Key` |
 | `ApproveValuesRevision` | 批准 | JWT，handler 自校验 | `internal/orchestrator/values_approval.go:56` | 同上 + `failed_precondition`（`:241`、`:245`、`:256`）、`permission_denied`（`:249`） |
