@@ -457,13 +457,13 @@ func (s *Service) CreateOperation(
 	if err := s.checkReleaseState(ctx, def, opType, int(msg.GetExpectedCurrentRevision())); err != nil {
 		return nil, err
 	}
-	// REQ-067 rule 14: canonical merge and secret scan (AC-067-12).
-	merged, err := prepareValues(revision, msg.GetValuesPatch())
+	// REQ-067 rule 14: canonical merge, secret scan, image ownership (AC-056-01).
+	merged, err := prepareValues(revision, msg.GetValuesPatch(), bundle.Images)
 	if err != nil {
 		if errors.Is(err, errSecretLiteralForbidden) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("secret_literal_forbidden"))
 		}
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, prepareValuesError(err)
 	}
 
 	// Build the domain Operation with the canonical request hash.

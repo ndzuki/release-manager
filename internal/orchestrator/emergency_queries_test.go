@@ -602,6 +602,11 @@ func seedCandidateImage(t *testing.T, st store.Store, id, ref, digest string) {
 // artifacts from the requested container's current logical repository. The
 // comparison is by logical repository, so a tag-form current ref matches both
 // tag-form and digest-form candidates from the same repository.
+//
+// TASK-325 W6: the request carries the AC's full identity pair (workload_ref and
+// container) plus operationVersion, so the assertion covers the shape the
+// console sends (web/src/connect/emergency-api.ts:237). The server-side filter
+// under test is candidateArtifactSummaries' `scoped` branch.
 func TestListCandidateArtifactsFiltersByTargetRepository(t *testing.T) {
 	svc, st, cleanup := setupService(t)
 	defer cleanup()
@@ -619,6 +624,7 @@ func TestListCandidateArtifactsFiltersByTargetRepository(t *testing.T) {
 	resp, err := svc.ListCandidateArtifacts(deployerCtx(), connect.NewRequest(&orchestratorv1.ListCandidateArtifactsRequest{
 		OrganizationId: "org-001", ReleaseDefinitionId: "def-001",
 		WorkloadRef: "deployments/default/my-release", Container: "api",
+		OperationVersion: "v1.0.0",
 	}))
 	require.NoError(t, err)
 	require.Len(t, resp.Msg.GetArtifacts(), 2)

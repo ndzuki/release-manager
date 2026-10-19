@@ -132,6 +132,19 @@ export declare const legacyEmergencyChangeSymbolsAbsent: AssertNever<
 // ─────────────────────────────────────────────────────────────────────────────
 export declare const responseResult: RequireField<ExecuteEmergencyChangeResponse, 'result'>;
 export declare const responseOperationId: RequireField<ExecuteEmergencyChangeResponse, 'operationId'>;
+export declare const responseOperationVersion: RequireField<ExecuteEmergencyChangeResponse, 'operationVersion'>;
+
+/**
+ * AC-058-19's `state: 'PENDING'` + `acceptedAt` are the legacy REQ-032 call
+ * surface that decision D-O superseded (REQ-032 变更记录 2026-09-19: the
+ * canonical response is `result` + `operation_id` + `operation_version`).
+ * REQ-058 D20=A makes the merged contract the authority for field shapes, so
+ * REQ-058 正文/AC 的旧字段若被重新引入，这里以命名字段报错（TASK-325 W5）。
+ */
+type LegacyResponseFields = 'state' | 'acceptedAt';
+export declare const legacyResponseFieldsAbsent: AssertNever<
+  Extract<LegacyResponseFields, keyof ExecuteEmergencyChangeResponse>
+>;
 
 export declare const resultEffectStatus: RequireField<EmergencyResult, 'effectStatus'>;
 export declare const resultRequested: RequireField<EmergencyResult, 'requested'>;

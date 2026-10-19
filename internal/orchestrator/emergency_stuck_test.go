@@ -180,6 +180,8 @@ func TestCancelEmergency_PendingReleasesNotApplied(t *testing.T) {
 // TestCancelEmergency_QueuedRetainsUnknown (REQ-087 AC-087-06): a queued
 // EMERGENCY whose command may already have crossed the delivery boundary
 // cancels with effect UNKNOWN, retaining the lock for late-result observation.
+// AC-058-28 (TASK-325 W7) is the joint assertion: cancelled, effect still
+// UNKNOWN, target lock still held, and no reverse K8s compensation.
 func TestCancelEmergency_QueuedRetainsUnknown(t *testing.T) {
 	svc, st, _ := emergencyTestService(t)
 	created := createEmergencyPendingViaUOW(t, st, "cancel-queued")
@@ -195,6 +197,17 @@ func TestCancelEmergency_QueuedRetainsUnknown(t *testing.T) {
 	intent, err := st.EmergencyIntents().GetByOperationID(t.Context(), created.Operation.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.EmergencyEffectUnknown, intent.EffectStatus)
+
+	// AC-058-28: the lock survives the cancellation, so a possibly-live effect
+	// cannot be forgotten until a late result or an explicit release resolves it.
+	unresolved, operationIDs, err := st.EmergencyIntents().HasUnresolvedForDefinition(t.Context(), "def-001")
+	require.NoError(t, err)
+	assert.True(t, unresolved, "cancelling a possibly-delivered EMERGENCY must keep the target lock")
+	assert.Equal(t, []string{created.Operation.ID}, operationIDs)
+
+	// AC-058-28: cancellation is not a rollback -- no reverse command is queued.
+	_, outboxErr := st.Outbox().GetByOperationID(t.Context(), created.Operation.ID)
+	assert.ErrorIs(t, outboxErr, store.ErrNotFound, "cancel must not dispatch a compensating K8s command")
 }
 
 var _ = json.Marshal
