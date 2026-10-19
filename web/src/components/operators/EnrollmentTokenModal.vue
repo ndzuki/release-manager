@@ -33,24 +33,93 @@ const title = computed(() => {
 });
 const GATEWAY_PLACEHOLDER = '<CONTROL_PLANE_OPERATOR_GATEWAY>';
 const gatewayEndpoint = computed(() => (result.value?.operatorEndpoint ?? '').trim().replace(/\/+$/, ''));
-const gatewayMissing = computed(() => gatewayEndpoint.value === '');
+
+/*
+ * Whether the advertised endpoint is an address a CUSTOMER cluster can dial.
+ *
+ * `operator_endpoint` comes from `cmd/orchestrator/main.go`: it is
+ * `https://operator-gateway.dev.release-manager.local:<port>` when the gateway is
+ * enabled, and `http://operator:8084` otherwise. Both are control-plane fixture
+ * addresses. The `.local` name only resolves on the dev fixture's own network, and
+ * `operator` / `*.svc[.cluster.local]` is a Service DNS name that only resolves inside
+ * the control-plane cluster. A separate change still has to teach the server to
+ * advertise a customer-reachable address (`gateway.advertise_url`), so until it lands
+ * the dialog has to recognise these known values instead of copying one into a command
+ * that looks ready and cannot connect.
+ *
+ * A non-TLS endpoint is refused as well: the command carries the enrollment token over
+ * that connection, so an `http` gateway would leak the one-time secret. An unparseable
+ * value is refused for the same reason: the dialog cannot prove the address reachable,
+ * and fail-closed is the safe default for a command that embeds a secret.
+ */
+type GatewayIssue = 'missing' | 'devLocal' | 'clusterDns' | 'plaintext' | 'invalid';
+
+function classifyGateway(endpoint: string): GatewayIssue | null {
+  if (endpoint === '') return 'missing';
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return 'invalid';
+  }
+  if (url.protocol !== 'https:') return 'plaintext';
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  // Cluster DNS is checked before `.local`: `operator.default.svc.cluster.local` ends in
+  // both, and the more specific reason is the useful one.
+  if (
+    host === 'operator' ||
+    /^operator\.[^.]+$/.test(host) ||
+    host.endsWith('.svc') ||
+    host.endsWith('.svc.cluster.local')
+  ) {
+    return 'clusterDns';
+  }
+  if (host.endsWith('.local')) return 'devLocal';
+  return null;
+}
+
+const gatewayIssue = computed(() => classifyGateway(gatewayEndpoint.value));
+const gatewayUsable = computed(() => gatewayIssue.value === null);
+// An unreachable value stays visible for diagnosis — the warning below explains why the
+// command is not armed — while a missing value has nothing to show.
+const gatewayDisplay = computed(() =>
+  gatewayIssue.value === 'missing' ? t('operator.token.gatewayMissing') : gatewayEndpoint.value,
+);
+const gatewayWarning = computed(() => {
+  switch (gatewayIssue.value) {
+    case 'missing':
+      return t('operator.token.gatewayMissingWarning');
+    case 'devLocal':
+      return t('operator.token.gatewayUnreachableWarning', { reason: t('operator.token.gatewayReasonDevLocal') });
+    case 'clusterDns':
+      return t('operator.token.gatewayUnreachableWarning', { reason: t('operator.token.gatewayReasonClusterDns') });
+    case 'plaintext':
+      return t('operator.token.gatewayUnreachableWarning', { reason: t('operator.token.gatewayReasonPlaintext') });
+    case 'invalid':
+      return t('operator.token.gatewayUnreachableWarning', { reason: t('operator.token.gatewayReasonInvalid') });
+    default:
+      return '';
+  }
+});
 
 /*
  * The server template keeps the gateway address as a placeholder on purpose: which
- * address a customer cluster can reach is a deployment fact, and `gateway.advertise_url`
- * is the control plane's answer to it. Substituting it here is what makes the copied
- * command executable instead of one the customer has to finish by hand.
+ * address a customer cluster can reach is a deployment fact. Substituting a usable
+ * endpoint here is what makes the copied command executable instead of one the customer
+ * has to finish by hand.
  *
  * The template carries the placeholder twice: as the quoted argument, and inside the
  * instruction comment that tells the reader to replace it. Substituting only the
  * argument would leave a comment asking the user to replace a value the console just
- * wrote, so that instruction block is dropped first. A comment is an instruction about
- * the raw template, not part of the armed command.
+ * wrote, so that instruction block is dropped first. When the gateway is not usable the
+ * placeholder has to stay, and the block is replaced by ONE remediation line in the
+ * dialog's locale: the command then says exactly which edit is still missing instead of
+ * looking ready.
  */
-function substituteGateway(command: string, endpoint: string): string {
+function prepareInstallCommand(template: string, token: string, endpoint: string | null): string {
   const kept: string[] = [];
   let droppingInstruction = false;
-  for (const line of command.split('\n')) {
+  for (const line of template.split('\n')) {
     const isComment = line.trimStart().startsWith('#');
     if (isComment && line.includes(GATEWAY_PLACEHOLDER)) {
       droppingInstruction = true;
@@ -60,19 +129,20 @@ function substituteGateway(command: string, endpoint: string): string {
       // The instruction spans a contiguous comment block; keep skipping its lines.
       if (isComment) continue;
       droppingInstruction = false;
+      if (endpoint === null) kept.push('# ' + t('operator.token.gatewayRemediation'));
     }
     kept.push(line);
   }
-  return kept.join('\n').replaceAll(GATEWAY_PLACEHOLDER, endpoint);
+  const command = kept.join('\n').replaceAll('${ENROLLMENT_TOKEN}', token);
+  // Fail closed: an unusable endpoint keeps the placeholder rather than arming the
+  // command with an address the customer cluster cannot resolve.
+  return endpoint === null ? command : command.replaceAll(GATEWAY_PLACEHOLDER, endpoint);
 }
 
 const installCommand = computed(() => {
   if (!result.value || !plaintext.value) return '';
-  const withToken = result.value.installCommandTemplate.replaceAll('${ENROLLMENT_TOKEN}', plaintext.value);
-  // Without an endpoint the placeholder has to stay: the command is then not executable,
-  // and the dialog says so instead of presenting a half-substituted command as ready.
-  if (gatewayMissing.value) return withToken;
-  return substituteGateway(withToken, gatewayEndpoint.value);
+  const endpoint = gatewayUsable.value ? gatewayEndpoint.value : null;
+  return prepareInstallCommand(result.value.installCommandTemplate, plaintext.value, endpoint);
 });
 // UX-039: a dialog owes the keyboard an exit, but what is irreversible here is the
 // PLAINTEXT, not the modal. While a token is on screen — or still being generated,
@@ -166,14 +236,14 @@ onUnmounted(clearPlaintext);
 
       <!-- The deployment command only works against the gateway the control plane
            advertises, so that address is a labelled row of its own rather than a suffix
-           of the template-version line — and an empty endpoint is loud here, before the
-           customer copies a command that cannot connect. -->
+           of the template-version line — and an unusable endpoint is loud here, before
+           the customer copies a command that cannot connect. -->
       <p class="gateway">
         <span class="gateway__label">{{ t('operator.token.gatewayAddress') }}</span>
-        <code data-testid="enrollment-gateway">{{ gatewayMissing ? t('operator.token.gatewayMissing') : gatewayEndpoint }}</code>
+        <code data-testid="enrollment-gateway">{{ gatewayDisplay }}</code>
       </p>
-      <p v-if="gatewayMissing" class="error" role="alert" data-testid="enrollment-gateway-missing">
-        {{ t('operator.token.gatewayMissingWarning') }}
+      <p v-if="gatewayIssue" class="error" role="alert" data-testid="enrollment-gateway-missing">
+        {{ gatewayWarning }}
       </p>
 
       <details>

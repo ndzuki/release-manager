@@ -1,10 +1,10 @@
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import EnrollmentTokenModal from './EnrollmentTokenModal.vue';
 import { useOperatorStore } from '@/stores/operator';
 import { createEnrollmentToken, revokePendingEnrollmentToken } from '@/connect/operator-api';
-import { t } from '@/i18n/messages';
+import { t, type MessageKey } from '@/i18n/messages';
 import type * as OperatorApi from '@/connect/operator-api';
 
 vi.mock('@/connect/operator-api', async (importOriginal) => {
@@ -36,6 +36,32 @@ const result = {
     "release-operator --config operator.yaml --orchestrator-addr '<CONTROL_PLANE_OPERATOR_GATEWAY>'",
   ].join('\n'),
 };
+
+const GATEWAY_PLACEHOLDER = '<CONTROL_PLANE_OPERATOR_GATEWAY>';
+
+/*
+ * TASK-389 review block: `operator_endpoint` is still a control-plane fixture address
+ * (`cmd/orchestrator/main.go`), so a non-empty value is NOT proof that the command can
+ * connect. These are the shapes the server can advertise today; each has to take the
+ * same fail-closed branch as an empty endpoint. `operator.example.com` is deliberately
+ * absent: a public host that merely starts with the Service name is reachable.
+ */
+const UNREACHABLE_GATEWAYS: ReadonlyArray<{ endpoint: string; reason: MessageKey }> = [
+  {
+    endpoint: 'https://operator-gateway.dev.release-manager.local:8084',
+    reason: 'operator.token.gatewayReasonDevLocal',
+  },
+  // The scheme is checked first: the gateway-disabled fallback is plaintext, so it
+  // reports the TLS violation before the cluster-internal host name.
+  { endpoint: 'http://operator:8084', reason: 'operator.token.gatewayReasonPlaintext' },
+  { endpoint: 'https://operator:8444', reason: 'operator.token.gatewayReasonClusterDns' },
+  {
+    endpoint: 'https://operator.default.svc.cluster.local:8084',
+    reason: 'operator.token.gatewayReasonClusterDns',
+  },
+  { endpoint: 'http://10.10.33.122:8444', reason: 'operator.token.gatewayReasonPlaintext' },
+  { endpoint: 'not a url', reason: 'operator.token.gatewayReasonInvalid' },
+];
 
 function createStorage(): Storage {
   const values = new Map<string, string>();
@@ -71,6 +97,36 @@ describe('EnrollmentTokenModal', () => {
     });
     await flushPromises();
     return wrapper;
+  }
+
+  async function mountWithEndpoint(endpoint: string) {
+    vi.mocked(createEnrollmentToken).mockResolvedValueOnce({ ...result, operatorEndpoint: endpoint });
+    return mountModal();
+  }
+
+  /*
+   * The fail-closed contract for an endpoint the customer cluster cannot dial: the
+   * placeholder stays quoted, the token substitution still happens, the warning names
+   * the reason, and the command carries one remediation line right where the raw
+   * template's English instruction block used to be. A command that "looks ready" is
+   * the failure this pins against.
+   */
+  function expectGatewayFailsClosed(wrapper: VueWrapper, endpoint: string, reasonKey: MessageKey): void {
+    const command = wrapper.find('pre').text();
+    expect(command).toContain(`--orchestrator-addr '${GATEWAY_PLACEHOLDER}'`);
+    expect(command).not.toContain(endpoint);
+    expect(command).toContain('plaintext-token');
+    expect(command).not.toContain('${ENROLLMENT_TOKEN}');
+    expect(command).toContain(`# ${t('operator.token.gatewayRemediation')}`);
+
+    // The advertised value stays visible for diagnosis; the alert explains why it is
+    // not armed into the command.
+    expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe(endpoint);
+    const notice = wrapper.find('[data-testid="enrollment-gateway-missing"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.attributes('role')).toBe('alert');
+    expect(notice.text()).toBe(t('operator.token.gatewayUnreachableWarning', { reason: t(reasonKey) }));
+    expect(notice.text()).toContain(GATEWAY_PLACEHOLDER);
   }
 
   it('keeps plaintext local to the modal and clears it after confirmed close', async () => {
@@ -246,6 +302,7 @@ describe('EnrollmentTokenModal', () => {
     // buried next to the template version.
     expect(wrapper.text()).toContain(t('operator.token.gatewayAddress'));
     expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe(GATEWAY);
+    expect(wrapper.find('[data-testid="enrollment-gateway-missing"]').exists()).toBe(false);
 
     const command = wrapper.find('pre').text();
     expect(command).not.toContain('<CONTROL_PLANE_OPERATOR_GATEWAY>');
@@ -285,6 +342,7 @@ describe('EnrollmentTokenModal', () => {
     // and the dialog says why instead of presenting the command as ready to run.
     expect(command).toContain("'<CONTROL_PLANE_OPERATOR_GATEWAY>'");
     expect(command).toContain('plaintext-token');
+    expect(command).toContain(`# ${t('operator.token.gatewayRemediation')}`);
 
     expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe(t('operator.token.gatewayMissing'));
     const notice = wrapper.find('[data-testid="enrollment-gateway-missing"]');
@@ -292,5 +350,35 @@ describe('EnrollmentTokenModal', () => {
     expect(notice.attributes('role')).toBe('alert');
     expect(notice.text()).toBe(t('operator.token.gatewayMissingWarning'));
     expect(notice.text()).toContain('<CONTROL_PLANE_OPERATOR_GATEWAY>');
+  });
+
+  /*
+   * TASK-389 review block. The server still advertises the control-plane fixture
+   * address (`cmd/orchestrator/main.go`), not one a customer cluster can reach, and the
+   * original change removed the "replace this" instruction. Arming the command with
+   * that value would be worse than the old placeholder: it runs and then cannot connect,
+   * with nothing telling the customer what is missing. Each known-unreachable shape
+   * therefore takes the same fail-closed branch as an empty endpoint.
+   */
+  it.each(UNREACHABLE_GATEWAYS)(
+    'keeps the placeholder and warns when the advertised gateway is unreachable: $endpoint',
+    async ({ endpoint, reason }) => {
+      const wrapper = await mountWithEndpoint(endpoint);
+      expectGatewayFailsClosed(wrapper, endpoint, reason);
+    },
+  );
+
+  // The classification must key off URL structure, not a substring: a public host that
+  // merely starts with the Service name is still a reachable gateway.
+  it('arms a public endpoint that only looks cluster-internal (TASK-389)', async () => {
+    const endpoint = 'https://operator.example.com:8444';
+    const wrapper = await mountWithEndpoint(endpoint);
+
+    const command = wrapper.find('pre').text();
+    expect(command).toContain(`--orchestrator-addr '${endpoint}'`);
+    expect(command).toContain('plaintext-token');
+    expect(command).not.toContain(`# ${t('operator.token.gatewayRemediation')}`);
+    expect(wrapper.find('[data-testid="enrollment-gateway"]').text()).toBe(endpoint);
+    expect(wrapper.find('[data-testid="enrollment-gateway-missing"]').exists()).toBe(false);
   });
 });
