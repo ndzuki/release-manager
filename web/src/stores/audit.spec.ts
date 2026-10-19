@@ -270,6 +270,87 @@ describe('audit query store', () => {
   });
 
   /*
+   * TASK-377: stepping back used to pour the revisited page's ids into the
+   * session-wide `seenEventIds`, so the next forward step filtered that page
+   * away entirely. Measured in production (TASK-376 acceptance) on a 39-event /
+   * 2-page query: 1 -> 2 -> previous -> next showed the empty "暂无审计事件".
+   */
+  it('keeps the target page populated when stepping back and forward again (TASK-377)', async () => {
+    const store = useAuditStore();
+    const page1 = Array.from({ length: 20 }, (_, index) => auditEvent(`p1-${index}`));
+    const page2 = Array.from({ length: 19 }, (_, index) => auditEvent(`p2-${index}`));
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse(page1, 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse(page2, ''))
+      .mockResolvedValueOnce(queryResponse(page1, 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse(page2, ''));
+
+    await store.query(ORG);
+    await store.query(ORG, 'next');
+    expect(store.events.map((event) => event.id)).toEqual(page2.map((event) => event.id));
+    expect(store.pageNumber).toBe(2);
+
+    await store.query(ORG, 'previous');
+    expect(store.events.map((event) => event.id)).toEqual(page1.map((event) => event.id));
+    expect(store.pageNumber).toBe(1);
+
+    // The regression: page two must come back intact, not collapse into the
+    // empty state after the revisit.
+    await store.query(ORG, 'next');
+    expect(store.events.map((event) => event.id)).toEqual(page2.map((event) => event.id));
+    expect(store.events).toHaveLength(19);
+    expect(store.pageNumber).toBe(2);
+    expect(store.hasMore).toBe(false);
+    expect(store.hasPrevious).toBe(true);
+  });
+
+  it('walks back and forth through three pages without emptying any page (TASK-377)', async () => {
+    const store = useAuditStore();
+    const pages = [
+      Array.from({ length: 20 }, (_, index) => auditEvent(`p1-${index}`)),
+      Array.from({ length: 20 }, (_, index) => auditEvent(`p2-${index}`)),
+      Array.from({ length: 19 }, (_, index) => auditEvent(`p3-${index}`)),
+    ];
+    queryAuditEvents
+      .mockResolvedValueOnce(queryResponse(pages[0], 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse(pages[1], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse(pages[2], ''))
+      .mockResolvedValueOnce(queryResponse(pages[1], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse(pages[0], 'cursor-1'))
+      .mockResolvedValueOnce(queryResponse(pages[1], 'cursor-2'))
+      .mockResolvedValueOnce(queryResponse(pages[2], ''));
+
+    const steps = [
+      { direction: 'first', page: 1 },
+      { direction: 'next', page: 2 },
+      { direction: 'next', page: 3 },
+      { direction: 'previous', page: 2 },
+      { direction: 'previous', page: 1 },
+      { direction: 'next', page: 2 },
+      { direction: 'next', page: 3 },
+    ] as const;
+    for (const step of steps) {
+      await store.query(ORG, step.direction);
+      expect(store.pageNumber, `${step.direction} -> page ${step.page}`).toBe(step.page);
+      expect(store.events, `${step.direction} -> page ${step.page}`).toEqual(pages[step.page - 1]);
+    }
+  });
+
+  it('drops the previous chain from the seen set when new filters start a new query (TASK-377)', async () => {
+    const store = useAuditStore();
+    queryAuditEvents.mockResolvedValueOnce(queryResponse([auditEvent('a'), auditEvent('b')], 'cursor-1'));
+    await store.query(ORG);
+    expect([...store.seenEventIds].sort()).toEqual(['a', 'b']);
+
+    store.setFilters({ ...emptyAuditFilters(), action: 'delete' });
+    queryAuditEvents.mockResolvedValueOnce(queryResponse([auditEvent('c')], ''));
+    await store.query(ORG);
+    // A filter change restarts the cursor chain: no id from the old chain may
+    // survive, or the first forward step of the new chain would be filtered.
+    expect([...store.seenEventIds]).toEqual(['c']);
+  });
+
+  /*
    * TASK-375 (Lead ruling: replace, not "load more"). `next` used to append while
    * `previous` replaced, so stepping back from page three kept only that one page's
    * rows (measured: 60 rows -> 20, 40 rows lost) and the cursor stack could not

@@ -244,7 +244,16 @@ export const useAuditStore = defineStore('audit', () => {
   const cursor = shallowRef('');
   const nextCursor = shallowRef('');
   const cursorStack = shallowRef<string[]>([]);
+  // TASK-377: `seenEventIds` dedupes FORWARD steps only, and its scope is the
+  // forward chain currently on screen — not the whole session. `pageIdStack`
+  // runs parallel to `cursorStack` with one extra entry: an id list per page
+  // walked, the current page included. `seenEventIds` is derived from it, so
+  // stepping back can drop the page being left. Previously every response —
+  // backward ones too — was poured into the session-wide set, so revisiting
+  // page 2 filtered its rows away (TASK-376 measured 1 -> 2 -> previous -> next
+  // as an empty "暂无审计事件" with 0 rows).
   const seenEventIds = shallowRef<Set<string>>(new Set());
+  const pageIdStack = shallowRef<string[][]>([]);
   const selectedEvent = shallowRef<AuditEvent | null>(null);
   const totalSize = shallowRef(0);
   const loading = shallowRef(false);
@@ -273,6 +282,7 @@ export const useAuditStore = defineStore('audit', () => {
     nextCursor.value = '';
     cursorStack.value = [];
     seenEventIds.value = new Set();
+    pageIdStack.value = [];
     selectedEvent.value = null;
     totalSize.value = 0;
   }
@@ -292,6 +302,7 @@ export const useAuditStore = defineStore('audit', () => {
     const previousNextCursor = nextCursor.value;
     const previousCursorStack = cursorStack.value;
     const previousSeenEventIds = seenEventIds.value;
+    const previousPageIdStack = pageIdStack.value;
     let requestCursor = '';
     if (direction === 'next') requestCursor = nextCursor.value;
     if (direction === 'previous') requestCursor = cursorStack.value.at(-1) ?? '';
@@ -314,15 +325,32 @@ export const useAuditStore = defineStore('audit', () => {
         cursor.value = requestCursor;
         cursorStack.value = cursorStack.value.slice(0, -1);
       }
-      // AC-059-03: when paging FORWARD, never re-render events already seen in
-      // this session, so cursor pagination stays stable when new events arrive
+      // AC-059-03: when paging FORWARD, never re-render events already seen on
+      // the chain, so cursor pagination stays stable when new events arrive
       // between pages. Backward pages are restored verbatim — deduplicating
-      // them against the session set would wipe the list.
+      // them against the seen set would wipe the list.
       const incoming =
         direction === 'next'
           ? response.events.filter((event) => !seenEventIds.value.has(event.id))
           : response.events;
-      for (const event of response.events) seenEventIds.value.add(event.id);
+      // TASK-377: keep one id list per walked page, aligned with `cursorStack`
+      // (the current page is the last entry). `seenEventIds` is rebuilt from the
+      // chain instead of being accumulated forever.
+      const pageIds = incoming.map((event) => event.id);
+      if (direction === 'first') {
+        // A new query opens a new forward chain.
+        pageIdStack.value = [pageIds];
+      } else if (direction === 'next') {
+        pageIdStack.value = [...pageIdStack.value, pageIds];
+      } else {
+        // Backward: drop the page being left and re-record the restored page
+        // from what is actually rendered, so a later forward step starts from
+        // this page's rows only.
+        const stack = pageIdStack.value;
+        const target = Math.max(0, stack.length - 2);
+        pageIdStack.value = [...stack.slice(0, target), pageIds];
+      }
+      seenEventIds.value = new Set(pageIdStack.value.flat());
       // TASK-375: one page at a time — REPLACE, never append. Appending made the
       // mixed model below observable ("next" accumulated, "previous" replaced) and
       // made "previous" lose every row already accumulated once the cursor stack
@@ -349,6 +377,7 @@ export const useAuditStore = defineStore('audit', () => {
         nextCursor.value = previousNextCursor;
         cursorStack.value = previousCursorStack;
         seenEventIds.value = previousSeenEventIds;
+        pageIdStack.value = previousPageIdStack;
       }
     } finally {
       loading.value = false;
