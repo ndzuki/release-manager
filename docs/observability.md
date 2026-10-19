@@ -112,7 +112,7 @@
 | `GET /health` | liveness 目标；`{"status":"ok"}`，orchestrator 附 `gc` 子对象 | **不可能**（无条件 200） | `internal/handler/health.go:12-28`、`internal/app/app.go:139-143` |
 | `GET /readyz` | readiness 目标；全通过 200，任一失败 503 + `{"status":"degraded","checks":{...}}` | 可能 | `internal/handler/ready.go:11-34`、`internal/app/app.go:152-158` |
 | `GET /environment` | 环境指纹（service/environment/environment_id/production） | 不可能 | `internal/app/app.go:91-116,144` |
-| `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:136-137`、`cmd/orchestrator/main.go:332-336` |
+| `GET /metrics` | Prometheus 文本 | 不可能 | `cmd/auth/main.go:144-145`、`cmd/orchestrator/main.go:332-336` |
 | `GET /notifications` | notification-sink 的 dev 投递观测（含 `dropped_count`） | 可能 5xx | `cmd/notification-sink/main.go:87-132` |
 
 - readiness 贡献项（TASK-099 后**七个进程全部有真实检查**）：orchestrator `database`（2s 超时 ping）+ `cleanup_gc`（`cmd/orchestrator/main.go:267-285`，GC 不健康的定义是「距上次成功 ≥ 2×interval」，`internal/orchestrator/gc_health.go:113`）；auth `database` + `redis`（`cmd/auth/main.go:75-95`）；notifier `database`（`cmd/notifier/main.go:60-71`）；**webhook `orchestrator`**——GET 上游 `/readyz`，非 200/不可达即 NotReady（`cmd/webhook/main.go:137-158`，超时 2s，上游地址与 Register 客户端同源 `orchestratorBaseURL` `cmd/webhook/main.go:126`）；**operator agent `gateway_session`**——agent 与网关的 CommandStream 存活才 Ready，重连退避期间如实 NotReady（`cmd/operator/main.go:454-467` + `Agent.Connected()`，`internal/operator/agent/connected_test.go` 锁定生命周期；gateway 模式无出站会话，保持无检查）；**notification-sink `config`**——dev 测试替身无外部依赖，唯一前置是解码出的 `http_port` 可用，缺失即 fail-closed（`cmd/notification-sink/main.go:151`）。
