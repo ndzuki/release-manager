@@ -2166,7 +2166,7 @@ func TestBuildGatewayServerMountsSyncInventory(t *testing.T) {
 
 	svc := &orchSvc{store: st}
 	server, err := svc.buildGatewayServer(
-		config.GatewayCfg{},
+		(config.GatewayCfg{}).WithDefaults(),
 		gatewayCA,
 		operatorService,
 		syncService,
@@ -2258,6 +2258,52 @@ func TestBuildGatewayServerMountsSyncInventory(t *testing.T) {
 	_, err = syncClient.CreateOperation(ctx, connect.NewRequest(&orchestratorv1.CreateOperationRequest{}))
 	require.Error(t, err)
 	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+// TestBuildGatewayServerUsesConfiguredSANs pins the TASK-388 wiring: the
+// listener's server certificate must carry the configured DNS and IP SANs, and
+// a zero-value GatewayCfg must still produce the legacy pair. The customer
+// failure this guards is a certificate whose SANs do not name the address the
+// agent dials (https://10.10.33.122:8444).
+func TestBuildGatewayServerUsesConfiguredSANs(t *testing.T) {
+	st := sqlitestore.OpenTest(t)
+	gatewayCA, err := ca.New(ca.Config{TTL: 24 * time.Hour})
+	require.NoError(t, err)
+	operatorService, err := operator.NewService(st, slog.New(slog.DiscardHandler), operator.WithCA(gatewayCA))
+	require.NoError(t, err)
+	syncService := orchestrator.NewService(st, nil, "staging", slog.New(slog.DiscardHandler))
+	svc := &orchSvc{store: st}
+
+	build := func(cfg config.GatewayCfg) *x509.Certificate {
+		t.Helper()
+		server, err := svc.buildGatewayServer(cfg.WithDefaults(), gatewayCA, operatorService, syncService, slog.New(slog.DiscardHandler))
+		require.NoError(t, err)
+		require.Len(t, server.TLSConfig.Certificates, 1)
+		leaf, err := x509.ParseCertificate(server.TLSConfig.Certificates[0].Certificate[0])
+		require.NoError(t, err)
+		return leaf
+	}
+
+	t.Run("configured SANs reach the leaf", func(t *testing.T) {
+		leaf := build(config.GatewayCfg{
+			Hostnames:   []string{"rm-prod.local"},
+			IPAddresses: []string{"10.10.33.122"},
+		})
+		assert.Equal(t, []string{"rm-prod.local"}, leaf.DNSNames)
+		require.Len(t, leaf.IPAddresses, 1)
+		assert.Equal(t, "10.10.33.122", leaf.IPAddresses[0].String())
+		// The verification an agent performs when it dials the IP.
+		_, err := leaf.Verify(x509.VerifyOptions{DNSName: "10.10.33.122", Roots: gatewayCA.CertPool()})
+		assert.NoError(t, err)
+	})
+
+	t.Run("zero value keeps the legacy certificate", func(t *testing.T) {
+		leaf := build(config.GatewayCfg{})
+		assert.Equal(t, []string{"operator-gateway.dev.release-manager.local", "localhost"}, leaf.DNSNames)
+		assert.Empty(t, leaf.IPAddresses, "no IP SAN unless configured")
+		_, err := leaf.Verify(x509.VerifyOptions{DNSName: "localhost", Roots: gatewayCA.CertPool()})
+		assert.NoError(t, err)
+	})
 }
 
 // signOperatorIdentity issues an operator client certificate (clientAuth

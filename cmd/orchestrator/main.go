@@ -170,10 +170,10 @@ func (s *orchSvc) buildGatewayServer(
 	syncService *orchestrator.Service,
 	logger *slog.Logger,
 ) (*http.Server, error) {
-	serverCertPEM, serverKeyPEM, err := caInst.SignServerCert([]string{
-		"operator-gateway.dev.release-manager.local",
-		"localhost",
-	})
+	serverCertPEM, serverKeyPEM, err := caInst.SignServerCertWithIPSANs(
+		gatewayCfg.Hostnames,
+		gatewayCfg.IPAddresses,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("sign gateway server certificate: %w", err)
 	}
