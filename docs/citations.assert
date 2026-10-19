@@ -1,0 +1,94 @@
+# docs/citations.assert — machine-checked citation content contracts (V13, TASK-379).
+#
+# Why this file exists: `docs/**` cites evidence as `file:line`, and check-docs used to
+# verify only that the line EXISTS. A line number drifts on every unrelated edit above
+# it, so a citation could point 100 lines away from its evidence and the gate stayed
+# green. Sampling 20 citations found 7 clear drifts (about 35%) and check-docs reported
+# 2 of them. This registry closes that hole for a whitelist of high-value citations
+# instead of hashing every citation: hashing high-churn files would produce noise and
+# rubber-stamping, and the `audit-citations` heuristic is not accurate enough to block.
+#
+# Format: TAB-separated, one contract per line.
+#   file<TAB>line<TAB>contains<TAB>reason<TAB>cited_at
+#     file      repository-relative path (no leading slash, no `..`)
+#     line      the single cited line, 1-based
+#     contains  literal substring that line must contain
+#     reason    REQUIRED: why this pointer matters (an entry without one is an ERROR)
+#     cited_at  REQUIRED here: `<doc>:<line>` where the document writes the citation.
+#               The document line must still cite the same file at a line covering
+#               `line`; otherwise the registry and the prose have diverged and the gate
+#               fails. This is the second direction of the check.
+# Comment lines start with `#`. Blank lines are ignored.
+#
+# Both directions are checked because either half can be edited alone:
+#   - forward: the declared file exists, `line` is inside it, and that line contains
+#     `contains`;
+#   - reverse: the document at `cited_at` still writes a citation to that file covering
+#     that line.
+# The reverse check is line-local on purpose: it requires the cited_at line to name the
+# file and to carry a `:N`/`:N-M`/`:N,M` citation covering the line. It does not
+# re-resolve which span belongs to which file when a line cites several; that
+# attribution is check-docs' check 6, and this layer is a consistency guard, not a
+# security boundary.
+# Scope is deliberately a whitelist. Full content hashing is a non-goal: the cited
+# files change often, so it would either fail constantly or be exempted wholesale.
+#
+# TASK-379 fixed the measured drifts and two edge cases in the documents; the first
+# entries below are those corrected citations, so the fixes cannot silently rot back.
+# The rest seed the high-frequency, high-churn files: cmd/orchestrator/main.go,
+# deploy/dev/dev.sh, cmd/auth/main.go, internal/orchestrator/service.go and
+# internal/store/store.go.
+
+# --- measured drifts, edges, and the adjacent stale pointers (TASK-379) ------
+docs/architecture.md	134	生产 Secret manager 注入	TASK-379 a：SECRETS.md 声明的生产注入边界说明在此行（原引 :113）	.github/SECRETS.md:8
+test/e2e/prerequisite/smoke.sh	171	Content-Type: application/json	TASK-379 b：e2e-runner 登录请求的 JSON Content-Type（原引 :164）	docs/api.md:59
+test/e2e/prerequisite/smoke.sh	182	Content-Type: application/json	TASK-379 b：ValidateToken 请求的 JSON Content-Type（原引 :175/:180）	docs/api.md:59
+internal/orchestrator/service.go	674	func (s *Service) GetOperation(	TASK-379 c：GetOperation handler 定义（原引 :580）	docs/api.md:537
+deploy/dev/dev.sh	549	-ensure-mtls-ca	TASK-379 d：dev.sh 调用 devseed 生成/复用 mTLS CA（原引 :410）	docs/cli.md:223
+cmd/auth/main.go	201	authorization.TraceInterceptor()	TASK-379 e：auth 装配 trace 拦截器（原引 :193）	docs/observability.md:93
+cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	TASK-379 f：auth readiness 检查入口（原引 :68-88）	docs/observability.md:205
+cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	TASK-379 f：同一条目的孪生引用，本次一并修正	docs/observability.md:118
+deploy/dev/dev.sh	1320	release-$svc:content-sha256-$hash	TASK-379 g：管理面 manifest 的 :dev → 内容寻址 tag 替换（原引 :1104-1118）	docs/runbook.md:493
+deploy/dev/dev.sh	1565	release-$svc:content-sha256-$hash	TASK-379 g：客户 agent overlay 的同一 tag 替换（原引 :1298-1330 指错位置）	docs/runbook.md:493
+cmd/auth/main.go	131	DialTimeout:           time.Second	TASK-379 边缘1：Redis 客户端 1s 级超时（原引 :114-127 少 4 行）	docs/runbook.md:320
+deploy/dev/dev.sh	424	jwt_ci_temp_cleanup() {	TASK-379 边缘2：ci JWT 临时文件删除函数（原引 :387-390 是说明注释）	.github/SECRETS.md:134
+
+# --- seeds: high-frequency cited / high-churn files --------------------------
+cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	auth readiness 贡献 database/redis 两项检查	docs/runbook.md:69
+cmd/auth/main.go	171	auth.NewStoreCustomerResolver	BindingService 使用本地 customer resolver（TASK-191）	docs/api.md:255
+cmd/auth/main.go	104	postgresstore.Open	auth 也经 postgresstore.Open 触发迁移（TASK-338）	docs/production-deploy.md:955
+cmd/orchestrator/main.go	173	caInst.SignServerCert	dev mTLS CA 为网关签服务端证书	.github/SECRETS.md:27
+cmd/orchestrator/main.go	105	operator.NewSessionRegistry	SessionRegistry 注入网关 operator service	docs/runbook.md:173
+cmd/orchestrator/main.go	202	NewOrchestratorServiceHandler	网关另建 OrchestratorService handler	docs/production-deploy.md:1184
+cmd/orchestrator/main.go	210	OrchestratorServiceSyncInventoryProcedure	网关只挂 SyncInventory 单路径	docs/production-deploy.md:1184
+cmd/orchestrator/main.go	484	NewOrchestratorServiceHandler	管理面完整 OrchestratorService handler	docs/production-deploy.md:1184
+cmd/orchestrator/main.go	490	app.MaintenanceInterceptor	CleanupService 的维护模式拦截器	docs/api.md:134
+cmd/orchestrator/main.go	516	orchestrator.NewBundleService	BundleService 构造点	docs/api.md:135
+cmd/orchestrator/main.go	959	tokenHashesFromEnv("DEV_WEBHOOK_SERVICE_TOKEN"	service token 以 SHA-256 摘要做常量时间比对	.github/SECRETS.md:23
+cmd/orchestrator/main.go	282	checks["cleanup_gc"]	orchestrator cleanup_gc readiness 检查	docs/observability.md:118
+deploy/dev/dev.sh	33	DEV_DATA_DIR=	状态/密钥/诊断根目录	docs/configuration.md:292
+deploy/dev/dev.sh	402	DEV_JWT_PRIVATE_KEY	ci profile 缺 JWT 私钥即失败	.github/SECRETS.md:22
+deploy/dev/dev.sh	443	dev-service-tokens/webhook-service-token	webhook service token 落盘路径	.github/SECRETS.md:140
+deploy/dev/dev.sh	455	service_token_ensure_one() {	service token 逐项生成/复用	.github/SECRETS.md:157
+deploy/dev/dev.sh	527	mtls_ca_key_path() {	dev mTLS CA key 路径	.github/SECRETS.md:141
+deploy/dev/dev.sh	533	DEV_M_TLS_CA_KEY	ci profile 缺 mTLS CA 即失败	.github/SECRETS.md:27
+deploy/dev/dev.sh	158	diagnostics/	失败诊断落盘 data/diagnostics/<ISO8601>/	docs/observability.md:174
+deploy/dev/dev.sh	1390	require_tcp_ready operator	operator 网关只做 TCP 连通性探测	docs/runbook.md:76
+internal/orchestrator/service.go	1067	func (s *Service) CancelOperation(	Queued 操作取消路径	docs/delivery-evidence.md:113
+internal/orchestrator/service.go	1102	cancel_not_allowed	Running 操作取消拒绝	docs/delivery-evidence.md:114
+internal/orchestrator/service.go	183	X-Reason-Code	release_busy 原因码 header	docs/delivery-evidence.md:64
+internal/orchestrator/service.go	244	emergency_effect_unresolved	UNKNOWN 标准发布门禁	docs/delivery-evidence.md:111
+internal/orchestrator/service.go	253	release_convergence_pending	门禁优先级：收敛 pending 在 UNKNOWN 之后	docs/delivery-evidence.md:117
+internal/orchestrator/service.go	1582	revision_not_approved	未批准 ValuesRevision 拒绝	docs/delivery-evidence.md:54
+internal/orchestrator/service.go	386	DigestValue	DigestAlg + ":" + DigestValue 拼接	docs/production-deploy.md:1993
+internal/orchestrator/service.go	1671	expected_current_revision	UPGRADE 的 expected_current_revision 校验	docs/production-deploy.md:1849
+internal/store/store.go	38	ErrApprovalPending	store 稳定哨兵错误清单	docs/api.md:319
+internal/store/store.go	207	ValuesStatusPendingApproval	values revision pending_approval 状态	docs/runbook.md:381
+internal/store/store.go	652	type OperatorStatus string	OperatorStatus 状态机词汇	docs/runbook.md:168
+internal/store/store.go	661	type SessionStatus string	SessionStatus 状态机词汇	docs/runbook.md:168
+internal/store/store.go	671	type SessionStatusReason string	SessionStatusReason 状态机词汇	docs/runbook.md:168
+internal/store/store.go	1044	type AuditEvent struct	审计事件模型结构体	docs/observability.md:137
+internal/store/store.go	916	release.emergency.execute	显式 deployer capability 动作常量	docs/delivery-evidence.md:91
+internal/orchestrator/rollback.go	24	func (s *Service) RollbackRelease(	RollbackRelease handler 定义	docs/api.md:536
+internal/orchestrator/values_revision.go	238	func (s *Service) ListValuesRevisions(	ListValuesRevisions handler 定义	docs/api.md:545
+internal/orchestrator/operations_query.go	34	func (s *Service) ListOperations(	ListOperations handler 定义	docs/api.md:584

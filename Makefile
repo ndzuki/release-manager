@@ -549,7 +549,7 @@ audit-citations: ## Read-only audit: symbols named next to a code citation shoul
 	$(GO) run ./cmd/docscheck/ -root . -max 40
 
 .PHONY: audit-doc-facts
-audit-doc-facts: ## Read-only audit, NOT a gate / NOT in `make quality`: claims that can be re-derived from config (nginx/vite proxy prefixes, DEV_PORTS band) must not contradict it — check-docs only verifies that a cited line exists (TASK-254)
+audit-doc-facts: ## Read-only audit, NOT a gate / NOT in `make quality`: claims that can be re-derived from config (nginx/vite proxy prefixes, DEV_PORTS band) must not contradict it — check-docs verifies line existence plus a content whitelist, not these derived facts (TASK-254)
 	$(GO) run ./cmd/docfacts/ -root . -max 40
 
 .PHONY: audit-task-premises
@@ -689,15 +689,16 @@ check-licenses: ## Check every shipped dependency's license against the project 
 	bash scripts/check-licenses.sh
 
 .PHONY: check-docs
-check-docs: ## Check that documented make targets and repository paths still exist
+check-docs: ## Check documented targets/paths exist and whitelisted citation tokens still match (V13)
 	bash scripts/check-docs.sh
 
 # NOT part of `quality`: this is the semantic spot check for `test.yml:<line>`
-# citations (TASK-309). check-docs only proves the cited line exists; this target
-# also checks that the cited range still looks like what the sentence claims, so
-# it has to be revisited whenever test.yml gains or loses lines. Deliberately
-# opt-in for that reason -- run it when you touch test.yml or a document that
-# cites it: `make check-citations`.
+# citations (TASK-309). check-docs proves that a cited line exists and, for the
+# whitelist in docs/citations.assert, that the line contains the declared token;
+# this target also checks that the cited range still looks like what the sentence
+# claims, so it has to be revisited whenever test.yml gains or loses lines.
+# Deliberately opt-in for that reason -- run it when you touch test.yml or a
+# document that cites it: `make check-citations`.
 .PHONY: check-citations
 check-citations: ## Check that test.yml line citations still match the content they claim (TASK-309)
 	bash scripts/check-citations.sh --check
