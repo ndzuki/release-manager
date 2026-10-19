@@ -55,7 +55,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 ### 2.2 URL、方法与请求头
 
 - 路径固定为 `/<pkg>.<Service>/<Method>`，来自生成代码的 `*Procedure` 常量（例如 `cmd/orchestrator/main.go:203` 用 `orchestratorv1connect.OrchestratorServiceSyncInventoryProcedure` 注册为 `"POST /orchestrator.v1.OrchestratorService/SyncInventory"`）。
-- **所有 106 个 RPC 只能 POST**。connect-go 只在 unary + `option idempotency = no_side_effects` 时才注册 GET 方法（`protocol_connect.go:70-76`，模块 `connectrpc.com/connect@v1.20.0`），而本仓库 `api/proto/**` 中 `option idempotency`/`option timeout`/任何 rpc 级 option 出现次数为 0（14 个 proto 文件、106 条 `rpc` 声明全部无 option）（检索 `api/proto/*/*/*.proto` 的 `option ` 行，只有 `syntax`/`go_package`/`file` 级 option）。因此 GET 一律 **405 + `Allow: POST`**，而不是 404：业务服务用生成代码返回的子树 pattern 注册（例如 `api/gen/auth/v1/authv1connect/auth.connect.go:576` 返回 `"/auth.v1.AuthService/"`，`cmd/auth/main.go:191` 原样 `mux.Handle`），请求会进到 connect handler 再由它按方法表拒绝（`handler.go:274-279`）；只有网关上 `cmd/orchestrator/main.go:191` 用了 `"POST "` 前缀 pattern，此时 405 由 `http.ServeMux` 自己给出。附带一条：`Content-Type` 不在协议表内会返回 **415 Unsupported Media Type**（`handler.go:291-294`），所以漏写 `-H 'Content-Type: application/json'` 的 curl 不会得到业务错误而是 415。
+- **所有 106 个 RPC 只能 POST**。connect-go 只在 unary + `option idempotency = no_side_effects` 时才注册 GET 方法（`protocol_connect.go:70-76`，模块 `connectrpc.com/connect@v1.20.0`），而本仓库 `api/proto/**` 中 `option idempotency`/`option timeout`/任何 rpc 级 option 出现次数为 0（14 个 proto 文件、106 条 `rpc` 声明全部无 option）（检索 `api/proto/*/*/*.proto` 的 `option ` 行，只有 `syntax`/`go_package`/`file` 级 option）。因此 GET 一律 **405 + `Allow: POST`**，而不是 404：业务服务用生成代码返回的子树 pattern 注册（例如 `api/gen/auth/v1/authv1connect/auth.connect.go:576` 返回 `"/auth.v1.AuthService/"`，`cmd/auth/main.go:217` 原样 `mux.Handle`），请求会进到 connect handler 再由它按方法表拒绝（`handler.go:274-279`）；只有网关上 `cmd/orchestrator/main.go:191` 用了 `"POST "` 前缀 pattern，此时 405 由 `http.ServeMux` 自己给出。附带一条：`Content-Type` 不在协议表内会返回 **415 Unsupported Media Type**（`handler.go:291-294`），所以漏写 `-H 'Content-Type: application/json'` 的 curl 不会得到业务错误而是 415。
 - 编码：`Content-Type: application/json`（Connect JSON）或 `application/proto`（Connect 二进制）；gRPC 用 `application/grpc(+proto)`；gRPC-Web 用 `application/grpc-web(+proto)`。仓库内真实用例统一用 `Content-Type: application/json`（`test/e2e/prerequisite/smoke.sh:171`、`:182`）。
 - 追踪/关联头：`X-Request-ID`（`internal/contracts/errors.go:14`）。入站带头则沿用、否则生成 UUID，并在响应头与错误 metadata 中回显（`internal/contracts/interceptor/requestid.go:28-42`）。
 - 浏览器会话相关：Cookie `rm_access`/`rm_refresh` 与 CSRF 双提交头 `X-CSRF-Token`（`internal/auth/service.go:17-20`，`internal/auth/interceptor.go:80-86`）。仅当 cookie 认证且 action 非 `read` 时才校验 CSRF。
@@ -127,7 +127,7 @@ curl -sS http://127.0.0.1:8083/environment
 | 挂载点 | 拦截器（外 → 内） | 定义位置 |
 | --- | --- | --- |
 | `AuditService` @8087 | `RequestID`, `ErrorSanitize`, `audit.NewJWTInterceptor` | `cmd/api/main.go:96-108` |
-| 4 个 `auth.v1` service @8085 | `RequestID`, `ErrorSanitize`, `TraceInterceptor`, `MaintenanceInterceptor`, `auth.NewAuthInterceptor` | `cmd/auth/main.go:181-187` |
+| 4 个 `auth.v1` service @8085 | `RequestID`, `ErrorSanitize`, `TraceInterceptor`, `MaintenanceInterceptor`, `auth.NewAuthInterceptor` | `cmd/auth/main.go:198-204` |
 | `NotifierService` @8086 | `RequestID`, `ErrorSanitize` | `cmd/notifier/main.go:179-186` |
 | `WebhookService` @8082 | `RequestID`, `ErrorSanitize` | `cmd/webhook/main.go:57-64` |
 | `OrchestratorService` @8083 | `RequestID`, `ErrorSanitize`, `TraceInterceptor`, `MaintenanceInterceptor`, `NewAuthInterceptor`, `NewAuthStreamInterceptor` | `cmd/orchestrator/main.go:470-477` |
@@ -143,7 +143,7 @@ curl -sS http://127.0.0.1:8083/environment
 
 ### 3.2 JWT
 
-**EdDSA（Ed25519）非对称签名**：`internal/auth/jwt.go:36` 的 `NewJWTManager(privateKey ed25519.PrivateKey, accessTTL, refreshTTL)`，签发在 `:97` 用 `jwt.SigningMethodEdDSA`；claims 为 `uid`/`roles`/`org_id` 加注册声明（`sub`/`exp`/`jti`，`:64-69`）。`cmd/auth/main.go:152` 以 15 分钟 access / 7 天 refresh 构造。**签名私钥**来自 `--jwt-private-key` / `JWT_PRIVATE_KEY`（PKCS#8 Ed25519 PEM，`cmd/auth/main.go:269`，经 `jwtauth.ParseEd25519PrivateKeyPEM` 解析于 `:148`），**只有 auth 持有**；**刻意没有默认值**——缺键或非 Ed25519 键**启动即失败**，不会静默回退到更弱的方案（`cmd/auth/main.go:262-268` 的注释即此约定）。校验方只持公钥：`--jwt-public-key` / `JWT_PUBLIC_KEY`（`cmd/orchestrator/main.go:988`、`cmd/api/main.go:223`）。验签**按类型钉住** `*jwt.SigningMethodEd25519`（`internal/auth/jwt.go:131`）⇒ 用公钥字节伪造的 `alg: HS256` 令牌会被拒（负控 `internal/auth/jwt_ed25519_test.go:54`）。
+**EdDSA（Ed25519）非对称签名**：`internal/auth/jwt.go:36` 的 `NewJWTManager(privateKey ed25519.PrivateKey, accessTTL, refreshTTL)`，签发在 `:97` 用 `jwt.SigningMethodEdDSA`；claims 为 `uid`/`roles`/`org_id` 加注册声明（`sub`/`exp`/`jti`，`:64-69`）。`cmd/auth/main.go:152` 以 15 分钟 access / 7 天 refresh 构造。**签名私钥**来自 `--jwt-private-key` / `JWT_PRIVATE_KEY`（PKCS#8 Ed25519 PEM，`cmd/auth/main.go:269`，经 `jwtauth.ParseEd25519PrivateKeyPEM` 解析于 `:148`），**只有 auth 持有**；**刻意没有默认值**——缺键或非 Ed25519 键**启动即失败**，不会静默回退到更弱的方案（`cmd/auth/main.go:260-268` 的注释即此约定）。校验方只持公钥：`--jwt-public-key` / `JWT_PUBLIC_KEY`（`cmd/orchestrator/main.go:988`、`cmd/api/main.go:223`）。验签**按类型钉住** `*jwt.SigningMethodEd25519`（`internal/auth/jwt.go:131`）⇒ 用公钥字节伪造的 `alg: HS256` 令牌会被拒（负控 `internal/auth/jwt_ed25519_test.go:54`）。
 
 校验链在 `internal/auth/interceptor.go:53-66`：取 `Authorization: Bearer`，无则回退 `rm_access` cookie，两者皆空 `unauthenticated`；`ValidateAccessToken` 失败 `unauthenticated: invalid token`。放行前还要过两道会话检查：`internal/auth/interceptor.go:111-114` 查库确认用户存在且 `status == active`，`:115-122` 确认存在未过期的 auth session（查库失败本身返回 `internal: session validation failed`），否则都是 `unauthenticated: session revoked`。
 
@@ -172,7 +172,7 @@ TASK-102 之后 bundle/Harbor ingress 共三把独立、可分别轮换的凭据
 
 `NewAuthInterceptor` 的裁决顺序（`internal/auth/interceptor.go:44-133`）：
 
-1. `publicMethods[procedure]` → 直接放行（`:49-51`）。release-auth 声明 5 个公开方法：`GetInitStatus`、`Initialize`、`ValidateToken`、`Login`、`RefreshToken`（`cmd/auth/main.go:173-179`）。release-orchestrator 四处挂载全部传 `map[string]bool{}`，即**没有公开方法**（`cmd/orchestrator/main.go:450`、`:468`、`:482`、`:517`）。
+1. `publicMethods[procedure]` → 直接放行（`:49-51`）。release-auth 声明 5 个公开方法：`GetInitStatus`、`Initialize`、`ValidateToken`、`Login`、`RefreshToken`（`cmd/auth/main.go:190-196`）。release-orchestrator 四处挂载全部传 `map[string]bool{}`，即**没有公开方法**（`cmd/orchestrator/main.go:450`、`:468`、`:482`、`:517`）。
 2. 解析 JWT（`:53-66`：`Authorization: Bearer` 缺失则回退 `rm_access` cookie，两者皆空 `unauthenticated: missing authentication credentials`，验签失败 `unauthenticated: invalid token`）。
 3. 查显式登记表并解析 domain（`:68-79`）：`lookupProcedure(procedure)`（`internal/auth/procedure_policy.go:183-186`）取该 procedure 的策略行，未登记 → `permission_denied` + `X-Reason-Code: invalid_actor_context`；`resolveDomain`（`internal/auth/interceptor.go:243-255`）默认要求请求 `org_id` 等于 token 的 `org_id`，只有登记为 `targetOrg` 的 procedure（仅 `SwitchOrganization`）允许取请求里的目标组织；两者都无 → `invalid_actor_context`。`BundleService` 两个读方法与 `GetOrganization`/`UpdateOrganization`/`DisableOrganization` 的归属由 `enforceRequestBinding`（`:257-274`）另行反查。
 4. cookie 会话下的非 read 请求校验 CSRF（`:80-86`）。
@@ -214,7 +214,7 @@ TASK-095 把旧的「服务名包含 + 方法名前缀」推断（`mapServiceToO
 
 `app.MaintenanceInterceptor(enabled, readOnly, logger)` 在 `maintenance: true` 时对不在白名单内的 unary procedure 返回 `unavailable`，message 恰为 `"maintenance"`（`internal/app/maintenance.go:14-28`）。配置项 `maintenance`（`internal/config/config.go:135` 的 `ServiceConfig.Maintenance`），env 名 `MAINTENANCE` 在 `internal/config/config.go:282` 的绑定表里登记（该表由 `bindDatabaseEnvironment` `:272` 装载）。
 
-- release-auth 白名单 12 条（`cmd/auth/main.go:215-230`），其中 `Login`/`RefreshToken`/`ChangePassword`/成员与绑定写操作被刻意挡住。
+- release-auth 白名单 13 条（`cmd/auth/main.go:241-256`），其中 `Login`/`RefreshToken`/`ChangePassword`/成员与绑定写操作被刻意挡住。
 - release-orchestrator 的 `OrchestratorService` 白名单 15 条读方法（`cmd/orchestrator/main.go:733-751`）。
 - `TrustService` 白名单仅 `GetTrustPolicy`（`cmd/orchestrator/main.go:753-757`）。
 - `CleanupService` 传 `nil`（`cmd/orchestrator/main.go:467`）→ 维护期两个 RPC 全被拒。
@@ -242,7 +242,7 @@ TASK-095 之前，`(object, action)` 由服务名包含 + 方法名前缀推断�
 
 | 项 | 认证归属 / 事实 | 检索依据 |
 | --- | --- | --- |
-| `auth.v1.ExternalIdentityService`（3 个 RPC：`AuthenticateLDAP`、`GetOIDCAuthURL`、`GetDingTalkAuthURL`） | **预认证** IdP 入口（登录前调用），登记为 `modePublic`；契约存在，Go 侧类型 `ExternalIdentityService` 已定义（`internal/auth/external_idp_service.go:28`）并实现了三个 handler 方法（`:55`、`:69`、`:80`），构造函数 `NewExternalIdentityService` 也在（`:36`），文件末尾还有接口断言（`:325`），但**从未被构造、从未被挂载**；归属 REQ-028 | `cmd/auth/main.go:189-203` 只 new/挂载 4 个 service；检索 `NewExternalIdentityService(`、`ExternalIdentityServiceHandler`、`mux.Handle` 于 `cmd/**`、`internal/**` 的非测试代码中零命中，唯一残留是维护白名单里两条永不命中的条目（`cmd/auth/main.go:227-228`）。`docs/architecture.md:80` 已把它记为遗留项 |
+| `auth.v1.ExternalIdentityService`（3 个 RPC：`AuthenticateLDAP`、`GetOIDCAuthURL`、`GetDingTalkAuthURL`） | **预认证** IdP 入口（登录前调用），登记为 `modePublic`；契约存在，Go 侧类型 `ExternalIdentityService` 已定义（`internal/auth/external_idp_service.go:28`）并实现了三个 handler 方法（`:55`、`:69`、`:80`），构造函数 `NewExternalIdentityService` 也在（`:36`），文件末尾还有接口断言（`:325`），但**从未被构造、从未被挂载**；归属 REQ-028 | `cmd/auth/main.go:215-229` 只 new/挂载 4 个 service；检索 `NewExternalIdentityService(`、`ExternalIdentityServiceHandler` 于 `cmd/**` 的非测试代码中零命中，唯一残留是维护白名单里两条永不命中的条目（`cmd/auth/main.go:254-255`）。`docs/architecture.md:80` 已把它记为遗留项 |
 | `orchestrator.v1.OrchestratorService/PublishRelease` | 已挂载，校验通过后返回 `Status: "not_implemented"`、`OperationId: ""`，不产生 Operation；发布流水线属 REQ-014/REQ-040 的后续实现 | `internal/orchestrator/service.go:666-669` |
 | `orchestrator.v1.OrchestratorService/SyncInventory` | 两条挂载：JWT 面按 `(release, write)` 裁决；agent 网关面走客户端证书身份（见 3.4） | `internal/auth/procedure_policy.go` 的 `SyncInventory` 行、`cmd/orchestrator/main.go:195-204` |
 | `audit.v1.AuditService/ExportAuditEvents` | 只登记一行 `pending` 导出记录（按 release-auth 判定的有效组织归属），仓库内**没有消费者**，导出不会真正完成 | `internal/audit/audit_service_handler.go:180-247`；检索 `AuditExports()` 的非测试命中只有接口与实现自身 |
@@ -467,7 +467,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | `GetOIDCAuthURL` | 生成 OIDC 授权跳转 URL | 未见挂载 | `internal/auth/external_idp_service.go:69` | 不适用 |
 | `GetDingTalkAuthURL` | 生成钉钉授权跳转 URL | 未见挂载 | `internal/auth/external_idp_service.go:80` | 不适用 |
 
-契约见 `api/proto/auth/v1/auth.proto:668`。同一文件里的 `OIDCCallback`/`DingTalkCallback` 是 `http.HandlerFunc` 形态，同样未在任何 mux 注册（`cmd/auth/main.go:136-205` 全文只有 4 个 `mux.Handle`）。
+契约见 `api/proto/auth/v1/auth.proto:668`。同一 service 的 `OIDCCallback`/`DingTalkCallback` 是 `http.HandlerFunc` 形态（`internal/auth/external_idp_service.go:258`、`:277`），同样未在任何 mux 注册（`cmd/auth/main.go` 全文共 5 个 `mux.Handle`：`:145` 的 `/metrics`、`:217`/`:221`/`:225`/`:229` 的四个 service，没有一条注册这两个回调）。
 
 ### 7.7 notifier.v1.NotifierService（2 个，`release-notifier` 8086）
 
