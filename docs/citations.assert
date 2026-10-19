@@ -138,3 +138,22 @@ cmd/orchestrator/main.go	340	registry := prometheus.NewRegistry()	TASK-382 g：o
 cmd/auth/main.go	148	ParseEd25519PrivateKeyPEM	TASK-382 h：auth 解析 Ed25519 私钥（原引 :145 是 /metrics 挂载）	docs/runbook.md:317
 cmd/orchestrator/main.go	462	ParseEd25519PublicKeyPEM	TASK-382 h：orchestrator 解析 Ed25519 公钥（原引 :459 是 preflight resume 日志）	docs/runbook.md:317
 cmd/auth/main.go	158	maxAttempts := 5	TASK-382 i：登录限流默认值与覆盖的起点（原引 :141-154）	docs/runbook.md:319
+
+# --- TASK-383: api.md /metrics mounts, JWT flag/parse anchors, PublishRelease error codes ----
+cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-383 a：auth 的 /metrics 挂载点（原引 :137 是 Redis ping 失败返回）	docs/api.md:41
+cmd/orchestrator/main.go	343	mux.Handle("GET /metrics", metrics.Handler())	TASK-383 a：orchestrator 的 /metrics 挂载点（原引 :319 是 Register 函数签名）	docs/api.md:41
+cmd/auth/main.go	152	auth.NewJWTManager(jwtPrivateKey	TASK-383 b：15 分钟 access / 7 天 refresh 的构造点（原引 :145 是 /metrics 挂载）	docs/api.md:146
+cmd/auth/main.go	269	flag.String("jwt-private-key"	TASK-383 b：--jwt-private-key flag 定义（原引 :261 是私钥约定注释首行）	docs/api.md:146
+cmd/auth/main.go	148	ParseEd25519PrivateKeyPEM	TASK-383 b：私钥 PEM 解析点（原引 :141 是 Redis 适配器启用日志）	docs/api.md:146
+cmd/auth/main.go	268	startup instead of silently falling back	TASK-383 b：「刻意没有默认值」注释末行（原引 :254-260 是旧注释位置）	docs/api.md:146
+cmd/orchestrator/main.go	988	flag.String("jwt-public-key"	TASK-383 b：orchestrator 的 --jwt-public-key flag（原引 :983 是密钥约定注释首行）	docs/api.md:146
+cmd/api/main.go	223	flag.String("jwt-public-key"	TASK-383 b：api 的 --jwt-public-key flag（原引 :183 是 timeout 校验）	docs/api.md:146
+cmd/auth/main.go	269	flag.String("jwt-private-key"	TASK-383 d：runbook 同组 JWT 私钥 flag 的孪生修正	docs/runbook.md:315
+cmd/orchestrator/main.go	988	flag.String("jwt-public-key"	TASK-383 d：runbook 同组公钥 flag 的孪生修正	docs/runbook.md:315
+cmd/api/main.go	223	flag.String("jwt-public-key"	TASK-383 d：runbook 同组 api 公钥 flag 的孪生修正	docs/runbook.md:315
+internal/orchestrator/service.go	637	connect.CodeNotFound	TASK-383 c：PublishRelease 定义不存在（原引 :470 是 now := time.Now().UTC()）	docs/api.md:535
+internal/orchestrator/service.go	654	connect.CodeNotFound	TASK-383 c：PublishRelease 集群不存在（与 :637 同一处漂移）	docs/api.md:535
+internal/orchestrator/service.go	648	connect.CodePermissionDenied	TASK-383 c：PublishRelease 客户已停用（原引 :481 是 IdempotencyKey 字段）	docs/api.md:535
+internal/orchestrator/service.go	661	connect.CodePermissionDenied	TASK-383 c：PublishRelease 集群已停用（与 :648 同一处漂移）	docs/api.md:535
+internal/orchestrator/service.go	641	connect.CodeInternal	TASK-383 c：PublishRelease 定义查询失败（原引 :474 是 marshal bundle digests 错误）	docs/api.md:535
+internal/orchestrator/service.go	658	connect.CodeInternal	TASK-383 c：PublishRelease 集群查询失败（与 :641 同一处漂移）	docs/api.md:535

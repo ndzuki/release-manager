@@ -38,7 +38,7 @@ dev 端口取 `configs/*.dev.yaml` 的 `http_port`：`configs/webhook.dev.yaml:1
 2. **8087 在 k3d dev 环境里是 web SPA 的 nginx，`release-api` 是 8088**：k3d 把宿主 8082-8088 映射到 NodePort 30082-30088（`deploy/dev/dev.sh:900`），其中 `deploy/kustomize/services/web.yaml:26` 的 `containerPort: 8087` 与 `:72` 的 `nodePort: 30087` 属于 web（`web/nginx.conf:7` 监听 8087）。`release-api` 自 REQ-065 D2 起也部署进 dev 环境，占 **8088**（NodePort **30088**，`deploy/kustomize/services/api.yaml`）；host 直跑模式（`make run-api`、`make dev-stage-audit`）仍用 8087。
 3. **网关监听器不提供任何探测端点**：`GET /health`、`GET /readyz`、`GET /environment` 由共享启动包装注册在主 mux 上（`internal/app/app.go:140`、`:142`、`:144`、`:158`），网关用的是独立的 `gmux`（`cmd/orchestrator/main.go:166`），只做 TLS + 过程路径注册。`api/proto/common/v1/health.proto:5-10` 的文件注释也明确说明这一点。
 
-`/metrics` 只有两个进程暴露：`cmd/auth/main.go:137`、`cmd/orchestrator/main.go:319`。
+`/metrics` 只有两个进程暴露：`cmd/auth/main.go:145`、`cmd/orchestrator/main.go:343`。
 
 ### 1.3 生成物
 
@@ -143,7 +143,7 @@ curl -sS http://127.0.0.1:8083/environment
 
 ### 3.2 JWT
 
-**EdDSA（Ed25519）非对称签名**：`internal/auth/jwt.go:36` 的 `NewJWTManager(privateKey ed25519.PrivateKey, accessTTL, refreshTTL)`，签发在 `:97` 用 `jwt.SigningMethodEdDSA`；claims 为 `uid`/`roles`/`org_id` 加注册声明（`sub`/`exp`/`jti`，`:64-69`）。`cmd/auth/main.go:145` 以 15 分钟 access / 7 天 refresh 构造。**签名私钥**来自 `--jwt-private-key` / `JWT_PRIVATE_KEY`（PKCS#8 Ed25519 PEM，`cmd/auth/main.go:261`，经 `jwtauth.ParseEd25519PrivateKeyPEM` 解析于 `:141`），**只有 auth 持有**；**刻意没有默认值**——缺键或非 Ed25519 键**启动即失败**，不会静默回退到更弱的方案（`cmd/auth/main.go:254-260` 的注释即此约定）。校验方只持公钥：`--jwt-public-key` / `JWT_PUBLIC_KEY`（`cmd/orchestrator/main.go:983`、`cmd/api/main.go:183`）。验签**按类型钉住** `*jwt.SigningMethodEd25519`（`internal/auth/jwt.go:131`）⇒ 用公钥字节伪造的 `alg: HS256` 令牌会被拒（负控 `internal/auth/jwt_ed25519_test.go:54`）。
+**EdDSA（Ed25519）非对称签名**：`internal/auth/jwt.go:36` 的 `NewJWTManager(privateKey ed25519.PrivateKey, accessTTL, refreshTTL)`，签发在 `:97` 用 `jwt.SigningMethodEdDSA`；claims 为 `uid`/`roles`/`org_id` 加注册声明（`sub`/`exp`/`jti`，`:64-69`）。`cmd/auth/main.go:152` 以 15 分钟 access / 7 天 refresh 构造。**签名私钥**来自 `--jwt-private-key` / `JWT_PRIVATE_KEY`（PKCS#8 Ed25519 PEM，`cmd/auth/main.go:269`，经 `jwtauth.ParseEd25519PrivateKeyPEM` 解析于 `:148`），**只有 auth 持有**；**刻意没有默认值**——缺键或非 Ed25519 键**启动即失败**，不会静默回退到更弱的方案（`cmd/auth/main.go:262-268` 的注释即此约定）。校验方只持公钥：`--jwt-public-key` / `JWT_PUBLIC_KEY`（`cmd/orchestrator/main.go:988`、`cmd/api/main.go:223`）。验签**按类型钉住** `*jwt.SigningMethodEd25519`（`internal/auth/jwt.go:131`）⇒ 用公钥字节伪造的 `alg: HS256` 令牌会被拒（负控 `internal/auth/jwt_ed25519_test.go:54`）。
 
 校验链在 `internal/auth/interceptor.go:53-66`：取 `Authorization: Bearer`，无则回退 `rm_access` cookie，两者皆空 `unauthenticated`；`ValidateAccessToken` 失败 `unauthenticated: invalid token`。放行前还要过两道会话检查：`internal/auth/interceptor.go:111-114` 查库确认用户存在且 `status == active`，`:115-122` 确认存在未过期的 auth session（查库失败本身返回 `internal: session validation failed`），否则都是 `unauthenticated: session revoked`。
 
@@ -532,7 +532,7 @@ JSON 命名：proto 字段 snake_case，**JSON 输出是 lowerCamelCase**（desc
 | RPC | 作用 | 鉴权 | 位置 | 关键错误 |
 | --- | --- | --- | --- | --- |
 | `CreateOperation` | 创建发布 Operation（幂等 + 门禁） | authz(release/write) | `internal/orchestrator/service.go:193` | `invalid_argument`（`:205` `operation_type` 只接受 `INSTALL`/`UPGRADE`）、`unauthenticated`（`:212`，actor 必须来自认证上下文）、`not_found`（`:218`）、`internal`（`:222`）；`Idempotency-Key`；门禁拒绝带 `CreateOperationGateDetail` |
-| `PublishRelease` | 直接发布（骨架） | authz(release/write) | `internal/orchestrator/service.go:628` | `not_found`（`:470`）、`permission_denied`（`:481`）、`internal`（`:474`）；成功时返回 `not_implemented` 且无 Operation → **未实现** |
+| `PublishRelease` | 直接发布（骨架） | authz(release/write) | `internal/orchestrator/service.go:628` | `not_found`（`:637` 定义、`:654` 集群）、`permission_denied`（`:648` 客户禁用、`:661` 集群禁用）、`internal`（`:641`、`:658`）；成功时返回 `not_implemented` 且无 Operation → **未实现** |
 | `RollbackRelease` | 回滚到指定 revision（响应 `to_revision` = **内容目标** = 请求 `target_revision`，不是回滚追加的新 Helm revision；新号要看 inventory `revision` / Helm history，TASK-354） | authz(release/write) | `internal/orchestrator/rollback.go:24` | `unauthenticated`（`:35`）、`invalid_argument`（`:41`）、`not_found`（`:66`）、`internal`（`:70`）；`Idempotency-Key` |
 | `GetOperation` | 查询 Operation 详情 | authz(release/read) | `internal/orchestrator/service.go:674` | `unauthenticated`（`:513`）、`not_found`（`:517`）、`internal`（`:521`） |
 | `WatchOperation` | **server-streaming** 订阅状态流转 | authz(release/read)；流式由 `NewAuthStreamInterceptor` 裁决 | `internal/orchestrator/service.go:769` | `unauthenticated`（`:776`）、`invalid_argument`（`:779`）、`not_found`（`:783`）、`internal`（`:786`）；游标过界 `out_of_range`+`cursor_expired`（`:876-877`）；维护模式**不拦截**流式 |
