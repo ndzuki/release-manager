@@ -656,8 +656,12 @@ fi
 #   - reverse: the document named by `cited_at` still writes a citation to that
 #     file covering that line.
 # A missing reason is an ERROR, never a silent pass — the same invariant as the
-# markdown and vulncheck exemptions above. An empty registry is also an error: a
-# vacuous layer would look green without proving anything.
+# markdown and vulncheck exemptions above. The `contains` token is required for
+# the same reason it is checked: an EMPTY token matches every line (`*""*`), so a
+# blank 3rd column would "verify" nothing and still be counted as verified. An
+# empty (or whitespace-only) token is therefore an error, not a vacuous pass. An
+# empty registry is also an error: a vacuous layer would look green without
+# proving anything.
 # ---------------------------------------------------------------------------
 ASSERT_FILE=${CHECK_DOCS_ASSERT_FILE:-docs/citations.assert}
 ASSERT_TOTAL=0
@@ -709,7 +713,18 @@ else
     IFS=$'\x1f' read -r afile aline acontains areason acited <<< "$araw"
     ASSERT_TOTAL=$((ASSERT_TOTAL + 1))
     where="$ASSERT_FILE:$assert_lno"
-    if [ -z "$areason" ]; then
+    # An empty token is not "no opinion": `case $actual in *""*)` matches every
+    # line, so an empty 3rd column would pass while still counting toward the
+    # verified total. A whitespace-only token is the same placeholder written with
+    # spaces. Reject both explicitly instead of letting the case match run.
+    if [[ -z "${acontains//[[:space:]]/}" ]]; then
+      bad_assert+=("$where: empty contains token (3rd column is required)")
+      continue
+    fi
+    # Same invariant for the reason: a missing reason was already an error, but a
+    # whitespace-only one slipped through `[ -z ]` and passed as if it explained
+    # the contract.
+    if [[ -z "${areason//[[:space:]]/}" ]]; then
       bad_assert+=("$where: missing reason (4th column is required: why this pointer matters)")
       continue
     fi
