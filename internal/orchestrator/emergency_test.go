@@ -167,7 +167,7 @@ func emergencyAdminContext() context.Context {
 }
 
 // emergencyTestReason is the required justification every ExecuteEmergencyChange
-// fixture must carry (TASK-325 W3 / AC-058-12: 5-500 characters after trimming).
+// fixture must carry (TASK-325 W3 / AC-058-12: 1-1000 UTF-8 bytes after trimming).
 // A request without it is rejected before any other validation runs, which is the
 // behaviour TestExecuteEmergencyChangeReasonValidation pins directly.
 const emergencyTestReason = "incident-42 mitigate impact"

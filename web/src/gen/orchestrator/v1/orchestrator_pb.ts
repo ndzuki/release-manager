@@ -4209,8 +4209,8 @@ export type ExecuteEmergencyChangeRequest = Message<"orchestrator.v1.ExecuteEmer
   /**
    * Operator-supplied justification, persisted to operations.reason and
    * projected back as Operation.reason_display (TASK-325 W3 / AC-058-12,
-   * decision D16=A). required; 5-500 Unicode characters after trimming, the
-   * same shape RevokeOperatorRequest.reason enforces.
+   * decision D16=A). required; 1-1000 UTF-8 bytes after trimming (byte count,
+   * not character count: 400 CJK characters are 1200 bytes and are rejected).
    *
    * @generated from field: string reason = 13;
    */

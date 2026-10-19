@@ -95,7 +95,7 @@ func (c *Connector) Targets(ctx context.Context, definitionID string) ([]stages.
 //     fingerprint depend on a value the server ignores.
 //   - set_replicas is mutually exclusive with container/artifact_ref (the image
 //     branch), so neither is sent.
-//   - reason is required (TASK-325 W3 / AC-058-12: 5-500 characters after
+//   - reason is required (TASK-325 W3 / AC-058-12: 1-1000 UTF-8 bytes after
 //     trimming). The stage passes its own stable justification instead of
 //     leaving the field empty, which the server rejects as invalid_reason.
 func (c *Connector) SetReplicas(ctx context.Context, request stages.EmergencySetReplicasRequest) (stages.OperationRef, error) {

@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -521,17 +520,22 @@ func validateExecuteEmergencyRequest(msg *orchestratorv1.ExecuteEmergencyChangeR
 	return nil
 }
 
-// Emergency reason bounds (TASK-325 W3 / AC-058-12). The window is the same
-// 5-500 Unicode character window RevokeOperatorRequest.reason enforces, so the
-// console shows one rule for every audited human input.
+// Emergency reason bounds (TASK-325 W3 / AC-058-12). The window is the one the
+// contract pins (Notes/contracts/emergency-execution.md): "trim 后 1–1000 UTF-8
+// bytes". The unit is BYTES, not characters/runes, so 400 CJK characters
+// (1200 bytes) are rejected even though they are only 400 runes. Do not swap
+// these for a rune count.
 const (
-	emergencyReasonMinRunes = 5
-	emergencyReasonMaxRunes = 500
+	emergencyReasonMinBytes = 1
+	emergencyReasonMaxBytes = 1000
 )
 
 // validateEmergencyReason enforces the required, trimmed, bounded reason.
 // The stable code is invalid_reason (carried as X-Reason-Code) and the message
 // is fixed prose, never the caller's text.
+//
+// The bound is measured in UTF-8 bytes: Go's len(string) already returns the
+// byte length, so len(reason) is the contract's unit and needs no conversion.
 //
 // The forbidden code points are the ones decision D16=A names (NUL, U+FFFE,
 // U+FFFF) and the console already rejects
@@ -539,8 +543,8 @@ const (
 // subset instead of the server accepting text the form refuses to submit.
 func validateEmergencyReason(raw string) error {
 	reason := strings.TrimSpace(raw)
-	if length := utf8.RuneCountInString(reason); length < emergencyReasonMinRunes || length > emergencyReasonMaxRunes {
-		return emergencyError(connect.CodeInvalidArgument, "invalid_reason", "reason must contain 5 to 500 characters")
+	if length := len(reason); length < emergencyReasonMinBytes || length > emergencyReasonMaxBytes {
+		return emergencyError(connect.CodeInvalidArgument, "invalid_reason", "reason must contain 1 to 1000 UTF-8 bytes")
 	}
 	for _, r := range reason {
 		if r == 0x00 || r == 0xFFFE || r == 0xFFFF {

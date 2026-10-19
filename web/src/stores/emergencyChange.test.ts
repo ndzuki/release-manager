@@ -259,7 +259,7 @@ describe('emergencyChange store', () => {
 
   // AC-058-12 / TASK-325 W3: the store sends the trimmed justification the
   // server persists and projects back. A reason that only passes after trimming
-  // must reach the wire trimmed, otherwise the server's 5-character minimum
+  // must reach the wire trimmed, otherwise the server's 1-byte minimum
   // would be measured against text the operator never meant to submit.
   it('sends the trimmed reason and refuses to confirm without one', async () => {
     setActivePinia(createPinia());
@@ -277,10 +277,15 @@ describe('emergencyChange store', () => {
     await vi.waitFor(() => expect(store.artifacts).toHaveLength(1));
     store.selectArtifact(store.artifacts[0]);
 
-    store.setReason('abcd');
+    store.setReason('   ');
     expect(store.reasonValid).toBe(false);
     store.openConfirm();
     expect(store.confirmOpen).toBe(false);
+
+    // One byte is valid under the contract's byte window; the old rune rule
+    // refused anything shorter than five characters.
+    store.setReason('a');
+    expect(store.reasonValid).toBe(true);
 
     store.setReason('  incident-42  ');
     expect(store.reasonValid).toBe(true);

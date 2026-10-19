@@ -202,7 +202,7 @@ func (r *LiveRecovery) RollbackRelease(ctx context.Context, definitionID string,
 //
 // The Recovery interface takes a reason for symmetry with the other recovery
 // writes, and ExecuteEmergencyChangeRequest.reason is now a required field
-// (TASK-325 W3: 5-500 characters after trimming), so cleanup forwards the
+// (TASK-325 W3: 1-1000 UTF-8 bytes after trimming), so cleanup forwards the
 // reason it already composes.
 func (r *LiveRecovery) SetReplicas(ctx context.Context, definitionID, workloadRef string, replicas int32, reason string) error {
 	if strings.TrimSpace(definitionID) == "" {

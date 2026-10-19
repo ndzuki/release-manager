@@ -6,7 +6,7 @@
 // Field-level validation errors render inline (D7 double-track).
 import { computed } from 'vue';
 import FormField from '@/components/common/FormField.vue';
-import { REASON_MAX_CHARS, codePointLength, validateReason } from '@/features/emergency/validation';
+import { REASON_MAX_BYTES, utf8ByteLength, validateReason } from '@/features/emergency/validation';
 import type { ConvergencePolicy } from '@/features/emergency/model';
 
 const props = defineProps<{
@@ -24,10 +24,11 @@ const emit = defineEmits<{
 }>();
 
 const reasonValidation = computed(() => validateReason(props.reason));
-// TASK-325 W3: the counter is in Unicode characters, the unit the server
-// enforces (5-500 via utf8.RuneCountInString), so the number the operator sees
-// is the number the server checks.
-const reasonChars = computed(() => codePointLength(props.reason.trim()));
+// TASK-325 W3: the counter is in UTF-8 bytes, the unit the server enforces
+// (1-1000 bytes via len(string)), so the number the operator sees is the number
+// the server checks. Code points would under-count CJK: 400 CJK characters are
+// 1200 bytes and over the limit.
+const reasonBytes = computed(() => utf8ByteLength(props.reason.trim()));
 // TASK-275: the counter stays a description (it is a live hint, not the name);
 // FormField cannot render it because it carries the `over` state class.
 const charCountId = 'emergency-reason-char-count';
@@ -66,7 +67,7 @@ function setPolicy(policy: ConvergencePolicy): void {
           @input="emit('update:reason', ($event.target as HTMLTextAreaElement).value)"
         />
         <span :id="charCountId" class="char-count" :class="{ over: !reasonValidation.valid }">
-          {{ reasonChars }} / {{ REASON_MAX_CHARS }} 字符
+          {{ reasonBytes }} / {{ REASON_MAX_BYTES }} 字节
         </span>
       </template>
     </FormField>

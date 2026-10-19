@@ -90,7 +90,7 @@ interface ExecuteEmergencyBaseInput {
   idempotencyKey: string;
   /**
    * Operator justification (AC-058-12 / TASK-325 W3). Required by the server,
-   * which trims it and rejects anything outside 5-500 characters as
+   * which trims it and rejects anything outside 1-1000 UTF-8 bytes as
    * invalid_reason.
    */
   reason: string;

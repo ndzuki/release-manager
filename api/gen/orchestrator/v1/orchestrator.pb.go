@@ -9430,8 +9430,8 @@ type ExecuteEmergencyChangeRequest struct {
 	AnnotationScope string             `protobuf:"bytes,12,opt,name=annotation_scope,json=annotationScope,proto3" json:"annotation_scope,omitempty"`
 	// Operator-supplied justification, persisted to operations.reason and
 	// projected back as Operation.reason_display (TASK-325 W3 / AC-058-12,
-	// decision D16=A). required; 5-500 Unicode characters after trimming, the
-	// same shape RevokeOperatorRequest.reason enforces.
+	// decision D16=A). required; 1-1000 UTF-8 bytes after trimming (byte count,
+	// not character count: 400 CJK characters are 1200 bytes and are rejected).
 	Reason        string `protobuf:"bytes,13,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

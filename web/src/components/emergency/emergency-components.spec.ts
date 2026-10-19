@@ -165,7 +165,7 @@ describe('emergency components (Step 4)', () => {
       },
     });
     expect(wrapper.text()).toContain('请填写变更原因');
-    expect(wrapper.text()).toContain('0 / 500 字符');
+    expect(wrapper.text()).toContain('0 / 1000 字节');
   });
 
   /*
@@ -200,7 +200,7 @@ describe('emergency components (Step 4)', () => {
     expect(errorNode.text()).toContain('请填写变更原因');
     expect(errorNode.attributes('role')).toBe('alert');
     expect(textarea.attributes('aria-invalid')).toBe('true');
-    expect(wrapper.get('#emergency-reason-char-count').text()).toContain('0 / 500 字符');
+    expect(wrapper.get('#emergency-reason-char-count').text()).toContain('0 / 1000 字节');
   });
 
   it('ChangeForm drops the reason alert and aria-invalid while the reason is valid (TASK-275)', () => {

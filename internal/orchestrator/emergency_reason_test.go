@@ -12,38 +12,47 @@ import (
 )
 
 // AC-058-12 / TASK-325 W3 (decision D16=A): Execute requires a justification
-// bounded to 5-500 Unicode characters after trimming. Each case asserts both the
-// rejection code AND that a rejection has no side effects; the accepted cases
-// assert the trimmed value is what the durable column and the display projection
-// carry.
+// bounded to 1-1000 UTF-8 BYTES after trimming, the window the contract pins
+// (Notes/contracts/emergency-execution.md). The unit is bytes, not
+// characters/runes, so 400 CJK characters (1200 bytes) must be rejected even
+// though they are only 400 runes, while 300 CJK characters (900 bytes) fit.
+// Each case asserts both the rejection code/message AND that a rejection has no
+// side effects; the accepted cases assert the trimmed value is what the durable
+// column carries, and that the display projection matches it unless the 500-rune
+// projection budget truncates it.
 func TestExecuteEmergencyChangeReasonValidation(t *testing.T) {
+	const (
+		lengthMessage    = "invalid_argument: reason must contain 1 to 1000 UTF-8 bytes"
+		forbiddenMessage = "invalid_argument: reason contains forbidden characters"
+	)
 	cases := []struct {
-		name     string
-		reason   string
-		rejected bool
-		wantText string
+		name        string
+		reason      string
+		rejected    bool
+		wantText    string
+		wantMessage string
+		// wantDisplayTruncated marks an accepted reason longer than the 500-rune
+		// display projection budget; the durable column keeps the full text.
+		wantDisplayTruncated bool
 	}{
-		{name: "empty", reason: "", rejected: true},
-		{name: "whitespace only", reason: " \n\t ", rejected: true},
-		{name: "four characters", reason: "abcd", rejected: true},
-		{name: "five characters", reason: "abcde", wantText: "abcde"},
+		{name: "empty", reason: "", rejected: true, wantMessage: lengthMessage},
+		{name: "whitespace only", reason: " \n\t ", rejected: true, wantMessage: lengthMessage},
+		// The contract's minimum is one BYTE, not the five characters the old
+		// rune window required, so a single character is a valid justification.
+		{name: "one byte", reason: "a", wantText: "a"},
 		{name: "surrounding whitespace is trimmed", reason: "  incident-42  ", wantText: "incident-42"},
-		{name: "five characters after trimming", reason: "\t abcde\n", wantText: "abcde"},
-		{name: "500 characters", reason: strings.Repeat("a", 500), wantText: strings.Repeat("a", 500)},
-		{name: "501 characters", reason: strings.Repeat("a", 501), rejected: true},
-		// Multibyte boundaries pin the character (rune) semantics rather than
-		// byte length: four emoji are 16 bytes but only four characters, so a
-		// byte-length check would wrongly accept them, and 500 CJK characters
-		// are 1500 bytes, so a byte-length check would wrongly reject them.
-		{name: "four emoji (4 runes, 16 bytes)", reason: "🚀🚀🚀🚀", rejected: true},
-		{name: "five emoji (5 runes, 20 bytes)", reason: "🚀🚀🚀🚀🚀", wantText: "🚀🚀🚀🚀🚀"},
-		{name: "four CJK characters (4 runes, 12 bytes)", reason: "中文中文", rejected: true},
-		{name: "mixed emoji and ASCII (5 runes, 8 bytes)", reason: "🚀ok!!", wantText: "🚀ok!!"},
-		{name: "500 CJK characters (500 runes, 1500 bytes)", reason: strings.Repeat("中", 500), wantText: strings.Repeat("中", 500)},
-		{name: "501 CJK characters (501 runes, 1503 bytes)", reason: strings.Repeat("中", 501), rejected: true},
-		{name: "NUL", reason: "abc\x00de", rejected: true},
-		{name: "U+FFFE", reason: "abc\ufffede", rejected: true},
-		{name: "U+FFFF", reason: "abc\uffffde", rejected: true},
+		{name: "one byte after trimming", reason: "\t a\n", wantText: "a"},
+		{name: "1000 bytes (ASCII)", reason: strings.Repeat("a", 1000), wantText: strings.Repeat("a", 1000), wantDisplayTruncated: true},
+		{name: "1001 bytes (ASCII)", reason: strings.Repeat("a", 1001), rejected: true, wantMessage: lengthMessage},
+		// Byte-vs-rune discriminators. 400 CJK is inside the old 500-rune cap but
+		// over the 1000-byte bound; 300 CJK is inside both.
+		{name: "300 CJK (300 runes, 900 bytes)", reason: strings.Repeat("中", 300), wantText: strings.Repeat("中", 300)},
+		{name: "400 CJK (400 runes, 1200 bytes)", reason: strings.Repeat("中", 400), rejected: true, wantMessage: lengthMessage},
+		{name: "333 CJK (999 bytes)", reason: strings.Repeat("中", 333), wantText: strings.Repeat("中", 333)},
+		{name: "334 CJK (1002 bytes)", reason: strings.Repeat("中", 334), rejected: true, wantMessage: lengthMessage},
+		{name: "NUL", reason: "abc\x00de", rejected: true, wantMessage: forbiddenMessage},
+		{name: "U+FFFE", reason: "abc\ufffede", rejected: true, wantMessage: forbiddenMessage},
+		{name: "U+FFFF", reason: "abc\uffffde", rejected: true, wantMessage: forbiddenMessage},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,6 +65,11 @@ func TestExecuteEmergencyChangeReasonValidation(t *testing.T) {
 				require.Error(t, err)
 				assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 				assert.Equal(t, "invalid_reason", connectErrorReason(err))
+				assert.Equal(t, tc.wantMessage, err.Error())
+				// The fixed prose must never echo the caller's text.
+				if trimmed := strings.TrimSpace(tc.reason); trimmed != "" {
+					assert.NotContains(t, err.Error(), trimmed)
+				}
 				assert.Empty(t, dispatcher.commands, "a rejected reason must never reach the operator")
 				operations, listErr := st.Operations().List(t.Context(), "def-001")
 				require.NoError(t, listErr)
@@ -75,7 +89,15 @@ func TestExecuteEmergencyChangeReasonValidation(t *testing.T) {
 				OperationId: resp.Msg.GetOperationId(),
 			}))
 			require.NoError(t, readErr)
-			assert.Equal(t, tc.wantText, read.Msg.GetOperation().GetReasonDisplay())
+			display := read.Msg.GetOperation().GetReasonDisplay()
+			if tc.wantDisplayTruncated {
+				// Accepted reasons may exceed the 500-rune display budget now that
+				// the bound is 1000 bytes; the projection truncates, the row does not.
+				assert.Equal(t, 500, len([]rune(display)))
+				assert.True(t, strings.HasSuffix(display, "..."))
+			} else {
+				assert.Equal(t, tc.wantText, display)
+			}
 		})
 	}
 }

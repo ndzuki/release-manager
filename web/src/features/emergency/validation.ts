@@ -1,13 +1,14 @@
 // Pure validation rules for the Emergency web form and convergence selection.
 // Annotation values keep the REQ-058 input contract's UTF-8 byte bound; the
-// reason is expressed in Unicode characters because the server enforces
-// 5-500 characters via utf8.RuneCountInString (TASK-325 W3). These are
-// client-side UX guards only — the server stays the authoritative validator
+// reason follows the emergency-execution contract's UTF-8 BYTE window
+// (trim 后 1–1000 UTF-8 bytes, TASK-325 W3), so 400 CJK characters (1200 bytes)
+// are rejected even though they are only 400 code points. These are client-side
+// UX guards only — the server stays the authoritative validator
 // (ADR-006/ADR-011).
 import type { ConvergenceTaskDisplay, EmergencyActionKind, EmergencyTargetDisplay } from '@/features/emergency/model';
 
-export const REASON_MIN_CHARS = 5;
-export const REASON_MAX_CHARS = 500;
+export const REASON_MIN_BYTES = 1;
+export const REASON_MAX_BYTES = 1000;
 export const ANNOTATION_MIN_ENTRIES = 1;
 export const ANNOTATION_MAX_ENTRIES = 50;
 export const ANNOTATION_VALUE_MIN_BYTES = 1;
@@ -28,11 +29,7 @@ export function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).length;
 }
 
-/** Unicode code points, matching the server's utf8.RuneCountInString bound. */
-export function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
+/** Rejects the code points decision D16=A names (NUL, U+FFFE, U+FFFF). */
 function containsForbiddenCodePoints(value: string): boolean {
   for (const char of value) {
     if (FORBIDDEN_CODE_POINTS.has(char.codePointAt(0)!)) return true;
@@ -41,28 +38,22 @@ function containsForbiddenCodePoints(value: string): boolean {
 }
 
 /**
- * reason: trimmed, 5-500 Unicode characters; forbids NUL, U+FFFE, U+FFFF
+ * reason: trimmed, 1-1000 UTF-8 BYTES; forbids NUL, U+FFFE, U+FFFF
  * (AC-058-12 / TASK-325 W3; the server rejects the same subset as
- * invalid_reason).
+ * invalid_reason). The unit is bytes, not characters: 400 CJK characters are
+ * 1200 bytes and must be rejected, 300 CJK characters are 900 bytes and fit.
  */
 export function validateReason(raw: string): ValidationResult {
   const reason = raw.trim();
-  if (reason.length === 0) {
+  const bytes = utf8ByteLength(reason);
+  if (bytes < REASON_MIN_BYTES) {
     return { valid: false, code: 'reason_required', message: '请填写变更原因' };
   }
-  const length = codePointLength(reason);
-  if (length < REASON_MIN_CHARS) {
-    return {
-      valid: false,
-      code: 'reason_too_short',
-      message: `变更原因至少 ${REASON_MIN_CHARS} 个字符（当前 ${length} 个）`,
-    };
-  }
-  if (length > REASON_MAX_CHARS) {
+  if (bytes > REASON_MAX_BYTES) {
     return {
       valid: false,
       code: 'reason_too_long',
-      message: `变更原因最多 ${REASON_MAX_CHARS} 个字符（当前 ${length} 个）`,
+      message: `变更原因最多 ${REASON_MAX_BYTES} 字节（当前 ${bytes} 字节）`,
     };
   }
   if (containsForbiddenCodePoints(reason)) {
