@@ -1,33 +1,14 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { onUnmounted, ref } from 'vue';
+import CopyableHash from '@/components/common/CopyableHash.vue';
 import type { TimelineEntry } from '@/types/operation';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 
 defineProps<{ entry: TimelineEntry }>();
 
-const copied = ref(false);
-let copiedResetTimer: ReturnType<typeof setTimeout> | null = null;
-
-onUnmounted(() => {
-  if (copiedResetTimer !== null) clearTimeout(copiedResetTimer);
-});
-
-async function copyIdentity(value: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(value);
-    copied.value = true;
-    // Replace any pending reset so a rapid second copy keeps the indicator
-    // visible for the full duration of the latest click (AC-057-04 UX).
-    if (copiedResetTimer !== null) clearTimeout(copiedResetTimer);
-    copiedResetTimer = setTimeout(() => {
-      copied.value = false;
-      copiedResetTimer = null;
-    }, 1200);
-  } catch {
-    // Clipboard unavailable (permissions/HTTP): leave the selectable text in place.
-  }
-}
+// TASK-394: the entry's correlation identities are UUIDs. They now render through the
+// shared CopyableHash (truncated with the full value in `title` and an explicit copy
+// button) instead of a bespoke full-length code plus copy button.
 
 // Template-safe wrapper: an object literal inside `{{ }}` is not copy the
 // i18n scanner can parse, and reaching into the formatter's options from the
@@ -75,24 +56,8 @@ const kindLabel: Record<string, string> = {
         <p class="timeline-entry__text">{{ entry.errorMessage || entry.errorCode || '发布出错' }}</p>
         <p v-if="entry.errorCode" class="timeline-entry__code">{{ t('operation.timeline.errorCode') }}{{ entry.errorCode }}</p>
         <div v-if="entry.operationId || entry.requestId" class="timeline-entry__identities">
-          <button
-            v-if="entry.operationId"
-            type="button"
-            class="timeline-entry__copy"
-            :aria-label="`复制 Operation ID ${entry.operationId}`"
-            @click="copyIdentity(entry.operationId)"
-          >
-            <code>{{ entry.operationId }}</code>{{ copied ? ' ✓' : ' 复制' }}
-          </button>
-          <button
-            v-if="entry.requestId"
-            type="button"
-            class="timeline-entry__copy"
-            :aria-label="`复制 Request ID ${entry.requestId}`"
-            @click="copyIdentity(entry.requestId)"
-          >
-            <code>{{ entry.requestId }}</code>{{ copied ? ' ✓' : ' 复制' }}
-          </button>
+          <CopyableHash v-if="entry.operationId" :value="entry.operationId" />
+          <CopyableHash v-if="entry.requestId" :value="entry.requestId" />
         </div>
       </template>
 
@@ -120,7 +85,6 @@ const kindLabel: Record<string, string> = {
 .timeline-entry__text { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-md); overflow-wrap: anywhere; }
 .timeline-entry__code { margin: 0; color: var(--color-error); font-size: var(--font-size-sm); }
 .timeline-entry__identities { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.timeline-entry__copy { padding: 0.25rem 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.35rem; background: var(--color-surface); color: var(--color-primary-hover); font-size: var(--font-size-xs); cursor: pointer; }
 .timeline-entry--error { border-color: var(--color-danger-border-soft); background: var(--color-danger-soft); }
 .timeline-entry--emergency_effect_resolved { border-color: var(--color-info-border-soft); background: var(--color-info-soft); }
 </style>

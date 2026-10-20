@@ -183,13 +183,15 @@ describe('OperationDetailPage convergence context (TASK-279)', () => {
     await router.isReady();
     const wrapper = mount(OperationDetailPage, { global: { plugins: [router] } });
 
-    // The breadcrumbs point at the real cluster the definition reports, and the
-    // action is available — this is the mask TASK-279 removes.
+    // The release crumb links into the scoped operation list built from the recovered
+    // scope, and the action is available — this is the mask TASK-279 removes. TASK-394
+    // moved the trail into PageHeader, whose crumb labels are NAMES (the href still
+    // carries the scope, which is the only place ids belong).
     await vi.waitFor(() =>
-      expect(wrapper.find('.operation-detail__breadcrumbs a[href^="/customers/"]').exists()).toBe(true),
+      expect(wrapper.find('.page-header__crumbs a[href^="/customers/"]').exists()).toBe(true),
     );
     expect(getDefinition).toHaveBeenCalledWith('def-1');
-    expect(wrapper.get('.operation-detail__breadcrumbs').html()).toContain(
+    expect(wrapper.get('.page-header__crumbs').html()).toContain(
       '/customers/cust-1/clusters/cluster-1/releases',
     );
 
@@ -217,7 +219,7 @@ describe('OperationDetailPage convergence context (TASK-279)', () => {
     // The operation and its panel still render; only the scoped navigation stays
     // closed, because there is genuinely no context to build it from.
     await vi.waitFor(() => expect(wrapper.text()).toContain('紧急变更结果'));
-    expect(wrapper.get('.operation-detail__breadcrumbs').text()).not.toContain('Releases');
+    expect(wrapper.get('.page-header__crumbs').text()).not.toContain('Releases');
     expect(convergenceButton(wrapper)).toBeUndefined();
   });
 
@@ -259,7 +261,7 @@ describe('OperationDetailPage convergence context (TASK-279)', () => {
 
     // The release scope is genuinely absent (scope-less breadcrumb) while the snapshot
     // still grants the capability...
-    expect(wrapper.get('.operation-detail__breadcrumbs').text()).not.toContain('Releases');
+    expect(wrapper.get('.page-header__crumbs').text()).not.toContain('Releases');
     expect(useEmergencyAuthorizationStore().canCreateValuesRevision).toBe(true);
     // ...and the action is absent rather than dead.
     expect(convergenceButton(wrapper)).toBeUndefined();

@@ -219,8 +219,10 @@ describe('OperationDetailPage scope switch (TASK-286)', () => {
     // The store moves on to a different definition under the SAME route param.
     releaseSecondSnapshot();
     await vi.waitFor(() => expect(getDefinition).toHaveBeenCalledWith('def-2'));
+    // TASK-394: the trail is PageHeader's, labelled with names; the recovered scope is
+    // observable in the release crumb's href (ids belong in links, never in labels).
     const scopedCrumbs = () =>
-      wrapper.get('.operation-detail__breadcrumbs').html();
+      wrapper.get('.page-header__crumbs').html();
     await vi.waitFor(() => expect(scopedCrumbs()).toContain('/customers/cust-2/clusters/cluster-2/releases'));
 
     // The def-1 read now resolves with a stale scope: the route param is still

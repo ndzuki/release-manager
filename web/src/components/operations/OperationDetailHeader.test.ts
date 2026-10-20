@@ -1,15 +1,17 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
-import { statusLabel } from '@/i18n/status-labels';
 import type { Operation } from '@/types/operation';
 import OperationDetailHeader from './OperationDetailHeader.vue';
 
 /*
  * The header's conditional actions are the detail page's only mutating entries. The
- * page used to hold them inline; they now live in this presentational component, so
- * the branches (can cancel / already cancelling / terminal / no write permission)
- * are pinned here by their observable contract: which button renders, whether it is
+ * branches (can cancel / already cancelling / terminal / no write permission) are
+ * pinned here by their observable contract: which button renders, whether it is
  * disabled, the completion tooltip, and what the click reports.
+ *
+ * TASK-394: the direction-C PageHeader owns the heading, so this component no longer
+ * renders an h1, the operation type eyebrow or the raw operation id; the first case
+ * pins that split (identity lives in PageHeader + OperationDetailSummary).
  */
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -37,7 +39,6 @@ function operation(overrides: Partial<Operation> = {}): Operation {
 
 function mountHeader(props: {
   operation?: Operation | null;
-  releaseName?: string;
   showCancel?: boolean;
   canCancel?: boolean;
   cancelLoading?: boolean;
@@ -46,7 +47,6 @@ function mountHeader(props: {
   return mount(OperationDetailHeader, {
     props: {
       operation: props.operation === undefined ? operation() : props.operation,
-      releaseName: props.releaseName ?? 'checkout',
       showCancel: props.showCancel ?? true,
       canCancel: props.canCancel ?? true,
       cancelLoading: props.cancelLoading ?? false,
@@ -60,13 +60,15 @@ function buttonWithText(wrapper: ReturnType<typeof mountHeader>, label: string) 
 }
 
 describe('OperationDetailHeader', () => {
-  it('renders the operation identity and state', () => {
+  it('renders no heading or identity of its own (TASK-394: PageHeader owns them)', () => {
     const wrapper = mountHeader({});
 
-    expect(wrapper.get('h1').text()).toBe('checkout');
-    expect(wrapper.text()).toContain('op-1');
-    expect(wrapper.text()).toContain(`${statusLabel('operationType', 'INSTALL')}操作`);
-    expect(wrapper.get('.operation-detail__state').text()).toBe(statusLabel('operation', 'running'));
+    // The old header rendered <h1>{{ releaseName }}</h1> and the raw operation id; both
+    // moved to the page header and the summary block respectively.
+    expect(wrapper.find('h1').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('op-1');
+    // Refresh is still the always-present action.
+    expect(buttonWithText(wrapper, '刷新')).toBeDefined();
   });
 
   it('reports a cancel request and a manual refresh', async () => {
