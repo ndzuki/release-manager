@@ -6,12 +6,23 @@ interface ForbiddenStateProps {
   title?: string;
   message?: string;
   actionLabel?: string;
+  /**
+   * Heading level for the state's title.
+   *
+   * Defaults to h2 because this state is normally embedded inside a page that already
+   * owns the h1 (every call site except ForbiddenPage). ForbiddenPage IS the page, so it
+   * asks for h1: without this the page would have no h1 at all, and adding a second one
+   * next to the state's heading would give assistive technology two top-level titles
+   * (TASK-394).
+   */
+  headingLevel?: 'h1' | 'h2';
 }
 
 withDefaults(defineProps<ForbiddenStateProps>(), {
   title: t('state.accessDenied'),
   message: t('state.accessDeniedMessage'),
   actionLabel: '',
+  headingLevel: 'h2',
 });
 
 const emit = defineEmits<{ action: [] }>();
@@ -28,7 +39,8 @@ const titleId = useId();
 <template>
   <section class="forbidden-state" role="alert" :aria-labelledby="titleId">
     <span class="forbidden-state__code" aria-hidden="true">403</span>
-    <h2 :id="titleId" class="forbidden-state__title">{{ title }}</h2>
+    <h1 v-if="headingLevel === 'h1'" :id="titleId" class="forbidden-state__title">{{ title }}</h1>
+    <h2 v-else :id="titleId" class="forbidden-state__title">{{ title }}</h2>
     <p class="forbidden-state__text">{{ message }}</p>
     <slot name="action">
       <button v-if="actionLabel" class="forbidden-state__action" type="button" @click="emit('action')">

@@ -419,23 +419,26 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ArtifactLifecyclePage.vue',
-    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；两者都只对 platform_admin 开放（cleanup/write），维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 调用', '同步', '执行（服务端预算可达约 1 小时），因此客户端对本过程使用更长的死线。', '同一幂等键在保留窗口内（默认 24 小时，可配置）会被拒绝（', 'cleanup_already_requested', '）而不重跑； 「重试」复用同一个键，点「执行 GC」才是新的清理请求。注意：单节点部署可能没有幂等键表，此时只有进程内互斥生效。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有「从', 'validated', '归档」的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 该操作是收敛的：重复调用再次成功且不改数据，因此要按', '存储的原始状态', '理解', 'previous_status', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC', '请先确认已了解清理不可撤销', '执行中…（服务端预算可达约 1 小时）', '提交中…', '恢复', '重试'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；仅 platform_admin 可用，维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 清理', '同步', '执行，服务端预算可达约 1 小时，所以页面会一直等待结果。', '保留窗口内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求， 点「执行 GC」才会发起新的清理。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有从', 'validated', '归档的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 重复恢复是安全的：再次成功且不改数据；结果显示的「归档前状态」是归档时的原始状态。', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC', '请先确认已了解清理不可撤销', '执行中…（最长约 1 小时）', '提交中…', '恢复', '重试'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the implementation detail (the `cleanup/write` policy action, `cleanup_already_requested`, `previous_status` and the key-table/deadline notes) out of the rendered copy, so those literals left this allowlist',
   },
   {
     file: 'src/pages/BundlesPage.vue',
-    allowed: ['发布 Bundle', 'Bundle 是不可变输入：内容摘要、Chart 引用与镜像绑定，以及签名/SBOM/来源证明的引用。', '状态', '全部', '请先填写 Release Definition ID：服务端把它同时作为', '查询范围', '授权对象', '，缺少它会被拒绝 （不是「没有数据」），因此页面在填写前不会发起请求。', '名称', '状态', '摘要', 'Chart', '镜像绑定', '接收时间', '操作', '明细', '正在追加下一页…', 'Bundle 明细', '名称', '摘要', '状态', '证据引用', '签名', '来源证明', '镜像绑定（ ）', '引用', '摘要', 'Values 路径', '关闭明细', 'definition id', 'chart name', '加载未成功', '正在读取 Bundle…', '没有 Bundle', '当前过滤条件下没有 Bundle；清空过滤可查看全部（注意：无权限时服务端会返回拒绝而不是空列表）。', '正在读取明细…', '明细加载失败', '查询中…', '查询', '加载中…', '加载更多', '共 个', '与', '个', '回到第一页'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `回到第一页` and the single-Han fragments `共 个` / `与` / `个`',
+    allowed: ['Chart', 'definition id', 'chart name'],
+    reason:
+      'TASK-394 (consistency wave 3) moved the page copy — title, subtitle, filters, table headers, detail labels and every state message — into the catalog. What stays inline is the `Chart` column noun and the two wire-field placeholders (`definition id`, `chart name`), which are examples of the value the filter expects rather than prose',
   },
   {
     file: 'src/pages/StuckLocksPage.vue',
-    allowed: ['卡住的紧急锁', '终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。', 'Release Definition 过滤（留空 = 当前组织内全部）', '查询', '定义 / 操作', '动作', '锁定路径', '终态时间 / 卡住自', '观察窗口', '操作', 'op', '卡住自', '释放锁', '释放模式', 'NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。', 'AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果', '保留 UNKNOWN', '，释放全程审计，迟到的结果仍可能解析效果。', '释放原因（必填，≤1000 字）', '解锁证据（可选，≤500 字）', '我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）', '取消', 'Release Definition ID', '操作未成功', '正在读取卡住的锁…', '没有卡住的锁', '当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE', '为什么可以释放这个锁', '例如 kubectl get deploy -o yaml 的观察结论', '释放原因最多 1000 个字符', '解锁证据最多 500 个字符', '必须填写释放原因', '必须选择释放模式', '请先确认已核实集群效果', '刷新中…', '刷新', '提交中…', '确认释放', '刷新列表'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `刷新列表`',
+    allowed: ['op', 'Release Definition ID', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE'],
+    reason:
+      'TASK-394 (consistency wave 3) moved the page copy — title, subtitle, filter, table headers, dialog labels, placeholders and the five validation messages — into the catalog. What stays inline is the `op ` row prefix, the wire-field placeholder, and the two radio VALUES (`NOT_APPLIED_PROVEN` / `AUDITED_OVERRIDE`), which are the enum the server receives, not copy',
   },
   {
     file: 'src/pages/TrustPolicyPage.vue',
-    allowed: ['签名信任根', '环境', '策略版本', '· 可用信任根', '状态', '生效自 / 宽限至', '操作', '宽限至', '吊销会立即停止该密钥的签名校验，并', '提升吊销 epoch', '（缓存持有者据此失效）；记录会保留。 已用该密钥验证过的制品不会因此失去既有地位。', '取消', '信任根操作未成功', '正在读取信任策略…', '该环境还没有信任根', '没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。', '结束宽限', '退休', '吊销', '该环境只剩一个可用信任根，不能移除', '刷新中…', '刷新', '提交中…', '确认吊销', '刷新策略'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `刷新策略`',
+    allowed: [],
+    reason:
+      'TASK-394 (consistency wave 3) moved every string this page renders (title, filter card, policy meta, table headers, state actions, empty/loading/error copy and the revoke confirmation) into the catalog; the page only composes them, and the action labels are a `MessageKey` map',
   },
   {
     file: 'src/pages/OperationCreatePage.vue',
@@ -444,8 +447,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationListPage.vue',
-    allowed: ['操作历史', '返回发布清单', '创建操作', '状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '面包屑', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。', '全部状态', '进行中', '已成功', '已失败', '已取消', '查询中…', '刷新', '加载中…', '加载更多'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。', '全部状态', '进行中', '已成功', '已失败', '已取消', '查询中…', '刷新', '加载中…', '加载更多'],
+    reason:
+      'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the page title, the eyebrow, the two header actions and the breadcrumb region name into the catalog (the hand-rolled `<nav aria-label="面包屑">` became PageHeader crumbs), so those four literals left this allowlist',
   },
   {
     file: 'src/pages/OperationDetailPage.vue',

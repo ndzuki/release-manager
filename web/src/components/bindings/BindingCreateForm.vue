@@ -32,12 +32,14 @@ const customerId = defineModel<string>('customerId', { required: true });
 </template>
 
 <style scoped>
+/* Direction C card (TASK-394): surface fill + the STRONG border (`--color-border` is a
+   hairline and vanishes in the dark theme) + the shared radius. */
 .governance__panel {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
   background: var(--color-surface);
 }
 

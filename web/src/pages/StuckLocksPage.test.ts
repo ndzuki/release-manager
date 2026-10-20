@@ -139,6 +139,29 @@ describe('StuckLocksPage', () => {
     expect(wrapper.find('.error-state').exists()).toBe(false);
   });
 
+  /*
+   * TASK-394 (consistency wave 3). The hand-rolled `.eyebrow` + `<h1>` is gone: the
+   * shared PageHeader owns both, keeping the same category word. The table keeps its
+   * six columns and gains the direction-C frame wrapper.
+   */
+  it('renders the shared header with the 紧急 eyebrow and a framed six-column table', async () => {
+    const wrapper = await mountPage();
+
+    expect(wrapper.find('.eyebrow').exists()).toBe(false);
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('紧急');
+    expect(wrapper.get('.page-header__title').text()).toBe('卡住的紧急锁');
+
+    const table = wrapper.get('.table-wrap.stuck__table-wrap');
+    expect(table.findAll('thead th').map((th) => th.text())).toEqual([
+      '定义 / 操作',
+      '动作',
+      '锁定路径',
+      '终态时间 / 卡住自',
+      '观察窗口',
+      '操作',
+    ]);
+  });
+
   it('filters by release definition', async () => {
     const wrapper = await mountPage();
 

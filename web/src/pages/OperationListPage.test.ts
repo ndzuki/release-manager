@@ -29,7 +29,7 @@ function summary(id: string, overrides: Partial<api.OperationSummaryItem> = {}):
   };
 }
 
-async function mountPage() {
+async function mountPage(query: Record<string, string> = {}) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -42,7 +42,7 @@ async function mountPage() {
       { path: `${ROUTE_PATH}/:operationId`, name: 'OperationDetail', component: { template: '<div />' } },
     ],
   });
-  await router.push(PATH);
+  await router.push({ path: PATH, query });
   await router.isReady();
   const wrapper = mount(OperationListPage, { global: { plugins: [router] } });
   await flushPromises();
@@ -166,5 +166,51 @@ describe('OperationListPage', () => {
 
     expect(wrapper.text()).toContain('暂无操作记录');
     expect(wrapper.text()).not.toContain('操作历史加载失败');
+  });
+});
+
+/*
+ * TASK-394 (consistency wave 5): the hand-rolled `<nav aria-label="面包屑">` + eyebrow/h1
+ * header became PageHeader. Two invariants carried over: the release NAME is the subtitle
+ * (the definition id is never printed as raw text), and the trail is built from NAMES —
+ * a level whose label would be the route identifier is dropped instead of shown.
+ */
+describe('OperationListPage header (TASK-394)', () => {
+  it('renders the release name as the subtitle and names in the crumb trail', async () => {
+    mockedList.mockResolvedValue({ operations: [], nextCursor: '' });
+
+    const wrapper = await mountPage({
+      customerName: 'Customer One',
+      clusterName: 'Cluster One',
+      releaseName: 'team/app',
+    });
+
+    expect(wrapper.get('h1').text()).toBe('操作历史');
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('Release 操作');
+    expect(wrapper.get('.page-header__subtitle').text()).toBe('team/app');
+    // The release definition id left the header entirely; the name identifies the release.
+    expect(wrapper.get('.page-header').text()).not.toContain(RELEASE);
+
+    const links = wrapper.findAll('nav a');
+    expect(links.map((link) => link.text())).toEqual(['客户', 'Customer One', 'Cluster One']);
+    expect(links[0]!.attributes('href')).toBe('/customers');
+    expect(links[1]!.attributes('href')).toBe(`/customers/${CUSTOMER}/clusters`);
+    expect(links[2]!.attributes('href')).toContain(`/customers/${CUSTOMER}/clusters/${CLUSTER}/releases`);
+    // The last crumb is this page: never a link, marked aria-current.
+    expect(wrapper.get('nav [aria-current="page"]').text()).toBe('操作历史');
+  });
+
+  it('falls back to a copyable definition hash when the URL carries no release name', async () => {
+    mockedList.mockResolvedValue({ operations: [], nextCursor: '' });
+
+    const wrapper = await mountPage();
+
+    // No subtitle to invent: the definition id surfaces as a truncated, copyable hash.
+    expect(wrapper.find('.page-header__subtitle').exists()).toBe(false);
+    expect(wrapper.get('.copyable-hash__value').attributes('title')).toBe(RELEASE);
+    // Identifier-level crumbs are dropped, not printed: 客户 + this page only.
+    expect(wrapper.findAll('nav li')).toHaveLength(2);
+    expect(wrapper.get('nav').text()).not.toContain(CUSTOMER);
+    expect(wrapper.get('nav').text()).not.toContain(CLUSTER);
   });
 });

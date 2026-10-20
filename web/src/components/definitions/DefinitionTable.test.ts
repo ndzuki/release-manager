@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import type { DefinitionView } from '@/connect/definition-api';
@@ -129,5 +131,25 @@ describe('DefinitionTable', () => {
     expect(region.attributes('aria-label')).toBe('发布定义表格（可横向滚动）');
     expect(region.attributes('tabindex')).toBe('0');
     expect(region.find('table.definitions__table').exists()).toBe(true);
+    // TASK-394: the wrapper is the shared `.table-wrap`, not a page-private scroll class.
+    expect(region.classes()).toContain('table-wrap');
+    expect(region.classes()).not.toContain('definitions__scroll');
+  });
+
+  /*
+   * TASK-394: happy-dom does not evaluate scoped CSS, so the direction-C table contract
+   * is asserted against the component source — the convention the audit tables use for
+   * their stylesheet invariants.
+   */
+  it('frames the scroller and paints the header from the direction-C tokens', () => {
+    const source = readFileSync(resolve(__dirname, 'DefinitionTable.vue'), 'utf8');
+    const style = source.replace(/\/\*[\s\S]*?\*\//g, '').match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] ?? '';
+
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*border:\s*1px solid var\(--color-border-strong\)/);
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*background:\s*var\(--color-surface\)/);
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*border-radius:\s*var\(--r\)/);
+    expect(style).toMatch(/\.definitions__table th\s*\{[^}]*background:\s*var\(--color-surface-muted\)/);
+    expect(style).toMatch(/\.definitions__table th\s*\{[^}]*color:\s*var\(--color-muted-strong\)/);
+    expect(style).toMatch(/\.definitions__table th\s*\{[^}]*font-size:\s*var\(--font-size-xs\)/);
   });
 });

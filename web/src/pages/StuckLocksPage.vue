@@ -5,6 +5,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import type { StuckLockView } from '@/connect/stuck-lock-api';
 import { useAuthStore } from '@/stores/auth';
@@ -18,6 +19,11 @@ import { formatTimestamp } from '@/utils/formatTimestamp';
  * the observation window — it blocks the definition from accepting new work. The
  * release is irreversible and not replayable, so the dialog forces the operator to
  * choose a mode and justify it, and warns about what each mode records.
+ *
+ * TASK-394 (consistency wave 3): the header is the shared PageHeader (eyebrow "紧急"),
+ * the page root dropped its own `--space-5` padding (the shell already pads 24px), the
+ * filter card and the table frame use the direction-C tokens, and the visible copy
+ * moved into the catalog. The radio VALUES stay inline: they are the wire enum, not copy.
  */
 const store = useStuckLocksStore();
 const auth = useAuthStore();
@@ -57,24 +63,24 @@ async function submit(): Promise<void> {
   // operator sees is the same one a direct API call would produce.
   const trimmed = reason.value.trim();
   if (!trimmed) {
-    validationError.value = '必须填写释放原因';
+    validationError.value = t('stuckLocks.validation.reasonRequired');
     return;
   }
   // The server counts RUNES, not bytes (1-1000 for the reason, <=500 for evidence).
   if ([...trimmed].length > 1000) {
-    validationError.value = '释放原因最多 1000 个字符';
+    validationError.value = t('stuckLocks.validation.reasonTooLong');
     return;
   }
   if ([...evidence.value].length > 500) {
-    validationError.value = '解锁证据最多 500 个字符';
+    validationError.value = t('stuckLocks.validation.evidenceTooLong');
     return;
   }
   if (!mode.value) {
-    validationError.value = '必须选择释放模式';
+    validationError.value = t('stuckLocks.validation.modeRequired');
     return;
   }
   if (!acknowledged.value) {
-    validationError.value = '请先确认已核实集群效果';
+    validationError.value = t('stuckLocks.validation.ackRequired');
     return;
   }
   validationError.value = '';
@@ -91,25 +97,24 @@ async function submit(): Promise<void> {
 
 <template>
   <section class="stuck">
-    <header class="stuck__header">
-      <div>
-        <p class="eyebrow">{{ t('stuck.eyebrow') }}</p>
-        <h1>卡住的紧急锁</h1>
-        <p class="stuck__subtitle">
-          终态 EMERGENCY 操作在观察窗口内仍未确认集群效果时会保留锁，定义因此无法接受新任务。
-        </p>
-      </div>
-      <button type="button" :disabled="store.loading" @click="store.load(store.definitionFilter)">
-        {{ store.loading ? '刷新中…' : '刷新' }}
-      </button>
-    </header>
+    <PageHeader
+      :title="t('stuckLocks.page.title')"
+      :eyebrow="t('stuck.eyebrow')"
+      :subtitle="t('stuckLocks.page.subtitle')"
+    >
+      <template #actions>
+        <button type="button" class="stuck__button" :disabled="store.loading" @click="store.load(store.definitionFilter)">
+          {{ store.loading ? t('stuckLocks.refreshing') : t('action.refresh') }}
+        </button>
+      </template>
+    </PageHeader>
 
     <form class="stuck__filter" @submit.prevent="store.load(store.definitionFilter)">
       <label>
-        Release Definition 过滤（留空 = 当前组织内全部）
+        {{ t('stuckLocks.filter.label') }}
         <input v-model="store.definitionFilter" name="releaseDefinitionId" placeholder="Release Definition ID" />
       </label>
-      <button type="submit" :disabled="store.loading">查询</button>
+      <button type="submit" :disabled="store.loading">{{ t('stuckLocks.filter.submit') }}</button>
     </form>
 
     <!-- TASK-267: the release confirmation uses the shared Toast primitive. -->
@@ -125,23 +130,23 @@ async function submit(): Promise<void> {
 
     <ErrorState
       v-if="store.failure"
-      title="操作未成功"
+      :title="t('stuckLocks.load.failed')"
       :message="store.failure.message"
       :details="store.failure.details"
-      action-label="刷新列表"
+      :action-label="t('stuckLocks.load.failedAction')"
       @action="store.load(store.definitionFilter)"
     />
 
-    <LoadingState v-if="store.loading && store.locks.length === 0" message="正在读取卡住的锁…" />
+    <LoadingState v-if="store.loading && store.locks.length === 0" :message="t('stuckLocks.loading')" />
     <EmptyState
       v-else-if="store.isEmpty"
-      title="没有卡住的锁"
-      message="当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。"
+      :title="t('stuckLocks.empty.title')"
+      :message="t('stuckLocks.empty.message')"
     />
 
     <div
       v-else-if="store.locks.length > 0"
-      class="table-wrap"
+      class="table-wrap stuck__table-wrap"
       role="region"
       :aria-label="t('stuckLocks.table.scrollRegion')"
       tabindex="0"
@@ -149,12 +154,12 @@ async function submit(): Promise<void> {
       <table class="stuck__table">
       <thead>
         <tr>
-          <th scope="col">定义 / 操作</th>
-          <th scope="col">动作</th>
-          <th scope="col">锁定路径</th>
-          <th scope="col">终态时间 / 卡住自</th>
-          <th scope="col">观察窗口</th>
-          <th scope="col">操作</th>
+          <th scope="col">{{ t('stuckLocks.table.definition') }}</th>
+          <th scope="col">{{ t('stuckLocks.table.action') }}</th>
+          <th scope="col">{{ t('stuckLocks.table.lockPath') }}</th>
+          <th scope="col">{{ t('stuckLocks.table.terminal') }}</th>
+          <th scope="col">{{ t('stuckLocks.table.window') }}</th>
+          <th scope="col">{{ t('stuckLocks.table.actions') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -164,16 +169,16 @@ async function submit(): Promise<void> {
             <br />
             <small>op {{ lock.operationId }}</small>
           </td>
-          <td>{{ lock.action }}</td>
+          <td class="stuck__action">{{ lock.action }}</td>
           <td>{{ lock.lockPathSummary }}</td>
           <td>
             {{ formatTimestamp(lock.terminalAt) }}
             <br />
-            <small>卡住自 {{ formatTimestamp(lock.stuckSince) }}</small>
+            <small>{{ t('stuckLocks.table.stuckSince', { time: formatTimestamp(lock.stuckSince) }) }}</small>
           </td>
           <td>{{ lock.observeTimeoutDisplay || '—' }}</td>
           <td>
-            <button v-if="auth.canWrite" type="button" class="danger" :disabled="store.releasing" @click="open(lock)">释放锁</button>
+            <button v-if="auth.canWrite" type="button" class="danger" :disabled="store.releasing" @click="open(lock)">{{ t('stuckLocks.release.entry') }}</button>
           </td>
         </tr>
       </tbody>
@@ -198,36 +203,36 @@ async function submit(): Promise<void> {
     >
       <form class="stuck__form" @submit.prevent="submit">
         <fieldset>
-          <legend>释放模式</legend>
+          <legend>{{ t('stuckLocks.mode.legend') }}</legend>
           <label>
             <input v-model="mode" type="radio" name="mode" value="NOT_APPLIED_PROVEN" />
-            NOT_APPLIED_PROVEN —— 能证明命令从未生效（例如从未 ACK_PERSISTED 且操作会话离线）；效果记为 NOT_APPLIED。
+            {{ t('stuckLocks.mode.notApplied') }}
           </label>
           <label>
             <input v-model="mode" type="radio" name="mode" value="AUDITED_OVERRIDE" />
-            AUDITED_OVERRIDE —— 无法证明未生效但必须接管目标；效果<strong>保留 UNKNOWN</strong>，释放全程审计，迟到的结果仍可能解析效果。
+            {{ t('stuckLocks.mode.override') }}
           </label>
         </fieldset>
         <label>
-          释放原因（必填，≤1000 字）
-          <textarea v-model="reason" name="reason" rows="3" placeholder="为什么可以释放这个锁"></textarea>
+          {{ t('stuckLocks.reason.label') }}
+          <textarea v-model="reason" name="reason" rows="3" :placeholder="t('stuckLocks.reason.placeholder')"></textarea>
         </label>
         <label>
-          解锁证据（可选，≤500 字）
-          <textarea v-model="evidence" name="evidence" rows="2" placeholder="例如 kubectl get deploy -o yaml 的观察结论"></textarea>
+          {{ t('stuckLocks.evidence.label') }}
+          <textarea v-model="evidence" name="evidence" rows="2" :placeholder="t('stuckLocks.evidence.placeholder')"></textarea>
         </label>
 
         <label class="stuck__ack">
           <input v-model="acknowledged" type="checkbox" name="acknowledged" />
-          我已通过集群观察核实该效果确实可以释放（释放后定义会重新接受任务，且没有撤销）
+          {{ t('stuckLocks.ack') }}
         </label>
 
         <p v-if="validationError" class="stuck__error" role="alert" data-testid="stuck-validation">{{ validationError }}</p>
 
         <div class="stuck__dialog-actions">
-          <button type="button" :disabled="store.releasing" @click="target = null">取消</button>
+          <button type="button" :disabled="store.releasing" @click="target = null">{{ t('action.cancel') }}</button>
           <button type="submit" class="danger" :disabled="store.releasing" data-testid="stuck-submit">
-            {{ store.releasing ? '提交中…' : '确认释放' }}
+            {{ store.releasing ? t('stuckLocks.submitting') : t('stuckLocks.submit') }}
           </button>
         </div>
       </form>
@@ -239,44 +244,18 @@ async function submit(): Promise<void> {
 .stuck {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
-}
-
-.stuck__header {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.stuck__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.stuck__subtitle {
-  margin: var(--space-1) 0 0;
-  max-width: 46rem;
-  color: var(--color-muted);
+  min-width: 0;
 }
 
 .stuck__filter {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-end;
   padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
 }
 
 .stuck__filter label {
@@ -303,16 +282,37 @@ async function submit(): Promise<void> {
   color: var(--color-success-ink);
 }
 
+/* Direction-C table frame. `.table-wrap` owns horizontal containment (the base rule),
+   so the 6-column table scrolls inside its own box at 375px instead of widening the page. */
+.stuck__table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
+
 .stuck__table {
   width: 100%;
+  min-width: 56rem;
   border-collapse: collapse;
   background: var(--color-surface);
 }
 
-.stuck__table th,
+/* Quiet header band; the table used to share one th/td rule, so the header had no band. */
+.stuck__table th {
+  padding: 10px 20px;
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-align: left;
+  /* Without nowrap a 375px viewport breaks the header and the action name one glyph per
+     line; the table scrolls inside `.table-wrap` instead. */
+  white-space: nowrap;
+}
+
 .stuck__table td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border-strong);
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-border-strong);
   text-align: left;
 }
 
@@ -320,8 +320,15 @@ async function submit(): Promise<void> {
   color: var(--color-muted);
 }
 
+/* The action name is a short CJK phrase; left to wrap it shrinks to one glyph per line
+   in the narrow viewport while the framed table scrolls anyway. */
+.stuck__action {
+  white-space: nowrap;
+}
+
 .stuck__table button,
 .stuck__filter button,
+.stuck__button,
 .stuck__dialog-actions button {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
