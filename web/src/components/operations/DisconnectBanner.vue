@@ -17,5 +17,10 @@ defineProps<{ visible: boolean }>();
 </template>
 
 <style scoped>
-.disconnect-banner { padding: 0.7rem 1rem; border: 1px solid var(--color-warning-border); border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); font-size: var(--font-size-md); }
+/* TASK-394: the banner is a grid item of the operation page, so the page's widened track
+   used to stretch it to 2030px. The page fix (`minmax(0, 1fr)` + `min-width: 0`) is what
+   actually keeps it at the column width; this rule makes the banner safe on its own for
+   any future parent that forgets, and a long reason token can never push it wider than
+   its column. */
+.disconnect-banner { min-width: 0; padding: 0.7rem 1rem; border: 1px solid var(--color-warning-border); border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); font-size: var(--font-size-md); overflow-wrap: anywhere; }
 </style>

@@ -98,3 +98,49 @@ describe('PreflightResultPanel overall state (UX-002)', () => {
     expect(wrapper.text()).toContain('runtime_pull_failed');
   });
 });
+
+/*
+ * TASK-394: `failedStageResult` (internal/orchestrator/preflight/coordinator.go) keeps the
+ * operator's whole result document when it cannot read a stable code out of it, so `detail`
+ * can be a compact JSON payload — one unbreakable "word". Laid into the page flow it took
+ * the operation grid track to ~2030px (document.scrollWidth 2190 at a 1440 viewport). It
+ * now renders inside a disclosure that is closed by default.
+ */
+describe('PreflightResultPanel raw JSON detail (TASK-394)', () => {
+  const rawJson = '{"status":"failed","detail":"render_failed","checks":[{"name":"manifest","ok":false}]}';
+
+  it('collapses an operator result document instead of laying it into the page flow', () => {
+    const wrapper = mountPanel({
+      overall: 'failed',
+      failedStage: 'render',
+      stages: [{ stage: 'render', status: 'failed', detail: rawJson }],
+    });
+
+    const disclosure = wrapper.get('[data-testid="preflight-stage-detail"]');
+    expect(disclosure.element.tagName).toBe('DETAILS');
+    expect(disclosure.attributes('open')).toBeUndefined();
+    expect(disclosure.get('summary').text()).toContain('查看原始 JSON');
+    expect(disclosure.get('pre').text()).toBe(rawJson);
+    expect(wrapper.find('p.preflight-stage__detail').exists()).toBe(false);
+  });
+
+  it('keeps a plain-text detail inline', () => {
+    const wrapper = mountPanel({
+      overall: 'failed',
+      stages: [{ stage: 'render', status: 'failed', detail: 'render_failed: invalid manifest' }],
+    });
+    const detail = wrapper.get('[data-testid="preflight-stage-detail"]');
+    expect(detail.element.tagName).toBe('P');
+    expect(detail.text()).toBe('render_failed: invalid manifest');
+    expect(wrapper.find('details').exists()).toBe(false);
+  });
+
+  it('does not mistake a broken JSON blob for a result document', () => {
+    const wrapper = mountPanel({
+      overall: 'failed',
+      stages: [{ stage: 'render', status: 'failed', detail: '{not json' }],
+    });
+    expect(wrapper.get('[data-testid="preflight-stage-detail"]').element.tagName).toBe('P');
+  });
+});
+

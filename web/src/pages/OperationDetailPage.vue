@@ -242,5 +242,14 @@ function openConvergence(): void {
 </template>
 
 <style scoped>
-.operation-detail { display: grid; gap: 1.5rem; max-width: 70rem; margin: 0 auto; }
+/* TASK-394: the page is one column, and an implicit `auto` track takes its MINIMUM from
+   the widest child's min-content. The preflight stage detail is one unbreakable JSON
+   "word" (~2030px in the production build), so the track grew to that and every sibling —
+   including the 60-character disconnect banner — stretched with it: document.scrollWidth
+   2190 at a 1440 viewport. `minmax(0, 1fr)` gives the track a zero minimum and
+   `min-width: 0` removes the same automatic minimum from the items; the panel and the
+   banner also break their own long strings. All three are required — the track rule alone
+   still lets content paint outside an item's box. */
+.operation-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; max-width: 70rem; margin: 0 auto; }
+.operation-detail > * { min-width: 0; }
 </style>

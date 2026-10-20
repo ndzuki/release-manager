@@ -687,6 +687,7 @@ const zhCN = {
   'operation.preflight.notReturned': '未返回状态',
   'operation.preflight.loadFailed': '预检结果加载失败',
   'operation.preflight.loadFailedHint': '未能读取预检结果；可重试。',
+  'operation.preflight.rawJson': '查看原始 JSON',
   'operation.timeline.errorCode': '错误码：',
   'operation.timeline.ack': 'ACK 已确认',
   'operation.timeline.workload': '未上报的 Workload',

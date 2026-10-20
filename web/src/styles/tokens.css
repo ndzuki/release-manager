@@ -88,6 +88,18 @@
   --color-primary-hover: color-mix(in srgb, var(--pr) 85%, var(--bg));
   --color-on-accent: var(--on);
 
+  /* Disabled controls (TASK-394). Two pages drew "you cannot press this" with a
+     semantic colour: EmergencyChangePage used the danger fill (the deployed build
+     measured white on #fca5a5 = 1.90:1) and ConvergenceTasksPage used the violet accent,
+     so a disabled button either looked like a destructive action or like an enabled
+     accent one. Disabled is its own state, so it gets its own neutral triple. Declared
+     once THROUGH the palette, exactly like the aliases above: dark resolves to #18181b
+     fill / #a1a1aa ink (6.9:1) and light to #f4f4f5 / #71717a (4.4:1) — legible, quiet,
+     and never confusable with the enabled primary next to it. */
+  --color-disabled-bg: var(--sf2);
+  --color-disabled-text: var(--mu);
+  --color-disabled-border: color-mix(in srgb, var(--mu) 30%, var(--bd));
+
   --color-error: var(--er);
   --color-error-strong: color-mix(in srgb, var(--er) 82%, var(--tx));
   --color-danger: var(--er);
@@ -133,7 +145,10 @@
   --color-violet: var(--n);
   --color-violet-ink: color-mix(in srgb, var(--n) 78%, var(--tx));
   --color-violet-ink-deep: color-mix(in srgb, var(--n) 70%, var(--tx));
-  --color-violet-border: color-mix(in srgb, var(--n) 45%, var(--bd));
+  /* `--color-violet-border` was removed by TASK-394 rather than left behind: its only
+     consumer was ConvergenceTasksPage's disabled primary, which now uses the neutral
+     --color-disabled-* triple. The console's token rule (tokens.test.ts) is that a token
+     without a consumer is dead vocabulary, so it went with its last use. */
   --color-violet-border-soft: color-mix(in srgb, var(--n) 28%, var(--bd));
   --color-violet-subtle: color-mix(in srgb, var(--n) 14%, var(--bg));
   --color-violet-surface: color-mix(in srgb, var(--n) 8%, var(--bg));
@@ -201,20 +216,27 @@
   /* --- Motion ---------------------------------------------------------- */
 
   /* --- Editor surface -------------------------------------------------- */
-  /* CodeMirror is dark regardless of the console theme, so it keeps its own tokens
-     instead of borrowing --color-text/--color-border by value. Mapping these onto the
-     short palette would make the editor follow the theme while the CodeMirror theme
-     (syntax colours, gutters) stayed dark — a light-on-light editor. Left invariant on
-     purpose; see the direction-C report for the follow-up. */
-  --editor-surface: #0f172a;
-  --editor-text: #e2e8f0;
-  --editor-caret: #f8fafc;
-  --editor-gutter-surface: #111827;
-  /* Slate-400, not slate-500 (#64748b): the gutter is text a reader compares line numbers
-     by, and #64748b measured 3.7:1 on --editor-gutter-surface — below AA. */
-  --editor-gutter-text: #94a3b8;
-  --editor-active-line: #1e293b80;
-  --editor-active-line-gutter: #1e293b;
+  /* TASK-394: the editor now follows the active theme. It used to be pinned to #0f172a
+     in BOTH themes while CodeMirror rendered its LIGHT default highlight style on top:
+     a YAML key came out `#0000cc` on `#0f172a` = 1.59:1 (the reported defect), and a
+     light-theme reader still got a dark slab in a light console. Expressing the editor
+     tokens through the palette is what fixes both at once — one declaration resolves per
+     theme, so there is no light-on-dark or dark-on-light combination left to drift into.
+     The CodeMirror theme in ValuesCodeEditor.vue only aliases these names. */
+  --editor-surface: var(--code);
+  --editor-text: var(--tx);
+  --editor-caret: var(--tx);
+  --editor-gutter-surface: var(--sf2);
+  /* The line numbers are text a reader compares values against, so they keep the AA
+     body floor: --mu is only 4.4:1 on the light gutter, the mix-toward-text step clears
+     4.5:1 in both themes (tokens.test.ts pins the ratio). */
+  --editor-gutter-text: var(--color-muted-strong);
+  --editor-active-line: color-mix(in srgb, var(--tx) 6%, transparent);
+  --editor-active-line-gutter: color-mix(in srgb, var(--tx) 8%, var(--sf2));
+  /* CodeMirror paints selection with its own layer, not ::selection, so it needs its own
+     value; tinting it with the accent keeps the selected text readable in both themes
+     (a hard #d9d9d9 or #222 from CodeMirror's built-in themes does not). */
+  --editor-selection: color-mix(in srgb, var(--k) 30%, transparent);
 }
 
 /* --- Light palette: follows the OS unless dark was chosen explicitly --- */

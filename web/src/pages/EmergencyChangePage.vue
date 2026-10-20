@@ -301,5 +301,8 @@ async function onConfirm(): Promise<void> {
 .submit-row { display: flex; justify-content: flex-end; }
 .unavailable-notice { margin: 0; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-bg); color: var(--color-muted-strong); }
 .primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: var(--color-danger); color: var(--color-on-accent); }
-.primary:disabled { background: var(--color-danger-border-strong); cursor: not-allowed; }
+/* TASK-394: a disabled primary used to be painted with the danger fill, so "you may not
+   press this yet" read as "this is destructive" (and the ink stayed --on-accent, which on
+   that fill measured below AA). Disabled is its own state, not a semantic colour. */
+.primary:disabled { box-shadow: inset 0 0 0 1px var(--color-disabled-border); background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
 </style>
