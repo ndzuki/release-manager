@@ -226,7 +226,7 @@ onUnmounted(clearPlaintext);
   >
     <LoadingState v-if="generating" :message="t('operator.token.generating')" />
     <template v-else-if="result && plaintext">
-      <p class="eyebrow">{{ t('operator.token.oneTimeSecret') }}</p>
+      <p class="section-label">{{ t('operator.token.oneTimeSecret') }}</p>
       <p class="modal-note">{{ t('operator.token.closeWarning') }}</p>
 
       <div class="secret">
@@ -310,13 +310,7 @@ onUnmounted(clearPlaintext);
 </template>
 
 <style scoped>
-.eyebrow {
-  margin: 0;
-  color: var(--color-error-strong);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  text-transform: uppercase;
-}
+.section-label { margin: 0; color: var(--mu); font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.04em; }
 
 .modal-note {
   margin: 0;
