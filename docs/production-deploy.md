@@ -2138,6 +2138,87 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期
 - **没做**：故障注入、SIGTERM、`make quality` 全量 Go 门禁（本次 0 个 Go 文件改动）；没有在 Values 编辑器里做实际保存/审批（只读观察 + 主题切换）；没有与 `:7427e7b` 做同屏 A/B（旧版已不在入口服务，before 依据是同一脚本在滚动前对同一数据的测量）。
 - **§0/§1 的镜像 tag 口径仍停在 §8.11**，本次未改（与 §8.12–§8.14 同例）；要看当前运行 tag 以 §8.15 与本节的 revision 表为准。
 
+### 8.16 实测：方向 C 多页面改版发布（`f3b328d` → `a059272`；无迁移、无依赖变化、仅 `web` 镜像内容变化，2026-10-20，TASK-394 ①–⑨）
+
+§8.15 把 `f3b328d` 发布后，方向 C 的**页面迁移**在当日谷时分十二个小步落地（每个 PR 独立复核、门禁全绿后合并），本次把 `origin/main` 从 `f3b328d` 前移到 **`a059272`**（`Merge pull request #506 from ndzuki/fix/e2e-console-redesign`，完整 sha `a0592722cff37dcc5c2601d27fb2a8b5361b40eb`），并把 `web` 滚动上去。
+
+**本波合并的 PR（按合并顺序）**
+
+| PR | 内容 |
+| --- | --- |
+| #488 | 首页总览（StatCard / 进行中操作 / 集群健康 / 快速入口）+ 发布清单方向 C 表格 + 审计页（筛选 + 互斥状态机）+ 创建操作（分段按钮 / Steps / 确认面板）+ 两处 E2E 选择器跟随；含 §8.13 记录的「7 天成功率改为同步率」「空清单不再谎报 0 个 Operator」两条口径修正 |
+| #491 | 操作详情（`PageHeader` + `Steps` 四阶段 + **修「无效 id 永久停在正在加载」**）+ Values 并排 diff |
+| #492 | 语义色文字迁移（102 条 `color:` 改用 ink/strong 阶；新增静态门禁「语义基色不得出现在 `color:`」，并修好该门禁的 `color-mix` 解析，避免 NaN 空转） |
+| #495 / #501 / #503 | `PageHeader` 新增 `eyebrow`；客户/集群/Operator/账号/表格三页/治理四页/操作三页/认证与错误页共 **25 页**统一（表头 band、外框、双重内边距、UUID→名称或 `CopyableHash`）；补 Emergency 页（此前未覆盖） |
+| #505 | 界面文案「干净化」：A 档 40 条、术语统一（Revision→版本、Definition→发布定义、`platform_admin`→平台管理员等）、去掉 9 处 `text-transform: uppercase` 造成的混排、字段直译转中文；catalog 967→1044 键 |
+| #500 / #506 | **既有 CI 缺陷修复**：`e2e-prerequisite` 的 `smoke.sh` 三处 `ExecuteEmergencyChange` 缺必填 `reason`（服务端 `emergency.go:547` 要求 1..1000 字节）——该红在 §8.13/§8.14/§8.15 三个部署点与更早 main 上就存在；以及改版后 4 个 console spec 的选择器/文案/mock 时序失效 |
+
+**变更面**（`git diff --no-ext-diff --shortstat f3b328d..a059272`）：**174 个文件，+9504/−2442**。
+
+| 类别 | 实测 | 结论 |
+| --- | --- | --- |
+| `web/src/**` | 166 个文件 | 仅前端产物变化 |
+| `web/e2e/**` + `test/e2e/**` | 5 + 1 个文件 | 仅测试面（进口镜像不含 e2e） |
+| `docs/**` | 2 个文件 | 文档 |
+| 迁移 | `git diff --name-only f3b328d..a059272 -- migrations/` ⇒ **0 文件** | schema 保持 **`36\|f`**，回滚是纯镜像级 |
+| Go 运行时 / 部署清单 | `internal/`、`cmd/`、`api/`、`deploy/` ⇒ **0 文件** | 6 个 Go 服务二进制不变，未重建 |
+| 依赖 | `web/package.json`、`web/package-lock.json` ⇒ **0 文件** | 无新依赖 |
+
+**镜像 ID（同一口径：节点内 `crictl images` 的 IMAGE ID）**
+
+| 服务 | 发布前 `:f3b328d` | 发布后 `:a059272` | 内容变化 |
+| --- | --- | --- | --- |
+| `web` | `501e3990af27f` | **`f46bdc433bef5`** | **是** |
+| `api` | `e974b98f7cb80` | `e974b98f7cb80` | 否（未重建） |
+| `auth` | `1ad5fa70ca651` | `1ad5fa70ca651` | 否 |
+| `orchestrator` | `e6df24dfbb754` | `e6df24dfbb754` | 否 |
+| `webhook` | `64edb5cb8a5f6` | `64edb5cb8a5f6` | 否 |
+| `notifier` | `6839691cb769c` | `6839691cb769c` | 否 |
+
+- 入口 `index.html` 交叉验证：`sha256(/)` **`a4c363b817e27271…` → `781536480aafce6d…`**，`web` revision **18 → 20**（中间一次 `:fe3cbad` 的 rev19 是同一产物的过渡；`fe3cbad` 与 `a059272` 的节点 IMAGE ID **完全相同** `f46bdc433bef5`，证明两者产品产物零差异，差异只在 `web/e2e/**`）。
+- 判定全程用节点内 `crictl images`，未用 `docker image inspect .Id`（§8.14 记录的 OCI index digest 口径陷阱）。
+
+**构建与导入**（worktree `/tmp/rm-deploy-final`，HEAD = `a059272`）
+
+```bash
+git fetch origin -q && git worktree add -q /tmp/rm-deploy-final -b chore/deploy-a059272 origin/main
+cd /tmp/rm-deploy-final
+docker build -f deploy/docker/Dockerfile.web -t localhost:5001/release-web:a059272 .
+docker save -o /tmp/web-a059272.tar localhost:5001/release-web:a059272
+k3d image import /tmp/web-a059272.tar -c rm-prod
+docker exec k3d-rm-prod-server-0 crictl images | grep "release-web.*a059272"
+```
+
+- ⚠️ **stdin 形态的导入在本机不可靠**：`docker save … | k3d image import -c rm-prod -` 返回
+  `ERRO Failed to import image(s) … failed to load image to cluster from stdin: <nil>`（但节点里可能已出现该 tag，容易误判成功）；
+  改用**文件形态**（`docker save -o` + `k3d image import <tar>`）后 `Successfully imported 1 image(s)`。判据以节点内 `crictl images` 为准。
+- tar **21,429,760 B**；构建 `EXIT=0`；没有走 registry 推送，Deployment 仍引用 `localhost:5001/...`、`imagePullPolicy=IfNotPresent`。
+
+**滚动与结果（实测，2026-10-20 22:15 +08）**
+
+| 项 | 发布前 | 发布后 |
+| --- | --- | --- |
+| `web` 镜像 | `:f3b328d` | **`:a059272`** |
+| `web` revision | 18 | **20** |
+| Pod | 10 工作负载 `1/1` + 3 个 `Completed`（备份 Job） | 同左，`RESTARTS` 全 **0** |
+| schema | `36\|f` | `36\|f`（未变） |
+| 入口 | `/` 200、`/readyz` 200 | `/` **200**、`/readyz` **200** |
+
+- 回滚（纯镜像级）：`kubectl --context k3d-rm-prod -n release-manager set image deploy/web web=localhost:5001/release-web:f3b328d && kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web`
+
+**真机验收（真实生产会话，非桩数据；2026-10-20 21:50–22:00 +08）**
+
+- **36 张截图**：1440×900 覆盖 13 个路由（首页 / 审计 / 操作历史 / 无效 id 操作详情 / 发布定义 / 紧急锁 / 信任根 / 授权绑定 / 组织成员 / 本地用户 / 制品生命周期 / 发布 Bundle / 客户）× 暗/亮；375×812 覆盖 6 个页（首页 / 审计 / 紧急锁 / 本地用户 / 发布定义 / 操作历史）；文件在 `/tmp/rm-prod-verify/shots/`，机器可读结果 `results.json` / `results2.json`。
+- **横向溢出：0/36**（每例 `document.documentElement.scrollWidth === window.innerWidth`，1440 与 375 均成立）。
+- ✅ **「无效 id 永久正在加载」缺陷已在生产验证修复**：`/operations/11111111-2222-…` 打开后 `errorState=true`、`loading=false`、不再出现「正在加载」文案。
+- console error 仅 3 例且均为**预期网络响应**：首页登录探测 `401`（无会话探测）、无效 id 的 `404`；无 JS 异常（`pageerror` 0）。
+- 页面形态抽查（真实 DOM）：发布清单/创建操作/Values/紧急变更均有 **1 个 `h1`**，`.page-header` 存在（紧急变更页采用无 actions 的 PageHeader），表格外框与状态胶囊渲染正常。
+
+**本波修复的两处既有 CI 缺陷（如实记录）**
+
+1. `e2e-prerequisite` 的 AC-066-17 smoke 三处 `ExecuteEmergencyChange` **缺必填 `reason`** ⇒ 确定性 400，使**所有** main 提交的该门禁长期为红（§8.13–§8.15 三次部署是在该红状态下完成的）。修复见 `d991c4f`（仅 `test/e2e/prerequisite/smoke.sh`）。
+2. 改版改变了操作详情/紧急变更/紧急锁页的 DOM 与文案，4 个 console spec 因此失效；修复见 `a059272`（仅 `web/e2e/**`，断言强度提升：operation id 改为对 `CopyableHash` 的 `title` 做**全值**对账）。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
