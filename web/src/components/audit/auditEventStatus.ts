@@ -4,14 +4,17 @@ import { t, type MessageKey } from '@/i18n/messages';
  * Audit outcome → StatusTag tone, and the Chinese label for the outcome.
  *
  * `AuditEvent.status` is a FREE-FORM string on the wire (api/proto/audit/v1/audit.proto
- * documents resource_type/action/status as open sets, D-62). The values below are the
- * ones the server actually writes today, each pinned to the producer:
+ * documents resource_type/action/status as open sets, D-62). The main classes below are
+ * the ones the server writes today, each pinned to the producer; the set stays open, so
+ * a value outside this list (for example the lock-release mode or "stuck" that
+ * internal/orchestrator/emergency_stuck.go:229 and :324 store as the status) renders
+ * neutral with its raw label rather than disappearing:
  *
  *   - "success"   internal/audit/audit_service_handler.go:239 (export request receipt)
  *   - "succeeded" internal/orchestrator/audit.go:17 and internal/store/store.go:158
  *   - "failed"    internal/orchestrator/audit.go:19 and internal/store/store.go:159
  *   - "trusted", "rejected", "policy_warning", "signature_missing",
- *     "verification_unavailable"  internal/store/store.go:21-25 (VerificationStatus),
+ *     "verification_unavailable"  internal/store/store.go:22-26 (VerificationStatus),
  *     written verbatim as the audit status by internal/orchestrator/service.go:1758
  *   - "blocked", "would_block" (or "")  internal/orchestrator/admission.go:74-105,
  *     written as the audit status at internal/orchestrator/admission.go:281
