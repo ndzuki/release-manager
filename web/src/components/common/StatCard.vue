@@ -72,7 +72,7 @@ withDefaults(
 }
 
 .stat-card--info .stat-card__value {
-  color: var(--ac);
+  color: var(--color-info);
 }
 
 .stat-card__hint {

@@ -55,7 +55,7 @@ const role = computed(() => (props.tone === 'error' || props.tone === 'warning' 
 }
 
 .alert--info {
-  color: var(--ac);
+  color: var(--color-info);
 }
 
 .alert--success {

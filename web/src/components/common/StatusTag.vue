@@ -87,7 +87,7 @@ withDefaults(
 }
 
 .status-tag--info {
-  color: var(--ac);
+  color: var(--color-info);
 }
 
 .status-tag__label {

@@ -165,6 +165,7 @@ const zhCN = {
   'customer.history.loading': '正在加载客户历史…',
   'customer.history.noEvents': '暂无客户生命周期事件。',
   'customer.history.scrollRegion': '客户历史（可滚动）',
+  'common.table.scrollRegion': '数据表格（可横向滚动）',
   'customer.disable.cascadeTokens': '注册令牌将被撤销。',
   'customer.disable.cascadeCerts': 'Operator 证书将被撤销。',
   'customer.disable.cascadeSessions': '活跃的 Operator 会话将被关闭。',

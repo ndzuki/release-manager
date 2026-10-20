@@ -112,7 +112,12 @@ function cellText(value: unknown): string {
 </script>
 
 <template>
-  <div class="data-table">
+  <div
+    class="data-table"
+    role="region"
+    :aria-label="t('common.table.scrollRegion')"
+    tabindex="0"
+  >
     <ErrorState
       v-if="error"
       :message="error.message"
