@@ -65,7 +65,9 @@ const emit = defineEmits<{ 'request-cancel': []; refresh: [] }>();
 
 <style scoped>
 .operation-detail__header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
-.operation-detail__cancel { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid var(--color-danger); border-radius: 0.45rem; background: var(--color-surface); color: var(--color-danger); cursor: pointer; font-weight: 700; }
+/* Outlined danger button: the rail keeps the palette base, the label takes the readable
+   step (TASK-394). Both resolve through `--er`, so the border still frames the label. */
+.operation-detail__cancel { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid var(--color-danger); border-radius: 0.45rem; background: var(--color-surface); color: var(--color-error-strong); cursor: pointer; font-weight: 700; }
 .operation-detail__cancel--disabled { border-color: var(--color-border-strong); color: var(--color-subtle); cursor: not-allowed; }
 .operation-detail__refresh { min-height: 2.4rem; padding: 0.45rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.45rem; background: var(--color-surface); color: var(--color-text-secondary); cursor: pointer; font-weight: 600; }
 </style>

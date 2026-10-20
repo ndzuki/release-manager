@@ -41,7 +41,11 @@
 
 :root {
   /* --- 1. Short palette: dark (default) -------------------------------- */
-  /* Byte-identical to the direction-C sample the user approved. */
+  /* Byte-identical to the direction-C sample the user approved (values unchanged).
+     One SLOT is gone: `--s` (the string accent) had a single reader — the CodeMirror
+     string tag — and that tag now uses the readable `--color-warning-ink`, so the slot
+     was removed instead of left as a token nobody may use (the dead-token gate above
+     would reject it, and a base accent is no longer a legal text colour). */
   --bg: #09090b;
   --sf: #111114;
   --sf2: #18181b;
@@ -57,7 +61,6 @@
   --r: 8px;
   --code: #0c0c0f;
   --k: #7dd3fc;
-  --s: #fcd34d;
   --n: #c4b5fd;
   /* Native controls, scrollbars and form internals follow the active theme. */
   color-scheme: dark;
@@ -256,7 +259,6 @@
     --ac: #047857;
     --code: #f4f4f5;
     --k: #0369a1;
-    --s: #b45309;
     --n: #6d28d9;
     color-scheme: light;
   }
@@ -281,7 +283,6 @@
   --ac: #047857;
   --code: #f4f4f5;
   --k: #0369a1;
-  --s: #b45309;
   --n: #6d28d9;
   color-scheme: light;
 }
@@ -301,7 +302,6 @@
   --ac: #34d399;
   --code: #0c0c0f;
   --k: #7dd3fc;
-  --s: #fcd34d;
   --n: #c4b5fd;
   color-scheme: dark;
 }

@@ -161,5 +161,5 @@ function continueToRevision(): void {
 /* TASK-394: same defect as EmergencyChangePage — the disabled primary borrowed this
    page's violet accent as if it were a disabled colour. */
 .primary:disabled { box-shadow: inset 0 0 0 1px var(--color-disabled-border); background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
-.error-text { color: var(--color-error); }
+.error-text { color: var(--color-error-strong); }
 </style>

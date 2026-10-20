@@ -235,7 +235,7 @@ async function submit(): Promise<void> {
 
 .rollback-dialog__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 
@@ -257,6 +257,6 @@ async function submit(): Promise<void> {
 .rollback-dialog__actions button.danger {
   border-color: var(--color-danger-border);
   background: var(--color-danger-surface);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 </style>

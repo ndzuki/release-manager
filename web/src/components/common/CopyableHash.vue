@@ -137,10 +137,10 @@ async function copyValue(): Promise<void> {
 }
 
 .copyable-hash__feedback--copied {
-  color: var(--ok);
+  color: var(--color-success-ink);
 }
 
 .copyable-hash__feedback--failed {
-  color: var(--er);
+  color: var(--color-error-strong);
 }
 </style>

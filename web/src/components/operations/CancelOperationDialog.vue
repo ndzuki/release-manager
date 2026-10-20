@@ -78,7 +78,7 @@ function submit(): void {
   border: 1px solid var(--color-info-border-soft);
   border-radius: var(--radius-lg);
   background: var(--color-info-soft);
-  color: var(--color-info);
+  color: var(--color-info-ink);
   font-size: var(--font-size-sm);
 }
 
@@ -107,7 +107,7 @@ function submit(): void {
 
 .cancel-dialog__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 

@@ -114,7 +114,7 @@ function statusLabel(binding: BindingView): string {
   border: 1px solid var(--color-danger-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  color: var(--color-error);
+  color: var(--color-error-strong);
   cursor: pointer;
 }
 </style>

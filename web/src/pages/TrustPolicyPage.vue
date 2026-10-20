@@ -370,14 +370,14 @@ const confirmTitle = computed(() =>
 
 .trust__actions button.danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 /* The confirm button is slotted into AppDialog's footer, which only supplies a
    baseline; the danger tone is the caller's rule (same split as BindingsPage). */
 .trust__confirm-danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .trust__actions button:disabled,

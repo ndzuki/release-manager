@@ -77,27 +77,30 @@ function syntaxTag(name: string): SyntaxTag {
 /*
  * The reported defect: the editor rendered CodeMirror's default (light) highlight style
  * on the dark `#0f172a` surface, so a YAML key was `#0000cc` on `#0f172a` = 1.59:1 and
- * the deployed build measured a 3.75:1 gutter. These accents are the direction-C palette
- * expressed as CSS variables, so ONE style resolves to the dark accents
- * (#7dd3fc/#fcd34d/#c4b5fd) or the light ones (#0369a1/#b45309/#6d28d9) with the theme.
- * Every pair is ≥4.5:1 on `--editor-surface`; tokens.test.ts computes the ratios from
- * tokens.css instead of trusting this comment.
+ * the deployed build measured a 3.75:1 gutter. These accents are the semantic palette
+ * expressed as CSS variables, so ONE style follows the theme.
+ *
+ * The accents use the INK step of each family, not the palette base (TASK-394): the base
+ * `--er` on the light `--code` surface is 4.39:1, and the three base accents are exactly
+ * the colours a `color:` declaration may no longer carry (tokens.test.ts fails the build
+ * for a base/short token used as text). The ratios on `--editor-surface` are computed
+ * there from tokens.css instead of trusted from this comment.
  *
  * Mapping notes: `null` is a `keyword` subtag and punctuation is not part of CodeMirror's
  * default style, so JSON punctuation deliberately inherits the editor's text colour —
  * structural characters may be quiet, keys/strings/numbers may not.
  */
 const syntaxStyle = HighlightStyle.define([
-  { tag: syntaxTag('keyword'), color: 'var(--k)' },
-  { tag: syntaxTag('propertyName'), color: 'var(--k)' },
-  { tag: syntaxTag('labelName'), color: 'var(--k)' },
-  { tag: syntaxTag('typeName'), color: 'var(--n)' },
-  { tag: syntaxTag('string'), color: 'var(--s)' },
-  { tag: syntaxTag('bool'), color: 'var(--n)' },
-  { tag: syntaxTag('literal'), color: 'var(--n)' }, // numbers, and anything else literal
+  { tag: syntaxTag('keyword'), color: 'var(--color-info-ink)' },
+  { tag: syntaxTag('propertyName'), color: 'var(--color-info-ink)' },
+  { tag: syntaxTag('labelName'), color: 'var(--color-info-ink)' },
+  { tag: syntaxTag('typeName'), color: 'var(--color-violet-ink)' },
+  { tag: syntaxTag('string'), color: 'var(--color-warning-ink)' },
+  { tag: syntaxTag('bool'), color: 'var(--color-violet-ink)' },
+  { tag: syntaxTag('literal'), color: 'var(--color-violet-ink)' }, // numbers, and anything else literal
   { tag: syntaxTag('comment'), color: 'var(--color-muted-strong)', fontStyle: 'italic' },
   { tag: syntaxTag('meta'), color: 'var(--color-muted-strong)' },
-  { tag: syntaxTag('invalid'), color: 'var(--er)' },
+  { tag: syntaxTag('invalid'), color: 'var(--color-error-strong)' },
 ]);
 
 /*

@@ -77,8 +77,8 @@ onMounted(() => store.loadList(true));
 .customer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; }
 .customer-card { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .status { font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
-.status--active { color: var(--color-success); }
-.status--disabled { color: var(--color-error); }
+.status--active { color: var(--color-success-ink); }
+.status--disabled { color: var(--color-error-strong); }
 /* Unreadable is neither success nor failure. */
 .status--unknown { color: var(--color-muted-strong); }
 .customer-card__facts { display: flex; gap: 1.5rem; margin: 0; }

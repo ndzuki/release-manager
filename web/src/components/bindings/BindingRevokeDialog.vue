@@ -56,12 +56,12 @@ const emit = defineEmits<{
    RevokeOperatorDialog). */
 .governance__confirm-danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .governance__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

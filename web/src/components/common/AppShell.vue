@@ -368,9 +368,11 @@ watch(
   color: var(--mu);
 }
 
+/* The underline stays on the palette base; only the label takes the readable step.
+   Both resolve through `--er`, so the hover pair still reads as one tone. */
 .app-shell__logout:hover {
   border-color: var(--er);
-  color: var(--er);
+  color: var(--color-error-strong);
 }
 
 .app-shell__main {

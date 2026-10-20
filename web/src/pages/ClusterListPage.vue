@@ -78,7 +78,7 @@ h1, h2, p { margin: 0; }
 .cluster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; }
 .cluster-card, .target-select { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .status { display: inline-block; margin-top: 0.375rem; font-size: var(--font-size-xs); font-weight: 700; }
-.status--active { color: var(--color-success); }
-.status--disabled { color: var(--color-error); }
+.status--active { color: var(--color-success-ink); }
+.status--disabled { color: var(--color-error-strong); }
 .actions { justify-content: flex-start; }
 </style>

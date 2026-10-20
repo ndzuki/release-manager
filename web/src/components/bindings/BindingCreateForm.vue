@@ -70,7 +70,7 @@ const customerId = defineModel<string>('customerId', { required: true });
 
 .governance__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

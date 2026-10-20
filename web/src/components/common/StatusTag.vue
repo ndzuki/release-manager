@@ -1,9 +1,14 @@
 <script setup lang="ts">
 /*
- * Direction C status pill: a 6px dot plus a label on a 10% tint of its own tone. The
- * tone is carried by `color` and the tinted border/background/dot derive from
- * `currentColor` with color-mix, so a tone is one line instead of four hex literals and
- * the text itself stays on the same palette entry as the dot.
+ * Direction C status pill: a 6px dot plus a label on a 10% tint of its own tone.
+ *
+ * The tone is split into two roles on purpose (TASK-394, semantic-ink migration): the
+ * tint, border and dot mix from the palette BASE colour (`--color-success` etc., which
+ * resolve to `--ok`/`--wn`/`--er`/`--k`) while the label uses the readable
+ * `--color-*-ink` / `-strong` step. Deriving the tint from the text colour would make
+ * the pill lighter exactly when the ink (dark in light theme) is mixed toward `--tx`,
+ * and a base-coloured label on its own 10% tint measures 4.24:1 in the light theme —
+ * below AA.
  *
  * `role="status"` is deliberate: a tag can change while a page is open (a release moves
  * from pending to online), and the polite live region is what announces that change. A
@@ -43,12 +48,45 @@ withDefaults(
   gap: 6px;
   align-items: center;
   padding: 0 9px;
-  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mu) 28%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, currentColor 10%, transparent);
+  background: color-mix(in srgb, var(--mu) 10%, transparent);
   font-size: var(--font-size-xs);
   line-height: 1.7;
   white-space: nowrap;
+}
+
+/* Each tone states the pair in one place: the chrome (border, tint, dot) mixes from the
+   palette BASE colour, the label takes its ink step. No component-local custom property
+   is used for the tone — tokens.test.ts requires every `var()` reference to be declared
+   in tokens.css. */
+.status-tag--ok {
+  border-color: color-mix(in srgb, var(--color-success) 28%, transparent);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-success-ink);
+}
+
+.status-tag--wn {
+  border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-warning-ink);
+}
+
+.status-tag--er {
+  border-color: color-mix(in srgb, var(--color-error) 28%, transparent);
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  color: var(--color-error-strong);
+}
+
+.status-tag--info {
+  border-color: color-mix(in srgb, var(--color-info) 28%, transparent);
+  background: color-mix(in srgb, var(--color-info) 10%, transparent);
+  color: var(--color-info-ink);
+}
+
+/* Neutral keeps the base chrome, so it only needs its label. */
+.status-tag--neutral {
+  color: var(--mu);
 }
 
 .status-tag__dot {
@@ -57,37 +95,37 @@ withDefaults(
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--mu);
 }
 
 .status-tag__dot--pulse::after {
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--mu);
   opacity: 0.35;
   animation: status-tag-pulse 1.8s ease-out infinite;
   content: '';
 }
 
-.status-tag--ok {
-  color: var(--ok);
+.status-tag--ok .status-tag__dot,
+.status-tag--ok .status-tag__dot--pulse::after {
+  background: var(--color-success);
 }
 
-.status-tag--wn {
-  color: var(--wn);
+.status-tag--wn .status-tag__dot,
+.status-tag--wn .status-tag__dot--pulse::after {
+  background: var(--color-warning);
 }
 
-.status-tag--er {
-  color: var(--er);
+.status-tag--er .status-tag__dot,
+.status-tag--er .status-tag__dot--pulse::after {
+  background: var(--color-error);
 }
 
-.status-tag--neutral {
-  color: var(--mu);
-}
-
-.status-tag--info {
-  color: var(--color-info);
+.status-tag--info .status-tag__dot,
+.status-tag--info .status-tag__dot--pulse::after {
+  background: var(--color-info);
 }
 
 .status-tag__label {

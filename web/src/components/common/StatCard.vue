@@ -54,25 +54,26 @@ withDefaults(
 }
 
 /* Only the number is toned; the label and hint stay neutral so a row of cards is
-   readable instead of a wall of colour. */
+   readable instead of a wall of colour. The tone is the readable ink step, not the
+   palette base (TASK-394): this number sits on `--color-surface`. */
 .stat-card--neutral .stat-card__value {
   color: var(--tx);
 }
 
 .stat-card--ok .stat-card__value {
-  color: var(--ok);
+  color: var(--color-success-ink);
 }
 
 .stat-card--wn .stat-card__value {
-  color: var(--wn);
+  color: var(--color-warning-ink);
 }
 
 .stat-card--er .stat-card__value {
-  color: var(--er);
+  color: var(--color-error-strong);
 }
 
 .stat-card--info .stat-card__value {
-  color: var(--color-info);
+  color: var(--color-info-ink);
 }
 
 .stat-card__hint {

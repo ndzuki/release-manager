@@ -78,7 +78,7 @@ defineProps<{
 .steps__item--done .steps__dot {
   border-color: color-mix(in srgb, var(--ok) 45%, var(--bd));
   background: color-mix(in srgb, var(--ok) 14%, var(--bg));
-  color: var(--ok);
+  color: var(--color-success-ink);
 }
 
 .steps__item--done .steps__dot::before {

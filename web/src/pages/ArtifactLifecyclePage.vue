@@ -237,7 +237,7 @@ async function restore(): Promise<void> {
 
 .lifecycle__panel button.danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .lifecycle__counts {
@@ -293,7 +293,7 @@ async function restore(): Promise<void> {
 
 .lifecycle__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 

@@ -133,7 +133,7 @@ const emit = defineEmits<{
 
 .organization__actions button.danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .organization__readonly {

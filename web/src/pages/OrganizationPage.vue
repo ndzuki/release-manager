@@ -300,7 +300,7 @@ function removeMember(member: OrganizationMemberView): void {
 
 .organization__header-actions button.danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .organization__notice {
@@ -314,7 +314,7 @@ function removeMember(member: OrganizationMemberView): void {
 
 .organization__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

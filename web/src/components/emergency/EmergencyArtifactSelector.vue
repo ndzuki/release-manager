@@ -107,5 +107,5 @@ function formatValidatedAt(value: string | null): string {
 .hint { color: var(--color-muted); }
 /* An image ref is one long token; without this it overflows the grid column. */
 .current-image { overflow-wrap: anywhere; }
-.error-text { color: var(--color-error); }
+.error-text { color: var(--color-error-strong); }
 </style>

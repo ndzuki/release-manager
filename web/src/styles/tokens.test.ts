@@ -126,6 +126,11 @@ describe('design tokens', () => {
   /*
    * The direction-C sample was approved byte for byte ("务必逐字节照抄颜色"), so both
    * palettes are pinned exactly. `--r` is theme-invariant and lives once in :root.
+   *
+   * `--s` (the string accent, byte-identical to `--wn`) is deliberately absent: the
+   * TASK-394 ink migration moved its only consumer — the CodeMirror string tag — to
+   * `--color-warning-ink`, and a palette entry nobody reads fails the dead-token gate
+   * above. No colour VALUE changed; the slot had no other reader.
    */
   it('pins the dark palette byte for byte', () => {
     expect(Object.fromEntries(darkPalette)).toMatchObject({
@@ -143,7 +148,6 @@ describe('design tokens', () => {
       '--ac': '#34d399',
       '--code': '#0c0c0f',
       '--k': '#7dd3fc',
-      '--s': '#fcd34d',
       '--n': '#c4b5fd',
     });
     expect(declared.get('--r')).toBe('8px');
@@ -165,7 +169,6 @@ describe('design tokens', () => {
       '--ac': '#047857',
       '--code': '#f4f4f5',
       '--k': '#0369a1',
-      '--s': '#b45309',
       '--n': '#6d28d9',
     });
   });
@@ -344,13 +347,20 @@ describe('design tokens', () => {
 
   it('keeps the editor and its syntax accents readable in both themes', () => {
     // TASK-394: the reported pairs were a #0000cc token on #0f172a (1.59:1) and a gutter
-    // at 3.75:1. The CodeMirror style now uses the direction-C accents (--k/--s/--n) for
-    // keys, strings and numbers, and the neutral step for comments and line numbers, all
-    // on --code. Computed here rather than eyeballed.
+    // at 3.75:1. The CodeMirror style uses the semantic INK accents (info/warning/violet)
+    // for keys, strings and numbers, the readable error step for invalid syntax, and the
+    // neutral step for comments and line numbers, all on --code. Computed here rather
+    // than eyeballed.
     const failures: string[] = [];
     for (const [theme, palette] of THEMES) {
       const surface = resolveToken('--editor-surface', palette);
-      for (const token of ['--k', '--s', '--n', '--color-muted-strong']) {
+      for (const token of [
+        '--color-info-ink',
+        '--color-warning-ink',
+        '--color-violet-ink',
+        '--color-error-strong',
+        '--color-muted-strong',
+      ]) {
         const ratio = contrastRatio(resolveToken(token, palette), surface);
         if (ratio < 4.5) failures.push(`${theme} ${token} on ${surface} = ${ratio.toFixed(2)}:1`);
       }
@@ -486,5 +496,47 @@ describe('design tokens', () => {
     }
     expect(tokens.length).toBeGreaterThan(0);
     for (const token of tokens) expect(scale.has(token), `${token} is not a scale step`).toBe(true);
+  });
+
+  /*
+   * Semantic-colour TEXT gate (TASK-394 ink migration).
+   *
+   * The base entries (`--color-error`, `--color-success`, `--color-warning`,
+   * `--color-info`, `--color-danger`, `--color-violet`) are the INPUT to a mix, not a
+   * text colour: in the light theme `--color-error` is 4.39:1 on `--sf2` and 3.61:1 on
+   * its own 16% surface tint, and `--color-warning` is 3.93:1 on `--color-warning-subtle`.
+   * Readable text uses a step mixed toward `--tx` — `-strong`, `-ink`, `-ink-strong`,
+   * `-ink-deep`. Fills, rails and tints stay on the base and are still allowed through
+   * `background(-color)` / `border-color`; this scan only looks at `color:`.
+   *
+   * The short palette (`--ok`, `--er`, `--wn`, `--k`, `--n`, `--s`) is the same rule with
+   * no escape hatch at all: it has no ink step, so a bare short token as text is always a
+   * failure. There is no exemption list on purpose — a component that needs a different
+   * tone adds an ink step to tokens.css instead of carving out an exception here.
+   */
+  it('never paints text with a semantic base colour', () => {
+    const INK = /^--color-(?:success|error|danger|warning|info|violet)(?:-strong|-ink(?:-strong|-deep)?)$/;
+    const SEMANTIC = /^--color-(?:success|error|danger|warning|info|violet)(?:-[a-z-]+)?$/;
+    const SHORT = /^--(?:ok|er|wn|k|n|s)$/;
+    const offenders: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, (comment) =>
+        comment.replace(/[^\n]/g, ' '),
+      );
+      for (const match of text.matchAll(/(?:^|[;{\s])color\s*:\s*([^;{}]+)/g)) {
+        for (const used of match[1]!.matchAll(/var\((--[a-z0-9-]+)/g)) {
+          const token = used[1]!;
+          const reason = SHORT.test(token)
+            ? 'the short palette has no readable ink step'
+            : SEMANTIC.test(token) && !INK.test(token)
+              ? 'text must use an ink/strong step, not a base or tint token'
+              : '';
+          if (!reason) continue;
+          const line = text.slice(0, match.index).split('\n').length;
+          offenders.push(`${file}:${line} ${token} — ${reason}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

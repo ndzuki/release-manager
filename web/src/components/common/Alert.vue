@@ -6,8 +6,10 @@ import { computed } from 'vue';
  *
  * Two decisions worth stating: the live region follows the tone (an error is `alert` so
  * it interrupts, the other three are `status` so they wait for a pause), and the surface
- * is a 10% color-mix of the tone over the page background instead of a second palette of
- * pastel backgrounds. That is what makes the same component legible in both themes.
+ * is a 10% color-mix of the palette BASE tone (`--er`, `--wn`, …) over the page
+ * background instead of a second palette of pastel backgrounds. The label takes the
+ * readable `--color-*-ink` / `-strong` step instead of that base: a base-coloured label
+ * on its own tint measures as low as 3.93:1 in the light theme (TASK-394).
  */
 type AlertTone = 'error' | 'warning' | 'info' | 'success';
 
@@ -39,27 +41,36 @@ const role = computed(() => (props.tone === 'error' || props.tone === 'warning' 
   gap: 10px;
   align-items: flex-start;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, currentColor 35%, var(--bd));
+  border: 1px solid color-mix(in srgb, var(--mu) 35%, var(--bd));
   border-radius: var(--r);
-  background: color-mix(in srgb, currentColor 10%, var(--bg));
+  background: color-mix(in srgb, var(--mu) 10%, var(--bg));
 }
 
-/* The tone is carried by `color`; the surface, border and mark mix from currentColor.
-   The title is re-stated in the text colour so only the chrome takes the tone. */
+/* Each tone states the chrome and the label together: the surface, border and mark mix
+   from the palette BASE colour, only the label takes the ink step. The title is
+   re-stated in the text colour so it stays neutral. */
 .alert--error {
-  color: var(--er);
+  border-color: color-mix(in srgb, var(--color-error) 35%, var(--bd));
+  background-color: color-mix(in srgb, var(--color-error) 10%, var(--bg));
+  color: var(--color-error-strong);
 }
 
 .alert--warning {
-  color: var(--wn);
+  border-color: color-mix(in srgb, var(--color-warning) 35%, var(--bd));
+  background-color: color-mix(in srgb, var(--color-warning) 10%, var(--bg));
+  color: var(--color-warning-ink);
 }
 
 .alert--info {
-  color: var(--color-info);
+  border-color: color-mix(in srgb, var(--color-info) 35%, var(--bd));
+  background-color: color-mix(in srgb, var(--color-info) 10%, var(--bg));
+  color: var(--color-info-ink);
 }
 
 .alert--success {
-  color: var(--ok);
+  border-color: color-mix(in srgb, var(--color-success) 35%, var(--bd));
+  background-color: color-mix(in srgb, var(--color-success) 10%, var(--bg));
+  color: var(--color-success-ink);
 }
 
 .alert__mark {
@@ -68,8 +79,24 @@ const role = computed(() => (props.tone === 'error' || props.tone === 'warning' 
   align-self: stretch;
   min-height: 18px;
   border-radius: 999px;
-  background: currentColor;
+  background: var(--mu);
   margin-top: 2px;
+}
+
+.alert--error .alert__mark {
+  background: var(--color-error);
+}
+
+.alert--warning .alert__mark {
+  background: var(--color-warning);
+}
+
+.alert--info .alert__mark {
+  background: var(--color-info);
+}
+
+.alert--success .alert__mark {
+  background: var(--color-success);
 }
 
 .alert__body {

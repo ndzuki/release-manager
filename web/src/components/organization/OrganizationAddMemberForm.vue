@@ -87,7 +87,7 @@ const role = defineModel<OrganizationRole>('role', { required: true });
 
 .organization__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

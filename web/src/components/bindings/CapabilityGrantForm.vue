@@ -111,7 +111,7 @@ const desiredState = defineModel<'grant' | 'revoke'>('desiredState', { required:
 
 .governance__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

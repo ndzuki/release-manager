@@ -218,7 +218,7 @@ h1, h2, p { margin: 0; }
 .hint { color: var(--color-muted); font-weight: 400; }
 .card .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .card button:disabled { cursor: not-allowed; opacity: 0.5; }
-.error { color: var(--color-error); }
+.error { color: var(--color-error-strong); }
 /* Slotted into AppDialog's footer, whose baseline must lose to a danger variant. */
-.dialog-danger { border-color: var(--color-danger-border); color: var(--color-error); }
+.dialog-danger { border-color: var(--color-danger-border); color: var(--color-error-strong); }
 </style>

@@ -131,7 +131,7 @@ function isRawJson(detail: string): boolean {
 }
 
 .preflight-panel__overall--passed {
-  color: var(--color-success);
+  color: var(--color-success-ink);
 }
 
 .preflight-panel__overall--failed {

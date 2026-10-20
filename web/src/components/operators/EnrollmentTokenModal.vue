@@ -312,7 +312,7 @@ onUnmounted(clearPlaintext);
 <style scoped>
 .eyebrow {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-xs);
   font-weight: 800;
   text-transform: uppercase;
@@ -382,7 +382,7 @@ pre {
 
 .modal-button--danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .modal-button:disabled {
@@ -392,6 +392,6 @@ pre {
 
 .error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 </style>
