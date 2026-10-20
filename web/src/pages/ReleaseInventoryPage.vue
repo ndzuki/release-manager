@@ -4,6 +4,7 @@ import { computed, onActivated, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
 import Toast from '@/components/common/Toast.vue';
 import ReleaseInventorySkeleton from '@/components/releases/ReleaseInventorySkeleton.vue';
@@ -26,6 +27,25 @@ const customerId = computed(() => String(route.params.customerId ?? ''));
 const clusterId = computed(() => String(route.params.clusterId ?? ''));
 // Plan N7: a direct URL has no query names, and the old fallback printed raw UUIDs.
 const { customerName, clusterName } = useScopeNames();
+
+/*
+ * Direction-C page header (TASK-394): one title, one subtitle and the crumbs carry the
+ * NAMES of the customer and cluster — a crumb built from route params would print a UUID,
+ * which is the anti-pattern PageHeader exists to stop. Both crumbs stay plain text, as the
+ * old hand-rolled breadcrumb was: this task changes the look, not the navigation graph.
+ *
+ * The title comes from the catalog's `eyebrow` entry — direction C has no eyebrow line,
+ * so that string is the page title now (the key name is historical). The last crumb keeps
+ * its own `breadcrumb` entry, which is what the crumb itself renders.
+ */
+const pageTitle = computed(() => t('release.inventory.eyebrow'));
+const crumbs = computed(() => [
+  { label: customerName.value },
+  { label: clusterName.value },
+  { label: t('release.inventory.breadcrumb') },
+]);
+const subtitle = computed(() => `展示 operator 最近同步的 Helm Release；共 ${inventory.totalCount} 条。`);
+
 const canSync = computed(() => auth.user?.roles.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)) === true);
 const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
 // AC-033-10: a stale authorization snapshot closes the NEW operation entry. The
@@ -105,25 +125,22 @@ function handleSearchInput(event: Event): void {
 
 <template>
   <section class="inventory-page">
-    <nav class="breadcrumbs" :aria-label="t('common.breadcrumb')">
-      <span>{{ customerName }}</span><span aria-hidden="true">/</span>
-      <span>{{ clusterName }}</span><span aria-hidden="true">/</span>
-      <strong>{{ t('release.inventory.breadcrumb') }}</strong>
-    </nav>
-
-    <header class="inventory-page__header">
-      <div>
-        <p class="eyebrow">{{ t('release.inventory.eyebrow') }}</p>
-        <h1>{{ clusterName }} {{ t('release.inventory.breadcrumb') }}</h1>
-        <p>展示 operator 最近同步的 Helm Release；共 {{ inventory.totalCount }} 条。</p>
-      </div>
-      <div class="inventory-actions">
-        <button type="button" :disabled="inventory.loading" @click="inventory.refresh()">{{ t('action.refresh') }}</button>
-        <button v-if="canSync" type="button" class="primary" :disabled="inventory.syncing" @click="inventory.triggerSync">
+    <PageHeader :title="pageTitle" :subtitle="subtitle" :crumbs="crumbs">
+      <template #actions>
+        <button type="button" class="inventory-button" :disabled="inventory.loading" @click="inventory.refresh()">
+          {{ t('action.refresh') }}
+        </button>
+        <button
+          v-if="canSync"
+          type="button"
+          class="inventory-button inventory-button--primary"
+          :disabled="inventory.syncing"
+          @click="inventory.triggerSync"
+        >
           {{ inventory.syncing ? '同步中…' : '触发同步' }}
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
 
     <AuthorizationStaleNotice :stale="writeBlocked" />
 
@@ -144,22 +161,30 @@ function handleSearchInput(event: Event): void {
       同步请求已创建：<code>{{ inventory.syncRequestId }}</code>。完成后请手动刷新。
     </Toast>
 
+    <!-- Filter bar. Native controls keep their UA geometry only if the palette does not
+         reach them, so both controls are drawn from tokens explicitly (the deployed
+         console measured `appearance:auto` with a white background and black text). -->
     <div class="filters">
-      <label>
+      <label class="filters__field">
         状态
-        <select :value="inventory.statusFilter ?? ''" @change="handleStatusChange">
-          <option value="">{{ t('release.filter.allStatus') }}</option>
-          <option value="active">{{ t('release.status.active') }}</option>
-          <option value="missing">{{ t('release.status.missing') }}</option>
-          <option value="out_of_sync">{{ t('release.status.outOfSync') }}</option>
-        </select>
+        <span class="select-wrap">
+          <select :value="inventory.statusFilter ?? ''" @change="handleStatusChange">
+            <option value="">{{ t('release.filter.allStatus') }}</option>
+            <option value="active">{{ t('release.status.active') }}</option>
+            <option value="missing">{{ t('release.status.missing') }}</option>
+            <option value="out_of_sync">{{ t('release.status.outOfSync') }}</option>
+          </select>
+          <span class="select-wrap__caret" aria-hidden="true" />
+        </span>
       </label>
-      <label class="filters__search">
+      <label class="filters__field filters__search">
         搜索 Release
         <input :value="inventory.nameSearch" maxlength="253" placeholder="按 release name 搜索" @input="handleSearchInput" />
       </label>
     </div>
 
+    <!-- The three async states are mutually exclusive: at most one of the skeleton, the
+         error state and the empty state is in the tree at a time. -->
     <ReleaseInventorySkeleton v-if="inventory.loading && inventory.releases.length === 0" />
     <ErrorState
       v-else-if="inventory.error && inventory.releases.length === 0"
@@ -170,9 +195,11 @@ function handleSearchInput(event: Event): void {
       @action="inventory.refresh()"
     />
     <template v-else>
+      <!-- A refresh failed but the rows we already had are still readable; that is a
+           notice, not the error state (which would hide the data). -->
       <div v-if="inventory.error" class="notice notice--warning" role="alert">
         {{ inventory.error }}
-        <button type="button" @click="inventory.refresh()">重试</button>
+        <button type="button" class="inventory-button" @click="inventory.refresh()">重试</button>
       </div>
       <EmptyState
         v-if="inventory.isEmpty"
@@ -181,19 +208,25 @@ function handleSearchInput(event: Event): void {
         action-label="刷新"
         @action="inventory.refresh()"
       />
-      <ReleaseInventoryTable
-        v-else
-        :releases="inventory.releases"
-        :can-create-operation="canCreateOperation"
-        :can-emergency="authorization.canExecuteEmergency"
-        :can-convergence="authorization.canCreateValuesRevision"
-        :can-rollback="canRollback"
-        :customer-id="customerId"
-        :cluster-id="clusterId"
-        :customer-name="customerName"
-        :cluster-name="clusterName"
-        @rollback="openRollback"
-      />
+      <template v-else>
+        <ReleaseInventoryTable
+          :releases="inventory.releases"
+          :can-create-operation="canCreateOperation"
+          :can-emergency="authorization.canExecuteEmergency"
+          :can-convergence="authorization.canCreateValuesRevision"
+          :can-rollback="canRollback"
+          :customer-id="customerId"
+          :cluster-id="clusterId"
+          :customer-name="customerName"
+          :cluster-name="clusterName"
+          @rollback="openRollback"
+        />
+        <div v-if="inventory.hasMore" class="load-more">
+          <button type="button" class="inventory-button" :disabled="inventory.appending" @click="inventory.load({ append: true })">
+            {{ inventory.appending ? '加载中…' : '加载更多' }}
+          </button>
+        </div>
+      </template>
       <RollbackReleaseDialog
         v-if="rollbackTarget"
         :open="true"
@@ -203,34 +236,150 @@ function handleSearchInput(event: Event): void {
         @close="rollbackTarget = null"
         @created="handleRollbackCreated"
       />
-      <div v-if="inventory.hasMore" class="load-more">
-        <button type="button" :disabled="inventory.appending" @click="inventory.load({ append: true })">
-          {{ inventory.appending ? '加载中…' : '加载更多' }}
-        </button>
-      </div>
     </template>
   </section>
 </template>
 
 <style scoped>
-.inventory-page { display: grid; gap: 1.5rem; }
-.breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--color-muted); font-size: var(--font-size-sm); }
-.inventory-page__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
-h1, p { margin: 0; }
-.inventory-page__header div:first-child { display: grid; gap: 0.35rem; }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.inventory-actions, .load-more { display: flex; gap: 0.75rem; }
-button, select, input { min-height: 2.5rem; padding: 0.45rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.45rem; background: var(--color-surface); }
-button { cursor: pointer; }
-button:disabled { cursor: not-allowed; opacity: 0.6; }
-button.primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
-.filters { display: grid; grid-template-columns: minmax(10rem, 14rem) minmax(18rem, 1fr); gap: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 0.65rem; background: var(--color-surface); }
-.filters label { display: grid; gap: 0.35rem; color: var(--color-muted-strong); font-size: var(--font-size-sm); font-weight: 700; }
-.notice { display: flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; border: 1px solid var(--color-info-border); border-radius: 0.5rem; background: var(--color-info-soft); color: var(--color-info-ink); }
-.notice--warning { border-color: var(--color-warning-border); background: var(--color-warning-soft); color: var(--color-warning-ink); }
-.load-more { justify-content: center; }
+.inventory-page {
+  display: grid;
+  gap: var(--space-5);
+}
+
+/* PageHeader owns a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the notice. */
+.inventory-page :deep(.page-header) {
+  margin-bottom: 0;
+}
+
+.inventory-button {
+  padding: 7px 14px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.inventory-button:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+}
+
+.inventory-button--primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-accent);
+  font-weight: var(--font-weight-medium);
+}
+
+.inventory-button--primary:hover {
+  background: var(--color-primary-hover);
+}
+
+/* Declared after the primary rules so it wins the equal-specificity tie: a disabled
+   control resolves to the neutral triple and never to an enabled semantic colour. */
+.inventory-button:disabled,
+.inventory-button--primary:disabled {
+  border-color: var(--color-disabled-border);
+  background: var(--color-disabled-bg);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.filters__field {
+  display: grid;
+  flex: none;
+  gap: var(--space-1);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.filters__search {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.filters select,
+.filters input {
+  padding: 7px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.filters input::placeholder {
+  color: var(--color-subtle);
+}
+
+/* The UA select arrow is painted outside the token palette; the caret is drawn from the
+   muted text colour instead, so both themes get the same control. */
+.select-wrap {
+  position: relative;
+  display: block;
+}
+
+.select-wrap select {
+  width: 100%;
+  padding-right: 30px;
+  appearance: none;
+}
+
+.select-wrap__caret {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid var(--color-muted);
+  border-bottom: 1px solid var(--color-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--color-info-border);
+  border-radius: 0.5rem;
+  background: var(--color-info-soft);
+  color: var(--color-info-ink);
+}
+
+.notice--warning {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-ink);
+}
+
+.load-more {
+  display: flex;
+  justify-content: center;
+}
+
 @media (max-width: 48rem) {
-  .inventory-page__header { flex-direction: column; }
-  .filters { grid-template-columns: 1fr; }
+  .filters {
+    align-items: stretch;
+  }
+
+  .filters__field,
+  .filters__search {
+    flex: 1 1 100%;
+  }
 }
 </style>
