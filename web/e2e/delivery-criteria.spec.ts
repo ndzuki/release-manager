@@ -233,10 +233,10 @@ test('H2 关键页可达：客户 → 集群 → 发布清单 → 创建操作 �
   expect(urlDefinitionId, 'the scoped detail route must name a release definition').not.toBe('');
   const summary = page.locator('.operation-detail__summary');
   await expect(
-    summary.locator('dt:text-is("Operation ID") + dd .copyable-hash__value'),
+    summary.locator('dt:text-is("操作 ID") + dd .copyable-hash__value'),
   ).toHaveAttribute('title', listedOperationId);
   await expect(
-    summary.locator('dt:text-is("ReleaseDefinition") + dd .copyable-hash__value'),
+    summary.locator('dt:text-is("发布定义") + dd .copyable-hash__value'),
   ).toHaveAttribute('title', urlDefinitionId);
 });
 

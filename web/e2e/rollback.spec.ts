@@ -291,12 +291,12 @@ test('Rollback from the release inventory creates a ROLLBACK operation and lands
   // strength — the whole server-issued id, not a shortened prefix.
   const summary = page.locator('.operation-detail__summary');
   await expect(
-    summary.locator('dt:text-is("Operation ID") + dd .copyable-hash__value'),
+    summary.locator('dt:text-is("操作 ID") + dd .copyable-hash__value'),
   ).toHaveAttribute('title', wireResponse.operationId);
   // The operation must hang off the definition the rollback was submitted for, not a
   // neighbour's: the second CopyableHash carries the id the row was bound to.
   await expect(
-    summary.locator('dt:text-is("ReleaseDefinition") + dd .copyable-hash__value'),
+    summary.locator('dt:text-is("发布定义") + dd .copyable-hash__value'),
   ).toHaveAttribute('title', definitionId);
   // The state moved from `.operation-detail__state` into the PageHeader subtitle
   // (`{state} · 状态版本 {version}`, messages.ts `operation.detail.subtitle`). The state
@@ -329,7 +329,7 @@ test('an illegal target revision is refused by the SERVER, not only by the form 
   await page.locator('input[name="targetRevision"]').fill(String(currentRevision));
   await page.locator('textarea[name="reason"]').fill('E2E TASK-240: negative control');
   await page.getByTestId('rollback-submit').click();
-  await expect(page.locator('.rollback-dialog__error')).toContainText('目标 Revision 必须小于当前 Revision');
+  await expect(page.locator('.rollback-dialog__error')).toContainText('目标版本必须小于当前版本');
   expect(rollbackRequests, 'the client guard must not send an illegal target').toBe(0);
 
   // Part 2, the SERVER guard. The form will never send target >= expected, so
