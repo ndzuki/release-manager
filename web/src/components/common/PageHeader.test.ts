@@ -23,6 +23,25 @@ function mountHeader(props: Record<string, unknown> = {}) {
 }
 
 describe('PageHeader', () => {
+  it('renders the category eyebrow above the title when supplied', async () => {
+    const wrapper = mount(PageHeader, {
+      props: { title: '发布清单', eyebrow: '发布' },
+      global: { stubs: { RouterLink: true } },
+    });
+    const eyebrow = wrapper.get('.page-header__eyebrow');
+    expect(eyebrow.text()).toBe('发布');
+    // Above the title in DOM order: the category reads before the page name.
+    expect(eyebrow.element.nextElementSibling?.tagName).toBe('H1');
+  });
+
+  it('omits the eyebrow when not supplied', () => {
+    const wrapper = mount(PageHeader, {
+      props: { title: '发布清单' },
+      global: { stubs: { RouterLink: true } },
+    });
+    expect(wrapper.find('.page-header__eyebrow').exists()).toBe(false);
+  });
+
   it('renders the page title as the single h1', () => {
     const wrapper = mountHeader();
 
