@@ -17,6 +17,12 @@ import { t } from '@/i18n/messages';
 const props = defineProps<{
   title: string;
   subtitle?: string;
+  /*
+   * Category label above the title ("发布 / 治理 / 紧急 / 维护"). A prop rather than a slot
+   * because 18 pages already carry this in a hand-rolled `.eyebrow` element; moving them
+   * onto PageHeader without it would silently drop the category.
+   */
+  eyebrow?: string;
   crumbs?: Array<{ label: string; to?: RouteLocationRaw }>;
 }>();
 
@@ -41,6 +47,7 @@ const crumbs = computed(() => props.crumbs ?? []);
 
     <div class="page-header__heading">
       <div class="page-header__text">
+        <p v-if="eyebrow" class="page-header__eyebrow">{{ eyebrow }}</p>
         <h1 class="page-header__title">{{ title }}</h1>
         <p v-if="subtitle" class="page-header__subtitle">{{ subtitle }}</p>
       </div>
@@ -104,6 +111,19 @@ const crumbs = computed(() => props.crumbs ?? []);
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+
+/*
+ * Direction-C eyebrow: 12px, semibold, muted, slightly tracked. The hand-rolled pages this
+ * replaces used 700 and 800 in different files, which is the kind of drift a shared
+ * component exists to remove.
+ */
+.page-header__eyebrow {
+  margin: 0;
+  color: var(--mu);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .page-header__title {

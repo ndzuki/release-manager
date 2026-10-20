@@ -73,4 +73,24 @@ describe('OperatorTable name column wrapping (W21)', () => {
     // Timestamps are the only nowrap survivors, and they say why.
     expect(style).toMatch(/\.operators__time\s*\{[^}]*white-space:\s*nowrap/);
   });
+
+  /*
+   * W2 (TASK-394): the header row was painted with `--color-bg`, the page colour — the
+   * exact defect direction C fixes by painting thead on the muted surface with the
+   * strong muted ink. The frame also has to carry a surface fill, not just a border.
+   */
+  it('paints the header from the direction-C table tokens (W2)', () => {
+    const style = styleBlock();
+
+    const header = style.match(/\.operators th\s*\{([^}]*)\}/);
+    expect(header, 'the th rule is gone; this assertion needs updating').not.toBeNull();
+    expect(header![1]).toContain('background: var(--color-surface-muted)');
+    expect(header![1]).toContain('color: var(--color-muted-strong)');
+    expect(style).not.toMatch(/--color-bg/);
+
+    const frame = style.match(/\.table-wrap\s*\{([^}]*)\}/);
+    expect(frame, 'the table frame is gone').not.toBeNull();
+    expect(frame![1]).toContain('border: 1px solid var(--color-border-strong)');
+    expect(frame![1]).toContain('background: var(--color-surface)');
+  });
 });

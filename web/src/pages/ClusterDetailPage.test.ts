@@ -7,11 +7,20 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import ClusterDetailPage from './ClusterDetailPage.vue';
 import { disableCluster, getCluster } from '@/connect/cluster-api';
 import type * as ClusterApi from '@/connect/cluster-api';
+import { getCustomer } from '@/connect/customer-api';
+import type * as CustomerApi from '@/connect/customer-api';
 import { useAuthStore } from '@/stores/auth';
 
 vi.mock('@/connect/cluster-api', async (importOriginal) => {
   const original = await importOriginal<typeof ClusterApi>();
   return { ...original, getCluster: vi.fn(), disableCluster: vi.fn() };
+});
+
+/* Direction C (TASK-394): the customer level of the breadcrumb is resolved by
+ * `useScopeNames`, which asks the API when the query does not carry the name. */
+vi.mock('@/connect/customer-api', async (importOriginal) => {
+  const original = await importOriginal<typeof CustomerApi>();
+  return { ...original, getCustomer: vi.fn() };
 });
 
 function dialogPanel(): HTMLElement {
@@ -40,6 +49,13 @@ beforeEach(() => {
     chartRules: [],
   });
   vi.mocked(disableCluster).mockReset().mockResolvedValue(undefined);
+  vi.mocked(getCustomer).mockReset().mockResolvedValue({
+    id: 'customer-1',
+    name: 'Acme',
+    slug: 'acme',
+    status: 'active',
+    version: 1,
+  } as never);
   useAuthStore().$patch({
     status: 'authenticated',
     initialized: true,
@@ -190,6 +206,44 @@ describe('ClusterDetailPage disable feedback (W10)', () => {
 
     expect(wrapper.find('[data-testid="cluster-detail-notice"]').exists()).toBe(false);
     wrapper.unmount();
+  });
+});
+
+/*
+ * TASK-394 (direction C). The hand-rolled `.eyebrow` + `<h1>` pair is PageHeader now. The
+ * category line ("集群") survives verbatim, the subtitle keeps naming the release-target
+ * state, and the trail carries the customer/cluster NAMES — a level that cannot be
+ * resolved is dropped instead of degrading to the route identifier.
+ */
+describe('ClusterDetailPage direction C page header', () => {
+  it('keeps the 集群 eyebrow, the cluster title and the target-state subtitle', async () => {
+    const wrapper = await mountPage();
+
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('集群');
+    expect(wrapper.get('.page-header__title').text()).toBe('staging');
+    expect(wrapper.get('.page-header__subtitle').text()).toBe('生效中的发布目标');
+  });
+
+  it('names the customer and the cluster in the breadcrumb', async () => {
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const crumbs = wrapper.get('.page-header__crumbs').text();
+    expect(crumbs).toContain('Acme');
+    expect(crumbs).toContain('staging');
+    expect(crumbs).not.toContain('customer-1');
+    expect(crumbs).not.toContain('cluster-1');
+  });
+
+  it('drops the customer level instead of printing its identifier', async () => {
+    vi.mocked(getCustomer).mockRejectedValue(new Error('not found'));
+
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    const crumbs = wrapper.get('.page-header__crumbs').text();
+    expect(crumbs).toContain('staging');
+    expect(crumbs).not.toContain('customer-1');
   });
 });
 

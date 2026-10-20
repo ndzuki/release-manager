@@ -182,4 +182,26 @@ describe('LocalUsersPage', () => {
     // The failure surface must carry the mapped copy, not merely some non-empty text.
     expect(wrapper.get('[role="alert"]').text()).toContain('不可用');
   });
+
+  /*
+   * W2 (TASK-394): the page's hand-rolled header moved to PageHeader (category eyebrow,
+   * title and the description as subtitle), and the role select was the console's last
+   * raw native control: it is now wrapped so the UA arrow can be replaced by the
+   * direction-C caret.
+   */
+  it('heads the page through PageHeader and customises the native select (W2)', async () => {
+    signIn(['platform_admin']);
+    mockedList.mockResolvedValue({ users: [], nextCursor: '' });
+
+    const wrapper = await mountPage();
+
+    const header = wrapper.get('.page-header');
+    expect(header.get('.page-header__eyebrow').text()).toBe('平台管理');
+    expect(header.get('h1').text()).toBe('本地用户');
+    expect(header.get('.page-header__subtitle').text()).toContain('本地账号属于「auth」命名空间');
+
+    const select = wrapper.get('select[name="role"]');
+    expect(select.element.parentElement?.classList.contains('select-wrap')).toBe(true);
+    expect(wrapper.find('.select-wrap__caret').exists()).toBe(true);
+  });
 });

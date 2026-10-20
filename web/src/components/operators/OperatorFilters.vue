@@ -42,8 +42,11 @@ function updateSession(event: Event): void {
 </template>
 
 <style scoped>
-.filters { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+/* W2 (TASK-394): direction-C card — a surface fill under a strong border. The old rule
+   had the strong border but no background, which made the filter row read as a flat
+   outline in the dark theme. */
+.filters { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); min-width: 0; }
 .filters legend { padding: 0 0.35rem; font-weight: 700; }
 .filters label { display: grid; gap: 0.35rem; color: var(--color-muted-strong); font-size: var(--font-size-md); }
-.filters select { min-width: 10rem; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
+.filters select { min-width: 10rem; max-width: 100%; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface-muted); color: var(--color-text); }
 </style>

@@ -1040,6 +1040,15 @@ const zhCN = {
   'values.page.saveBlocked': '保存为新版本需要写权限，且内容需通过校验。',
   'values.diff.heading': '与上一版本的差异',
   'values.diff.none': '无变更',
+
+  // --- consistency w2 (TASK-394) ---
+  /*
+   * The operator detail page printed the raw operator UUID under its title. The id now
+   * sits in the identity card as a CopyableHash row, which needs its own label. The value
+   * follows the existing "X 标识" vocabulary (`operationCenter.column.operation`,
+   * `bundle.detail.bundleId`) and stays in Chinese like the rest of the catalog.
+   */
+  'operator.detail.id': 'Operator 标识',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
