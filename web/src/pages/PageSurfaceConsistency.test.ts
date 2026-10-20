@@ -187,6 +187,28 @@ describe('W7 page surfaces (TASK-394)', () => {
     }
   });
 
+  it('frames the annotation table and paints its header band', () => {
+    const style = styleOf('../components/emergency/EmergencyAnnotationEditor.vue');
+
+    // Horizontal containment is the global `.table-wrap`; the page-level table frame and the
+    // quiet header band are the direction-C part.
+    const frame = rule(style, '.table-wrap');
+    expect(frame).toContain('border: 1px solid var(--color-border-strong)');
+    expect(frame).toContain('background: var(--sf)');
+    expect(frame).toContain('border-radius: var(--r)');
+
+    const header = rule(style, '.annotation-table th');
+    expect(header).toContain('background: var(--color-surface-muted)');
+    expect(header).toContain('color: var(--color-muted-strong)');
+    expect(header).toContain('font-size: var(--font-size-xs)');
+    expect(header).toContain('font-weight: 600');
+    expect(header).toContain('padding: 10px 20px');
+
+    const cell = rule(style, '.annotation-table td');
+    expect(cell).toContain('padding: 10px 20px');
+    expect(cell).toContain('border-top: 1px solid var(--color-border-strong)');
+  });
+
   it('turns the values page eyebrow into a section title', () => {
     const template = templateOf('ValuesEditorPage.vue');
     const style = styleOf('ValuesEditorPage.vue');
