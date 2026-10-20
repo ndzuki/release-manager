@@ -60,6 +60,27 @@ const failedStages = computed(() => {
       .map((stage) => stage.stage),
   ]);
 });
+
+/**
+ * TASK-394: `detail` is operator text (or, when the operator reported a whole result
+ * document, that document's raw JSON — `failedStageResult` in
+ * internal/orchestrator/preflight/coordinator.go keeps `resultJSON` verbatim). Rendered
+ * as a paragraph, compact JSON is a single unbreakable "word" whose min-content width
+ * (~2030px in the production build) inflated the operation page's grid track and the
+ * document to 2190 at a 1440 viewport. JSON now goes into a collapsed disclosure instead
+ * of the page flow; plain text stays inline but breaks anywhere.
+ */
+function isRawJson(detail: string): boolean {
+  const trimmed = detail.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 </script>
 
 <template>
@@ -84,7 +105,17 @@ const failedStages = computed(() => {
       >
         <span class="preflight-stage__name">{{ stage.stage }}</span>
         <span class="preflight-stage__status">{{ statusLabel('stage', stage.status) }}</span>
-        <p v-if="stage.detail" class="preflight-stage__detail" data-testid="preflight-stage-detail">
+        <!-- TASK-394: collapsed by default. Closed <details> render no contents at all, so
+             the raw JSON contributes nothing to min-content until the reader asks for it. -->
+        <details
+          v-if="stage.detail && isRawJson(stage.detail)"
+          class="preflight-stage__raw"
+          data-testid="preflight-stage-detail"
+        >
+          <summary>{{ t('operation.preflight.rawJson') }}</summary>
+          <pre class="preflight-stage__json">{{ stage.detail }}</pre>
+        </details>
+        <p v-else-if="stage.detail" class="preflight-stage__detail" data-testid="preflight-stage-detail">
           {{ stage.detail }}
         </p>
       </li>
@@ -93,6 +124,12 @@ const failedStages = computed(() => {
 </template>
 
 <style scoped>
+/* TASK-394: the panel is a grid item of the operation page. `min-width: 0` drops the
+   automatic minimum that let a long stage detail widen the page's single column. */
+.preflight-panel {
+  min-width: 0;
+}
+
 .preflight-panel__overall--passed {
   color: var(--color-success);
 }
@@ -116,8 +153,10 @@ const failedStages = computed(() => {
 
 .preflight-stage {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: baseline;
+  min-width: 0;
 }
 
 .preflight-stage--failed {
@@ -127,6 +166,41 @@ const failedStages = computed(() => {
 
 .preflight-stage__detail {
   margin: 0;
+  min-width: 0;
   font-family: var(--font-family-mono);
+  /* `anywhere`, not `break-word`: only `anywhere` also lowers the element's MIN-CONTENT
+     width, and min-content is exactly what the page's grid track reads. With
+     `break-word` the box would wrap but the track would already have been inflated. */
+  overflow-wrap: anywhere;
+}
+
+/* Starts a new flex line, so the disclosure never sits beside the stage label. */
+.preflight-stage__raw {
+  flex-basis: 100%;
+  min-width: 0;
+}
+
+.preflight-stage__raw > summary {
+  cursor: pointer;
+  color: var(--color-muted-strong);
+  font-family: var(--font-family-mono);
+}
+
+.preflight-stage__json {
+  max-width: 100%;
+  max-height: 18rem;
+  margin: 0.35rem 0 0;
+  padding: 0.5rem 0.75rem;
+  overflow: auto;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--code);
+  color: var(--color-text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  /* Keep the payload's own indentation, but wrap a long single-line value so the
+     horizontal scroll stays inside this block instead of reaching the document. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 </style>

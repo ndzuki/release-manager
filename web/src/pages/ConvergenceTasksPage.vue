@@ -158,6 +158,8 @@ function continueToRevision(): void {
 .convergence-body { display: grid; gap: 1rem; }
 .prepare-row { display: flex; justify-content: space-between; align-items: center; }
 .primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: var(--color-violet); color: var(--color-on-accent); }
-.primary:disabled { background: var(--color-violet-border); cursor: not-allowed; }
+/* TASK-394: same defect as EmergencyChangePage — the disabled primary borrowed this
+   page's violet accent as if it were a disabled colour. */
+.primary:disabled { box-shadow: inset 0 0 0 1px var(--color-disabled-border); background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
 .error-text { color: var(--color-error); }
 </style>

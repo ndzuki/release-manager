@@ -180,12 +180,16 @@ describe('design tokens', () => {
     }
   });
 
-  it('keeps the editor tokens dark and theme-invariant (CodeMirror is dark in both)', () => {
-    // Mapping these onto the palette would make the editor surface follow the theme while
-    // the CodeMirror theme (syntax colours, gutter) stayed dark: a light-on-light editor.
-    expect(declared.get('--editor-active-line')).toBe('#1e293b80');
-    expect(declared.get('--editor-gutter-surface')).toBe('#111827');
-    expect(declared.get('--editor-text')).toBe('#e2e8f0');
+  it('makes the editor follow the active palette instead of pinning a dark surface', () => {
+    // TASK-394: the editor used to be #0f172a in both themes while CodeMirror rendered its
+    // LIGHT default highlight style on it (a YAML key was #0000cc on #0f172a = 1.59:1).
+    // Every editor token now resolves through the palette, so the surface, ink and gutter
+    // change with the theme and no light-on-dark pair can come back through this door.
+    expect(declared.get('--editor-surface')).toBe('var(--code)');
+    expect(declared.get('--editor-text')).toBe('var(--tx)');
+    expect(declared.get('--editor-caret')).toBe('var(--tx)');
+    expect(declared.get('--editor-gutter-surface')).toBe('var(--sf2)');
+    expect(declared.get('--editor-gutter-text')).toBe('var(--color-muted-strong)');
   });
 
   /*
@@ -207,6 +211,8 @@ describe('design tokens', () => {
   const MIX_RULES: Record<string, { from: string; percent: number; to: string }> = {
     '--color-subtle': { from: '--mu', percent: 88, to: '--tx' },
     '--color-border-strong': { from: '--bd', percent: 48, to: '--mu' },
+    '--color-muted-strong': { from: '--mu', percent: 78, to: '--tx' },
+    '--color-disabled-border': { from: '--mu', percent: 30, to: '--bd' },
   };
 
   it.each(Object.entries(MIX_RULES))('pins the %s derivation', (token, rule) => {
@@ -258,6 +264,100 @@ describe('design tokens', () => {
     return (lighter + 0.05) / (darker + 0.05);
   }
 
+  /**
+   * The value a token actually renders with in one theme: palette re-declarations win,
+   * `var()` aliases are followed, and `color-mix` rules are evaluated with the same
+   * channel interpolation the browser performs. Without this the theme-following tokens
+   * would only be checkable by eye.
+   */
+  function resolveToken(token: string, palette: Map<string, string>): string {
+    const fromPalette = palette.get(token);
+    if (fromPalette) return fromPalette;
+    const raw = declared.get(token) ?? '';
+    const alias = /^var\((--[a-z0-9-]+)\)$/.exec(raw.trim());
+    if (alias) return resolveToken(alias[1]!, palette);
+    const rule = MIX_RULES[token];
+    if (rule) {
+      return mix(resolveToken(rule.from, palette), rule.percent, resolveToken(rule.to, palette));
+    }
+    return raw;
+  }
+
+  const THEMES = [
+    ['dark', darkPalette],
+    ['light', lightPalette],
+  ] as const;
+
+  /*
+   * Disabled controls (TASK-394). The defect was semantic as well as visual: the emergency
+   * page painted its disabled primary with the danger fill (white on #fca5a5 = 1.90:1 in
+   * the deployed build) and the convergence page used the violet accent. These pin the
+   * neutral replacement and its two resolutions.
+   */
+  it('declares the disabled triple through the palette', () => {
+    expect(declared.get('--color-disabled-bg')).toBe('var(--sf2)');
+    expect(declared.get('--color-disabled-text')).toBe('var(--mu)');
+    expect(declared.get('--color-disabled-border')).toBe('color-mix(in srgb, var(--mu) 30%, var(--bd))');
+  });
+
+  it('resolves the disabled fill and ink to each theme’s quiet pair', () => {
+    expect({
+      dark: [resolveToken('--color-disabled-bg', darkPalette), resolveToken('--color-disabled-text', darkPalette)],
+      light: [resolveToken('--color-disabled-bg', lightPalette), resolveToken('--color-disabled-text', lightPalette)],
+    }).toEqual({
+      dark: ['#18181b', '#a1a1aa'],
+      light: ['#f4f4f5', '#71717a'],
+    });
+  });
+
+  it('keeps a disabled label distinguishable on its own fill in both themes', () => {
+    // WCAG exempts inactive controls, so the floor is the readability one (3:1) rather
+    // than AA body text: quiet enough not to compete with the enabled control beside it.
+    const failures: string[] = [];
+    for (const [theme, palette] of THEMES) {
+      const ratio = contrastRatio(
+        resolveToken('--color-disabled-text', palette),
+        resolveToken('--color-disabled-bg', palette),
+      );
+      if (ratio < 3) failures.push(`${theme} = ${ratio.toFixed(2)}:1`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('never paints a disabled control with an enabled semantic colour', () => {
+    // The regression guard for the rule the two pages used to carry. `:disabled` in the
+    // SELECTOR is fine (`.primary:disabled`); what must not reappear is a danger/primary
+    // token in its declarations.
+    const offenders: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      for (const style of text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
+        for (const rule of style[1]!.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+          if (!rule[1]!.includes(':disabled')) continue;
+          const bad = /var\((--color-(?:danger|error|primary|warning|success|violet|info)[a-z-]*)\)/.exec(rule[2]!);
+          if (bad) offenders.push(`${file}: ${rule[1]!.trim()} uses ${bad[1]}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps the editor and its syntax accents readable in both themes', () => {
+    // TASK-394: the reported pairs were a #0000cc token on #0f172a (1.59:1) and a gutter
+    // at 3.75:1. The CodeMirror style now uses the direction-C accents (--k/--s/--n) for
+    // keys, strings and numbers, and the neutral step for comments and line numbers, all
+    // on --code. Computed here rather than eyeballed.
+    const failures: string[] = [];
+    for (const [theme, palette] of THEMES) {
+      const surface = resolveToken('--editor-surface', palette);
+      for (const token of ['--k', '--s', '--n', '--color-muted-strong']) {
+        const ratio = contrastRatio(resolveToken(token, palette), surface);
+        if (ratio < 4.5) failures.push(`${theme} ${token} on ${surface} = ${ratio.toFixed(2)}:1`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   it('keeps --color-subtle readable on every surface in both themes', () => {
     const failures: string[] = [];
     for (const [theme, palette] of [
@@ -288,7 +388,16 @@ describe('design tokens', () => {
   });
 
   it('keeps --editor-gutter-text readable on the editor gutter', () => {
-    expect(contrastRatio(declared.get('--editor-gutter-text')!, declared.get('--editor-gutter-surface')!)).toBeGreaterThanOrEqual(4.5);
+    // Was a single pair of literals; the gutter now follows the theme, so both are checked.
+    const failures: string[] = [];
+    for (const [theme, palette] of THEMES) {
+      const ratio = contrastRatio(
+        resolveToken('--editor-gutter-text', palette),
+        resolveToken('--editor-gutter-surface', palette),
+      );
+      if (ratio < 4.5) failures.push(`${theme} = ${ratio.toFixed(2)}:1`);
+    }
+    expect(failures).toEqual([]);
   });
 
   it('keeps the on-accent ink readable on the primary fill in both themes', () => {
