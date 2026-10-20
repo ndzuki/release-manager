@@ -260,7 +260,7 @@ onBeforeUnmount(() => {
               one panel. The h2 now carries the region name on its own and stays the
               `aria-labelledby` target the section points at.
             -->
-            <h2 id="values-editor-title">{{ t('values.page.title') }}</h2>
+            <h2 id="values-editor-title">{{ t('values.page.content') }}</h2>
           </header>
           <ValuesCodeEditor
             :model-value="editor.editorContent"
