@@ -125,14 +125,18 @@ async function openReleases(page: Page): Promise<void> {
   await page.waitForURL((url) => url.pathname.endsWith('/releases'));
 }
 
-// The Revision column is always the 4th cell (release/status/chart/revision),
-// whether or not the optional trailing columns render.
+// Direction-C column order: 发布 / 集群 / 当前 revision / 库存状态 / 紧急变更 / Values / 操作.
+// The old order (release/status/chart/revision) put the revision 4th.
+const REVISION_CELL_INDEX = 2;
 async function inventoryRevisions(page: Page): Promise<number[]> {
+  // Read the header first: a silent column move would otherwise make every row parse as
+  // NaN and the diagnostic would blame the environment instead of the selector.
+  await expect(page.locator('thead th').nth(REVISION_CELL_INDEX)).toContainText('revision');
   const rows = page.locator('tbody tr');
   const count = await rows.count();
   const revisions: number[] = [];
   for (let i = 0; i < count; i += 1) {
-    const text = (await rows.nth(i).locator('td').nth(3).innerText()).trim();
+    const text = (await rows.nth(i).locator('td').nth(REVISION_CELL_INDEX).innerText()).trim();
     const value = Number(text);
     if (Number.isInteger(value)) revisions.push(value);
   }

@@ -891,7 +891,6 @@ const zhCN = {
   'emergency.tasks.scrollRegion': '收敛任务表格（可横向滚动）',
   'annotation.table.scrollRegion': '注解表格（可横向滚动）',
   'definitions.mappings.scrollRegion': 'Promotion Mapping 表格（可横向滚动）',
-
   // --- home overview (TASK-394) ---
   'home.overview.subtitle': '发布活动与集群健康一览',
   'home.overview.loading': '正在加载…',
@@ -934,6 +933,70 @@ const zhCN = {
   'home.time.hours': '{count} 小时前',
   'home.time.days': '{count} 天前',
   'home.time.unknown': '时间未知',
+
+
+  // --- release inventory table (TASK-394) ---
+  /*
+   * Direction-C release inventory columns. The status LABELS are reused from the
+   * `release.status.*` entries above (they are the store's own vocabulary); what is new
+   * here is the column set and the per-status tooltip copy AC-054-02 requires. Those
+   * tooltips lived inline in ReleaseStatusBadge.vue, which the inventory table no longer
+   * renders now that the status is a StatusTag.
+   */
+  'release.table.release': '发布',
+  'release.table.cluster': '集群',
+  'release.table.revision': '当前 revision',
+  'release.table.status': '库存状态',
+  'release.table.emergency': '紧急变更',
+  'release.table.actions': '操作',
+  'release.status.tooltip.active': 'Release 与最近一次同步结果一致',
+  'release.status.tooltip.missing': 'Release 已从集群中消失',
+  'release.status.tooltip.outOfSync': '配置与期望不一致',
+
+  // --- audit page (TASK-394) ---
+  /*
+   * Direction C audit page. The heading sentence names the scope the current query is
+   * pinned to (an organization, every organization, or the platform "system" scope);
+   * the wording mirrors the page's subtitle contract "查看 <scope> 的脱敏审计记录".
+   */
+  'audit.page.headerSubtitle': '查看 {scope} 的脱敏审计记录',
+  'audit.table.scrollRegion': '审计事件表格（可横向滚动）',
+  /*
+   * Labels for the audit outcome values the server actually writes (the sources are
+   * listed in src/components/audit/auditEventStatus.ts). The four values the catalog
+   * already covered reuse status.audit.*; these are the rest of the open set, and an
+   * unknown value still falls back to the raw server string on purpose.
+   */
+  'audit.result.trusted': '可信',
+  'audit.result.rejected': '已拒绝',
+  'audit.result.blocked': '已阻断',
+  'audit.result.wouldBlock': '预演：将阻断（观察模式）',
+  'audit.result.policyWarning': '策略警告',
+  'audit.result.signatureMissing': '缺少签名',
+  'audit.result.verificationUnavailable': '校验不可用',
+  'audit.result.pending': '待处理',
+  'audit.result.preflight': '预检中',
+  'audit.result.queued': '已排队',
+  'audit.result.running': '执行中',
+  'audit.result.cancelling': '取消中',
+  'audit.result.cancelled': '已取消',
+  'audit.result.timeout': '超时',
+
+  // --- create operation (TASK-394) ---
+  /*
+   * Direction C rewrote the create page around a header + stepper + two-column
+   * form/confirmation layout. The page title, subtitle and the back action moved here
+   * from inline copy; the two stepper labels and the confirmation-panel chrome
+   * (type row, "check the form first" hint) are new because the panel is now visible
+   * while the form is being filled instead of only behind the old confirmation step.
+   */
+  'operation.create.title': '创建发布操作',
+  'operation.create.lead': '选择制品和已审批配置，确认后启动预检',
+  'operation.create.back': '返回发布清单',
+  'operation.create.step.artifact': '制品与配置',
+  'operation.create.step.confirm': '确认',
+  'operation.confirm.type': '类型',
+  'operation.confirm.hint': '先完成表单并点击「检查并确认」，确认创建才可用。',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

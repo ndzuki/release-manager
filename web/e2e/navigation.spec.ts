@@ -101,7 +101,9 @@ test('breadcrumbs resolve names instead of printing identifiers on direct entry'
 
   // Deliberately WITHOUT the customerName/clusterName query parameters.
   await page.goto(`/customers/${CUSTOMER_ID}/clusters/${clusterId}/releases`);
-  const breadcrumb = page.locator('nav.breadcrumbs');
+  // The release inventory's crumbs moved into the shared PageHeader, whose nav carries a
+  // semantic label instead of the old hand-rolled `nav.breadcrumbs` class.
+  const breadcrumb = page.locator('nav[aria-label="面包屑"], nav.breadcrumbs').first();
   await expect(breadcrumb).toBeVisible();
   const text = (await breadcrumb.innerText()).replace(/\s+/g, ' ').trim();
 

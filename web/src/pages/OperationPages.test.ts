@@ -95,7 +95,12 @@ async function mountCreatePage(clients: TestClients) {
       { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
     ],
   });
-  await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new?currentRevision=5');
+  // TASK-394: the inventory link carries the real names; the page must never print the
+  // scope identifiers as breadcrumb levels, so every create-page case starts from names.
+  await router.push(
+    '/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new'
+      + '?currentRevision=5&customerName=Customer%20One&clusterName=Cluster%20One&releaseName=team%2Fapp',
+  );
   await router.isReady();
   const wrapper = mount(OperationCreatePage, {
     global: { plugins: [pinia, router] },
@@ -135,18 +140,69 @@ describe('operation pages', () => {
     expect(wrapper.text()).not.toContain('当前 Revision');
     expect(wrapper.text()).not.toContain('回退目标 Operation');
 
-    await wrapper.find('input[value="UPGRADE"]').setValue(true);
+    // TASK-394: the operation type is a segmented button group, not a set of radios.
+    await wrapper.find('[data-testid="operation-type-UPGRADE"]').trigger('click');
     expect(wrapper.text()).toContain('当前 Revision');
 
-    await wrapper.find('input[value="ROLLBACK"]').setValue(true);
+    await wrapper.find('[data-testid="operation-type-ROLLBACK"]').trigger('click');
     // TASK-153 / AC-056-08: ROLLBACK collects a target revision instead of a bundle and a
     // values revision, and it renders no patch editor.
     expect(wrapper.text()).toContain('当前 Revision');
     expect(wrapper.text()).toContain('回滚目标 Revision');
     expect(wrapper.text()).not.toContain('制品 Bundle');
     expect(wrapper.text()).not.toContain('已审批 ValuesRevision');
-    expect(wrapper.text()).not.toContain('Patch 覆盖');
+    // The always-visible confirmation panel still summarises a rollback as "Patch 覆盖: 无";
+    // what must be absent is the patch EDITOR, so scope the assertion to the form.
+    expect(wrapper.get('form').text()).not.toContain('Patch 覆盖');
+    expect(wrapper.find('.patch-editor').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('回退目标 Operation');
+  });
+
+  it('exposes the operation type as a named group of pressed buttons', async () => {
+    const { wrapper } = await mountCreatePage(optionsClients());
+
+    const group = wrapper.get('[role="group"]');
+    expect(group.attributes('aria-labelledby')).toBeDefined();
+    const install = wrapper.get('[data-testid="operation-type-INSTALL"]');
+    const upgrade = wrapper.get('[data-testid="operation-type-UPGRADE"]');
+    expect(install.attributes('aria-pressed')).toBe('true');
+    expect(upgrade.attributes('aria-pressed')).toBe('false');
+
+    await upgrade.trigger('click');
+
+    expect(upgrade.attributes('aria-pressed')).toBe('true');
+    expect(install.attributes('aria-pressed')).toBe('false');
+    expect(upgrade.classes()).toContain('seg__button--selected');
+  });
+
+  it('derives the step states from how much of the form is complete', async () => {
+    const { wrapper } = await mountCreatePage(optionsClients());
+    const step = (label: string) => wrapper.findAll('.steps__item').find((item) => item.text() === label);
+
+    expect(step('操作类型')?.classes()).toContain('steps__item--done');
+    expect(step('制品与配置')?.classes()).toContain('steps__item--now');
+    expect(step('Patch 覆盖')?.classes()).toContain('steps__item--todo');
+    expect(step('确认')?.classes()).toContain('steps__item--todo');
+
+    await fillBundleAndValues(wrapper);
+
+    expect(step('操作类型')?.classes()).toContain('steps__item--done');
+    expect(step('制品与配置')?.classes()).toContain('steps__item--done');
+    expect(step('Patch 覆盖')?.classes()).toContain('steps__item--done');
+    expect(step('确认')?.classes()).toContain('steps__item--now');
+  });
+
+  it('builds the breadcrumb from names and never from the scope identifiers', async () => {
+    const { wrapper } = await mountCreatePage(optionsClients());
+
+    const crumbs = wrapper.get('.page-header__crumbs').text();
+    expect(crumbs).toContain('Customer One');
+    expect(crumbs).toContain('Cluster One');
+    expect(crumbs).toContain('team/app');
+    expect(crumbs).toContain('新建操作');
+    expect(crumbs).not.toContain('cust-1');
+    expect(crumbs).not.toContain('cluster-1');
+    expect(crumbs).not.toContain('def-1');
   });
 
   it('marks a non-bundle image patch on the invalid row', async () => {
@@ -164,16 +220,39 @@ describe('operation pages', () => {
     expect(invalidRow.find('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('true');
   });
 
-  it('opens confirmation and cancel preserves the form without creating', async () => {
+  it('keeps confirmation disabled until the form is checked, and cancel preserves the form', async () => {
+    const clients = optionsClients();
+    const { wrapper } = await mountCreatePage(clients);
+    const confirm = () => wrapper.findAll('button').find((button) => button.text() === '确认创建');
+
+    // TASK-394: the confirmation panel is visible from the first render; the action it
+    // carries only arms once the form's own validation has passed.
+    expect(wrapper.text()).toContain('最终确认');
+    expect(confirm()?.attributes('disabled')).toBeDefined();
+    expect(wrapper.text()).toContain('先完成表单并点击「检查并确认」，确认创建才可用。');
+
+    await fillBundleAndValues(wrapper);
+    await wrapper.find('form').trigger('submit');
+
+    expect(confirm()?.attributes('disabled')).toBeUndefined();
+    await wrapper.findAll('button').find((button) => button.text() === '取消')?.trigger('click');
+
+    expect(wrapper.text()).toContain('创建发布操作');
+    expect(confirm()?.attributes('disabled')).toBeDefined();
+    expect(clients.operations.createOperation).not.toHaveBeenCalled();
+  });
+
+  it('disarms the confirmation when a field changes after the check', async () => {
     const clients = optionsClients();
     const { wrapper } = await mountCreatePage(clients);
     await fillBundleAndValues(wrapper);
     await wrapper.find('form').trigger('submit');
+    const confirm = () => wrapper.findAll('button').find((button) => button.text() === '确认创建');
+    expect(confirm()?.attributes('disabled')).toBeUndefined();
 
-    expect(wrapper.text()).toContain('最终确认');
-    await wrapper.findAll('button').find((button) => button.text() === '取消')?.trigger('click');
+    await wrapper.findAll('button').find((button) => button.text() === '添加 Patch')?.trigger('click');
 
-    expect(wrapper.text()).toContain('创建发布操作');
+    expect(confirm()?.attributes('disabled')).toBeDefined();
     expect(clients.operations.createOperation).not.toHaveBeenCalled();
   });
 
@@ -187,7 +266,10 @@ describe('operation pages', () => {
       { path: '/customers/:customerId/clusters/:clusterId/releases', name: 'ReleaseInventory', component: { template: '<div />' } },
       ],
     });
-    await router.push('/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new');
+    await router.push(
+      '/customers/cust-1/clusters/cluster-1/releases/def-1/operations/new'
+        + '?customerName=Customer%20One&clusterName=Cluster%20One&releaseName=team%2Fapp',
+    );
     await router.isReady();
     const wrapper = mount(OperationCreatePage, { global: { plugins: [createPinia(), router] } });
 

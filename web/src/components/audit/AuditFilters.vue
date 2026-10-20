@@ -28,7 +28,15 @@ const emit = defineEmits<{
 </script>
 
 <template>
+  <!-- TASK-394 (direction C): the filter bar is a dense auto-fit grid whose controls
+       share one baseline (`align-items: end`). Every field maps to a real filter field
+       on audit.v1.AuditQueryFilter — there is no free-text search because the wire
+       contract has none. -->
   <form class="audit-filters" :aria-label="t('audit.filters.title')" @submit.prevent="emit('submit')">
+    <p class="audit-filters__intro">
+      {{ t('audit.page.description') }}
+      <span v-if="maxRangeDays" class="audit-filters__hint">{{ t('audit.filters.windowHint', { days: maxRangeDays }) }}</span>
+    </p>
     <label v-if="platformAdmin" class="audit-filters__field">
       <span>{{ t('audit.filters.organization') }}</span>
       <select v-model="scope" name="organization">
@@ -78,12 +86,9 @@ const emit = defineEmits<{
       <span>{{ t('audit.filters.to') }}</span>
       <input v-model="model.to" name="to" type="datetime-local" />
     </label>
-    <p v-if="maxRangeDays" class="audit-filters__hint">
-      {{ t('audit.filters.windowHint', { days: maxRangeDays }) }}
-    </p>
     <div class="audit-filters__actions">
-      <button type="submit">{{ t('audit.filters.search') }}</button>
-      <button type="button" class="audit-button audit-button--secondary" @click="emit('reset')">{{ t('audit.filters.reset') }}</button>
+      <button type="submit" class="audit-filters__submit">{{ t('audit.filters.search') }}</button>
+      <button type="button" class="audit-filters__reset" @click="emit('reset')">{{ t('audit.filters.reset') }}</button>
     </div>
   </form>
 </template>
@@ -91,68 +96,88 @@ const emit = defineEmits<{
 <style scoped>
 .audit-filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 1rem;
-  padding: 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
-  background: var(--color-surface);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-items: end;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
+
+/* The intro is a sentence, not a field: it spans the whole first row so the grid
+   stays a control matrix. It also carries the role's allowed query window, which
+   needs room the 150px fields do not have. */
+.audit-filters__intro {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--mu);
+  font-size: var(--font-size-sm);
+}
+
+.audit-filters__hint {
+  display: block;
+  margin-top: 4px;
 }
 
 .audit-filters__field {
   display: grid;
-  gap: 0.35rem;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  gap: 6px;
+  min-width: 0;
+  color: var(--mu);
+  font-size: var(--font-size-xs);
   font-weight: 600;
 }
 
 .audit-filters__field input,
 .audit-filters__field select {
+  width: 100%;
   min-width: 0;
-  padding: 0.55rem 0.65rem;
+  padding: 8px 10px;
   border: 1px solid var(--color-border-strong);
-  border-radius: 0.375rem;
-  background: var(--color-surface);
-  font: inherit;
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--tx);
 }
 
+/* A control that is focused gets the shared ring from base.css; the border change is
+   the second cue for a dark surface where a 2px outline can read as decoration. */
+.audit-filters__field input:focus-visible,
+.audit-filters__field select:focus-visible {
+  border-color: var(--tx);
+}
 
 .audit-filters__field small {
-  color: var(--color-muted);
-  font-weight: 400;
-}
-
-/* The allowed span applies to the pair, not to one input, so the hint spans the
-   whole grid row instead of sitting under a single date field. */
-.audit-filters__hint {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--color-muted);
-  font-size: var(--font-size-sm);
+  color: var(--mu);
+  font-size: var(--font-size-xs);
   font-weight: 400;
 }
 
 .audit-filters__actions {
   display: flex;
-  align-items: end;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  grid-column: 1 / -1;
 }
 
 .audit-filters__actions button {
-  padding: 0.55rem 0.85rem;
-  border: 1px solid var(--color-primary-hover);
-  border-radius: 0.375rem;
-  background: var(--color-primary);
-  color: var(--color-on-accent);
+  padding: 8px 14px;
+  border-radius: 6px;
   cursor: pointer;
-  font: inherit;
   font-weight: 600;
 }
 
-.audit-filters__actions .audit-button--secondary {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
+.audit-filters__submit {
+  border: 1px solid var(--color-primary-hover);
+  background: var(--pr);
+  color: var(--on);
+}
+
+.audit-filters__reset {
+  border: 1px solid var(--color-border-strong);
+  background: var(--sf2);
+  color: var(--tx);
 }
 </style>

@@ -437,8 +437,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationCreatePage.vue',
-    allowed: ['创建发布操作', '选择制品和已审批配置，确认完整目标后启动 Preflight。', '返回 Releases', '查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。', '操作创建失败', '重新加载'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `重新加载`',
+    allowed: ['查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。', '操作创建失败', '重新加载'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `重新加载`. TASK-394 moved the page title, subtitle, section title and back action into the catalog, so the three literals that used to sit inline (`创建发布操作`, `选择制品和已审批配置，确认完整目标后启动 Preflight。`, `返回 Releases`) left this allowlist',
   },
   {
     file: 'src/pages/OperationListPage.vue',
@@ -472,8 +472,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/releases/ReleaseInventoryTable.vue',
-    allowed: ['Release', '状态', 'Chart', 'Revision', '最近同步', '紧急变更', '操作', '操作历史', '未绑定 Definition', '紧急变更', '紧急变更', '收敛', '创建操作', '未绑定 Definition', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更', '尚未同步', '${release.pendingConvergenceCount} 个待收敛任务'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['操作历史', '未绑定 Definition', '紧急变更', '紧急变更已阻断', '收敛', '创建操作', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更', 'Values', '尚未同步', '${release.pendingConvergenceCount} 个待收敛任务'],
+    reason:
+      'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the column headers and the three status tooltips into the catalog; what remains inline is the row-action copy and the `Values` domain noun',
   },
   {
     file: 'src/App.vue',
