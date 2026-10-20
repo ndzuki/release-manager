@@ -952,7 +952,6 @@ const zhCN = {
   'release.status.tooltip.active': 'Release 与最近一次同步结果一致',
   'release.status.tooltip.missing': 'Release 已从集群中消失',
   'release.status.tooltip.outOfSync': '配置与期望不一致',
-||||||| f2b6765
 
   // --- audit page (TASK-394) ---
   /*
@@ -982,7 +981,6 @@ const zhCN = {
   'audit.result.cancelling': '取消中',
   'audit.result.cancelled': '已取消',
   'audit.result.timeout': '超时',
-||||||| f2b6765
 
   // --- create operation (TASK-394) ---
   /*
