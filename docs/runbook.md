@@ -50,11 +50,11 @@
 | Operation 长时间非终态、`cancelling` 不消失、锁 stuck | §6 |
 | 要回滚、要放行紧急变更、要解 stuck lock | §7 |
 | 升级到新版本、镜像/pin 配置、升级失败回退 | §8 |
-| **生产环境（k3d-rm-prod）日常巡检、发布 web、镜像级回滚** | §11.1 / §11.2 |
-| **密钥与证书异地备份、证书轮换、Secret 未纳入备份** | §11.3 |
-| **数据库备份 / 恢复演练、备份 CronJob 覆盖范围** | §11.4 |
-| **控制台（前端）发布后缓存、主题偏好、UI 冒烟** | §11.5 |
-| **CI 门禁失败怎么判、哪些是已知 flake、重跑纪律** | §11.6 |
+| **生产环境（k3d-rm-prod）日常巡检、发布 web、镜像级回滚** | §11.1 / §11.4 |
+| **密钥与证书异地备份、证书轮换、Secret 未纳入备份** | §11.5 |
+| **数据库备份 / 恢复演练、备份 CronJob 覆盖范围** | §11.6 |
+| **控制台（前端）发布后缓存、主题偏好、UI 冒烟** | §11.7 |
+| **CI 门禁失败怎么判、哪些是已知 flake、重跑纪律** | §11.8 |
 | 只读诊断命令、该找谁 | §9 |
 
 ## 1. 服务不可用、探针失败、CrashLoopBackOff
@@ -484,7 +484,7 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 ## 8. 升级到新版本
 
 > **本章是 dev 环境口径**（`k3d-release-manager-control`、内容哈希 tag、`make dev-up` 收敛）。
-> **生产环境**（`k3d-rm-prod`、固定 tag 如 `:f0f8d6b` / `web:5080198`）的发布、镜像导入与回滚见 **§11.2**，
+> **生产环境**（`k3d-rm-prod`、固定 tag 如 `:f0f8d6b` / `web:5080198`）的发布、镜像导入与回滚见 **§11.4**，
 > 逐次发布的实测记录见 `docs/production-deploy.md` 的 §8.12–§8.16。
 
 **症状 / 触发**：要把环境收敛到当前工作树（或某个提交）的代码与配置版本。
@@ -649,7 +649,7 @@ kubectl --context $CTX -n $NS get deploy -o custom-columns='NAME:.metadata.name,
 kubectl --context $CTX -n $NS exec postgres-0 -- psql -U release_manager -d release_manager \
   -tAc 'select version||chr(124)||dirty from schema_migrations'
 
-# 6) 备份 Job 是否每天在跑（02:00 UTC，见 11.4）
+# 6) 备份 Job 是否每天在跑（02:00 UTC，见 11.6）
 kubectl --context $CTX -n $NS get cronjob release-manager-backup
 kubectl --context $CTX -n $NS get pods | grep release-manager-backup
 ```
@@ -657,13 +657,81 @@ kubectl --context $CTX -n $NS get pods | grep release-manager-backup
 补充判据与口径：
 
 - **`RESTARTS` 增长、Pod 反复重启** ⇒ 走 §1；**入口 200 但页面空白** ⇒ 先看浏览器控制台与 `/readyz`，
-  再用 §11.5 的「静态资源一致性」步骤确认是否是发布/缓存问题。
+  再用 §11.7 的「静态资源一致性」步骤确认是否是发布/缓存问题。
 - **首页「发布同步率」显示 `—`**：没有发布数据或读失败，卡片提示行会写原因；不是故障本身。
 - **首页「暂无 Operator」/「0 个 Operator 在线」**：生产当前**没有部署客户侧 operator**（接入流程见
   `docs/customer-onboarding.md`）。这会导致依赖 Operator 的读被拒绝（Values 的 Secret 列表、紧急变更候选制品等），
   UI 会显式降级，不要误判为控制台故障。
 
-### 11.2 生产发布与镜像级回滚
+### 11.2 日志位置与常用日志命令
+
+生产日志全部在 Pod 的 stdout/stderr（`kubectl logs` 可取），**没有额外的日志文件落盘**；
+审计事件**不是日志**，它在数据库里：查法见控制台「审计」页（或 `docs/api.md` 的 audit 服务）。
+⚠️ **导出能力尚未实现**：`ExportAuditEvents` 只写一条 `pending` 记录、没有任何消费者，导出永远不会变成 `completed`
+（见 §10 第 9 条）——需要归档请直接对数据库做只读导出，不要按 UI 的「导出当前查询」期待结果。
+
+```bash
+CTX=k3d-rm-prod; NS=release-manager
+
+# 单个服务最近日志（-f 跟随；--tail 限制条数）
+kubectl --context $CTX -n $NS logs deploy/orchestrator --tail=200
+kubectl --context $CTX -n $NS logs deploy/auth         --tail=200
+kubectl --context $CTX -n $NS logs deploy/api          --tail=200
+kubectl --context $CTX -n $NS logs deploy/web          --tail=200   # nginx 访问/错误日志
+
+# 崩溃过的容器：看上一次的日志（Pod 重启后当前容器日志会清空）
+kubectl --context $CTX -n $NS logs <pod> --previous --tail=200
+
+# 备份 Job 的日志（判断备份为什么失败）
+kubectl --context $CTX -n $NS get pods | grep release-manager-backup
+kubectl --context $CTX -n $NS logs <备份 pod 名> --tail=100
+
+# 入口/边缘进程（不在集群里，是宿主上的容器）
+docker ps --format '{{.Names}} {{.Status}}' | grep -i edge
+docker logs --tail=200 rm-edge-forwarder
+```
+
+**判据**：生产 logger 是 `slog.NewJSONHandler`（`internal/app/app.go`），每行是**一行 JSON**，字段为
+`time` / `level` / `msg` 加上下文键（实际观测到 `request_id`、`procedure`、`organization_id`、`customer_id`、`reason`、`error`）。
+**没有 `component` 字段**，所以不要按 `level=ERROR` 这种文本过滤（匹配不到），要用 JSON 过滤：
+
+```bash
+# 只看错误行（grep 要带引号，因为值是 JSON 字符串）
+kubectl --context k3d-rm-prod -n release-manager logs deploy/auth --tail=500 | grep -F '"level":"ERROR"'
+# 或用 jq 结构化过滤（有 jq 的机器）
+kubectl --context k3d-rm-prod -n release-manager logs deploy/orchestrator --tail=500 | jq -c 'select(.level=="ERROR")'
+```
+
+真实样例（生产实测，2026-10-21）：
+
+```json
+{"time":"2026-10-20T17:06:08Z","level":"WARN","msg":"authorization snapshot pull failed","organization_id":"…","customer_id":"…","reason":"unauthenticated"}
+{"time":"2026-10-20T17:06:08Z","level":"ERROR","msg":"request failed","request_id":"…","procedure":"/auth.v1.AuthorizationService/GetAuthorizationSnapshot","error":"unauthenticated: invalid token: …"}
+```
+
+找根因先用 `msg` + `error` 定位，再用 `time` 与 §11.1 的 `RESTARTS`/事件对齐。**不要把日志里的
+`invalid token` 直接当成用户会话问题**——它也可能是服务间授权快照拉取失败（见 §5）。
+
+### 11.3 症状 → 章节映射（生产口径）
+
+| 生产症状 | 先看 | 处置章节 |
+| --- | --- | --- |
+| 入口 5xx / 证书告警 / 页面打不开 | §11.1 的 `/`、`/readyz`、pod 状态 | §1（服务不可用）、§11.5（证书） |
+| 登录失败、401 风暴、会话刚发就失效 | `auth` 日志 + 浏览器 Set-Cookie | §5 |
+| 数据库连接失败、迁移失败、schema `dirty=true` | `postgres` 日志、`schema_migrations` | §2 |
+| Operator 离线 / 心跳陈旧 / 命令不投递 | Operator 会话状态、`rm-edge-forwarder` | §3（Operator 失联）；入口 IP 漂移见 §11.5 |
+| 审计缺事件 / 缓冲积压 | `api` 的审计日志与 outbox 积压 | §4 |
+| 审计「导出」一直 pending | 这是**现状缺口**（导出无消费者） | §10 第 9 条 |
+| 操作长期非终态 / `cancelling` 不消失 | 操作中心 + 时间线 + `orchestrator` 日志 | §6 |
+| 要紧急改副本/镜像 | 控制台「紧急变更」页的授权快照与候选制品 | §7.2（含收敛策略） |
+| 紧急锁（效果未知、已过观察窗口） | 控制台「紧急锁」页 + 客户集群实际状态 | §7.3（人工放行前置确认） |
+| 要整体停止写路径 | 维护窗口流程 | §7.4 |
+| 要回滚控制台或某个服务 | 当前 tag / `crictl` 判定 | §11.4 |
+| 备份失败 / 需要恢复数据 | 备份 Job 日志、`/backups` | §11.6 |
+| 发布后页面样式没变 / 资源 404 | `index.html` sha、`assets/*` | §11.7 |
+| CI 门禁红 | 失败 job 名 | §11.8 |
+
+### 11.4 生产发布与镜像级回滚
 
 **只滚变更的服务**。改版期间只有 `web` 变化（`internal/`、`cmd/`、`api/proto/`、`migrations/`、`web/package*.json`
 为 0 文件时，Go 服务与 schema 都不动）。
@@ -710,7 +778,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz
 - schema 只有 6 个 Go 服务变更时才可能前滚；`web` 发布**不动 schema**（本轮两次 web 发布 schema 都是 `36|f`）。
 - `rollout undo` 同样只回镜像、不回 schema；若 Go 服务伴随 schema 前滚，见 §2 与 §8 的「不可逆」说明。
 
-### 11.3 密钥与证书（异地备份是硬缺口）
+### 11.5 密钥与证书（异地备份是硬缺口）
 
 生产命名空间有 9 个 Secret（`kubectl --context k3d-rm-prod -n release-manager get secret`），其中**三份是必须异地备份的私钥材料**：
 
@@ -720,7 +788,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz
 | `release-manager-mtls-ca` | Opaque | Operator mTLS CA 私钥 | 已接入的客户 operator 全部无法再认证，需重签 CA 并重新下发 |
 | `release-manager-edge-tls` | kubernetes.io/tls | 入口 TLS 证书与私钥 | 入口证书无法恢复（自签场景只能重建） |
 
-- ⚠️ **备份 CronJob（§11.4）只备份 PostgreSQL，不覆盖任何 Secret**。这三份私钥目前**没有任何自动备份**，
+- ⚠️ **备份 CronJob（§11.6）只备份 PostgreSQL，不覆盖任何 Secret**。这三份私钥目前**没有任何自动备份**，
   必须人工导出并**放到异地的密码库/加密介质**（至少两份、不同故障域）。
 - 导出方式（只在受信终端执行，产物立刻加密后移走，不要留在 `/tmp` 或仓库里）：
 
@@ -735,10 +803,10 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz
 - **证书轮换**：当前**没有自动轮换**（无 cert-manager/无 cron 轮换）。入口证书到期或需要换 CA 时，按
   `docs/production-deploy.md` 的部署章节手工替换 Secret 并滚动 `edge`/`orchestrator`；客户端（浏览器）自签证书需手工信任导入
   （Chrome 要加「受信任的服务器证书 / 受信任对端」）。轮换属**建议能力**，落地前不要按「已自动化」处置。
-- **入口 IP**：`10.10.33.122` 是 DHCP 地址，IP 漂移会让 forwarder 监听与 `advertise_url` 失配（§3 的 operator 失联症状之一）。
+- **入口 IP**：`10.10.33.122` 是 DHCP 地址，IP 漂移会让 forwarder 监听与 `advertise_url` 失配 ⇒ Operator 会失联（失联的判据与处置见 §3；IP 漂移这条只在本节记录）。
   变更前先确认当前 IP 与 forwarder 进程。
 
-### 11.4 数据库备份与恢复
+### 11.6 数据库备份与恢复
 
 **现状**：CronJob `release-manager-backup`（**每天 02:00 UTC**，`0 2 * * *`；不是本地时间）在 `release-manager` 命名空间里用
 `postgres:16` 镜像跑 `pg_dump` 到 `/backups`（PVC），备份前用 `pg_isready` 有界等待数据库可连。
@@ -756,10 +824,10 @@ kubectl --context k3d-rm-prod -n release-manager logs job/<最近的 job 名>
 3. 在一个**独立** Postgres 容器里 `pg_restore` 该 dump，再按第 2 步的计数逐项比对。
 4. 生产恢复属 ⚠️ **破坏性操作**：必须先停写路径（维护窗口，见 §7.4），再恢复、再核对 schema 与健康。
 
-**已知缺口**：备份不覆盖 Secret（§11.3）、不做增量/WAL 归档（RPO=24h）、没有异地副本。
+**已知缺口**：备份不覆盖 Secret（§11.5）、不做增量/WAL 归档（RPO=24h）、没有异地副本。
 这三条是**建议能力**，不要按「已具备」处置。
 
-### 11.5 控制台（前端）发布后检查
+### 11.7 控制台（前端）发布后检查
 
 前端是 SPA（nginx 托管静态资源 + 反代 API）。发布后按下面顺序确认，避免把「缓存没刷」当成发布失败：
 
@@ -785,7 +853,7 @@ kubectl --context k3d-rm-prod -n release-manager exec deploy/web -- sha256sum /u
   5. 侧栏左下角主题按钮循环 跟随系统 → 浅色 → 深色，刷新后保持；
   6. 375px（手机宽度）：无横向滚动，导航从「导航菜单」抽屉打开。
 
-### 11.6 CI 门禁与已知不稳定项
+### 11.8 CI 门禁与已知不稳定项
 
 **门禁含义（PR 与 main 都要看）**
 
