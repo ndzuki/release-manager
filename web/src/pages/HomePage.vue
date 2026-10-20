@@ -1,55 +1,199 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { t } from '@/i18n/messages';
-import { statusLabel } from '@/i18n/status-labels';
-import { computed, onMounted } from 'vue';
 import { useAuthStore } from '@/stores/auth';
-import { useOperationFeed } from '@/composables/useOperationFeed';
+import PageHeader from '@/components/common/PageHeader.vue';
+import StatCard from '@/components/common/StatCard.vue';
+import StatusTag from '@/components/common/StatusTag.vue';
+import AppDialog from '@/components/common/AppDialog.vue';
+import HomeOperationsPanel from '@/components/home/HomeOperationsPanel.vue';
+import HomeClusterPanel from '@/components/home/HomeClusterPanel.vue';
+import { useHomeOverview } from '@/components/home/useHomeOverview';
+import type { InventoryRelease } from '@/components/home/homeOverview';
 
 /*
- * Home workbench (plan N1).
+ * Home overview (TASK-394, direction C).
  *
- * The page used to be a dead end: one welcome empty state whose only action was
- * "Dismiss" and not a single link, so the console's entry point led nowhere. This is
- * a plain entry grid instead — every tile is a real destination, and the ones that
- * need a capability are hidden for roles that do not hold it, mirroring the shell.
+ * The page answers four questions and then gets out of the way: how many releases still
+ * need convergence, how much work is in flight, how much of the inventory matches its
+ * clusters, and whether any emergency change is waiting for an explicit decision. Below
+ * them sit the in-progress queue and the per-cluster health the operation centre and the
+ * release inventory each know how to read.
  *
- * The "waiting on me" panel is fed by the cross-release aggregate read (TASK-276), which
- * is the data source this page previously said did not exist.
+ * Two rules the layout enforces, both of them honesty rules rather than styling:
+ *
+ * 1. A number is rendered only when the read that produces it succeeded. Every metric
+ *    card falls back to "—" with the reason in its hint (加载失败 / 功能未启用) instead of
+ *    a 0 that reads like a healthy state. The sync-rate card is derived from the release
+ *    inventory the page already reads, so it never needs a second source; with no rows it
+ *    shows "—" rather than a meaningless 0%.
+ * 2. The navigation tiles stay VISIBLE. REQ-100 §5.1 N1 requires the workbench to offer
+ *    more than four entries and the console E2E lane asserts they are reachable, so the
+ *    redesign tucks them into a "quick links" card instead of replacing or collapsing
+ *    them. (Collapsing them was proposed in review; that is a requirement change, not a
+ *    styling change.)
  */
 const auth = useAuthStore();
+const router = useRouter();
 
 const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
+const operatorManagementEnabled = import.meta.env.VITE_FEATURE_OPERATOR_MANAGEMENT !== 'false';
 
-/*
- * One short page plus a one-row probe: the aggregate has no total, so "5+" is the only
- * honest count — asking for LIMIT+1 rows reveals "there is more" without a second call.
- */
-const TODO_LIMIT = 5;
-
-const {
-  items: todoItems,
-  nextPageToken: todoNextPageToken,
-  loading: todoLoading,
-  error: todoError,
-  maintenance: todoMaintenance,
-  forbidden: todoForbidden,
-  empty: todoEmpty,
-  load: loadTodo,
-} = useOperationFeed({ pageSize: TODO_LIMIT + 1 });
-
-const todoVisible = computed(() => todoItems.value.slice(0, TODO_LIMIT));
-const todoHasMore = computed(
-  () => todoItems.value.length > TODO_LIMIT || todoNextPageToken.value !== '',
-);
-const todoCount = computed(() =>
-  todoHasMore.value
-    ? t('home.todo.countMore', { count: todoVisible.value.length })
-    : t('home.todo.count', { count: todoVisible.value.length }),
-);
+const { summary, inventory, inventoryState, stuckLocksState, operationsState, feed, reload } =
+  useHomeOverview();
 
 onMounted(() => {
-  if (operationsEnabled) void loadTodo();
+  void reload();
 });
+
+/** Falls back to a product name rather than an empty heading when the session has no org yet. */
+const organizationName = computed(() => auth.activeOrganization?.name ?? 'Release Manager');
+
+const inventoryReady = computed(() => inventoryState.value === 'ok');
+const operationsReady = computed(() => operationsState.value === 'ok');
+
+function sourceHint(state: 'loading' | 'ok' | 'error' | 'off'): string {
+  switch (state) {
+    case 'loading':
+      return t('home.overview.loading');
+    case 'error':
+      return t('home.overview.loadFailed');
+    case 'off':
+      return t('home.overview.featureOff');
+    default:
+      return '';
+  }
+}
+
+const pendingValue = computed(() => (inventoryReady.value ? summary.value.pendingConvergence : '—'));
+const pendingTone = computed(() => (inventoryReady.value && summary.value.pendingConvergence > 0 ? 'wn' : 'neutral'));
+const pendingHint = computed(() =>
+  inventoryReady.value
+    ? t('home.stat.pendingConvergenceHint', { count: summary.value.releaseTotal })
+    : sourceHint(inventoryState.value),
+);
+
+const operationsValue = computed(() => {
+  if (!operationsReady.value) return '—';
+  const count = summary.value.operations.length;
+  return summary.value.operationsTruncated ? `${count}+` : String(count);
+});
+const operationsHint = computed(() => {
+  if (operationsReady.value) return t('home.stat.activeOperationsHint', { count: summary.value.dispatching });
+  switch (operationsState.value) {
+    case 'maintenance':
+      return t('home.todo.maintenance');
+    case 'forbidden':
+      return t('home.todo.forbidden');
+    case 'error':
+      return t('home.overview.loadFailed');
+    case 'off':
+      return t('home.overview.featureOff');
+    default:
+      return t('home.overview.loading');
+  }
+});
+
+const emergencyValue = computed(() => (stuckLocksState.value === 'ok' ? summary.value.stuckLocks : '—'));
+const emergencyTone = computed(() => (stuckLocksState.value === 'ok' && summary.value.stuckLocks > 0 ? 'er' : 'neutral'));
+const emergencyHint = computed(() =>
+  stuckLocksState.value === 'ok' ? t('home.stat.emergencyHint') : sourceHint(stuckLocksState.value),
+);
+
+/*
+ * The hero row must not spend a slot on a metric the contract cannot produce. The first
+ * revision of this page shipped a hardcoded "—/unavailable" success-rate card; the
+ * independent review called that a broken-looking hero. Sync rate is computed from the
+ * release-inventory read the page already performs, so it is real data at no extra cost.
+ */
+const syncedReleases = computed(() => summary.value.clusters.reduce((total, cluster) => total + cluster.synced, 0));
+const syncRateValue = computed(() => {
+  if (!inventoryReady.value) return '—';
+  const total = summary.value.releaseTotal;
+  return total === 0 ? '—' : t('home.stat.syncRateValue', { percent: Math.round((syncedReleases.value / total) * 100) });
+});
+const syncRateHint = computed(() => {
+  if (!inventoryReady.value) return sourceHint(inventoryState.value);
+  return summary.value.releaseTotal === 0
+    ? t('home.stat.syncRateEmpty')
+    : t('home.stat.syncRateHint', { synced: syncedReleases.value, total: summary.value.releaseTotal });
+});
+
+/*
+ * The live indicator states its OWN coverage. Only the clusters the health panel
+ * renders are probed (ListOperators is cluster-scoped), so a partial probe says
+ * "已探测 K/M 个集群" instead of presenting a subset as the organization total.
+ */
+const liveVisible = computed(() => operatorManagementEnabled && inventoryState.value !== 'loading');
+const liveLabel = computed(() => {
+  switch (summary.value.operatorCoverage) {
+    case 'complete':
+      return t('home.live.online', { count: summary.value.onlineOperators });
+    case 'partial':
+      return t('home.live.partial', {
+        count: summary.value.onlineOperators,
+        probed: summary.value.probedClusters,
+        total: summary.value.clustersTotal,
+      });
+    default:
+      return t('home.live.unavailable');
+  }
+});
+const liveTone = computed(() =>
+  summary.value.operatorCoverage !== 'unavailable' && summary.value.onlineOperators > 0 ? 'ok' : 'neutral',
+);
+
+const clusterNames = computed<Record<string, string>>(() =>
+  Object.fromEntries(summary.value.clusters.map((cluster) => [cluster.clusterId, cluster.name])),
+);
+
+/*
+ * "Create operation" needs a release as context and the create route only exists
+ * when the release inventory + values revision switches are on. The dialog picks
+ * from the inventory this page already read, so it can never send the form to a
+ * release that does not exist.
+ */
+const createRouteAvailable = computed(() => router.hasRoute('OperationCreate'));
+const creatableReleases = computed<InventoryRelease[]>(() =>
+  [...inventory.value]
+    .filter((release) => release.releaseDefinitionId !== '')
+    .sort(
+      (left, right) =>
+        left.releaseName.localeCompare(right.releaseName, 'zh-Hans-CN') ||
+        left.clusterName.localeCompare(right.clusterName, 'zh-Hans-CN'),
+    ),
+);
+const canCreate = computed(
+  () => auth.canCreateReleaseOperation && createRouteAvailable.value && creatableReleases.value.length > 0,
+);
+const createOpen = ref(false);
+const selectedIndex = ref(0);
+
+function openCreate(): void {
+  selectedIndex.value = 0;
+  createOpen.value = true;
+}
+
+function confirmCreate(): void {
+  const release = creatableReleases.value[selectedIndex.value];
+  if (!release) return;
+  createOpen.value = false;
+  void router.push({
+    name: 'OperationCreate',
+    params: {
+      customerId: release.customerId,
+      clusterId: release.clusterId,
+      releaseId: release.releaseDefinitionId,
+    },
+    query: {
+      customerName: release.customerName,
+      clusterName: release.clusterName,
+      releaseName: release.releaseDefinitionName || release.releaseName,
+      currentRevision: release.revision,
+    },
+  });
+}
 
 interface Tile {
   name: string;
@@ -57,6 +201,11 @@ interface Tile {
   hint: string;
 }
 
+/*
+ * The entry grid is the page's navigation fallback: every tile names a real route,
+ * and the ones that need a capability are hidden for roles that do not hold it,
+ * mirroring the shell. It is kept inside a card rather than as the whole page.
+ */
 const tiles = computed<Tile[]>(() => {
   const list: Tile[] = [
     { name: 'CustomerList', label: '客户', hint: '进入客户 → 集群 → 发布的层级' },
@@ -88,69 +237,111 @@ const tiles = computed<Tile[]>(() => {
 
 <template>
   <section class="home-page">
-    <header class="home-page__header">
-      <p class="home-page__eyebrow">{{ t('home.eyebrow') }}</p>
-      <h1>{{ auth.activeOrganization?.name ?? 'Release Manager' }}</h1>
-      <p>{{ t('home.signedInAs') }} <strong>{{ auth.user?.username }}</strong>.</p>
-    </header>
-
-    <!-- Cross-release pending work (TASK-277): a count plus the first few rows, read
-         from the same aggregate the Operation centre uses. Never an invented number —
-         the aggregate has no total, so the count becomes "N+" while a next page exists. -->
-    <section v-if="operationsEnabled" class="home-page__todo" aria-labelledby="home-todo-title">
-      <div class="home-page__todo-header">
-        <h2 id="home-todo-title" class="home-page__todo-title">{{ t('home.todo.title') }}</h2>
-        <RouterLink :to="{ name: 'OperationCenter' }">{{ t('home.todo.viewAll') }}</RouterLink>
-      </div>
-
-      <p v-if="todoMaintenance" class="home-page__todo-note" role="status">
-        {{ t('home.todo.maintenance') }}
-      </p>
-      <p v-else-if="todoForbidden" class="home-page__todo-note" role="alert">
-        {{ t('home.todo.forbidden') }}
-      </p>
-      <p v-else-if="todoLoading" class="home-page__todo-note" role="status">
-        {{ t('home.todo.loading') }}
-      </p>
-      <div v-else-if="todoError" class="home-page__todo-note" role="alert">
-        {{ t('home.todo.error') }}
-        <button type="button" @click="loadTodo()">{{ t('action.retry') }}</button>
-      </div>
-      <p v-else-if="todoEmpty" class="home-page__todo-note">{{ t('home.todo.empty') }}</p>
-      <template v-else>
-        <p class="home-page__todo-count" role="status">{{ todoCount }}</p>
-        <ul class="home-page__todo-list">
-          <li v-for="item in todoVisible" :key="item.operationId">
-            <RouterLink
-              :to="{
-                name: 'OperationCenterDetail',
-                params: { operationId: item.operationId },
-                query: { releaseName: item.releaseDefinitionName },
-              }"
-              :data-testid="`home-todo-${item.operationId}`"
-            >
-              <span class="home-page__todo-state">{{ statusLabel('operation', item.state) }}</span>
-              <span>{{ statusLabel('operationType', item.operationType) }}</span>
-              <span>{{ item.releaseDefinitionName || item.releaseDefinitionId }}</span>
-              <span>{{ item.customerName || item.customerId }}</span>
-            </RouterLink>
-          </li>
-        </ul>
+    <PageHeader :title="organizationName" :subtitle="t('home.overview.subtitle')">
+      <template #actions>
+        <button v-if="canCreate" type="button" class="home-page__primary" data-testid="home-create" @click="openCreate">
+          {{ t('home.create.open') }}
+        </button>
+        <StatusTag
+          v-if="liveVisible"
+          :tone="liveTone"
+          :pulse="liveTone === 'ok'"
+          :label="liveLabel"
+          data-testid="home-live"
+        />
       </template>
+    </PageHeader>
+
+    <div class="home-page__stats">
+      <StatCard
+        :label="t('home.stat.pendingConvergence')"
+        :value="pendingValue"
+        :hint="pendingHint"
+        :tone="pendingTone"
+        data-testid="home-stat-pending"
+      />
+      <StatCard
+        :label="t('home.stat.activeOperations')"
+        :value="operationsValue"
+        :hint="operationsHint"
+        data-testid="home-stat-operations"
+      />
+      <StatCard
+        :label="t('home.stat.syncRate')"
+        :value="syncRateValue"
+        :hint="syncRateHint"
+        data-testid="home-stat-sync"
+      />
+      <StatCard
+        :label="t('home.stat.emergency')"
+        :value="emergencyValue"
+        :hint="emergencyHint"
+        :tone="emergencyTone"
+        data-testid="home-stat-emergency"
+      />
+    </div>
+
+    <div class="home-page__columns">
+      <HomeOperationsPanel
+        v-if="operationsEnabled"
+        :items="feed.items.value"
+        :truncated="summary.operationsTruncated"
+        :state="operationsState"
+        :cluster-names="clusterNames"
+        @retry="reload()"
+      />
+      <HomeClusterPanel
+        :clusters="summary.clusters"
+        :clusters-total="summary.clustersTotal"
+        :state="inventoryState"
+        @retry="reload()"
+      />
+    </div>
+
+    <!-- The tiles stay visible on purpose: REQ-100 §5.1 N1 requires the home workbench to
+         offer more than four entries, and the console E2E lane asserts they are reachable.
+         Collapsing them was proposed in the PR #484 review, but that is a requirement change
+         (it would make the workbench undiscoverable until expanded), so it is recorded as a
+         product question rather than applied here. -->
+    <section class="home-page__quicklinks" aria-labelledby="home-quicklinks-title">
+      <h2 id="home-quicklinks-title" class="home-page__quicklinks-title">{{ t('home.quickLinks.title') }}</h2>
+      <nav class="home-page__tiles" :aria-label="t('home.workbench')">
+        <RouterLink
+          v-for="tile in tiles"
+          :key="tile.name"
+          class="home-page__tile"
+          :to="{ name: tile.name }"
+          :data-testid="`home-tile-${tile.name}`"
+        >
+          <strong>{{ tile.label }}</strong>
+          <span>{{ tile.hint }}</span>
+        </RouterLink>
+      </nav>
     </section>
 
-    <nav class="home-page__tiles" :aria-label="t('home.workbench')">
-      <RouterLink
-        v-for="tile in tiles"
-        :key="tile.name"
-        class="home-page__tile"
-        :to="{ name: tile.name }"
-        :data-testid="`home-tile-${tile.name}`"
-      >
-        <strong>{{ tile.label }}</strong>
-        <span>{{ tile.hint }}</span>
-      </RouterLink>
-    </nav>
+    <AppDialog v-if="canCreate" :open="createOpen" :title="t('home.create.title')" @close="createOpen = false">
+      <div class="home-page__dialog">
+        <p class="home-page__dialog-hint">{{ t('home.create.hint') }}</p>
+        <label class="home-page__dialog-label" for="home-create-release">{{ t('home.create.selectLabel') }}</label>
+        <select id="home-create-release" v-model.number="selectedIndex" class="home-page__dialog-select">
+          <option v-for="(release, index) in creatableReleases" :key="`${release.clusterId}-${release.releaseDefinitionId}`" :value="index">
+            {{ release.releaseDefinitionName || release.releaseName }} · {{ release.clusterName }}
+          </option>
+        </select>
+      </div>
+      <template #footer>
+        <button type="button" class="home-page__dialog-cancel" @click="createOpen = false">{{ t('action.cancel') }}</button>
+        <button
+          type="button"
+          class="home-page__primary"
+          data-testid="home-create-confirm"
+          :disabled="creatableReleases.length === 0"
+          @click="confirmCreate"
+        >
+          {{ t('home.create.confirm') }}
+        </button>
+      </template>
+    </AppDialog>
   </section>
 </template>
 
@@ -160,113 +351,110 @@ const tiles = computed<Tile[]>(() => {
   gap: var(--space-5);
 }
 
-.home-page__header {
+.home-page__primary {
+  padding: 6px 12px;
+  border: 1px solid var(--pr);
+  border-radius: var(--r);
+  background: var(--pr);
+  color: var(--on);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.home-page__primary:hover {
+  background: var(--color-primary-hover);
+}
+
+.home-page__stats {
   display: grid;
-  gap: var(--space-1);
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
-.home-page__todo {
+.home-page__columns {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  gap: 16px;
+  grid-template-columns: 1.5fr 1fr;
 }
 
-.home-page__todo-header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.home-page__todo-title,
-.home-page__todo-count,
-.home-page__todo-note {
-  margin: 0;
-}
-
-.home-page__todo-title {
-  font-size: var(--font-size-lg);
-}
-
-.home-page__todo-count {
-  color: var(--color-muted-strong);
-  font-weight: var(--font-weight-bold);
-}
-
-.home-page__todo-note {
-  color: var(--color-muted);
-  font-size: var(--font-size-sm);
-}
-
-.home-page__todo-list {
+.home-page__quicklinks {
   display: grid;
-  gap: var(--space-2);
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  background: var(--sf);
+}
+
+.home-page__quicklinks-title {
   margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.home-page__todo-list a {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: center;
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-  text-decoration: none;
-}
-
-.home-page__todo-list a:hover {
-  color: var(--color-primary);
-}
-
-.home-page__todo-state {
-  padding: 0.1rem var(--space-2);
-  border-radius: var(--radius-xl);
-  background: var(--color-surface-muted);
-  font-weight: var(--font-weight-bold);
-}
-
-.home-page__eyebrow {
-  color: var(--color-muted);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.home-page h1,
-.home-page p {
-  margin: 0;
+  color: var(--tx);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-heading);
 }
 
 .home-page__tiles {
   display: grid;
   gap: var(--space-3);
-  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
 }
 
 .home-page__tile {
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  padding: 10px 12px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  background: var(--bg);
   color: var(--color-text);
   text-decoration: none;
 }
 
 .home-page__tile:hover {
-  border-color: var(--color-primary);
+  border-color: var(--pr);
 }
 
 .home-page__tile span {
-  color: var(--color-muted);
+  color: var(--mu);
   font-size: var(--font-size-sm);
+}
+
+.home-page__dialog {
+  display: grid;
+  gap: 10px;
+}
+
+.home-page__dialog-hint,
+.home-page__dialog-label {
+  margin: 0;
+  color: var(--mu);
+  font-size: var(--font-size-sm);
+}
+
+.home-page__dialog-select {
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--sf2);
+  color: var(--tx);
+  font-size: var(--font-size-md);
+}
+
+.home-page__dialog-cancel {
+  padding: 6px 12px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  background: var(--sf2);
+  color: var(--tx);
+  font-size: var(--font-size-md);
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .home-page__columns {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

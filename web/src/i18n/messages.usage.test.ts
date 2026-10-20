@@ -941,6 +941,9 @@ describe('migrated files carry no unrecorded copy', () => {
     // Placeholder examples for routing prefixes: a URL pattern, not copy to translate.
     ['cluster.rules.sourceExample', 'a URL example (docker.io/library/) shown as a placeholder'],
     ['cluster.rules.targetExample', 'a URL example (harbor.example.com/proxy/) shown as a placeholder'],
+    // A numeric format template for the StatCard value; the unit and meaning live in the
+    // card's label and hint, so there is no sentence to translate here.
+    ['home.stat.syncRateValue', 'a percentage format template rendered inside a StatCard value'],
   ]);
 
   /** Violations ignoring the exemption map — the exemption check needs them raw. */
