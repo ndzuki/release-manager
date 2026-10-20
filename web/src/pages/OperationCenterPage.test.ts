@@ -330,3 +330,36 @@ describe('OperationCenterPage accessibility', () => {
     expect(wrapper.get('.operation-center__pager').attributes('aria-label')).toBe('Operation 分页');
   });
 });
+
+/*
+ * TASK-394 (consistency wave 5): the page's hand-rolled eyebrow + h1 + description became
+ * PageHeader, and the table primitive (which was already the direction-C sample) got the
+ * card frame the page was missing. The header is asserted by its rendered parts, because
+ * that is what a reader sees — the props alone would pass even if PageHeader were unused.
+ */
+describe('OperationCenterPage direction-C shell (TASK-394)', () => {
+  it('renders the eyebrow, title and description through PageHeader', async () => {
+    feedClient(async () => page([summary()]));
+
+    const wrapper = await mountCenter();
+
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('跨 Release');
+    expect(wrapper.get('h1').text()).toBe('Operation 中心');
+    expect(wrapper.get('.page-header__subtitle').text()).toContain('按等待时间从最久到最新排序');
+    // The old header was a page-private <header> with its own h1; only PageHeader remains.
+    expect(wrapper.findAll('h1')).toHaveLength(1);
+  });
+
+  it('frames the shared table without changing the primitive itself', async () => {
+    feedClient(async () => page([summary()]));
+
+    const wrapper = await mountCenter();
+
+    const frame = wrapper.get('.operation-center__table');
+    // The class falls through to DataTable's single root, so the frame wraps the scroller.
+    expect(frame.attributes('role')).toBe('region');
+    expect(frame.find('table').exists()).toBe(true);
+    // The primitive keeps owning the header band and the sort control.
+    expect(frame.find('th[data-key="createdAt"] button').exists()).toBe(true);
+  });
+});

@@ -5,6 +5,7 @@ import { t } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import DataTable from '@/components/common/DataTable.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Pagination from '@/components/common/Pagination.vue';
 import { useOperationFeed } from '@/composables/useOperationFeed';
 import { formatTimestamp } from '@/utils/formatTimestamp';
@@ -143,13 +144,11 @@ onMounted(() => {
 
 <template>
   <section class="operation-center">
-    <header class="operation-center__header">
-      <div>
-        <p class="operation-center__eyebrow">{{ t('operationCenter.eyebrow') }}</p>
-        <h1>{{ t('operationCenter.title') }}</h1>
-        <p class="operation-center__description">{{ t('operationCenter.description') }}</p>
-      </div>
-    </header>
+    <PageHeader
+      :title="t('operationCenter.title')"
+      :eyebrow="t('operationCenter.eyebrow')"
+      :subtitle="t('operationCenter.description')"
+    />
 
     <!-- Maintenance is a planned refusal, not a failure: say so instead of showing a
          retryable error, an empty queue, or a spinner that never resolves. -->
@@ -166,6 +165,7 @@ onMounted(() => {
 
     <DataTable
       v-else
+      class="operation-center__table"
       :columns="columns"
       :rows="items"
       :row-key="COLUMN.operationId"
@@ -215,30 +215,28 @@ onMounted(() => {
 </template>
 
 <style scoped>
+/* Direction-C page root: the shell's `main` already pads 24px (12px at 375), so the page
+   only stacks its sections. The old `padding: var(--space-5)` was a second padding. */
 .operation-center {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-.operation-center__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
+/* PageHeader keeps a 20px bottom margin for pages that are not grids; the grid gap is
+   the only space between the header and the queue here. */
+.operation-center :deep(.page-header) {
+  margin-bottom: 0;
 }
 
-.operation-center__eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.operation-center__description {
-  margin: var(--space-1) 0 0;
-  color: var(--color-muted);
-  font-size: var(--font-size-sm);
+/* The card frame around the shared table (TASK-394). DataTable owns its own header band
+   and row rules and is the direction-C sample; the page only gives it the card it was
+   missing, so the queue stops floating on the page. The primitive's own `overflow-x` keeps
+   the scroll inside this frame. */
+.operation-center__table {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
 }
 
 .operation-center__maintenance {

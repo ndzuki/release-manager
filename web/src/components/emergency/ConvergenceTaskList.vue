@@ -18,7 +18,7 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
 
 <template>
   <div
-    class="table-wrap"
+    class="table-wrap task-table-wrap"
     role="region"
     :aria-label="t('emergency.tasks.scrollRegion')"
     tabindex="0"
@@ -50,7 +50,7 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
           <span v-else aria-hidden="true">—</span>
         </td>
         <td>{{ task.targetSummary }}</td>
-        <td>{{ opTypeLabel(task.opType) }}</td>
+        <td class="type">{{ opTypeLabel(task.opType) }}</td>
         <td class="reason">{{ task.reasonDisplay }}</td>
         <td><code v-for="path in task.promotionPaths" :key="path" class="path">{{ path }}</code></td>
         <td>
@@ -68,11 +68,25 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
 </template>
 
 <style scoped>
-.task-table { width: 100%; border-collapse: collapse; }
-.task-table th, .task-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-border-strong); text-align: left; }
-.task-table th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); text-transform: uppercase; }
-.reason { max-width: 16rem; overflow-wrap: anywhere; }
+/* Direction-C table frame (TASK-394). `.table-wrap` already owns horizontal containment,
+   so the 6-column table scrolls inside its own box at 375px instead of widening the page;
+   the frame is what stops the list floating on the page background. */
+.task-table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
+.task-table { width: 100%; min-width: 48rem; border-collapse: collapse; background: var(--sf); }
+/* Quiet header band. It used to paint `--color-bg`, which is the page background rather
+   than a header surface, so the header read as a hole rather than a band. */
+.task-table th { padding: 10px 20px; background: var(--color-surface-muted); color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 600; text-align: left; text-transform: uppercase; white-space: nowrap; }
+.task-table td { padding: 10px 20px; border-top: 1px solid var(--color-border-strong); text-align: left; }
+/* A floor on the reason column: auto table layout hands its width to the long promotion
+   path, which squeezed this cell to one glyph per line at 375px. */
+.reason { min-width: 8rem; max-width: 16rem; overflow-wrap: anywhere; }
 .path { display: block; font-size: var(--font-size-xs); color: var(--color-text-secondary); }
+/* Short CJK label: without nowrap auto layout gives it one glyph per line at 375px. */
+.type { white-space: nowrap; }
 .status { font-size: var(--font-size-sm); color: var(--color-muted-strong); }
 .muted { color: var(--color-subtle); }
 .continue { margin-left: 0.5rem; color: var(--color-primary); }

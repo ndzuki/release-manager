@@ -444,8 +444,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationListPage.vue',
-    allowed: ['操作历史', '返回发布清单', '创建操作', '状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '面包屑', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。', '全部状态', '进行中', '已成功', '已失败', '已取消', '查询中…', '刷新', '加载中…', '加载更多'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。', '全部状态', '进行中', '已成功', '已失败', '已取消', '查询中…', '刷新', '加载中…', '加载更多'],
+    reason:
+      'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the page title, the eyebrow, the two header actions and the breadcrumb region name into the catalog (the hand-rolled `<nav aria-label="面包屑">` became PageHeader crumbs), so those four literals left this allowlist',
   },
   {
     file: 'src/pages/OperationDetailPage.vue',
