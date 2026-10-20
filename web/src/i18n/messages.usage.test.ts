@@ -180,9 +180,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/TimelineEntryItem.vue',
-    allowed: ['： / 就绪', '状态转换', '已确认', '发布进度', '错误', '未知事件', '未知状态', '发布出错', '复制', '未知', '复制 Operation ID ${entry.operationId}', '复制 Request ID ${entry.requestId}'],
+    allowed: ['： / 就绪', '状态转换', '已确认', '发布进度', '错误', '未知事件', '未知状态', '发布出错', '未知'],
     reason:
-      'the fragments around the workload/ready interpolations (colon, slash and the 就绪 unit) plus the timeline event-kind labels; the sentence itself is Chinese',
+      'the fragments around the workload/ready interpolations (colon, slash and the 就绪 unit) plus the timeline event-kind labels; TASK-394 moved the identity copy to CopyableHash, so the three 复制 literals are gone',
   },
   {
     file: 'src/components/emergency/EmergencyConvergenceCard.vue',
@@ -447,8 +447,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationDetailPage.vue',
-    allowed: ['正在加载 Operation…', '实时更新已关闭', '点击刷新加载 Operation 最新状态', '刷新', 'Operation 加载失败', '重试', 'Release'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. W18 moved the breadcrumb/header/summary literals into the components below (no new copy)',
+    allowed: [],
+    reason:
+      'TASK-394 moved every string this page renders (title, subtitle, step labels, pane labels, loading/error copy and the two back entries) into the catalog; the page only composes them',
   },
   {
     file: 'src/components/operations/OperationDetailBreadcrumbs.vue',
@@ -457,13 +458,15 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationDetailHeader.vue',
-    allowed: ['操作', '取消中…', '取消操作', '刷新', '操作已完成，无法取消'],
-    reason: 'Chinese copy already in the target locale; W18 carved it out of OperationDetailPage without changing the rendered text',
+    allowed: ['取消中…', '取消操作', '刷新', '操作已完成，无法取消'],
+    reason:
+      'Chinese copy already in the target locale; TASK-394 removed the eyebrow/h1/operation-id block (PageHeader owns them), so the action labels are all this component still shows',
   },
   {
     file: 'src/components/operations/OperationDetailSummary.vue',
-    allowed: ['ReleaseDefinition', 'StateVersion', 'TargetRevision', '变更原因', '创建时间', '更新时间', '终止时间'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); W18 carved it out of OperationDetailPage without changing the rendered text',
+    allowed: ['Operation ID', 'ReleaseDefinition', 'StateVersion', 'TargetRevision', '变更原因', '创建时间', '更新时间', '终止时间'],
+    reason:
+      'Chinese copy already in the target locale (plus server wire values and domain nouns); TASK-394 added the Operation ID row so the identifier keeps a home after leaving the page heading',
   },
   {
     file: 'src/pages/HomePage.vue',

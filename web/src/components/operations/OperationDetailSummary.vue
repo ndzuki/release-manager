@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { statusLabel } from '@/i18n/status-labels';
 import { t } from '@/i18n/messages';
+import CopyableHash from '@/components/common/CopyableHash.vue';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 import type { Operation } from '@/types/operation';
 
 /*
  * The operation's summary block: the authoritative fields the timeline does not
- * repeat (definition, versions, timestamps, and — for EMERGENCY operations — the
- * effect status the convergence action is keyed on).
+ * repeat (identity, definition, versions, timestamps, and — for EMERGENCY operations —
+ * the effect status the convergence action is keyed on).
+ *
+ * TASK-394: the operation id moved here from the old heading (the page title is now the
+ * operation type plus release name), and both UUID-shaped values render through
+ * CopyableHash — truncated on screen, full value in `title`, copyable.
  */
 defineProps<{ operation: Operation | null }>();
 
@@ -19,7 +24,8 @@ function formatDetailTime(value: string | null): string {
 
 <template>
   <dl class="operation-detail__summary">
-    <div><dt>ReleaseDefinition</dt><dd>{{ operation?.releaseDefinitionId }}</dd></div>
+    <div><dt>Operation ID</dt><dd><CopyableHash :value="operation?.operationId ?? ''" /></dd></div>
+    <div><dt>ReleaseDefinition</dt><dd><CopyableHash :value="operation?.releaseDefinitionId ?? ''" /></dd></div>
     <div><dt>StateVersion</dt><dd>{{ operation?.stateVersion.toString() }}</dd></div>
     <div v-if="operation?.operationType === 'EMERGENCY'">
       <dt>{{ t('emergency.result.effectStatus') }}</dt><dd>{{ statusLabel('effect', operation?.effectStatus ?? undefined) }}</dd>

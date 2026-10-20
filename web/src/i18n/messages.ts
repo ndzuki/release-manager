@@ -682,7 +682,7 @@ const zhCN = {
   'operation.patch.literal': '字面量',
   'operation.patch.secretRef': 'Secret 引用',
   'operation.patch.add': '添加 Patch',
-  'operation.preflight.title': '预检',
+  'operation.preflight.title': '预检结果',
   'operation.preflight.unknown': '状态未知（{reason}）',
   'operation.preflight.notReturned': '未返回状态',
   'operation.preflight.loadFailed': '预检结果加载失败',
@@ -997,6 +997,35 @@ const zhCN = {
   'operation.create.step.confirm': '确认',
   'operation.confirm.type': '类型',
   'operation.confirm.hint': '先完成表单并点击「检查并确认」，确认创建才可用。',
+
+  // --- operation detail (TASK-394) ---
+  /*
+   * Direction C rewrote the detail page around a PageHeader (operation type + release
+   * name title, state/version subtitle, name-only breadcrumbs), a four-step lifecycle
+   * strip and a two-column preflight/timeline layout. The load-failure surface is new
+   * copy: the page used to sit on "正在加载 Operation…" forever for an unknown id, so
+   * the error state now names the failure, shows its stable code and offers a way back.
+   */
+  'operation.detail.breadcrumb': '操作详情',
+  'operation.detail.title': '{type}操作',
+  'operation.detail.titleWithRelease': '{type}操作 · {release}',
+  'operation.detail.subtitle': '{state} · 状态版本 {version}',
+  'operation.detail.steps.preflight': '预检',
+  'operation.detail.steps.approval': '审批',
+  'operation.detail.steps.dispatch': '下发',
+  'operation.detail.steps.convergence': '收敛',
+  'operation.detail.preflightPane': '预检结果',
+  'operation.detail.timelinePane': '状态时间线',
+  'operation.detail.preflightEmptyTitle': '暂未返回预检结果',
+  'operation.detail.preflightEmptyMessage': '预检完成后会列出各阶段结果。',
+  'operation.detail.loading': '正在加载 Operation…',
+  'operation.detail.liveUpdatesOff': '实时更新已关闭',
+  'operation.detail.liveUpdatesHint': '点击刷新加载 Operation 最新状态',
+  'operation.detail.loadFailed': '操作加载失败',
+  'operation.detail.errorCode': '错误码',
+  'operation.detail.loadTimeout': '加载超时，未能读取该操作。',
+  'operation.detail.backToHistory': '返回操作历史',
+  'operation.detail.backToCenter': '返回操作中心',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
