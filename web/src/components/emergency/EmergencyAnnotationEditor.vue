@@ -235,8 +235,15 @@ watch(
 
 <style scoped>
 .annotation-editor { display: grid; gap: var(--space-3); }
+/* Direction-C table frame (TASK-394). The global `.table-wrap` already owns the horizontal
+   containment (`overflow-x: auto` + `min-width: 0`), so the table scrolls inside its own box
+   at 375px; the frame is what stops the rows floating on the page background. */
+.table-wrap { border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--sf); }
 .annotation-table { width: 100%; border-collapse: collapse; }
-.annotation-table th, .annotation-table td { padding: var(--space-2); border: 1px solid var(--color-border-strong); text-align: left; }
+/* Quiet header band on the muted surface (the cells used to be boxed on all four sides and
+   the band was the page background, which read as a hole rather than a header). */
+.annotation-table th { padding: 10px 20px; border-top: 0; background: var(--color-surface-muted); color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 600; text-align: left; white-space: nowrap; }
+.annotation-table td { padding: 10px 20px; border-top: 1px solid var(--color-border-strong); text-align: left; }
 .field-input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
 .field-input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; box-shadow: var(--focus-ring); }
 .scope-field { display: flex; gap: var(--space-2); align-items: center; }

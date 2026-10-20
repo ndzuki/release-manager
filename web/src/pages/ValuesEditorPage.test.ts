@@ -510,6 +510,23 @@ describe('ValuesEditorPage direction C surface (TASK-394)', () => {
     expect(crumbs).toContain('Release One');
   });
 
+  /*
+   * TASK-394 (consistency wave 7): the editor panel's label was the console's last
+   * hand-written `.eyebrow` in the page layer. It is a section title now — same catalog key,
+   * direction-C type — while the h2 keeps the region's heading semantics and the page keeps
+   * exactly one h1.
+   */
+  it('labels the editor panel with a section title instead of the retired eyebrow', async () => {
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    const panel = wrapper.get('.values-panel');
+    expect(panel.find('.eyebrow').exists()).toBe(false);
+    expect(panel.get('.values-panel__header .values-section__title').text()).toBe('ValuesRevision 编辑器');
+    expect(panel.get('h2#values-editor-title').text()).toBe('Values 文档');
+    expect(wrapper.findAll('h1')).toHaveLength(1);
+  });
+
   it('switches the editor language through the segmented control', async () => {
     const wrapper = mountWithDiffStub();
     await flushPromises();

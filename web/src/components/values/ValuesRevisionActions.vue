@@ -35,7 +35,7 @@ function formatDecidedAt(value?: string): string {
 <template>
   <section class="revision-actions" aria-labelledby="revision-actions-title">
     <div>
-      <p class="eyebrow">{{ t('values.revision.workflow') }}</p>
+      <p class="section-label">{{ t('values.revision.workflow') }}</p>
       <h2 id="revision-actions-title">{{ revision ? `Revision ${revision.revision}` : t('values.revision.new') }}</h2>
       <p v-if="revision" class="status-line">
         <span :class="['status', `status--${revision.status}`]">{{ statusLabel }}</span>
@@ -96,7 +96,7 @@ function formatDecidedAt(value?: string): string {
 <style scoped>
 .revision-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 0.75rem; background: var(--color-surface); }
 h2, p { margin: 0; }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.section-label { margin: 0; color: var(--mu); font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.04em; }
 .status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 0.45rem; }
 .status-line code { color: var(--color-muted); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
 .status { padding: 0.2rem 0.45rem; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 800; }

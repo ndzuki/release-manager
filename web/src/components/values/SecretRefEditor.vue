@@ -38,7 +38,7 @@ function updateKey(item: SecretRefFormItem, event: Event): void {
   <section class="secret-editor" aria-labelledby="secret-refs-title">
     <header class="secret-editor__header">
       <div>
-        <p class="eyebrow">{{ t('values.secretRefs.title') }}</p>
+        <p class="section-label">{{ t('values.secretRefs.title') }}</p>
         <h2 id="secret-refs-title">{{ t('values.secretRefs.kind') }}</h2>
       </div>
       <button type="button" :disabled="disabled" @click="emit('add')">添加 SecretRef</button>
@@ -77,7 +77,7 @@ function updateKey(item: SecretRefFormItem, event: Event): void {
 .secret-editor { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 0.75rem; background: var(--color-surface); }
 .secret-editor__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
 .secret-editor__header h2, .secret-editor__header p, .secret-editor__help, .secret-editor__empty, .secret-editor__error { margin: 0; }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.section-label { margin: 0; color: var(--mu); font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.04em; }
 .secret-editor__help, .secret-editor__empty { color: var(--color-muted); font-size: var(--font-size-sm); }
 .secret-editor__error { color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .secret-row { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) minmax(14rem, 1.4fr) auto; align-items: end; gap: 0.75rem; padding: 0.85rem; border: 1px solid var(--color-border); border-radius: 0.55rem; }

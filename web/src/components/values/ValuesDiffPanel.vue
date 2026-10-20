@@ -84,7 +84,7 @@ const countTone = computed<'wn' | 'neutral'>(() => (props.result.hasChanges ? 'w
   <section class="diff-panel" aria-labelledby="values-diff-title">
     <header class="diff-panel__header">
       <div class="diff-panel__heading">
-        <p class="eyebrow">{{ t('values.diff.title') }}</p>
+        <p class="section-label">{{ t('values.diff.title') }}</p>
         <div class="diff-panel__title-row">
           <h2 id="values-diff-title">{{ t('values.diff.heading') }}</h2>
           <StatusTag :tone="countTone" :label="countLabel" />
@@ -137,7 +137,7 @@ const countTone = computed<'wn' | 'neutral'>(() => (props.result.hasChanges ? 'w
 .diff-panel__title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
 .diff-panel__title-row h2 { font-size: var(--font-size-lg); }
 .diff-panel__scope { color: var(--mu); font-size: var(--font-size-sm); }
-.eyebrow { color: var(--mu); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.section-label { margin: 0; color: var(--mu); font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.04em; }
 .diff-panel__empty { display: grid; min-height: 20rem; place-items: center; padding: 1rem; color: var(--mu); font-size: var(--font-size-sm); text-align: center; }
 .diff-hunks { display: grid; gap: 0.75rem; margin: 0; padding: 0; list-style: none; }
 .diff-hunk { display: grid; gap: 0.5rem; min-width: 0; padding: 0.75rem; border: 1px solid var(--bd); border-radius: 0.6rem; }
