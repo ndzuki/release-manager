@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { computed, nextTick, reactive, ref } from 'vue';
+import { computed, nextTick, reactive, ref, useId } from 'vue';
 import FormField from '@/components/common/FormField.vue';
 import PatchOverrideEditor from './PatchOverrideEditor.vue';
 import { useOperationFormStore, type OperationFormErrors } from '@/stores/operationForm';
@@ -9,6 +9,9 @@ import type { OperationType } from '@/types/operation';
 const store = useOperationFormStore();
 const errors = reactive<OperationFormErrors>({});
 const operationTypes: OperationType[] = ['INSTALL', 'UPGRADE', 'ROLLBACK'];
+// The segmented group is named by its visible legend, so the label a sighted reader sees
+// is the same one assistive tech announces (no second, invisible aria-label to drift).
+const typeLabelId = useId();
 
 /*
  * REQ-056 D10: the approved ValuesRevision is chosen, never typed. The form used to
@@ -76,19 +79,30 @@ async function prepareConfirmation(): Promise<void> {
 
 <template>
   <form ref="formRef" class="operation-form" @submit.prevent="prepareConfirmation">
-    <fieldset class="operation-form__types">
-      <legend>{{ t('operation.form.type') }}</legend>
-      <label v-for="operationType in operationTypes" :key="operationType">
-        <input
-          type="radio"
-          name="operationType"
-          :value="operationType"
-          :checked="store.fields.operationType === operationType"
-          @change="store.setOperationType(operationType)"
-        />
-        {{ operationType }}
-      </label>
-    </fieldset>
+    <!--
+      TASK-394: the operation type is a segmented button group instead of three radios
+      drawn as browser dots. Each button is `type="button"` (only the trailing submit may
+      submit), carries `aria-pressed` for the selected state, and the group is named by
+      the visible legend through `aria-labelledby` — the same words a sighted reader sees.
+      Native buttons keep the control in the tab order and operable with Enter/Space.
+    -->
+    <div class="operation-form__type">
+      <p :id="typeLabelId" class="operation-form__legend">{{ t('operation.form.type') }}</p>
+      <div class="seg" role="group" :aria-labelledby="typeLabelId">
+        <button
+          v-for="operationType in operationTypes"
+          :key="operationType"
+          type="button"
+          class="seg__button"
+          :class="{ 'seg__button--selected': store.fields.operationType === operationType }"
+          :aria-pressed="store.fields.operationType === operationType"
+          :data-testid="`operation-type-${operationType}`"
+          @click="store.setOperationType(operationType)"
+        >
+          {{ operationType }}
+        </button>
+      </div>
+    </div>
 
     <!--
      TASK-275: the error used to live INSIDE this implicitly wrapping <label>, so it was
@@ -131,9 +145,9 @@ async function prepareConfirmation(): Promise<void> {
     >
       <template #default="{ id, describedBy, invalid, disabled, required: fieldRequired }">
         <select
-          class="operation-form__control"
           :id="id"
           v-model="store.fields.valuesRevisionId"
+          class="operation-form__control"
           :aria-describedby="[describedBy, revisionsDescribedBy].filter(Boolean).join(' ') || undefined"
           :aria-invalid="invalid"
           :disabled="disabled || store.revisionsLoading || store.approvedRevisions.length === 0"
@@ -215,16 +229,99 @@ async function prepareConfirmation(): Promise<void> {
 </template>
 
 <style scoped>
-.operation-form { display: grid; gap: 1.25rem; padding: 1.5rem; border: 1px solid var(--color-border); border-radius: 0.8rem; background: var(--color-surface); }
-.operation-form__types { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.65rem; }
-.operation-form__types label { display: flex; align-items: center; gap: 0.4rem; font-weight: 700; }
+.operation-form {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  background: var(--sf);
+}
+
+.operation-form__type {
+  display: grid;
+  gap: 8px;
+}
+
+.operation-form__legend {
+  margin: 0;
+  color: var(--mu);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+/*
+ * Direction C segmented control: one recessed track with the selected segment lifted
+ * onto the page background and outlined by the hairline, so the state reads in both
+ * themes without a second accent colour competing with the primary submit.
+ */
+.seg {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  padding: 3px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  background: var(--sf2);
+}
+
+.seg__button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: calc(var(--r) - 3px);
+  background: transparent;
+  color: var(--mu);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.seg__button:hover {
+  color: var(--tx);
+}
+
+.seg__button--selected {
+  background: var(--bg);
+  color: var(--tx);
+  box-shadow: 0 0 0 1px var(--bd);
+}
+
 /*
  * TASK-275: the three controls now live in FormField's slot, which compiles in THIS
  * component's scope, so a plain class rule still reaches them; the field chrome
- * (label/error/spacing) belongs to FormField. The class is explicit so the radio
- * inputs inside the fieldset keep the UA default look.
+ * (label/error/spacing) belongs to FormField.
  */
-.operation-form__control { min-height: 2.6rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
-.operation-form__status { margin: 0; color: var(--color-muted); font-size: var(--font-size-sm); }
-.operation-form__submit { width: fit-content; justify-self: end; padding: 0.7rem 1rem; border: 0; border-radius: 0.45rem; background: var(--color-primary); color: var(--color-on-accent); font-weight: 700; }
+.operation-form__control {
+  min-height: 2.6rem;
+  padding: 8px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--tx);
+}
+
+.operation-form__control::placeholder {
+  color: var(--mu);
+}
+
+.operation-form__status {
+  margin: 0;
+  color: var(--mu);
+  font-size: var(--font-size-sm);
+}
+
+.operation-form__submit {
+  width: fit-content;
+  justify-self: end;
+  padding: 8px 14px;
+  border: 1px solid var(--pr);
+  border-radius: 6px;
+  background: var(--pr);
+  color: var(--on);
+  font-weight: var(--font-weight-bold);
+  cursor: pointer;
+}
 </style>

@@ -982,6 +982,23 @@ const zhCN = {
   'audit.result.cancelling': '取消中',
   'audit.result.cancelled': '已取消',
   'audit.result.timeout': '超时',
+||||||| f2b6765
+
+  // --- create operation (TASK-394) ---
+  /*
+   * Direction C rewrote the create page around a header + stepper + two-column
+   * form/confirmation layout. The page title, subtitle and the back action moved here
+   * from inline copy; the two stepper labels and the confirmation-panel chrome
+   * (type row, "check the form first" hint) are new because the panel is now visible
+   * while the form is being filled instead of only behind the old confirmation step.
+   */
+  'operation.create.title': '创建发布操作',
+  'operation.create.lead': '选择制品和已审批配置，确认后启动预检',
+  'operation.create.back': '返回发布清单',
+  'operation.create.step.artifact': '制品与配置',
+  'operation.create.step.confirm': '确认',
+  'operation.confirm.type': '类型',
+  'operation.confirm.hint': '先完成表单并点击「检查并确认」，确认创建才可用。',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

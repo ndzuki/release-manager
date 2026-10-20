@@ -68,14 +68,86 @@ function removeRow(index: number): void {
 </template>
 
 <style scoped>
-.patch-editor { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
-.patch-editor__hint { margin: 0; color: var(--color-muted); font-size: var(--font-size-md); }
-.patch-editor__error { margin: 0; color: var(--color-error-strong); font-size: var(--font-size-sm); }
-.patch-editor__row { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: 0.5rem; }
-.patch-editor__row--error { padding: 0.65rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: var(--color-danger-soft); }
-.patch-editor__row-error { grid-column: 1 / -1; margin: 0; color: var(--color-error); }
-.patch-editor input, .patch-editor select { min-width: 0; padding: 0.6rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
-.patch-editor__add, .patch-editor__remove { width: fit-content; padding: 0.55rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
-.patch-editor__remove { color: var(--color-error); }
-@media (max-width: 48rem) { .patch-editor__row { grid-template-columns: 1fr; } }
+/*
+ * Direction C (TASK-394): the editor is a nested fieldset on the form card, so it uses
+ * the palette's surfaces and hairline instead of the legacy strong border. The grid is
+ * `minmax(0, …)` on every track: the automatic minimum of an input is its intrinsic
+ * width, which is exactly how the old layout pushed the page past 375px.
+ */
+.patch-editor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+}
+
+.patch-editor__hint {
+  margin: 0;
+  color: var(--mu);
+  font-size: var(--font-size-sm);
+}
+
+.patch-editor__error {
+  margin: 0;
+  color: var(--er);
+  font-size: var(--font-size-sm);
+}
+
+.patch-editor__row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.patch-editor__row--error {
+  padding: 10px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--r);
+  background: var(--color-danger-soft);
+}
+
+.patch-editor__row-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--er);
+  font-size: var(--font-size-sm);
+}
+
+.patch-editor input,
+.patch-editor select {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--tx);
+}
+
+.patch-editor input::placeholder {
+  color: var(--mu);
+}
+
+.patch-editor__add,
+.patch-editor__remove {
+  width: fit-content;
+  padding: 7px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  background: var(--sf2);
+  color: var(--tx);
+  cursor: pointer;
+}
+
+.patch-editor__remove {
+  color: var(--er);
+}
+
+@media (max-width: 48rem) {
+  .patch-editor__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 </style>
