@@ -186,7 +186,7 @@ describe('FormField wiring on the adopting page', () => {
     // With no error the hint is the description and the control is not invalid.
     const hintId = password.attributes('aria-describedby');
     expect(hintId).toMatch(/-help$/);
-    expect(wrapper.get(`#${hintId}`).text()).toContain('bcrypt');
+    expect(wrapper.get(`#${hintId}`).text()).toContain('哈希算法');
     expect(password.attributes('aria-invalid')).toBeUndefined();
 
     // An oversized value swaps the description to the alert and flips aria-invalid.

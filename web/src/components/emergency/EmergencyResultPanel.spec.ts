@@ -31,7 +31,7 @@ describe('EmergencyResultPanel (AC-058-20~33)', () => {
       },
     });
     // The operation kind stays a wire value; the convergence strategy is display copy.
-    expect(wrapper.text()).toContain('SET_CONTAINER_IMAGE');
+    expect(wrapper.text()).toContain('镜像变更');
     expect(wrapper.text()).toContain('生成收敛任务，需异人审批');
     expect(wrapper.text()).toContain('目标字段已写入集群');
     expect(wrapper.text()).toContain('repo/app:v2');
@@ -48,7 +48,7 @@ describe('EmergencyResultPanel (AC-058-20~33)', () => {
         canCreateValuesRevision: false,
       },
     });
-    expect(wrapper.text()).toContain('Unresolved Emergency Effect');
+    expect(wrapper.text()).toContain('集群效果尚未确认');
     expect(wrapper.text()).toContain('继续观察');
   });
 
@@ -64,7 +64,7 @@ describe('EmergencyResultPanel (AC-058-20~33)', () => {
     });
     expect(wrapper.text()).toContain('集群效果未知');
     // queued is not terminal → no unresolved warning.
-    expect(wrapper.text()).not.toContain('Unresolved Emergency Effect');
+    expect(wrapper.text()).not.toContain('集群效果尚未确认');
   });
 
   it('renders the convergence card CTA only when APPLIED + capable (AC-058-30)', async () => {
@@ -79,7 +79,7 @@ describe('EmergencyResultPanel (AC-058-20~33)', () => {
     });
     const card = wrapper.findComponent(EmergencyConvergenceCard);
     expect(card.exists()).toBe(true);
-    expect(wrapper.text()).toContain('创建 ValuesRevision 收敛');
+    expect(wrapper.text()).toContain('创建收敛 Values 版本');
     await wrapper.find('button').trigger('click');
     expect(wrapper.emitted('open-convergence')).toHaveLength(1);
   });
@@ -95,7 +95,7 @@ describe('EmergencyResultPanel (AC-058-20~33)', () => {
       },
     });
     expect(wrapper.text()).toContain('未生效，不创建收敛任务');
-    expect(wrapper.text()).not.toContain('创建 ValuesRevision 收敛');
+    expect(wrapper.text()).not.toContain('创建收敛 Values 版本');
   });
 });
 
@@ -127,7 +127,7 @@ describe('EmergencyConvergenceCard (AC-058-32/33)', () => {
         canCreateValuesRevision: false,
       },
     });
-    expect(reconciled.text()).toContain('已对账（Operation op9）');
+    expect(reconciled.text()).toContain('已对账（操作 op9）');
   });
 
   it('hides the create CTA without capability (AC-058-47)', () => {

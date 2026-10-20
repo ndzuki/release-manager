@@ -24,13 +24,13 @@ function formatDetailTime(value: string | null): string {
 
 <template>
   <dl class="operation-detail__summary">
-    <div><dt>Operation ID</dt><dd><CopyableHash :value="operation?.operationId ?? ''" /></dd></div>
-    <div><dt>ReleaseDefinition</dt><dd><CopyableHash :value="operation?.releaseDefinitionId ?? ''" /></dd></div>
-    <div><dt>StateVersion</dt><dd>{{ operation?.stateVersion.toString() }}</dd></div>
+    <div><dt>操作 ID</dt><dd><CopyableHash :value="operation?.operationId ?? ''" /></dd></div>
+    <div><dt>发布定义</dt><dd><CopyableHash :value="operation?.releaseDefinitionId ?? ''" /></dd></div>
+    <div><dt>状态版本</dt><dd>{{ operation?.stateVersion.toString() }}</dd></div>
     <div v-if="operation?.operationType === 'EMERGENCY'">
       <dt>{{ t('emergency.result.effectStatus') }}</dt><dd>{{ statusLabel('effect', operation?.effectStatus ?? undefined) }}</dd>
     </div>
-    <div><dt>TargetRevision</dt><dd>{{ operation?.targetRevision || '—' }}</dd></div>
+    <div><dt>目标版本</dt><dd>{{ operation?.targetRevision || '—' }}</dd></div>
     <!--
       AC-058-48 / TASK-325 W3: only the server's redacted + truncated projection
       reaches the DOM; the raw reason is never part of the read model. An

@@ -338,7 +338,7 @@ describe('Operator pages', () => {
     await flushPromises();
 
     expectFieldErrorIsDescription(wrapper, 'Operator 名称', t('operator.validation.name'));
-    expectFieldErrorIsDescription(wrapper, 'TTL 分钟', t('operator.validation.ttl'));
+    expectFieldErrorIsDescription(wrapper, '有效期（分钟）', t('operator.validation.ttl'));
   });
 
   /*

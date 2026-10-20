@@ -94,7 +94,7 @@ const countTone = computed<'wn' | 'neutral'>(() => (props.result.hasChanges ? 'w
     </header>
 
     <div v-if="!props.result.hasChanges" class="diff-panel__empty" role="status">
-      无 canonical 变化。格式、注释与 key 顺序差异不会产生无意义 diff。
+      无规范化内容变化。格式、注释与键顺序差异不会产生无意义的差异。
     </div>
     <ol v-else class="diff-hunks">
       <li v-for="hunk in hunks" :key="hunk.key" class="diff-hunk">
@@ -143,13 +143,13 @@ const countTone = computed<'wn' | 'neutral'>(() => (props.result.hasChanges ? 'w
 .diff-hunk { display: grid; gap: 0.5rem; min-width: 0; padding: 0.75rem; border: 1px solid var(--bd); border-radius: 0.6rem; }
 .diff-hunk__summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; }
 .diff-hunk__summary code { min-width: 0; color: var(--color-text-secondary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
-.diff-kind { padding: 0.15rem 0.4rem; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
+.diff-kind { padding: 0.15rem 0.4rem; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 800; }
 .diff-kind--added { background: var(--color-success-surface); color: var(--color-success-ink); }
 .diff-kind--removed { background: var(--color-danger-surface); color: var(--color-error-strong); }
 .diff-kind--modified, .diff-kind--array_change { background: var(--color-warning-subtle); color: var(--color-warning-ink-strong); }
 .diff-hunk__sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .diff-side { display: grid; align-content: start; gap: 0.25rem; min-width: 0; }
-.diff-side__label { color: var(--mu); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
+.diff-side__label { color: var(--mu); font-size: var(--font-size-xs); font-weight: 700; }
 .diff-line { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: start; gap: 0.4rem; min-width: 0; padding: 0.35rem 0.45rem; border-left: 2px solid transparent; border-radius: 0.3rem; background: var(--bg); }
 /* Removed lines read as `--er`, added lines as `--ok`, on `--bg`. The 2px rail keeps the
    palette BASE so the line still reads as a single tone; the text takes the ink step,

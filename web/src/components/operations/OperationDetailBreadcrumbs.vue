@@ -24,7 +24,7 @@ defineProps<{
           params: { customerId: releaseScope.customerId, clusterId: releaseScope.clusterId },
         }"
       >
-        Releases
+        {{ t('release.inventory.breadcrumb') }}
       </RouterLink>
       <span aria-hidden="true">/</span>
       <RouterLink

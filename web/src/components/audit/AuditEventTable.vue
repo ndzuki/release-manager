@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ref } from 'vue';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
@@ -121,7 +122,7 @@ function formatTimeTitle(event: AuditEvent): string | undefined {
               <strong>{{ actorLabel(event) }}</strong>
             </td>
             <td>
-              {{ event.action || '—' }}
+              {{ event.action ? statusLabel('auditAction', event.action) : '—' }}
             </td>
             <!-- TASK-394: the resource id is a machine identifier. It used to be printed
                  whole (a 36-character UUID folded into two lines and widened the table);
@@ -132,7 +133,7 @@ function formatTimeTitle(event: AuditEvent): string | undefined {
                  also select the row and open the detail panel. -->
             <td>
               <span class="audit-results__resource">
-                <span class="audit-results__resource-type">{{ event.resourceType || '—' }}</span>
+                <span class="audit-results__resource-type">{{ event.resourceType ? statusLabel('auditResource', event.resourceType) : '—' }}</span>
                 <span class="audit-results__resource-id" @click.stop @keydown.stop>
                   <CopyableHash v-if="event.resourceId" :value="event.resourceId" :head="20" :tail="4" />
                   <template v-else>—</template>
@@ -224,7 +225,6 @@ th {
   font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 tbody tr:last-child td {

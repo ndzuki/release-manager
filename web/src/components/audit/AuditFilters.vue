@@ -57,7 +57,7 @@ const emit = defineEmits<{
       <span>{{ t('audit.filters.resourceType') }}</span>
       <select v-model="model.resourceType" name="resource">
         <option value="">{{ t('audit.filters.allResources') }}</option>
-        <option v-for="resource in resourceTypeOptions" :key="resource" :value="resource">{{ resource }}</option>
+        <option v-for="resource in resourceTypeOptions" :key="resource" :value="resource">{{ statusLabel('auditResource', resource) }}</option>
       </select>
     </label>
     <label class="audit-filters__field">
@@ -68,7 +68,7 @@ const emit = defineEmits<{
       <span>{{ t('audit.filters.action') }}</span>
       <select v-model="model.action" name="action">
         <option value="">{{ t('audit.filters.allActions') }}</option>
-        <option v-for="action in actionOptions" :key="action" :value="action">{{ action }}</option>
+        <option v-for="action in actionOptions" :key="action" :value="action">{{ statusLabel('auditAction', action) }}</option>
       </select>
     </label>
     <label class="audit-filters__field">

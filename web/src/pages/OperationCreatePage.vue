@@ -191,7 +191,7 @@ async function cancel(): Promise<void> {
     <EmptyState
       v-else-if="store.isEmpty"
       title="没有可创建操作的选项"
-      message="请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。"
+      message="请先准备已验证的 Bundle；通过审批的 Values 版本会自动列在表单里。"
       action-label="重新加载"
       @action="store.loadOptions"
     />

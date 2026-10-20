@@ -131,7 +131,7 @@ describe('LocalUsersPage', () => {
 
     const wrapper = await mountPage();
 
-    expect(wrapper.text()).toContain('platform_admin');
+    expect(wrapper.text()).toContain('平台管理员');
     expect(wrapper.find('form').exists()).toBe(false);
     expect(mockedList).not.toHaveBeenCalled();
   });
@@ -198,7 +198,7 @@ describe('LocalUsersPage', () => {
     const header = wrapper.get('.page-header');
     expect(header.get('.page-header__eyebrow').text()).toBe('平台管理');
     expect(header.get('h1').text()).toBe('本地用户');
-    expect(header.get('.page-header__subtitle').text()).toContain('本地账号属于「auth」命名空间');
+    expect(header.get('.page-header__subtitle').text()).toContain('本地账号只有平台管理员能读写');
 
     const select = wrapper.get('select[name="role"]');
     expect(select.element.parentElement?.classList.contains('select-wrap')).toBe(true);

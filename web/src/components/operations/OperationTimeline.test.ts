@@ -57,7 +57,7 @@ describe('TimelineEntryItem', () => {
       ['ACK', '已确认'],
       ['ROLLOUT_PROGRESS', '发布进度'],
       ['ERROR', '错误'],
-      ['EMERGENCY_EFFECT_RESOLVED', 'Emergency 生效结果已确认'],
+      ['EMERGENCY_EFFECT_RESOLVED', '紧急变更生效结果已确认'],
     ];
 
     for (const [kind, label] of kinds) {
@@ -87,8 +87,8 @@ describe('TimelineEntryItem', () => {
         }),
       },
     });
-    expect(wrapper.text()).toContain('running');
-    expect(wrapper.text()).toContain('cancelling');
+    expect(wrapper.text()).toContain('执行中');
+    expect(wrapper.text()).toContain('取消中');
     // The reason/request identity must never leak into the timeline.
     expect(wrapper.text()).not.toContain('secret-reason');
   });

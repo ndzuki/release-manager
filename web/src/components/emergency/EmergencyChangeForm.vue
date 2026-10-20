@@ -5,6 +5,7 @@
 // unique promotion mapping; otherwise it degrades to REVERT).
 // Field-level validation errors render inline (D7 double-track).
 import { computed } from 'vue';
+import { t } from '@/i18n/messages';
 import FormField from '@/components/common/FormField.vue';
 import { REASON_MAX_BYTES, utf8ByteLength, validateReason } from '@/features/emergency/validation';
 import type { ConvergencePolicy } from '@/features/emergency/model';
@@ -83,7 +84,7 @@ function setPolicy(policy: ConvergencePolicy): void {
           :disabled="!requirePromotionAvailable"
           @change="setPolicy('REQUIRE_PROMOTION')"
         />
-        REQUIRE_PROMOTION — 生成收敛任务，需异人审批
+        {{ t('status.convergenceStrategy.requirePromotion') }}
       </label>
       <label>
         <input
@@ -93,12 +94,12 @@ function setPolicy(policy: ConvergencePolicy): void {
           :checked="effectivePolicy === 'REVERT_ON_NEXT_RECONCILE'"
           @change="setPolicy('REVERT_ON_NEXT_RECONCILE')"
         />
-        REVERT_ON_NEXT_RECONCILE — 下次对账时回退
+        {{ t('status.convergenceStrategy.revertOnNextReconcile') }}
       </label>
       <p v-if="!requirePromotionAvailable" class="hint">
-        当前变更字段缺少完整 Promotion Mapping，已固定为 REVERT（AC-058-14）。
+        当前变更字段缺少完整的提升映射，已固定为「下次对账时回退」。
       </p>
-      <p v-else-if="mappingComplete" class="hint">全部变更字段均有唯一 Promotion Mapping。</p>
+      <p v-else-if="mappingComplete" class="hint">全部变更字段都有唯一的提升映射。</p>
     </fieldset>
 
     <p v-if="submitError" class="summary-bar" role="alert">{{ submitError.message }}</p>

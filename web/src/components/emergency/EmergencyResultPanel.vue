@@ -42,11 +42,11 @@ function valuesLabel(values: EmergencyTypedValuesDisplay | null): string {
   if (!values) return '—';
   switch (values.case) {
     case 'image':
-      return `image ${values.container} → ${values.imageReference}`;
+      return `镜像 ${values.container} → ${values.imageReference}`;
     case 'replicas':
-      return `replicas → ${values.replicas}`;
+      return `副本数 → ${values.replicas}`;
     case 'annotations':
-      return `annotations ${values.annotations.map((entry) => `${entry.key}=${entry.value}`).join(', ')}`;
+      return `注解 ${values.annotations.map((entry) => `${entry.key}=${entry.value}`).join('、')}`;
     default:
       return '—';
   }
@@ -59,7 +59,7 @@ function valuesLabel(values: EmergencyTypedValuesDisplay | null): string {
     <dl class="result-grid">
       <div>
         <dt>{{ t('emergency.result.intent') }}</dt>
-        <dd>{{ result.opType }} / {{ statusLabel('convergenceStrategy', result.convergencePolicy) }}</dd>
+        <dd>{{ statusLabel('emergencyOperation', result.opType) }} / {{ statusLabel('convergenceStrategy', result.convergencePolicy) }}</dd>
       </div>
       <div>
         <dt>受理状态</dt>
@@ -68,7 +68,7 @@ function valuesLabel(values: EmergencyTypedValuesDisplay | null): string {
       <div>
         <dt>{{ t('emergency.result.effectStatus') }}</dt>
         <dd :class="`effect-${result.effectStatus.toLowerCase()}`">
-          {{ effectLabel[result.effectStatus] ?? result.effectStatus }}
+          {{ effectLabel[result.effectStatus] ?? statusLabel('effect', result.effectStatus) }}
         </dd>
       </div>
       <div>

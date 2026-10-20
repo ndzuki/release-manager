@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 // Emergency change page (plan v3 Step 4): thin composition surface —
 // scoped authorization gate → conflict check → target/action/form flow →
 // frozen confirmation → Execute → Operation Detail. All business logic lives
@@ -182,17 +183,17 @@ async function onConfirm(): Promise<void> {
     <LoadingState v-if="gate === 'loading'" message="正在加载授权与目标…" />
     <ForbiddenState
       v-else-if="gate === 'forbidden'"
-      title="403"
-      message="你没有执行紧急变更的权限（release.emergency.execute）。"
+      title="无权操作"
+      message="你没有执行紧急变更的权限。"
     />
     <ErrorState
       v-else-if="gate === 'not_found'"
-      title="404"
+      title="不可用"
       message="紧急变更不可用：功能已关闭或发布定义不存在。"
     />
     <div v-else-if="store.conflict?.hasConflict" class="conflict-block">
       <h2>{{ t('emergency.page.blockedTitle') }}</h2>
-      <p>{{ t('emergency.page.blockedBody') }} {{ store.conflict.runningOperation?.type }}</p>
+      <p>{{ t('emergency.page.blockedBody') }} {{ statusLabel('operationType', store.conflict.runningOperation?.type ?? '') }}</p>
       <RouterLink
         v-if="store.conflict.runningOperation"
         :to="operationRoute(store.conflict.runningOperation.operationId)"

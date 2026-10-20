@@ -96,7 +96,7 @@ describe('OperationCenterPage states', () => {
 
     const wrapper = await mountCenter();
 
-    expect(wrapper.get('.empty-state').text()).toContain('当前作用域内没有非终态的 Operation。');
+    expect(wrapper.get('.empty-state').text()).toContain('当前作用域内没有未结束的操作。');
     expect(wrapper.find('table').exists()).toBe(false);
     // The cursor is the only end-of-list signal, so an empty first page has no pager.
     expect(wrapper.find('.operation-center__pager').exists()).toBe(false);
@@ -200,7 +200,7 @@ describe('OperationCenterPage degradations', () => {
 
     // This UI never sends a customerId, so the refusal is the authorization decision on
     // the read (casbin release:read, or an inactive membership) — not a customer scope.
-    expect(wrapper.get('.forbidden-state').text()).toContain('无读取权限：当前账号无权读取该作用域内的 Operation。');
+    expect(wrapper.get('.forbidden-state').text()).toContain('无读取权限：当前账号无权读取该作用域内的操作。');
     expect(wrapper.find('table').exists()).toBe(false);
     // A refusal is not retryable: repeating the same scope cannot succeed.
     expect(wrapper.find('[role="alert"] button').exists()).toBe(false);
@@ -327,7 +327,7 @@ describe('OperationCenterPage accessibility', () => {
 
     const wrapper = await mountCenter();
 
-    expect(wrapper.get('.operation-center__pager').attributes('aria-label')).toBe('Operation 分页');
+    expect(wrapper.get('.operation-center__pager').attributes('aria-label')).toBe('操作分页');
   });
 });
 
@@ -344,8 +344,8 @@ describe('OperationCenterPage direction-C shell (TASK-394)', () => {
     const wrapper = await mountCenter();
 
     expect(wrapper.get('.page-header__eyebrow').text()).toBe('跨 Release');
-    expect(wrapper.get('h1').text()).toBe('Operation 中心');
-    expect(wrapper.get('.page-header__subtitle').text()).toContain('按等待时间从最久到最新排序');
+    expect(wrapper.get('h1').text()).toBe('操作中心');
+    expect(wrapper.get('.page-header__subtitle').text()).toContain('按等待时间从长到短排序');
     // The old header was a page-private <header> with its own h1; only PageHeader remains.
     expect(wrapper.findAll('h1')).toHaveLength(1);
   });

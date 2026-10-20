@@ -67,7 +67,7 @@ describe('RouteRuleEditor', () => {
     const option = wrapper.get('option[value="pull_through_cache"]');
     expect(option.attributes('disabled')).toBeDefined();
     expect(option.attributes('title')).toContain('能力测试');
-    expect(wrapper.text()).toContain('Pull-through cache 需要先通过能力测试。');
+    expect(wrapper.text()).toContain('透传缓存需要先通过能力测试。');
   });
 
   it('does not render a credential input', () => {

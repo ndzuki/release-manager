@@ -5,7 +5,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 const props = defineProps<{ submitting?: boolean }>();
 const emit = defineEmits<{ submit: [reason: string]; close: [] }>();
 const reason = shallowRef('');
-const error = computed(() => reason.value.length > 1000 ? '拒绝原因过长 (上限 1000 字符)' : '');
+const error = computed(() => reason.value.length > 1000 ? '拒绝原因过长（上限 1000 字符）' : '');
 const errorId = useId();
 
 function submit(): void {
@@ -19,7 +19,7 @@ function submit(): void {
        @click.self on the backdrop); only a submission blocks Escape. -->
   <AppDialog
     :open="true"
-    title="拒绝 ValuesRevision"
+    title="拒绝 Values 版本"
     :close-on-escape="!submitting"
     @close="emit('close')"
   >

@@ -18,7 +18,7 @@ describe('mapLocalUserError', () => {
     const mapped = mapLocalUserError(failure(Code.PermissionDenied));
 
     expect(mapped.code).toBe('permission_denied');
-    expect(mapped.message).toContain('platform_admin');
+    expect(mapped.message).toContain('平台管理员');
     expect(mapped.retryable).toBe(false);
   });
 

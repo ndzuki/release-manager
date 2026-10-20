@@ -119,7 +119,7 @@ describe('PreflightResultPanel raw JSON detail (TASK-394)', () => {
     const disclosure = wrapper.get('[data-testid="preflight-stage-detail"]');
     expect(disclosure.element.tagName).toBe('DETAILS');
     expect(disclosure.attributes('open')).toBeUndefined();
-    expect(disclosure.get('summary').text()).toContain('查看原始 JSON');
+    expect(disclosure.get('summary').text()).toContain('查看原始响应');
     expect(disclosure.get('pre').text()).toBe(rawJson);
     expect(wrapper.find('p.preflight-stage__detail').exists()).toBe(false);
   });

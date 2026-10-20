@@ -60,11 +60,11 @@ function applyFilters(): void {
     <form class="bundles__filters" @submit.prevent="applyFilters">
       <label>
         {{ t('definitions.releaseDefinitionIdRequired') }}
-        <input v-model="definitionFilter" name="releaseDefinitionId" placeholder="definition id" required />
+        <input v-model="definitionFilter" name="releaseDefinitionId" placeholder="发布定义 ID" required />
       </label>
       <label>
         {{ t('definitions.chartNameOptional') }}
-        <input v-model="chartFilter" name="chartNameFilter" placeholder="chart name" />
+        <input v-model="chartFilter" name="chartNameFilter" placeholder="Chart 名称" />
       </label>
       <label>
         {{ t('bundles.filters.status') }}

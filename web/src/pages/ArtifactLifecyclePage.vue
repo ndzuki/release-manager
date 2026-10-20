@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import { ref } from 'vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import PageHeader from '@/components/common/PageHeader.vue';
@@ -25,7 +26,7 @@ const store = useArtifactLifecycleStore();
  * acting — who may run this and that maintenance mode refuses it. The dropped tail named
  * the authorization policy action (`cleanup/write`), which is implementation, not copy.
  */
-const pageSubtitle = '保留期垃圾回收与归档恢复；仅 platform_admin 可用，维护模式下会被拒绝。';
+const pageSubtitle = '保留期清理与归档恢复；仅平台管理员可用，维护模式下会被拒绝。';
 
 const bundleId = ref('');
 const restoreError = ref('');
@@ -80,21 +81,21 @@ async function restore(): Promise<void> {
     </Toast>
 
     <section class="lifecycle__panel">
-      <h2>执行保留期 GC</h2>
+      <h2>执行保留期清理</h2>
       <p class="lifecycle__warning">
-        <strong>不可撤销</strong>：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是<b>行数</b>而非释放的字节。
-        清理<b>同步</b>执行，服务端预算可达约 1 小时，所以页面会一直等待结果。
+        <strong>不可撤销</strong>：清理会删除超出保留期的 Bundle、候选制品与预检记录，计数是<b>行数</b>而非释放的字节。
+        清理<b>同步</b>执行，最长可能需要约 1 小时，页面会一直等待结果。
       </p>
       <p class="lifecycle__hint">
-        保留窗口内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求，
-        点「执行 GC」才会发起新的清理。
+        保留期内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求，
+        点「执行清理」才会发起新的清理。
       </p>
       <label class="lifecycle__ack">
         <input v-model="acknowledged" type="checkbox" name="acknowledged" />
         我已确认清理会删除超出保留期的制品，且不可撤销
       </label>
       <button type="button" class="danger" :disabled="store.running" data-testid="cleanup-run" @click="runGc">
-        {{ store.running ? '执行中…（最长约 1 小时）' : '执行 GC' }}
+        {{ store.running ? '执行中…（最长约 1 小时）' : '执行清理' }}
       </button>
       <p v-if="runError" class="lifecycle__error" role="alert" data-testid="cleanup-validation">{{ runError }}</p>
 
@@ -110,10 +111,10 @@ async function restore(): Promise<void> {
       <div v-if="store.result" class="lifecycle__result" data-testid="cleanup-result">
         <h3>计数</h3>
         <dl class="lifecycle__counts">
-          <dt>删除 bundle</dt><dd data-testid="cleanup-bundles">{{ store.result.deletedBundles }}</dd>
+          <dt>删除 Bundle</dt><dd data-testid="cleanup-bundles">{{ store.result.deletedBundles }}</dd>
           <dt>删除候选制品</dt><dd>{{ store.result.deletedCandidates }}</dd>
-          <dt>删除 preflight</dt><dd>{{ store.result.deletedPreflights }}</dd>
-          <dt>跳过 bundle</dt><dd>{{ store.result.skippedBundles }}</dd>
+          <dt>删除预检记录</dt><dd>{{ store.result.deletedPreflights }}</dd>
+          <dt>跳过 Bundle</dt><dd>{{ store.result.skippedBundles }}</dd>
         </dl>
         <div v-if="store.hasProblems" class="lifecycle__problems" role="alert" data-testid="cleanup-errors">
           <h3>非致命错误（{{ store.result.errors.length }}）</h3>
@@ -129,13 +130,13 @@ async function restore(): Promise<void> {
     <section class="lifecycle__panel">
       <h2>恢复已归档 Bundle</h2>
       <p class="lifecycle__hint">
-        只有从 <code>validated</code> 归档的 bundle 能恢复；恢复后回到 <code>validated</code>，不是重新接收。
-        重复恢复是安全的：再次成功且不改数据；结果显示的「归档前状态」是归档时的原始状态。
+        只有从「已验证」状态归档的 Bundle 能恢复；恢复后回到「已验证」，不是重新接收。
+        重复恢复是安全的，结果里的「归档前状态」就是归档时的状态。
       </p>
       <form @submit.prevent="restore">
         <label>
           {{ t('bundle.detail.bundleId') }}
-          <input v-model="bundleId" name="bundleId" placeholder="bundle id" />
+          <input v-model="bundleId" name="bundleId" placeholder="Bundle ID" />
         </label>
         <button type="submit" :disabled="store.restoring" data-testid="unarchive-submit">
           {{ store.restoring ? '提交中…' : '恢复' }}
@@ -151,7 +152,7 @@ async function restore(): Promise<void> {
       />
 
       <p v-if="store.restoreResult" class="lifecycle__restored" role="status" data-testid="unarchive-result">
-        已恢复 <code>{{ store.restoreResult.bundleId }}</code>，归档前状态：{{ store.restoreResult.previousStatus }}
+        已恢复 <code>{{ store.restoreResult.bundleId }}</code>，归档前状态：{{ statusLabel('bundle', store.restoreResult.previousStatus) }}
       </p>
     </section>
   </section>

@@ -145,7 +145,7 @@ describe('ValuesEditorPage', () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    expect(wrapper.text()).toContain('创建首个配置 Revision');
+    expect(wrapper.text()).toContain('创建首个配置版本');
     expect(wrapper.get('[data-testid="values-editor"]').text()).toContain('# Paste or edit your values.yaml here');
   });
 
@@ -167,7 +167,7 @@ describe('ValuesEditorPage', () => {
     const wrapper = mountPage();
     await flushPromises();
 
-    expect(wrapper.get('[data-testid="error-state"]').text()).toContain('ValuesRevision 加载失败');
+    expect(wrapper.get('[data-testid="error-state"]').text()).toContain('Values 版本加载失败');
     expect(mocks.editor.editorContent).toBe('replicas: 4');
     await wrapper.get('[data-testid="error-state"] button').trigger('click');
     expect(mocks.editor.load).toHaveBeenCalledTimes(2);
@@ -495,7 +495,7 @@ describe('ValuesEditorPage direction C surface (TASK-394)', () => {
     expect(crumbs).toContain('Cluster One');
     expect(crumbs).toContain('Release One');
     expect(crumbs).not.toContain('definition-1');
-    expect(wrapper.text()).toContain('编辑 canonical values，通过 SecretRef 引用集群 Secret。');
+    expect(wrapper.text()).toContain('编辑规范化 Values 内容，通过 Secret 引用读取集群 Secret。');
   });
 
   it('omits a crumb whose resolved name is the identifier instead of printing a UUID', async () => {
@@ -522,7 +522,7 @@ describe('ValuesEditorPage direction C surface (TASK-394)', () => {
 
     const panel = wrapper.get('.values-panel');
     expect(panel.find('.eyebrow').exists()).toBe(false);
-    expect(panel.get('.values-panel__header .values-section__title').text()).toBe('ValuesRevision 编辑器');
+    expect(panel.get('.values-panel__header .values-section__title').text()).toBe('Values 版本编辑器');
     expect(panel.get('h2#values-editor-title').text()).toBe('Values 文档');
     expect(wrapper.findAll('h1')).toHaveLength(1);
   });

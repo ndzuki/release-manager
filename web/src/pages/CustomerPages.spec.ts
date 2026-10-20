@@ -91,7 +91,7 @@ describe('customer viewer boundaries', () => {
     const wrapper = await mountAt(CustomerDetailPage, '/customers/new');
     await nextTick();
 
-    expect(wrapper.text()).toContain('你的 viewer 角色没有新建客户入口。');
+    expect(wrapper.text()).toContain('你的只读角色没有新建客户入口。');
     expect(wrapper.find('form').exists()).toBe(false);
   });
 });

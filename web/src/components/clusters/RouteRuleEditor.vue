@@ -95,7 +95,7 @@ function isConflictingRule(rule: RouteRuleInput, index: number): boolean {
                 :disabled="mode.disabled"
                 :title="mode.title"
               >
-                {{ mode.label }}{{ mode.disabled ? ' — unavailable' : '' }}
+                {{ mode.label }}{{ mode.disabled ? '（暂不可用）' : '' }}
               </option>
             </select>
           </template>

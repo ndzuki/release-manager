@@ -41,15 +41,15 @@ function updateKey(item: SecretRefFormItem, event: Event): void {
         <p class="section-label">{{ t('values.secretRefs.title') }}</p>
         <h2 id="secret-refs-title">{{ t('values.secretRefs.kind') }}</h2>
       </div>
-      <button type="button" :disabled="disabled" @click="emit('add')">添加 SecretRef</button>
+      <button type="button" :disabled="disabled" @click="emit('add')">添加 Secret 引用</button>
     </header>
 
-    <p class="secret-editor__help">仅保存 namespace 内 Secret 的 name、key 与目标 path，不读取或传输 value。</p>
+    <p class="secret-editor__help">只保存命名空间内 Secret 的名称、键与目标路径，不读取或传输其值。</p>
     <p v-if="error" class="secret-editor__error" role="alert">{{ error }}</p>
-    <p v-if="items.length === 0" class="secret-editor__empty">尚未配置 SecretRef。</p>
+    <p v-if="items.length === 0" class="secret-editor__empty">尚未配置 Secret 引用。</p>
 
     <div v-for="(item, index) in items" :key="item.id" class="secret-row">
-      <strong>SecretRef {{ index + 1 }}</strong>
+      <strong>Secret 引用 {{ index + 1 }}</strong>
       <label>
         {{ t('values.secretRefs.name') }}
         <select :value="item.name" :disabled="disabled" @change="updateName(item, $event)">
@@ -60,13 +60,13 @@ function updateKey(item: SecretRefFormItem, event: Event): void {
       <label>
         {{ t('values.secretRefs.key') }}
         <select :value="item.key" :disabled="disabled || !item.name" @change="updateKey(item, $event)">
-          <option value="">请选择 Key</option>
+          <option value="">请选择键</option>
           <option v-for="key in keysFor(item)" :key="key" :value="key">{{ key }}</option>
         </select>
       </label>
       <label>
         {{ t('values.secretRefs.path') }}
-        <input :value="item.path" readonly placeholder="选择 name/key 后自动生成" />
+        <input :value="item.path" readonly placeholder="选择名称与键后自动生成" />
       </label>
       <button type="button" class="danger-text" :disabled="disabled" @click="emit('remove', item.id)">移除</button>
     </div>

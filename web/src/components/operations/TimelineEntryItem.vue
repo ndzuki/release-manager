@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import CopyableHash from '@/components/common/CopyableHash.vue';
 import type { TimelineEntry } from '@/types/operation';
 import { formatTimestamp } from '@/utils/formatTimestamp';
@@ -17,6 +18,29 @@ function formatEntryTime(value: string | null): string {
   return formatTimestamp(value, { style: 'medium' });
 }
 
+/*
+ * Server values reach the timeline as raw wire strings (PENDING, ACK_PERSISTED…).
+ * The timeline must read as prose, so every enum goes through the shared status map and
+ * an unknown value becomes a neutral Chinese label rather than leaking the wire word.
+ */
+function stateLabel(value: string): string {
+  if (!value) return t('operation.timeline.unknownState');
+  const label = statusLabel('operation', value);
+  return label === value ? t('operation.timeline.unknownState') : label;
+}
+
+function effectLabel(value: string): string {
+  return statusLabel('effect', value || 'UNKNOWN');
+}
+
+function ackText(stage: string): string {
+  const base = t('operation.timeline.ack');
+  if (!stage) return base;
+  const label = statusLabel('ackStage', stage);
+  const stageLabel = label === stage ? t('operation.timeline.ackStage.unknown') : label;
+  return t('operation.timeline.ackWithStage', { base, stage: stageLabel });
+}
+
 const kindLabel: Record<string, string> = {
   STATE_TRANSITION: '状态转换',
   ACK: '已确认',
@@ -32,18 +56,18 @@ const kindLabel: Record<string, string> = {
     <span class="timeline-entry__dot" aria-hidden="true" />
     <div class="timeline-entry__body">
       <div class="timeline-entry__header">
-        <strong>{{ kindLabel[entry.kind] ?? entry.kind }}</strong>
+        <strong>{{ kindLabel[entry.kind] ?? kindLabel.UNSPECIFIED }}</strong>
         <time :datetime="entry.timestamp ?? ''">{{ formatEntryTime(entry.timestamp) }}</time>
       </div>
 
       <template v-if="entry.kind === 'STATE_TRANSITION'">
         <p class="timeline-entry__text">
-          {{ entry.fromState || '未知状态' }} → {{ entry.toState || '未知状态' }}
+          {{ stateLabel(entry.fromState) }} → {{ stateLabel(entry.toState) }}
         </p>
       </template>
 
       <template v-else-if="entry.kind === 'ACK'">
-        <p class="timeline-entry__text">{{ entry.ackStage ? `${t('operation.timeline.ack')}（${entry.ackStage}）` : t('operation.timeline.ack') }}</p>
+        <p class="timeline-entry__text">{{ ackText(entry.ackStage) }}</p>
       </template>
 
       <template v-else-if="entry.kind === 'ROLLOUT_PROGRESS'">
@@ -63,7 +87,7 @@ const kindLabel: Record<string, string> = {
 
       <template v-else-if="entry.kind === 'EMERGENCY_EFFECT_RESOLVED'">
         <p class="timeline-entry__text">
-          {{ entry.effectFrom || entry.fromState || 'UNKNOWN' }} → {{ entry.effectTo || entry.toState || '未知' }}
+          {{ effectLabel(entry.effectFrom || entry.fromState) }} → {{ effectLabel(entry.effectTo || entry.toState) }}
         </p>
       </template>
     </div>

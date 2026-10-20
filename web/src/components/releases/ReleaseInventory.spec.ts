@@ -149,7 +149,7 @@ describe('release inventory presentation', () => {
     });
 
     // Conflicted row → non-clickable span; unbound row → explanation text.
-    expect(wrapper.text()).toContain('未绑定 Definition');
+    expect(wrapper.text()).toContain('未绑定发布定义');
     const emergencyLinks = wrapper.findAllComponents(RouterLinkStub).filter((link) => {
       const to = link.props('to');
       return typeof to === 'object' && to !== null && 'name' in to && to.name === 'EmergencyChange';

@@ -173,7 +173,7 @@ describe('DefinitionsPage', () => {
     mockedList.mockResolvedValue([definition({ promotionMappingsViolation: '无法解析' })]);
     const wrapper = await mountPage();
 
-    expect(wrapper.get('[data-testid="definitions-violation"]').text()).toContain('契约违反');
+    expect(wrapper.get('[data-testid="definitions-violation"]').text()).toContain('数据异常');
     expect(wrapper.get<HTMLButtonElement>('[data-testid="definition-edit-def-1"]').element.disabled).toBe(true);
   });
 
@@ -392,11 +392,11 @@ describe('DefinitionsPage', () => {
 
     // Unique per row (two rows cannot share an id)…
     expect(new Set(inputs.map((input) => input.getAttribute('id'))).size).toBe(10);
-    // …and the row number is what tells the two rows' Workload 类型 inputs apart.
+    // …and the row number is what tells the two rows' 工作负载类型 inputs apart.
     expect(root.querySelector('.definitions__mappings label[for$="-0-kind"]')?.textContent?.trim())
-      .toBe('Workload 类型（第 1 行）');
+      .toBe('工作负载类型（第 1 行）');
     expect(root.querySelector('.definitions__mappings label[for$="-1-kind"]')?.textContent?.trim())
-      .toBe('Workload 类型（第 2 行）');
+      .toBe('工作负载类型（第 2 行）');
     expect(root.querySelector('.definitions__mappings label[for$="-1-values-path"]')?.textContent?.trim())
       .toBe('Values 路径（第 2 行）');
   });

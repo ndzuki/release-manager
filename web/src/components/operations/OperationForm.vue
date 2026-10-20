@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import { computed, nextTick, reactive, ref, useId } from 'vue';
 import FormField from '@/components/common/FormField.vue';
 import PatchOverrideEditor from './PatchOverrideEditor.vue';
@@ -99,7 +100,7 @@ async function prepareConfirmation(): Promise<void> {
           :data-testid="`operation-type-${operationType}`"
           @click="store.setOperationType(operationType)"
         >
-          {{ operationType }}
+          {{ statusLabel('operationType', operationType) }}
         </button>
       </div>
     </div>

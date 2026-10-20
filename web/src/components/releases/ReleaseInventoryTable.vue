@@ -167,8 +167,8 @@ function chartLabel(release: ReleaseSummary): string {
             </span>
           </td>
           <td v-if="canEmergency || canConvergence" role="cell" :data-label="t('release.table.emergency')">
-            <span v-if="!release.releaseDefinitionId" class="muted" title="未关联 ReleaseDefinition，紧急变更入口不可用">
-              未绑定 Definition
+            <span v-if="!release.releaseDefinitionId" class="muted" title="未关联发布定义，紧急变更入口不可用">
+              未绑定发布定义
             </span>
             <template v-else>
               <span
@@ -232,7 +232,7 @@ function chartLabel(release: ReleaseSummary): string {
               >
                 创建操作
               </RouterLink>
-              <span v-else class="muted">未绑定 Definition</span>
+              <span v-else class="muted">未绑定发布定义</span>
               <button
                 v-if="canRollbackRow(release)"
                 type="button"

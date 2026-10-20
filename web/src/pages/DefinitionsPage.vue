@@ -45,9 +45,9 @@ const auth = useAuthStore();
  */
 const pageSubtitle = computed(
   () =>
-    '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；' +
+    '每个定义把 Bundle 来源与客户、集群、命名空间与 Release 名称绑定；' +
     t('definitions.promotionMapping') +
-    ' 决定收敛后的紧急变更如何提升为标准 ValuesRevision。',
+    ' 决定收敛后的紧急变更如何提升为标准 Values 版本。',
 );
 
 const customerId = ref('');
@@ -158,7 +158,7 @@ function applyFilters(): void {
     />
 
     <p v-if="store.violations.length > 0" class="definitions__violation" role="alert" data-testid="definitions-violation">
-      有 {{ store.violations.length }} 个定义的 Promotion Mapping 无法解析（契约违反）：{{
+      有 {{ store.violations.length }} 个定义的提升映射无法解析（数据异常）：{{
         store.violations.map((definition) => definition.name).join('、')
       }}。这些行已禁用编辑，避免把损坏数据写回。
     </p>

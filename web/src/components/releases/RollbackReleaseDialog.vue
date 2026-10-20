@@ -83,13 +83,13 @@ function validate(): boolean {
     return false;
   }
   if (!Number.isInteger(parsedTarget.value) || parsedTarget.value < 1) {
-    validationError.value = { field: 'targetRevision', message: '目标 Revision 必须是 1 以上的整数' };
+    validationError.value = { field: 'targetRevision', message: '目标版本必须是 1 以上的整数' };
     return false;
   }
   if (parsedTarget.value >= props.currentRevision) {
     validationError.value = {
       field: 'targetRevision',
-      message: `目标 Revision 必须小于当前 Revision（${props.currentRevision}）`,
+      message: `目标版本必须小于当前版本（${props.currentRevision}）`,
     };
     return false;
   }
@@ -136,14 +136,14 @@ async function submit(): Promise<void> {
   <AppDialog
     :open="open"
     :title="`回滚 ${releaseName}`"
-    :description="`当前 Revision ${currentRevision}，回滚会创建一个新的 ROLLBACK 操作。`"
+    :description="`当前版本为 ${currentRevision}，回滚会创建一个新的回滚操作。`"
     danger
     :close-on-backdrop="false"
     :close-on-escape="!submitting"
     @close="emit('close')"
   >
     <p class="rollback-dialog__warning" role="note">
-      回滚会按目标 Revision 重新下发该 Release；操作不可撤销，请确认目标 Revision 与原因。
+      回滚会按目标版本重新下发该 Release；操作不可撤销，请确认目标版本与原因。
     </p>
 
     <ErrorState
@@ -156,11 +156,11 @@ async function submit(): Promise<void> {
 
     <form class="rollback-dialog__form" @submit.prevent="submit">
       <label>
-        当前 Revision（来自发布清单）
+        当前版本（来自发布清单）
         <input :value="currentRevision" name="currentRevision" readonly />
       </label>
       <label>
-        目标 Revision
+        目标版本
         <input
           v-model="targetRevision"
           name="targetRevision"

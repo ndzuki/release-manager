@@ -25,7 +25,12 @@ export type StatusDomain =
   | 'localUser'
   | 'customer'
   | 'stage'
-  | 'emergencyOperation';
+  | 'emergencyOperation'
+  | 'ackStage'
+  | 'bundle'
+  | 'preflightStage'
+  | 'auditAction'
+  | 'auditResource';
 
 const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
   // internal/store/store.go: OperationStatus
@@ -93,6 +98,34 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     failed: 'status.audit.failed',
     accepted: 'status.audit.accepted',
   },
+  // Audit event action and resource type. The console's filter offers these wire values
+  // (web/src/stores/audit.ts), so the LABELLED form must not drift from them: a value the
+  // map does not know falls through to the identifier, which is what the filter sent.
+  auditAction: {
+    create: 'status.auditAction.create',
+    update: 'status.auditAction.update',
+    delete: 'status.auditAction.delete',
+    approve: 'status.auditAction.approve',
+    reject: 'status.auditAction.reject',
+    install: 'status.auditAction.install',
+    upgrade: 'status.auditAction.upgrade',
+    rollback: 'status.auditAction.rollback',
+    emergency_change: 'status.auditAction.emergency_change',
+    'export.created': 'status.auditAction.export.created',
+    verify_trust: 'status.auditAction.verify_trust',
+    login: 'status.auditAction.login',
+    logout: 'status.auditAction.logout',
+  },
+  auditResource: {
+    customer: 'status.auditResource.customer',
+    cluster: 'status.auditResource.cluster',
+    release: 'status.auditResource.release',
+    operation: 'status.auditResource.operation',
+    release_bundle: 'status.auditResource.release_bundle',
+    trust_root: 'status.auditResource.trust_root',
+    audit_export: 'status.auditResource.audit_export',
+    organization: 'status.auditResource.organization',
+  },
   // Audit export task status. Only "pending" is confirmed server-side (the export store
   // creates a receipt and never advances it); the others are accepted values with the
   // raw fallback covering anything else.
@@ -139,6 +172,30 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     skipped: 'status.stage.skipped',
     timeout: 'status.stage.timeout',
     cancelled: 'status.stage.cancelled',
+  },
+  // internal/orchestrator/preflight/stage.go: StageName. The stage id is a wire value,
+  // so the panel labels it instead of printing `runtime_pull` to the operator.
+  preflightStage: {
+    artifact: 'status.preflightStage.artifact',
+    render: 'status.preflightStage.render',
+    cluster: 'status.preflightStage.cluster',
+    runtime_pull: 'status.preflightStage.runtime_pull',
+  },
+  // api/proto/common/v1/domain.proto: BundleStatus. The archive restore response returns
+  // the status a bundle was archived FROM (`previous_status`), so this is display copy.
+  bundle: {
+    received: 'status.bundle.received',
+    validated: 'status.bundle.validated',
+    rejected: 'status.bundle.rejected',
+    archived: 'status.bundle.archived',
+    unspecified: 'status.bundle.unspecified',
+  },
+  // TimelineEntry.ack_stage on an ACK entry. The operator reports `persisted` once the
+  // command is fsynced locally; the console shows that as a stage note, never the wire
+  // word itself (unknown values fall back to the neutral label in the component).
+  ackStage: {
+    persisted: 'operation.timeline.ackStage.persisted',
+    unknown: 'operation.timeline.ackStage.unknown',
   },
 };
 

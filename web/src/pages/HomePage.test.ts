@@ -424,7 +424,7 @@ describe('HomePage operation panel', () => {
   it('says nothing is waiting instead of showing an empty list', async () => {
     const { wrapper } = await mountHome({ feed: async () => page([]) });
 
-    expect(wrapper.text()).toContain('当前没有待处理的 Operation。');
+    expect(wrapper.text()).toContain('当前没有待处理的操作。');
     expect(wrapper.find('.home-panel__rows').exists()).toBe(false);
   });
 

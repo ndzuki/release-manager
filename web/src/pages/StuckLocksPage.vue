@@ -112,7 +112,7 @@ async function submit(): Promise<void> {
     <form class="stuck__filter" @submit.prevent="store.load(store.definitionFilter)">
       <label>
         {{ t('stuckLocks.filter.label') }}
-        <input v-model="store.definitionFilter" name="releaseDefinitionId" placeholder="Release Definition ID" />
+        <input v-model="store.definitionFilter" name="releaseDefinitionId" placeholder="发布定义 ID" />
       </label>
       <button type="submit" :disabled="store.loading">{{ t('stuckLocks.filter.submit') }}</button>
     </form>
@@ -167,7 +167,7 @@ async function submit(): Promise<void> {
           <td>
             <code>{{ lock.releaseDefinitionId }}</code>
             <br />
-            <small>op {{ lock.operationId }}</small>
+            <small>操作 {{ lock.operationId }}</small>
           </td>
           <td class="stuck__action">{{ lock.action }}</td>
           <td>{{ lock.lockPathSummary }}</td>
@@ -204,11 +204,11 @@ async function submit(): Promise<void> {
       <form class="stuck__form" @submit.prevent="submit">
         <fieldset>
           <legend>{{ t('stuckLocks.mode.legend') }}</legend>
-          <label>
+          <label :title="t('stuckLocks.mode.notAppliedHint')">
             <input v-model="mode" type="radio" name="mode" value="NOT_APPLIED_PROVEN" />
             {{ t('stuckLocks.mode.notApplied') }}
           </label>
-          <label>
+          <label :title="t('stuckLocks.mode.overrideHint')">
             <input v-model="mode" type="radio" name="mode" value="AUDITED_OVERRIDE" />
             {{ t('stuckLocks.mode.override') }}
           </label>

@@ -64,7 +64,7 @@ describe('BundlesPage', () => {
   it('asks for a release definition before calling the server', async () => {
     const wrapper = await mountPage();
 
-    expect(wrapper.get('[data-testid="bundles-needs-definition"]').text()).toContain('Release Definition ID');
+    expect(wrapper.get('[data-testid="bundles-needs-definition"]').text()).toContain('发布定义 ID');
     expect(mockedList).not.toHaveBeenCalled();
   });
 

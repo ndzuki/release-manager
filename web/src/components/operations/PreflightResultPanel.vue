@@ -103,7 +103,7 @@ function isRawJson(detail: string): boolean {
         :class="{ 'preflight-stage--failed': failedStages.has(stage.stage) }"
         :data-testid="`preflight-stage-${stage.stage}`"
       >
-        <span class="preflight-stage__name">{{ stage.stage }}</span>
+        <span class="preflight-stage__name">{{ statusLabel('preflightStage', stage.stage) }}</span>
         <span class="preflight-stage__status">{{ statusLabel('stage', stage.status) }}</span>
         <!-- TASK-394: collapsed by default. Closed <details> render no contents at all, so
              the raw JSON contributes nothing to min-content until the reader asks for it. -->

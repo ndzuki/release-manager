@@ -79,7 +79,7 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
 .task-table { width: 100%; min-width: 48rem; border-collapse: collapse; background: var(--sf); }
 /* Quiet header band. It used to paint `--color-bg`, which is the page background rather
    than a header surface, so the header read as a hole rather than a band. */
-.task-table th { padding: 10px 20px; background: var(--color-surface-muted); color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 600; text-align: left; text-transform: uppercase; white-space: nowrap; }
+.task-table th { padding: 10px 20px; background: var(--color-surface-muted); color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 600; text-align: left; white-space: nowrap; }
 .task-table td { padding: 10px 20px; border-top: 1px solid var(--color-border-strong); text-align: left; }
 /* A floor on the reason column: auto table layout hands its width to the long promotion
    path, which squeezed this cell to one glyph per line at 375px. */

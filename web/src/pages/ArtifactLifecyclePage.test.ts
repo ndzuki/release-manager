@@ -83,9 +83,9 @@ describe('ArtifactLifecyclePage', () => {
     const key = mockedRun.mock.calls[0]![0];
     expect(key).toMatch(/^[0-9a-f-]{36}$/);
     const counters = wrapper.get('[data-testid="cleanup-result"]').text();
-    expect(counters).toContain('删除 bundle');
+    expect(counters).toContain('删除 Bundle');
     expect(wrapper.get('[data-testid="cleanup-bundles"]').text()).toBe('2');
-    expect(counters).toContain('跳过 bundle');
+    expect(counters).toContain('跳过 Bundle');
   });
 
   // "Done" and "no problems" are different statements: the errors list must be visible.
@@ -128,6 +128,6 @@ describe('ArtifactLifecyclePage', () => {
     await flushPromises();
 
     expect(mockedUnarchive).toHaveBeenCalledWith('b1');
-    expect(wrapper.get('[data-testid="unarchive-result"]').text()).toContain('validated');
+    expect(wrapper.get('[data-testid="unarchive-result"]').text()).toContain('已验证');
   });
 });

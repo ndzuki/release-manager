@@ -168,7 +168,7 @@ onBeforeUnmount(() => {
   <section class="values-page">
     <AuthorizationStaleNotice :stale="writeBlocked" />
 
-    <PageHeader :title="pageTitle" subtitle="编辑 canonical values，通过 SecretRef 引用集群 Secret。" :crumbs="crumbs">
+    <PageHeader :title="pageTitle" subtitle="编辑规范化 Values 内容，通过 Secret 引用读取集群 Secret。" :crumbs="crumbs">
       <template #actions>
         <div class="values-actions">
           <span :id="languageLabelId" class="values-actions__label">{{ t('values.page.language') }}</span>
@@ -231,13 +231,13 @@ onBeforeUnmount(() => {
     <div v-if="editor.draftSaveFailed" class="notice notice--warning" role="alert">
       {{ t('values.draft.saveFailed') }}
     </div>
-    <div v-if="firstRevision && !editor.loading" class="notice">创建首个配置 Revision。</div>
-    <div v-if="!canWrite" class="notice notice--warning">当前角色为只读。服务端仍会独立执行授权。</div>
+    <div v-if="firstRevision && !editor.loading" class="notice">创建首个配置版本。</div>
+    <div v-if="!canWrite" class="notice notice--warning">当前角色为只读。</div>
 
     <ValuesEditorSkeleton v-if="editor.loading && !editor.currentRevision && !editor.parentRevision" />
     <ErrorState
       v-else-if="editor.error && !editor.canonicalCurrent"
-      title="ValuesRevision 加载失败"
+      title="Values 版本加载失败"
       :message="editor.error"
       action-label="重试"
       @action="editor.load"
@@ -318,13 +318,13 @@ onBeforeUnmount(() => {
 
       <AppDialog
         :open="discardConfirmOpen"
-        title="确认丢弃 Draft"
+        title="确认丢弃草稿"
         danger
         :close-on-backdrop="false"
         @close="discardConfirmOpen = false"
       >
         <p class="discard-dialog__body">
-          确认丢弃当前 Draft？绑定的 {{ editor.preparedTaskIds.length }} 个收敛任务将被解绑。
+          确认丢弃当前草稿？绑定的 {{ editor.preparedTaskIds.length }} 个收敛任务将被解绑。
         </p>
         <template #footer>
           <button type="button" @click="discardConfirmOpen = false">取消</button>

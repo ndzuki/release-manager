@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
+import { statusLabel } from '@/i18n/status-labels';
 import type { BundleSummary, OperationType, PatchOverride } from '@/types/operation';
 
 defineProps<{
@@ -43,7 +44,7 @@ defineEmits<{
       copy gate's allowlist stays exact.
     -->
     <dl class="confirm-panel__summary">
-      <div><dt>{{ t('operation.confirm.type') }}</dt><dd>{{ operationType }}</dd></div>
+      <div><dt>{{ t('operation.confirm.type') }}</dt><dd>{{ statusLabel('operationType', operationType) }}</dd></div>
       <div><dt>{{ t('operation.confirm.release') }}</dt><dd>{{ releaseName || '—' }}</dd></div>
       <div><dt>{{ t('operation.confirm.cluster') }}</dt><dd>{{ customerName }} / {{ clusterName }}</dd></div>
       <div>
@@ -104,7 +105,6 @@ defineEmits<{
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .confirm-panel__title {

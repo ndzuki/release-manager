@@ -70,7 +70,7 @@ function formatValidatedAt(value: string | null): string {
       the API returned a verified artifact while the page claimed none existed).
     -->
     <div v-else-if="selectedContainer === ''" class="hint">请先选择容器，再挑选候选制品</div>
-    <div v-else-if="artifacts.length === 0" class="hint">没有可用的 VERIFIED 候选制品</div>
+    <div v-else-if="artifacts.length === 0" class="hint">没有可用的已验证候选制品</div>
     <div v-else class="artifact-list" role="radiogroup" aria-label="选择候选制品">
       <label
         v-for="artifact in artifacts"
