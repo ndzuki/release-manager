@@ -85,7 +85,10 @@ async function handleSubmit(): Promise<void> {
   border: 1px solid var(--color-border);
   border-radius: 0.75rem;
   background: var(--color-surface);
-  box-shadow: 0 0.75rem 2rem rgb(15 23 42 / 8%);
+  /* Theme-aware elevation: the shadow is the ink colour at 8%, so it is a soft dark
+     cast in light and a soft light halo in dark — the slate literal disappeared on the
+     near-black surface (TASK-394). */
+  box-shadow: 0 0.75rem 2rem color-mix(in srgb, var(--tx) 8%, transparent);
 }
 
 .init-page__eyebrow,

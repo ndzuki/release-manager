@@ -75,7 +75,7 @@ function submit(): void {
 
 .revoke-reason textarea {
   padding: 0.65rem; /* HEAD value; no 4px-scale step */
-  border: 1px solid var(--color-subtle);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   font: inherit;
   font-weight: var(--font-weight-regular);

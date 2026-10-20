@@ -73,7 +73,7 @@ onMounted(() => store.loadList(customerId));
 .page__header, .cluster-card header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 h1, h2, p { margin: 0; }
 .page__header p, .cluster-card p { color: var(--color-muted); margin-top: 0.375rem; }
-.primary { padding: 0.625rem 0.875rem; border-radius: 0.375rem; background: var(--color-primary); color: white; text-decoration: none; }
+.primary { padding: 0.625rem 0.875rem; border-radius: 0.375rem; background: var(--color-primary); color: var(--color-on-accent); text-decoration: none; }
 .cluster-content { display: grid; gap: 1.5rem; }
 .cluster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; }
 .cluster-card, .target-select { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }

@@ -86,7 +86,7 @@ function updateField(field: 'name' | 'slug', value: string) {
  * component's scope, so a scoped `input` rule still reaches them. The field
  * chrome (label / error / spacing) belongs to FormField now.
  */
-.customer-form input { padding: 0.625rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
+.customer-form input { padding: 0.625rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 .customer-form input:disabled { background: var(--color-surface-muted); color: var(--color-muted-strong); }
 .customer-form__readonly { margin: 0; color: var(--color-muted); }
 .customer-form__submit { justify-self: start; padding: 0.625rem 0.875rem; border: 0; border-radius: 0.375rem; background: var(--color-primary); color: var(--color-on-accent); font-weight: 700; cursor: pointer; }

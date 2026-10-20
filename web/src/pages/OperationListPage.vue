@@ -194,7 +194,13 @@ onMounted(() => load(false));
         {{ error }}
         <button type="button" @click="load(false)">重试</button>
       </div>
-      <table class="operation-list__table">
+      <div
+        class="table-wrap"
+        role="region"
+        :aria-label="t('operations.table.scrollRegion')"
+        tabindex="0"
+      >
+        <table class="operation-list__table">
         <thead>
           <tr>
             <th scope="col">类型</th>
@@ -219,7 +225,8 @@ onMounted(() => load(false));
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
       <button
         v-if="nextCursor"
         type="button"
@@ -347,7 +354,7 @@ onMounted(() => load(false));
 .operation-list__table th,
 .operation-list__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

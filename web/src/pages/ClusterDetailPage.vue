@@ -153,7 +153,7 @@ h1, p { margin: 0; }
 .summary div { padding: 1rem; }
 .summary dt { color: var(--color-muted); }
 .summary dd { margin: 0.25rem 0 0; font-weight: 700; }
-.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
+.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
 .danger { color: var(--color-error); }
 /*
  * W21 (UX-032): the three-column summary had no breakpoint, so at a narrow width

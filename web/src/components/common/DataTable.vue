@@ -112,7 +112,12 @@ function cellText(value: unknown): string {
 </script>
 
 <template>
-  <div class="data-table">
+  <div
+    class="data-table"
+    role="region"
+    :aria-label="t('common.table.scrollRegion')"
+    tabindex="0"
+  >
     <ErrorState
       v-if="error"
       :message="error.message"
@@ -168,15 +173,26 @@ function cellText(value: unknown): string {
 </template>
 
 <style scoped>
+/* The primitive owns the horizontal containment: every consumer gets a table that
+   scrolls inside its own box instead of widening the page (TASK-394). `min-width: 0`
+   keeps a grid/flex parent from re-inflating to the table's min-content width. */
+.data-table {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .data-table__table {
   width: 100%;
   border-collapse: collapse;
 }
 
+/* Row rules use --color-border-strong: --color-border is 1.3:1 on the dark surface, so a
+   table drawn with it has no visible lines at all (the defect TASK-394 fixed). */
 .data-table__table th,
 .data-table__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
 }
 
 .data-table__table th {

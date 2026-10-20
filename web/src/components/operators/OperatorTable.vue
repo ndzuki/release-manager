@@ -45,7 +45,7 @@ const emit = defineEmits<{
 <style scoped>
 .table-wrap { overflow-x: auto; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .operators { width: 100%; border-collapse: collapse; }
-.operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: top; }
+.operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid var(--color-border-strong); text-align: left; vertical-align: top; }
 /*
  * W21 (UX-031): the blanket `white-space: nowrap` on every cell forced the table to
  * its fully unwrapped width, so a long operator name or id could only be read by

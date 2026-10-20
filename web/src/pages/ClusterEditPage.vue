@@ -149,6 +149,6 @@ label { display: grid; gap: 0.375rem; font-weight: 600; }
 .checkbox { display: flex; align-items: center; }
 input { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 .save-error { display: grid; gap: 0.5rem; padding: 1rem; border: 1px solid var(--color-danger-border-bright); border-radius: 0.5rem; background: var(--color-danger-soft); color: var(--color-error-strong); }
-.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
+.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
 .primary { background: var(--color-primary); color: var(--color-on-accent); border-color: var(--color-primary); }
 </style>

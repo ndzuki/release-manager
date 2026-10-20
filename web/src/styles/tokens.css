@@ -1,68 +1,180 @@
 /*
- * Design tokens (ADR-029).
+ * Design tokens (ADR-029) — direction C.
  *
- * Before this file the console referenced `var(--color-*, <hardcoded>)` 46 times
- * with ZERO definitions anywhere in web/src, so every one of those declarations
- * silently fell back to its inline literal: the stylesheet looked tokenised and
- * was not. Those six names are defined first, which makes the existing 46 usages
- * resolve for real; the extended set below is what new and migrated code must
- * use. Migrating the remaining hardcoded values (609 occurrences / 62 distinct
- * colours at the time of writing) is deliberately incremental — see
- * docs/ux-revamp-plan.md §9 and TASK-176.
+ * History that still matters: before TASK-180 the console referenced
+ * `var(--color-*, <hardcoded>)` 46 times with ZERO definitions, so every one of those
+ * declarations silently fell back to its inline literal. TASK-180 defined them and the
+ * wave that migrated 609 hardcoded colours / 62 distinct literals completed the set
+ * below. The names are therefore load-bearing across ~91 components and MUST NOT be
+ * removed by a theme change — direction C re-assigns their values instead.
  *
- * Rules for new code: no raw hex, no raw font-size, no raw radius. If a value is
- * missing, add a token here instead of inlining it.
+ * STRUCTURE OF THIS FILE
+ *   1. the SHORT PALETTE (`--bg --sf --sf2 …`), re-declared once per theme;
+ *   2. the LEGACY `--color-*` ALIASES, declared once and expressed through the short
+ *      palette, so every component that reads `--color-*` follows the theme without
+ *      being touched (the mapping table is below);
+ *   3. type / spacing / radius / elevation / editor tokens.
+ *
+ * THEME RESOLUTION (dark is the default; the console is a dark-first tool)
+ *   :root                        → dark
+ *   @media (prefers-color-scheme: light) → light, UNLESS data-theme="dark"
+ *   [data-theme="light"]         → explicit light, wins over the OS
+ *   [data-theme="dark"]          → explicit dark, wins over the OS
+ *   `useTheme()` writes data-theme on <html>; before it runs the OS preference decides,
+ *   so the first paint is already in the right theme instead of flashing light.
+ *
+ * LEGACY → DIRECTION C MAPPING (summary; every name is kept, only the value moves)
+ *   --color-bg            → --bg            --color-primary        → --pr
+ *   --color-surface       → --sf            --color-primary-hover  → --pr mixed to --bg
+ *   --color-surface-muted → --sf2           --color-on-accent      → --on
+ *   --color-border        → --bd            --color-success        → --ok
+ *   --color-text          → --tx            --color-warning        → --wn
+ *   --color-muted         → --mu            --color-error/danger   → --er
+ *   --color-info*         → --k            --color-violet*        → --n
+ *   --color-cyan          → --k
+ *   Derived pairs are computed instead of duplicated: every `*-soft`, `*-surface` and
+ *   `*-subtle` mixes the semantic colour INTO the background, and every `*-ink` mixes it
+ *   TOWARD the text colour. That single rule is what makes the light and dark variants
+ *   readable in both directions (a soft red surface is barely-tinted in dark and
+ *   barely-tinted in light; an "ink" red gets darker on white and lighter on black).
  */
 
 :root {
-  /* --- Semantic colours ------------------------------------------------- */
-  --color-bg: #f8fafc;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f1f5f9;
-  --color-border: #e2e8f0;
-  --color-border-strong: #cbd5e1;
-  --color-text: #0f172a;
-  --color-muted: #64748b;
-  --color-subtle: #94a3b8;
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-error: #b91c1c;
-  --color-danger-soft: #fef2f2;
-  --color-warning: #b45309;
-  --color-warning-soft: #fff7ed;
-  --color-warning-border: #fdba74;
-  --color-success: #15803d;
-  --color-info: #1d4ed8;
-  --color-info-soft: #eff6ff;
-  --color-info-border: #93c5fd;
+  /* --- 1. Short palette: dark (default) -------------------------------- */
+  /* Byte-identical to the direction-C sample the user approved. */
+  --bg: #09090b;
+  --sf: #111114;
+  --sf2: #18181b;
+  --tx: #fafafa;
+  --mu: #a1a1aa;
+  --bd: #27272a;
+  --pr: #fafafa;
+  --on: #09090b;
+  --ok: #34d399;
+  --wn: #fbbf24;
+  --er: #f87171;
+  --ac: #34d399;
+  --r: 8px;
+  --code: #0c0c0f;
+  --k: #7dd3fc;
+  --s: #fcd34d;
+  --n: #c4b5fd;
+  /* Native controls, scrollbars and form internals follow the active theme. */
+  color-scheme: dark;
 
-  /* Focus ring: one definition instead of per-component outlines. */
-  --focus-ring: 0 0 0 3px rgb(37 99 235 / 35%);
+  /* --- 2. Legacy aliases (declared once, resolved per theme) ----------- */
+  --color-bg: var(--bg);
+  --color-surface: var(--sf);
+  --color-surface-muted: var(--sf2);
+  --color-border: var(--bd);
+  /* `--bd` is a hairline: on the near-black surface it measures ~1.3:1, so an input or a
+     table rule drawn with it is invisible rather than quiet (the defect TASK-394 fixed).
+     Strong mixes it almost halfway to `--mu`, which clears 3:1 on every dark surface — the WCAG
+     non-text threshold for a control boundary — without becoming a grid line. */
+  --color-border-strong: color-mix(in srgb, var(--bd) 48%, var(--mu));
+  --color-text: var(--tx);
+  --color-text-secondary: color-mix(in srgb, var(--tx) 82%, var(--mu));
+  --color-muted: var(--mu);
+  --color-muted-strong: color-mix(in srgb, var(--mu) 78%, var(--tx));
+  /* The "quietest text" step. It mixes `--mu` TOWARD `--tx`, not toward `--bd`: `--bd` is
+     darker than `--mu` in dark and lighter in light, so mixing into it lowered contrast in
+     BOTH themes (dark 3.8:1 on --sf2, light 2.6:1 on --bg — unreadable body copy). Toward
+     the text colour the mix always raises contrast, and it clears 4.5:1 on --bg/--sf/--sf2
+     in both themes (tokens.test.ts pins the ratios). Border roles use --color-border-strong
+     instead: a text-safe grey is far too loud as a hairline. */
+  --color-subtle: color-mix(in srgb, var(--mu) 88%, var(--tx));
 
-  /* --- Type scale -------------------------------------------------------- */
-  /* AC-180-09 (2026-09-28): the type scale was collapsed from 16 sizes to five
-     body steps (xs 12px / sm 13px / md 14px / base 16px / lg 18px) plus three
-     display steps (xl 24 / 2xl 32 / 3xl 48). Every retired size moved to its
-     nearest step; the largest shift is +1.6px on a single badge and the most
-     common one is -0.6px on 31 secondary labels, reviewed against before/after
-     screenshots of four pages. */
+  --color-primary: var(--pr);
+  --color-primary-hover: color-mix(in srgb, var(--pr) 85%, var(--bg));
+  --color-on-accent: var(--on);
+
+  --color-error: var(--er);
+  --color-error-strong: color-mix(in srgb, var(--er) 82%, var(--tx));
+  --color-danger: var(--er);
+  --color-danger-soft: color-mix(in srgb, var(--er) 10%, var(--bg));
+  --color-danger-surface: color-mix(in srgb, var(--er) 16%, var(--bg));
+  --color-danger-border: color-mix(in srgb, var(--er) 45%, var(--bd));
+  --color-danger-border-soft: color-mix(in srgb, var(--er) 28%, var(--bd));
+  --color-danger-border-strong: color-mix(in srgb, var(--er) 62%, var(--bd));
+  --color-danger-border-bright: var(--er);
+  --color-danger-ink-deep: color-mix(in srgb, var(--er) 70%, var(--tx));
+  --color-danger-orange: var(--wn);
+
+  --color-warning: var(--wn);
+  --color-warning-ink: color-mix(in srgb, var(--wn) 80%, var(--tx));
+  --color-warning-ink-strong: color-mix(in srgb, var(--wn) 72%, var(--tx));
+  --color-warning-ink-deep: color-mix(in srgb, var(--wn) 62%, var(--tx));
+  --color-warning-soft: color-mix(in srgb, var(--wn) 8%, var(--bg));
+  --color-warning-surface: color-mix(in srgb, var(--wn) 10%, var(--bg));
+  --color-warning-subtle: color-mix(in srgb, var(--wn) 15%, var(--bg));
+  --color-warning-border: color-mix(in srgb, var(--wn) 40%, var(--bd));
+  --color-warning-border-strong: color-mix(in srgb, var(--wn) 50%, var(--bd));
+  --color-warning-border-bright: color-mix(in srgb, var(--wn) 70%, var(--bd));
+  --color-warning-solid: var(--wn);
+  --color-warning-solid-strong: color-mix(in srgb, var(--wn) 88%, var(--tx));
+  --color-warning-solid-deep: color-mix(in srgb, var(--wn) 76%, var(--tx));
+
+  --color-success: var(--ok);
+  --color-success-surface: color-mix(in srgb, var(--ok) 16%, var(--bg));
+  --color-success-surface-soft: color-mix(in srgb, var(--ok) 9%, var(--bg));
+  --color-success-ink: color-mix(in srgb, var(--ok) 76%, var(--tx));
+  --color-success-border: color-mix(in srgb, var(--ok) 45%, var(--bd));
+  --color-success-border-soft: color-mix(in srgb, var(--ok) 28%, var(--bd));
+
+  --color-info: var(--k);
+  --color-info-soft: color-mix(in srgb, var(--k) 8%, var(--bg));
+  --color-info-surface: color-mix(in srgb, var(--k) 14%, var(--bg));
+  --color-info-subtle: color-mix(in srgb, var(--k) 18%, var(--bg));
+  --color-info-border: color-mix(in srgb, var(--k) 40%, var(--bd));
+  --color-info-border-soft: color-mix(in srgb, var(--k) 24%, var(--bd));
+  --color-info-ink: color-mix(in srgb, var(--k) 76%, var(--tx));
+  --color-info-ink-strong: color-mix(in srgb, var(--k) 66%, var(--tx));
+
+  --color-violet: var(--n);
+  --color-violet-ink: color-mix(in srgb, var(--n) 78%, var(--tx));
+  --color-violet-ink-deep: color-mix(in srgb, var(--n) 70%, var(--tx));
+  --color-violet-border: color-mix(in srgb, var(--n) 45%, var(--bd));
+  --color-violet-border-soft: color-mix(in srgb, var(--n) 28%, var(--bd));
+  --color-violet-subtle: color-mix(in srgb, var(--n) 14%, var(--bg));
+  --color-violet-surface: color-mix(in srgb, var(--n) 8%, var(--bg));
+
+  /* The palette's only cyan: the timeline ACK dot reads --color-cyan. */
+  --color-cyan: var(--k);
+
+  /* Focus ring: one definition instead of per-component outlines. --pr is the
+     direction-C accent, so the ring is the same colour as the primary control. */
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--pr) 35%, transparent);
+
+  /* --- 3. Type scale --------------------------------------------------- */
+  /* AC-180-09 collapsed 16 sizes onto five body steps (xs 12 / sm 13 / md 14 /
+     base 16 / lg 18) plus three display steps (xl 24 / 2xl 32 / 3xl 48). Direction C
+     adds exactly three more, each with a named role, so no component has to reach for
+     a one-off size: the page title (22), the section title (15) and the stat value
+     (28). Adding a size for any other reason means the scale is being bypassed. */
   --font-size-base: 1rem;
   --font-size-xs: 0.75rem;
   --font-size-sm: 0.8125rem;
   --font-size-md: 0.875rem;
   --font-size-lg: 1.125rem;
   --font-size-xl: 1.5rem;
+  --font-size-2xl: 2rem;
+  --font-size-3xl: 3rem;
+  --font-size-h1: 1.375rem; /* 22px — direction C page title */
+  --font-size-h2: 0.9375rem; /* 15px — direction C section title */
+  --font-size-stat: 1.75rem; /* 28px — StatCard value */
   --font-weight-regular: 400;
   --font-weight-medium: 500;
+  --font-weight-heading: 650;
   --font-weight-bold: 700;
   --line-height-tight: 1.25;
-  --line-height-base: 1.5;
-  --font-family-sans:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
-    'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --line-height-base: 1.55;
+  /* Inter is not bundled (the project ships no webfont dependency); it is used when the
+     reader has it installed and the platform UI stack is the fallback. */
+  --font-family-sans: Inter, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  /* Mono is for machine values: hashes, UUIDs, versions, namespaces. */
+  --font-family-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
 
-  /* --- Spacing scale (4px base) ----------------------------------------- */
+  /* --- Spacing scale (4px base) ---------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -70,89 +182,106 @@
   --space-5: 1.5rem;
   --space-6: 2rem;
 
-  /* --- Radius ----------------------------------------------------------- */
+  /* --- Radius ---------------------------------------------------------- */
   --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
+  --radius-lg: var(--r);
   --radius-xl: 0.75rem;
 
-  /* --- Elevation & layering -------------------------------------------- */
-  --shadow-lg: 0 12px 32px rgb(15 23 42 / 12%);
+  /* --- Elevation & layering ------------------------------------------- */
+  /* A slate-tinted shadow is invisible on a near-black surface, so the elevation token
+     is neutral black at a weight that still separates a dialog from --bg in dark. */
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 40%);
+  /* Backdrop behind a modal. Theme-invariant, like the elevation token above: a scrim has
+     to darken the page in both themes, so it must not be derived from --bg (which is
+     near-white in light). AppDialog is the consumer. */
+  --scrim: rgb(0 0 0 / 62%);
   --z-dialog-backdrop: 100;
   --z-dialog: 101;
 
   /* --- Motion ---------------------------------------------------------- */
-}
 
-
-/* Palette extensions required by the migration of the 538 hardcoded values.
-   Every value below is byte-identical to the literal it replaces, so the
-   substitution is provably value-preserving (scripts/…, see TASK-180). */
-:root {
-  --color-text-secondary: #334155;
-  --color-muted-strong: #475569;
-  --color-on-accent: #ffffff;
-  --color-danger: #dc2626;
-  --color-error-strong: #991b1b;
-  --color-danger-surface: #fee2e2;
-  --color-success-surface: #dcfce7;
-  --color-success-ink: #166534;
-  --color-warning-ink: #9a3412;
-  --color-warning-ink-strong: #92400e;
-  --color-warning-surface: #fffbeb;
-}
-
-/* Migration batch 2 (TASK-180 AC-180-06): the remaining one-off values, again
-   byte-identical to the literals they replace. The font-size entries are an
-   honest enumeration rather than a redesign: collapsing 0.78/0.8/0.85/0.88/0.9
-   onto the five-step scale changes rendered size, which is a design decision that
-   needs a visual review, not a silent rename. Collapse list is AC-180-06. */
-:root {
-  --color-warning-subtle: #fef3c7;
-  --color-warning-border-strong: #fde68a;
-  --color-warning-solid: #f59e0b;
-  --color-warning-solid-strong: #d97706;
-  --color-warning-solid-deep: #ca8a04;
-  --color-warning-ink-deep: #78350f;
-  --color-danger-border: #ef4444;
-  --color-danger-border-soft: #fecaca;
-  --color-danger-border-strong: #fca5a5;
-  --color-danger-border-bright: #f87171;
-  --color-danger-ink-deep: #7f1d1d;
-  --color-danger-orange: #c2410c;
-  --color-info-border-soft: #bfdbfe;
-  --color-info-ink: #1e3a8a;
-  --color-info-subtle: #e0f2fe;
-  --color-info-ink-strong: #075985;
-  --color-info-surface: #dbeafe;
-  --color-violet: #7c3aed;
-  --color-violet-ink: #5b21b6;
-  --color-violet-border: #c4b5fd;
-  --color-violet-subtle: #ede9fe;
-  --color-violet-border-soft: #ddd6fe;
-  --color-violet-surface: #f5f3ff;
-  --color-violet-ink-deep: #6d28d9;
-  --color-success-surface-soft: #f0fdf4;
-  --color-success-border: #86efac;
-  --color-success-border-soft: #bbf7d0;
-  --color-cyan: #0891b2;
-  --font-size-2xl: 2rem;
-  --font-size-3xl: 3rem;
-}
-
-:root {
-  --color-warning-border-bright: #fbbf24;
-}
-
-/* Editor surface (CodeMirror is dark regardless of the console theme, so it gets
-   its own tokens instead of borrowing --color-text/--color-border by value). */
-:root {
+  /* --- Editor surface -------------------------------------------------- */
+  /* CodeMirror is dark regardless of the console theme, so it keeps its own tokens
+     instead of borrowing --color-text/--color-border by value. Mapping these onto the
+     short palette would make the editor follow the theme while the CodeMirror theme
+     (syntax colours, gutters) stayed dark — a light-on-light editor. Left invariant on
+     purpose; see the direction-C report for the follow-up. */
   --editor-surface: #0f172a;
   --editor-text: #e2e8f0;
   --editor-caret: #f8fafc;
   --editor-gutter-surface: #111827;
-  --editor-gutter-text: #64748b;
+  /* Slate-400, not slate-500 (#64748b): the gutter is text a reader compares line numbers
+     by, and #64748b measured 3.7:1 on --editor-gutter-surface — below AA. */
+  --editor-gutter-text: #94a3b8;
   --editor-active-line: #1e293b80;
   --editor-active-line-gutter: #1e293b;
+}
+
+/* --- Light palette: follows the OS unless dark was chosen explicitly --- */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #fafafa;
+    --sf: #fff;
+    --sf2: #f4f4f5;
+    --tx: #18181b;
+    --mu: #71717a;
+    --bd: #e4e4e7;
+    --pr: #18181b;
+    --on: #fafafa;
+    --ok: #047857;
+    --wn: #b45309;
+    --er: #dc2626;
+    --ac: #047857;
+    --code: #f4f4f5;
+    --k: #0369a1;
+    --s: #b45309;
+    --n: #6d28d9;
+    color-scheme: light;
+  }
+}
+
+/* --- Explicit overrides written by useTheme() ------------------------- */
+/* `[data-theme='light']` repeats the palette above because the media query is skipped
+   when the OS says dark; `[data-theme='dark']` is the symmetric guard so the attribute
+   always means what it says even if a later media query is added. */
+[data-theme='light'] {
+  --bg: #fafafa;
+  --sf: #fff;
+  --sf2: #f4f4f5;
+  --tx: #18181b;
+  --mu: #71717a;
+  --bd: #e4e4e7;
+  --pr: #18181b;
+  --on: #fafafa;
+  --ok: #047857;
+  --wn: #b45309;
+  --er: #dc2626;
+  --ac: #047857;
+  --code: #f4f4f5;
+  --k: #0369a1;
+  --s: #b45309;
+  --n: #6d28d9;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --bg: #09090b;
+  --sf: #111114;
+  --sf2: #18181b;
+  --tx: #fafafa;
+  --mu: #a1a1aa;
+  --bd: #27272a;
+  --pr: #fafafa;
+  --on: #09090b;
+  --ok: #34d399;
+  --wn: #fbbf24;
+  --er: #f87171;
+  --ac: #34d399;
+  --code: #0c0c0f;
+  --k: #7dd3fc;
+  --s: #fcd34d;
+  --n: #c4b5fd;
+  color-scheme: dark;
 }
 
 /* Deliberately absent:
@@ -170,4 +299,5 @@
      were 0.85rem/0.8rem pointed at it by mistake (the dialog-rewrite blocker);
    - AC-180-09 then collapsed the 16 one-off sizes onto the scale and reintroduced
      13px as the deliberate step for secondary labels, so `--font-size-sm` is live
-     again. The scale is xs/sm/md/base/lg + xl/2xl/3xl. */
+     again. The scale is xs/sm/md/base/lg + xl/2xl/3xl;
+   - direction C added h1/h2/stat (TASK-394) with a named role each. */

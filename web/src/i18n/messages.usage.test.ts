@@ -93,9 +93,32 @@ describe('message catalog usage', () => {
 const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   {
     file: 'src/components/common/AppShell.vue',
-    allowed: ['Release Manager', '制品生命周期', '发布 Bundle', '发布定义', '紧急锁', '信任根', '授权绑定', '组织成员', '修改密码'],
+    allowed: [
+      'Release Manager',
+      '制品生命周期',
+      '发布 Bundle',
+      '发布定义',
+      '紧急锁',
+      '信任根',
+      '授权绑定',
+      '组织成员',
+      '修改密码',
+      // TASK-394: the sidebar navigation became a routed table, so three single-word
+      // ROUTE NAMES surface as script literals. They are vue-router identifiers, not
+      // copy (the same class the router/index.ts entry registers), and the detector
+      // cannot tell `'Audit'` (a route) from `'Audit'` (a heading).
+      'Definitions',
+      'Bundles',
+      'Audit',
+    ],
     reason:
-      'The brand is a product name, and the governance entries are the Chinese wave whose copy belongs to the locale convergence (W5), not to this migration',
+      'The brand is a product name, and the governance entries are the Chinese wave whose copy belongs to the locale convergence (W5), not to this migration; the three route names are identifiers the direction-C sidebar probes with router.hasRoute',
+  },
+  {
+    file: 'src/composables/useTheme.ts',
+    allowed: ['(prefers-color-scheme: dark)'],
+    reason:
+      'the media-query string is a CSS identifier, not copy (the same standing as Toast.vue prefers-reduced-motion); TASK-394 added it with the theme switch',
   },
   {
     file: 'src/components/common/EmptyState.vue',

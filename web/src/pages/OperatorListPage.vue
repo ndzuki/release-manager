@@ -142,7 +142,7 @@ h1, p { margin: 0; }
 .page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
 .eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
 .actions { justify-content: flex-end; }
-.actions button, .primary, .content > button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); color: inherit; cursor: pointer; text-decoration: none; }
+.actions button, .primary, .content > button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); color: inherit; cursor: pointer; text-decoration: none; }
 .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .content { display: grid; gap: 1rem; }
 .warning { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); }

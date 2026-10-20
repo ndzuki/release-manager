@@ -191,7 +191,7 @@ function formatSyncTime(value: string | null): string {
 th:first-child, td:first-child { position: sticky; left: 0; z-index: 1; background: var(--color-surface); }
 th:first-child { background: var(--color-bg); }
 td:first-child { box-shadow: 1px 0 0 var(--color-border); }
-th, td { padding: 0.9rem 1rem; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: middle; }
+th, td { padding: 0.9rem 1rem; border-bottom: 1px solid var(--color-border-strong); text-align: left; vertical-align: middle; }
 th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); letter-spacing: 0.04em; text-transform: uppercase; }
 tbody tr:last-child td { border-bottom: 0; }
 code { color: var(--color-text-secondary); font-size: var(--font-size-xs); overflow-wrap: anywhere; }

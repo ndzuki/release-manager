@@ -45,5 +45,5 @@ function updateSession(event: Event): void {
 .filters { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .filters legend { padding: 0 0.35rem; font-weight: 700; }
 .filters label { display: grid; gap: 0.35rem; color: var(--color-muted-strong); font-size: var(--font-size-md); }
-.filters select { min-width: 10rem; padding: 0.5rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
+.filters select { min-width: 10rem; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
 </style>

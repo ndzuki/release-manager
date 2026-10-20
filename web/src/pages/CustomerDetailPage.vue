@@ -187,7 +187,7 @@ async function disable() {
 .eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
 .muted { color: var(--color-muted); margin-top: 0.375rem !important; }
 .disabled-copy { color: var(--color-error); margin-top: 0.375rem !important; }
-.customer-detail__actions a, .customer-detail__actions button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); text-decoration: none; }
+.customer-detail__actions a, .customer-detail__actions button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); text-decoration: none; }
 .danger { color: var(--color-error); cursor: pointer; }
 .customer-detail__panel { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .customer-detail__panel h2 { margin: 0; font-size: var(--font-size-lg); }

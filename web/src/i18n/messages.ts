@@ -23,9 +23,29 @@ const zhCN = {
   // Shared states
   // Shared chrome (Chinese since the 2026-09-28 locale decision)
   'shell.nav.label': '主导航',
+  /* The ≤1024px drawer control. `aria-expanded` carries open/closed, so the name states
+     the destination ("navigation menu") rather than repeating the state. */
+  'shell.nav.menu': '导航菜单',
   'shell.organization.choose': '组织',
   'shell.organization.switchError': '切换组织失败，请重试',
   'shell.signOut': '退出登录',
+  /*
+   * Direction C sidebar (TASK-394). The three group headings keep the 14 entries in the
+   * 212px rail scannable; they are new copy, so they go through the catalog rather than
+   * into the component (the older navigation labels are inline and already registered).
+   */
+  'shell.nav.group.release': '发布与运维',
+  'shell.nav.group.assets': '资产与审计',
+  'shell.nav.group.governance': '治理与账号',
+  /*
+   * The theme control cycles system → light → dark. The accessible name states the
+   * CURRENT preference, because a bare "toggle theme" does not tell a screen-reader user
+   * what the button will do next.
+   */
+  'shell.theme.toggle': '切换主题（当前：{theme}）',
+  'shell.theme.system': '跟随系统',
+  'shell.theme.light': '浅色',
+  'shell.theme.dark': '深色',
   'nav.customers': '客户',
   'nav.clusters': '集群',
   'nav.audit': '审计',
@@ -145,6 +165,7 @@ const zhCN = {
   'customer.history.loading': '正在加载客户历史…',
   'customer.history.noEvents': '暂无客户生命周期事件。',
   'customer.history.scrollRegion': '客户历史（可滚动）',
+  'common.table.scrollRegion': '数据表格（可横向滚动）',
   'customer.disable.cascadeTokens': '注册令牌将被撤销。',
   'customer.disable.cascadeCerts': 'Operator 证书将被撤销。',
   'customer.disable.cascadeSessions': '活跃的 Operator 会话将被关闭。',
@@ -177,6 +198,16 @@ const zhCN = {
   'release.table.valuesDigest': 'Values 摘要',
   'release.table.scrollRegion': '发布清单表格（可横向滚动）',
   'common.breadcrumb': '面包屑',
+  /*
+   * Direction C copy affordance (TASK-394, CopyableHash). The failure copy names the
+   * manual fallback because the truncated value stays selectable on screen; it is
+   * rendered visibly, not only announced, so a refused clipboard write cannot look like
+   * success.
+   */
+  'common.copy': '复制',
+  'common.copied': '已复制',
+  'common.copyFailed': '复制失败，请手动选中复制',
+  'common.copyFullValue': '复制完整值',
   /*
    * Accessible name for a form control that lives in a repeated table row: the field
    * name alone repeats once per row, so a screen-reader user tabbing through the row
@@ -847,6 +878,22 @@ const zhCN = {
   'reason.rollback_values_not_allowed': '回滚不能携带 Values 修订或补丁',
   'reason.optimistic_lock_conflict': '记录已被其他人修改，已为你刷新最新数据',
   'reason.AUTHORIZATION_VERSION_CONFLICT': '授权版本已变化，请重新读取后重试',
+  /*
+   * Accessible names for the scroll regions added by TASK-394. A table that can outgrow
+   * its column becomes a labelled, focusable region (the shape DefinitionTable /
+   * OrganizationMemberTable / ReleaseInventoryTable already use), so a screen-reader user
+   * hears WHERE they are before scrolling and a keyboard user can Tab to it at all.
+   */
+  'trust.table.scrollRegion': '信任根表格（可横向滚动）',
+  'operations.table.scrollRegion': '操作历史表格（可横向滚动）',
+  'bundles.table.scrollRegion': 'Bundle 列表表格（可横向滚动）',
+  'bundles.images.scrollRegion': 'Bundle 镜像绑定表格（可横向滚动）',
+  'bindings.table.scrollRegion': '授权绑定表格（可横向滚动）',
+  'localUser.table.scrollRegion': '本地用户表格（可横向滚动）',
+  'stuckLocks.table.scrollRegion': '紧急锁表格（可横向滚动）',
+  'emergency.tasks.scrollRegion': '收敛任务表格（可横向滚动）',
+  'annotation.table.scrollRegion': '注解表格（可横向滚动）',
+  'definitions.mappings.scrollRegion': 'Promotion Mapping 表格（可横向滚动）',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

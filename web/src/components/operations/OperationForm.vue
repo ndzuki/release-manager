@@ -224,7 +224,7 @@ async function prepareConfirmation(): Promise<void> {
  * (label/error/spacing) belongs to FormField. The class is explicit so the radio
  * inputs inside the fieldset keep the UA default look.
  */
-.operation-form__control { min-height: 2.6rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-subtle); border-radius: 0.4rem; background: var(--color-surface); }
+.operation-form__control { min-height: 2.6rem; padding: 0.55rem 0.7rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
 .operation-form__status { margin: 0; color: var(--color-muted); font-size: var(--font-size-sm); }
 .operation-form__submit { width: fit-content; justify-self: end; padding: 0.7rem 1rem; border: 0; border-radius: 0.45rem; background: var(--color-primary); color: var(--color-on-accent); font-weight: 700; }
 </style>

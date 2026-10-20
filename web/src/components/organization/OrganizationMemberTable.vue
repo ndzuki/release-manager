@@ -100,7 +100,7 @@ const emit = defineEmits<{
 .organization__table th,
 .organization__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

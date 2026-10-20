@@ -22,11 +22,30 @@
           unrelated error cannot replace a working console.
     -->
     <style>
+      /* The body colour is part of the boot surface: before the app CSS loads (or when it
+         fails to), the page background is this rule. It is also duplicated here rather than
+         imported, for the same reason as the .boot-failure rules. When the bundle does load,
+         base.css's `body` rule wins because the stylesheet is injected after this block. */
+      body { background: #fff; }
       .boot-failure { display: grid; gap: 0.75rem; place-content: center; min-height: 100vh; padding: 2rem; text-align: center; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif; color: #0f172a; }
       .boot-failure__title { margin: 0; font-size: 1.5rem; }
       .boot-failure__message { max-width: 40rem; margin: 0 auto; color: #64748b; }
       .boot-failure__detail { max-width: 40rem; margin: 0 auto; padding: 0.75rem; overflow-wrap: anywhere; border: 1px solid #e2e8f0; border-radius: 0.5rem; background: #fff; color: #64748b; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; white-space: pre-wrap; }
       .boot-failure__retry { justify-self: center; padding: 0.5rem 1rem; border: 1px solid #2563eb; border-radius: 0.375rem; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
+      /*
+       * Dark counterpart. A bundle that fails to load on a dark-mode desktop used to paint
+       * this last-resort surface in the light palette (white flash, then white-on-white for
+       * the retry button once the dark tokens loaded). The palette below is direction C's
+       * --bg/--sf/--tx/--mu/--bd, written as literals because no CSS import can be trusted
+       * here; the media query keeps it correct with no JS at all.
+       */
+      @media (prefers-color-scheme: dark) {
+        body { background: #09090b; }
+        .boot-failure { color: #fafafa; }
+        .boot-failure__message { color: #a1a1aa; }
+        .boot-failure__detail { border-color: #27272a; background: #111114; color: #a1a1aa; }
+        .boot-failure__retry { border-color: #fafafa; background: #fafafa; color: #09090b; }
+      }
     </style>
     <script>
       (function () {

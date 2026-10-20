@@ -128,12 +128,13 @@ const emit = defineEmits<{
   width: 100%;
   border-collapse: collapse;
   background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
 }
 
 .definitions__table th,
 .definitions__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

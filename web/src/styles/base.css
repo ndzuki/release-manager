@@ -30,7 +30,24 @@ body {
   color: var(--color-text);
   font-family: var(--font-family-sans);
   font-size: var(--font-size-md);
+  /* Direction C body copy: 14px / 1.55 (the token carries the ratio). */
   line-height: var(--line-height-base);
+}
+
+/* Direction C heading rhythm: the page title is 22px/650, the section title 15px/650.
+   Scoped page rules (or PageHeader.vue) still win; this is the default so a bare heading
+   is not rendered at the UA 2em/32px. Margins are deliberately untouched — pages own
+   their spacing and a global reset here would move every existing layout. */
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-heading);
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-heading);
+  letter-spacing: 0.01em;
 }
 
 /* Form controls kept the UA default (13.33px) because only some components set
@@ -41,6 +58,21 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+/*
+ * A control's UA intrinsic width (roughly `size=20`, ~177px) becomes its automatic
+ * minimum as a flex/grid item, so a filter row of four controls could not shrink below
+ * ~400px: at 375 the document measured 386–438px on six pages (bindings, definitions,
+ * bundles, organization, stuck locks, artifact lifecycle; TASK-394). `min-width: 0` lets
+ * the control shrink with its container instead, and `max-width: 100%` stops a wide
+ * control from overflowing a narrow one. Measured after the rule: all six at 375px.
+ */
+input,
+select,
+textarea {
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* One focus policy for the whole console. Only two `:focus-visible` rules
@@ -82,6 +114,60 @@ textarea {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Machine values (hashes, UUIDs, versions, namespaces) get the mono stack without a
+   component. Opt-in: `.mono` is for values a reader may compare character by character,
+   not for every number on the page. */
+.mono {
+  font-family: var(--font-family-mono);
+}
+
+/* Numeric columns line up. `table` covers the existing tables; `.tabular-nums` opts in
+   the non-table surfaces (StatCard, aggregates). */
+table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Wide tables scroll inside their own box instead of widening the document (TASK-394).
+   `min-width: 0` is load-bearing: a grid/flex item's automatic minimum is min-content,
+   which for this wrapper is the table's min-content width — the exact re-inflation the
+   wrapper exists to stop. Pair it with role="region" + aria-label + tabindex="0" so the
+   scroller is reachable by keyboard (the pattern DefinitionTable established). */
+.table-wrap {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Code-surface syntax accents from the direction-C palette. The editor keeps its own
+   CodeMirror theme (tokens.css `--editor-*`); these classes are for read-only code
+   previews and diff panes that must not inline hex. `--code` is the surface itself. */
+.code-surface {
+  background: var(--code);
+}
+
+.code-keyword {
+  color: var(--k);
+}
+
+.code-string {
+  color: var(--s);
+}
+
+.code-number {
+  color: var(--n);
+}
+
+/* Selection is drawn from the primary/accent pair instead of the UA blue, which is
+   unreadable on the near-black surface. */
+::selection {
+  background: var(--pr);
+  color: var(--on);
 }
 
 /* Boot-failure surface (B2). Global on purpose: it must render when no
@@ -126,7 +212,9 @@ textarea {
   border: 1px solid var(--color-primary);
   border-radius: var(--radius-md);
   background: var(--color-primary);
-  color: #fff;
+  /* Direction C: --pr is light in dark mode and near-black in light mode, so a literal
+     #fff here would be white-on-white in dark. The on-accent token inverts with it. */
+  color: var(--color-on-accent);
   font: inherit;
   font-weight: var(--font-weight-medium);
   cursor: pointer;

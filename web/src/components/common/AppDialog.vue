@@ -99,7 +99,9 @@ function onBackdropClick(): void {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: rgb(15 23 42 / 60%);
+  /* Theme-invariant scrim: a backdrop has to darken the page in both themes, so it
+     cannot be derived from --bg (near-white in light). */
+  background: var(--scrim);
 }
 
 .app-dialog__panel {

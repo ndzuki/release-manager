@@ -158,7 +158,14 @@ const confirmTitle = computed(() =>
       message="没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。"
     />
 
-    <table v-else-if="store.policy && store.policy.roots.length > 0" class="trust__table">
+    <div
+      v-else-if="store.policy && store.policy.roots.length > 0"
+      class="table-wrap"
+      role="region"
+      :aria-label="t('trust.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="trust__table">
       <thead>
         <tr>
           <th scope="col">{{ t('trust.keyId') }}</th>
@@ -209,7 +216,8 @@ const confirmTitle = computed(() =>
           </td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
 
     <!-- Revocation cannot be undone, so it goes through the shared primitive with
          `danger` (role=alertdialog) instead of a hand-rolled block: that adds
@@ -251,8 +259,11 @@ const confirmTitle = computed(() =>
   padding: var(--space-5);
 }
 
+/* TASK-394: title + actions side by side measured 483px at a 375px viewport. Wrapping is
+   inert on desktop and lets the action group drop below the title when it cannot fit. */
 .trust__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -306,7 +317,7 @@ const confirmTitle = computed(() =>
 .trust__table th,
 .trust__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

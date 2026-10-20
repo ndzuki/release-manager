@@ -125,7 +125,7 @@ async function viewExistingOperation(): Promise<void> {
 .operation-page__header h1, .operation-page__header p { margin: 0; }
 .operation-page__header div { display: grid; gap: 0.35rem; }
 .operation-page__eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.operation-page__header a, .operation-page button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.4rem; background: var(--color-surface); color: var(--color-text); text-decoration: none; }
+.operation-page__header a, .operation-page button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); color: var(--color-text); text-decoration: none; }
 .operation-page__existing { border-color: var(--color-primary) !important; color: var(--color-primary-hover) !important; }
 @media (max-width: 42rem) { .operation-page__header { flex-direction: column; } }
 </style>
