@@ -522,7 +522,8 @@ describe('ValuesEditorPage direction C surface (TASK-394)', () => {
 
     const panel = wrapper.get('.values-panel');
     expect(panel.find('.eyebrow').exists()).toBe(false);
-    expect(panel.get('.values-panel__header .values-section__title').text()).toBe('Values 版本编辑器');
+    expect(panel.findAll('.values-panel__header h2')).toHaveLength(1);
+    expect(panel.get('.values-panel__header h2').text()).toBe('Values 文档');
     expect(panel.get('h2#values-editor-title').text()).toBe('Values 文档');
     expect(wrapper.findAll('h1')).toHaveLength(1);
   });

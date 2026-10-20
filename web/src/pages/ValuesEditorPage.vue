@@ -255,13 +255,11 @@ onBeforeUnmount(() => {
         <section class="values-panel" aria-labelledby="values-editor-title">
           <header class="values-panel__header">
             <!--
-              TASK-394: this was the console's last hand-rolled `.eyebrow` in the page layer
-              (12px / 800 / .08em / uppercase). It is a section label, so it takes the
-              direction-C section-title type instead of the old micro-label treatment. The h2
-              below keeps the region's heading semantics (aria-labelledby) and the catalog key
-              of this line is unchanged.
+              TASK-394: one title per region. The old markup stacked a micro-label
+              ("Values 版本编辑器"), an h2 ("Values 文档") and the page h1 — three labels for
+              one panel. The h2 now carries the region name on its own and stays the
+              `aria-labelledby` target the section points at.
             -->
-            <p class="values-section__title">{{ t('values.page.editor') }}</p>
             <h2 id="values-editor-title">{{ t('values.page.title') }}</h2>
           </header>
           <ValuesCodeEditor
@@ -364,10 +362,9 @@ onBeforeUnmount(() => {
 .values-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
 .values-panel { display: grid; align-content: start; gap: 0.55rem; min-width: 0; padding: 1rem; border: 1px solid var(--bd); border-radius: 0.75rem; background: var(--sf); }
 .values-panel__header { display: grid; gap: 0.2rem; min-width: 0; }
-.values-panel__header h2 { margin: 0; color: var(--tx); font-size: var(--font-size-lg); }
+.values-panel__header h2 { margin: 0; color: var(--tx); font-size: var(--font-size-h2); font-weight: var(--font-weight-heading); }
 /* Direction-C section title (TASK-394): 15px / heading weight / sentence case, the same
    treatment OperationCreatePage's section headings use. No 800, no tracking, no uppercase. */
-.values-section__title { margin: 0; color: var(--tx); font-size: var(--font-size-h2); font-weight: var(--font-weight-heading); }
 .validation-message { margin: 0; padding: 0.65rem 0.8rem; border-left: 3px solid var(--color-danger); background: var(--color-danger-soft); color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.9rem; border: 1px solid var(--color-info-border); border-radius: 0.5rem; background: var(--color-info-soft); color: var(--color-info-ink); }
 .notice--warning { border-color: var(--color-warning-border-bright); background: var(--color-warning-surface); color: var(--color-warning-ink-strong); }

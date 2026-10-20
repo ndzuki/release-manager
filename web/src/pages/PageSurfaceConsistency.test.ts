@@ -208,12 +208,13 @@ describe('W7 page surfaces (TASK-394)', () => {
 
     expect(template).not.toMatch(/class="eyebrow"/);
     expect(style).not.toMatch(/\.eyebrow\s*\{/);
-    // The catalog keys are unchanged: the label still renders, the region keeps its h2.
-    expect(template).toContain('class="values-section__title"');
-    expect(template).toContain("t('values.page.editor')");
+    // One title per region: the micro-label is gone, the h2 alone names the panel and stays
+    // the `aria-labelledby` target.
+    expect(template).not.toContain('class="values-section__title"');
+    expect(template).not.toContain("t('values.page.editor')");
     expect(template).toContain('id="values-editor-title"');
 
-    const title = rule(style, '.values-section__title');
+    const title = rule(style, '.values-panel__header h2');
     expect(title).toContain('font-size: var(--font-size-h2)');
     expect(title).toContain('font-weight: var(--font-weight-heading)');
     // None of the old micro-label treatment survives.

@@ -491,7 +491,6 @@ const zhCN = {
   'values.revision.status.discarded': '已丢弃',
   'values.revision.status.unknown': '未知',
   'values.page.title': 'Values 文档',
-  'values.page.editor': 'Values 版本编辑器',
   'values.page.language': '语言',
   'values.page.breadcrumb': '面包屑',
   'definitions.eyebrow': '发布定义',
