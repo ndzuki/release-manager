@@ -19,7 +19,7 @@ describe('auditStatusTone', () => {
   it('renders refusals and failures in the er tone', () => {
     // failed: internal/orchestrator/audit.go:19
     // rejected: internal/store/store.go:23 (trust verification, written as the audit
-    //   status by internal/orchestrator/service.go:1755)
+    //   status by internal/orchestrator/service.go:1758)
     // blocked: internal/orchestrator/admission.go:91 (admission refusal)
     for (const status of ['failed', 'rejected', 'blocked']) {
       expect(auditStatusTone(status), status).toBe('er');

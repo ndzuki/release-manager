@@ -12,12 +12,12 @@ import { t, type MessageKey } from '@/i18n/messages';
  *   - "failed"    internal/orchestrator/audit.go:19 and internal/store/store.go:159
  *   - "trusted", "rejected", "policy_warning", "signature_missing",
  *     "verification_unavailable"  internal/store/store.go:21-25 (VerificationStatus),
- *     written verbatim as the audit status by internal/orchestrator/service.go:1755
+ *     written verbatim as the audit status by internal/orchestrator/service.go:1758
  *   - "blocked", "would_block" (or "")  internal/orchestrator/admission.go:74-105,
  *     written as the audit status at internal/orchestrator/admission.go:281
  *   - the operation states pending/preflight/queued/running/cancelling/cancelled/timeout
  *     internal/store/store.go:153-161, copied into the audit status by
- *     internal/orchestrator/emergency.go:932-935 (status = string(op.Status))
+ *     internal/operator/service.go:930-933 (status = string(op.Status))
  *   - "accepted"  accepted by the audit filter list (web/src/stores/audit.ts:62) and
  *     persisted as-is by the emitter (internal/audit/emitter.go records the event it
  *     was given)
