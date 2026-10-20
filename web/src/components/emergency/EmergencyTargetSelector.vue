@@ -80,7 +80,8 @@ function annotationAvailabilityLabel(target: EmergencyTargetDisplay): string {
 
 <style scoped>
 .target-selector { display: grid; gap: 0.5rem; }
-.target-card { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.75rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-surface); cursor: pointer; }
+/* Direction C card: surface fill + the strong border + the shared radius (TASK-394). */
+.target-card { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.75rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--sf); cursor: pointer; }
 .target-card.selected { border-color: var(--color-primary); background: var(--color-info-soft); }
 .target-body { display: grid; gap: 0.35rem; }
 .target-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--color-muted-strong); font-size: var(--font-size-sm); }

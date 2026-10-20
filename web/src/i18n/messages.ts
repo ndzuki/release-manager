@@ -1168,6 +1168,16 @@ const zhCN = {
   'operation.list.back': '返回发布清单',
   'operation.list.create': '创建操作',
   'operation.list.definition': '发布定义',
+
+  // --- consistency w7 (TASK-394) ---
+  /*
+   * The emergency-change page had no h1 at all. Its category is the same one the stuck-lock
+   * surface carries (`stuck.eyebrow` also reads 紧急), but the value is stated here under the
+   * emergency page's own key so a later change to the stuck-lock category cannot silently
+   * relabel this page. The word itself is not new copy: it is the category name the console
+   * already uses.
+   */
+  'emergency.page.eyebrow': '紧急',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

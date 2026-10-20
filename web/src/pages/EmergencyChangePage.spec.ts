@@ -348,3 +348,44 @@ describe('EmergencyChangePage container picker', () => {
     expect(wrapper.find('.annotation-editor [role="status"]').exists()).toBe(false);
   });
 });
+
+/*
+ * TASK-394 (consistency wave 7). This page was the only routed surface with NO h1: it
+ * hand-rolled `<nav class="breadcrumbs">` and put the page name in a <strong>. The header
+ * now comes from PageHeader, and these assertions make the migration non-vacuous — the
+ * crumb labels, the category and the single h1 are read back from the rendered DOM.
+ */
+describe('EmergencyChangePage direction-C header (TASK-394)', () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  function mountPage() {
+    // A slot-rendering stub: the default `RouterLink: true` stub drops its children, and
+    // the crumb LABEL is exactly what this test is about.
+    const RouterLink = { template: '<a><slot /></a>' };
+    return mount(EmergencyChangePage, { global: { stubs: { RouterLink } } });
+  }
+
+  it('renders exactly one h1, the catalog category and the release-inventory crumb', () => {
+    const wrapper = mountPage();
+
+    const headings = wrapper.findAll('h1');
+    expect(headings).toHaveLength(1);
+    expect(headings[0]!.text()).toBe(t('emergency.page.title'));
+
+    // 紧急 comes from the catalog (same word the stuck-lock surface uses), rendered by
+    // PageHeader rather than a page-local eyebrow element.
+    const eyebrow = wrapper.get('.page-header__eyebrow');
+    expect(eyebrow.text()).toBe(t('emergency.page.eyebrow'));
+    expect(t('emergency.page.eyebrow')).toBe('紧急');
+
+    const trail = wrapper.get('.page-header__crumb-list');
+    expect(trail.text()).toContain(t('cluster.detail.releases'));
+    expect(trail.text()).toContain(t('emergency.page.title'));
+    // The current page is the last crumb and is not a link.
+    expect(wrapper.get('[aria-current="page"]').text()).toBe(t('emergency.page.title'));
+
+    // No hand-rolled heading chrome survives.
+    expect(wrapper.find('.breadcrumbs').exists()).toBe(false);
+    expect(wrapper.find('.eyebrow').exists()).toBe(false);
+  });
+});

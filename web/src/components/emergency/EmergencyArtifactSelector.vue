@@ -99,7 +99,8 @@ function formatValidatedAt(value: string | null): string {
 .field-label { display: block; margin-bottom: 0.25rem; color: var(--color-muted-strong); font-size: var(--font-size-sm); }
 .field-input { width: 100%; padding: 0.5rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
 .artifact-list { display: grid; gap: 0.5rem; }
-.artifact-card { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.75rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-surface); cursor: pointer; }
+/* Direction C card: surface fill + the strong border + the shared radius (TASK-394). */
+.artifact-card { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.75rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--sf); cursor: pointer; }
 .artifact-card.selected { border-color: var(--color-primary); background: var(--color-info-soft); }
 .artifact-body { display: grid; gap: 0.2rem; }
 .digest { font-family: monospace; font-size: var(--font-size-sm); color: var(--color-muted-strong); }

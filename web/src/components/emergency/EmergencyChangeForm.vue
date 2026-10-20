@@ -112,7 +112,8 @@ function setPolicy(policy: ConvergencePolicy): void {
 .reason-input { resize: vertical; }
 .char-count { font-size: var(--font-size-sm); color: var(--color-subtle); }
 .char-count.over { color: var(--color-error-strong); }
-.policy-fieldset { display: grid; gap: 0.4rem; border: 1px solid var(--color-border); border-radius: 0.5rem; padding: 0.75rem; }
+/* Direction C panel: surface fill + the strong border + the shared radius (TASK-394). */
+.policy-fieldset { display: grid; gap: 0.4rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); padding: 0.75rem; background: var(--sf); }
 .policy-fieldset label.disabled { color: var(--color-subtle); }
 .hint { color: var(--color-muted); font-size: var(--font-size-sm); }
 .summary-bar { padding: 0.6rem 0.75rem; border: 1px solid var(--color-danger-border-soft); border-radius: 0.375rem; background: var(--color-danger-soft); color: var(--color-error-strong); }

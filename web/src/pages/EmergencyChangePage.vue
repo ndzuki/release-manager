@@ -11,11 +11,12 @@ import { t } from '@/i18n/messages';
 // annotation payloads reach the request through the store, never through a
 // page-local copy of the wire shape.
 import { computed, onBeforeUnmount, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import EmergencyActionSelector from '@/components/emergency/EmergencyActionSelector.vue';
 import EmergencyAnnotationEditor from '@/components/emergency/EmergencyAnnotationEditor.vue';
 import EmergencyArtifactSelector from '@/components/emergency/EmergencyArtifactSelector.vue';
@@ -41,6 +42,24 @@ const organizationId = computed(() => authStore.activeOrganization?.id ?? '');
 const routeScope = computed(() =>
   [route.params.customerId, route.params.clusterId, route.params.releaseId].map(String).join('/'),
 );
+
+/*
+ * TASK-394 (consistency wave 7): the hand-rolled `<nav class="breadcrumbs">` became
+ * PageHeader's `crumbs`. The trail is built inside a computed so the release-inventory
+ * target follows the route params instead of being captured once at setup. Crumb text is a
+ * NAME only — PageHeader renders the last entry as the current page and never prints a
+ * route identifier.
+ */
+const crumbs = computed<Array<{ label: string; to?: RouteLocationRaw }>>(() => [
+  {
+    label: t('cluster.detail.releases'),
+    to: {
+      name: 'ReleaseInventory',
+      params: { customerId: customerId.value, clusterId: route.params.clusterId },
+    },
+  },
+  { label: t('emergency.page.title') },
+]);
 
 const gate = computed(() => authorization.gateFor('execute'));
 // AC-033-10: a stale authorization snapshot closes the NEW emergency entry. The
@@ -147,14 +166,18 @@ async function onConfirm(): Promise<void> {
 
 <template>
   <section class="emergency-page">
-    <nav class="breadcrumbs" :aria-label="t('values.page.breadcrumb')">
-      <RouterLink
-        :to="{ name: 'ReleaseInventory', params: { customerId, clusterId: route.params.clusterId } }"
-      >
-        {{ t('cluster.detail.releases') }}
-      </RouterLink>
-      <span aria-hidden="true">/</span><strong>{{ t('emergency.page.title') }}</strong>
-    </nav>
+    <!--
+      Direction C: the page had no h1 at all — only a hand-rolled breadcrumb nav with the
+      title in a <strong>. PageHeader now owns the trail, the category (紧急) and the h1.
+      The page carries no page-level explanatory copy of its own, so the subtitle is
+      omitted rather than invented; the action slot stays empty because this surface has
+      no header buttons (the only entries live in the flow).
+    -->
+    <PageHeader
+      :title="t('emergency.page.title')"
+      :eyebrow="t('emergency.page.eyebrow')"
+      :crumbs="crumbs"
+    />
 
     <LoadingState v-if="gate === 'loading'" message="正在加载授权与目标…" />
     <ForbiddenState
@@ -294,12 +317,19 @@ async function onConfirm(): Promise<void> {
 </template>
 
 <style scoped>
-.emergency-page { display: grid; gap: 1.25rem; padding: 1.25rem; }
-.breadcrumbs { display: flex; gap: 0.5rem; color: var(--color-muted); }
-.conflict-block { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid var(--color-warning-border-strong); border-radius: 0.5rem; background: var(--color-warning-surface); }
-.emergency-flow { display: grid; gap: 1.25rem; }
+/* Direction-C page root: the shell's `main` already pads 24px (12px at 375), so a page-local
+   `padding: 1.25rem` was a second inset that doubled it. `min-width: 0` keeps the wide
+   annotation table from pushing the document at 375. */
+.emergency-page { display: grid; gap: 1.25rem; min-width: 0; }
+/* PageHeader keeps a 20px bottom margin for pages that are not grids; the grid gap is the
+   only space between the header and the flow here. */
+.emergency-page :deep(.page-header) { margin-bottom: 0; }
+/* The conflict block is a warning callout, so it keeps the warning palette; only the radius
+   moves onto the direction-C token. */
+.conflict-block { display: grid; gap: 0.75rem; padding: 1rem; border: 1px solid var(--color-warning-border-strong); border-radius: var(--r); background: var(--color-warning-surface); }
+.emergency-flow { display: grid; gap: 1.25rem; min-width: 0; }
 .submit-row { display: flex; justify-content: flex-end; }
-.unavailable-notice { margin: 0; padding: 0.75rem 1rem; border: 1px solid var(--color-border); border-radius: 0.5rem; background: var(--color-bg); color: var(--color-muted-strong); }
+.unavailable-notice { margin: 0; padding: 0.75rem 1rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--sf); color: var(--color-muted-strong); }
 .primary { padding: 0.6rem 1.25rem; border: 0; border-radius: 0.375rem; background: var(--color-danger); color: var(--color-on-accent); }
 /* TASK-394: a disabled primary used to be painted with the danger fill, so "you may not
    press this yet" read as "this is destructive" (and the ink stayed --on-accent, which on

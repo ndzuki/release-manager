@@ -85,11 +85,13 @@ function select(action: EmergencyActionKind): void {
 </template>
 
 <style scoped>
+/* Direction C panel: surface fill + the strong border + the shared radius (TASK-394). */
 .action-selector {
   display: grid;
   gap: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
   padding: var(--space-3);
 }
 
