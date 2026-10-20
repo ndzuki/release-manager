@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { t } from '@/i18n/messages';
+import { t, type MessageKey } from '@/i18n/messages';
 import { statusLabel } from '@/i18n/status-labels';
 import { useAuthStore } from '@/stores/auth';
 import { computed, onMounted, ref } from 'vue';
@@ -7,6 +7,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import TrustRootEditor from '@/components/trust/TrustRootEditor.vue';
 import { TRUST_ENVIRONMENTS, allowedActions, type TrustAction, type TrustRootView } from '@/connect/trust-api';
@@ -20,6 +21,12 @@ import { formatTimestamp } from '@/utils/formatTimestamp';
  * revoked ones included — plus the policy version and revocation epoch. Writes are
  * state-ordered, so each row offers only the actions the current state accepts and
  * the page re-reads after every refusal.
+ *
+ * TASK-394 (consistency wave 3): the header is the shared PageHeader (eyebrow "治理");
+ * the environment selector and the policy meta line moved out of the prose paragraph
+ * into a filter card, which is where a control belongs; the page root no longer adds
+ * `--space-5` on top of the shell's 24px; the table has a frame and a direction-C
+ * header band; and the visible copy moved into the catalog.
  */
 const store = useTrustPolicyStore();
 const auth = useAuthStore();
@@ -52,16 +59,18 @@ onMounted(() => {
 
 const liveCount = computed(() => store.liveRootCount);
 
-const ACTION_LABELS: Record<TrustAction, string> = {
-  end_grace: '结束宽限',
-  retire: '退休',
-  revoke: '吊销',
+// The labels are catalog keys rather than Chinese literals so the whole page reads from
+// one place; `allowedActions` still owns WHICH actions a state offers.
+const ACTION_LABELS: Record<TrustAction, MessageKey> = {
+  end_grace: 'trust.action.endGrace',
+  retire: 'trust.action.retire',
+  revoke: 'trust.action.revoke',
 };
 
 /** Why an action is unavailable, so the tooltip never states a wrong reason. */
 function disabledReason(root: TrustRootView, action: TrustAction): string | undefined {
   if (store.saving) return undefined; // in flight: not a policy reason
-  if (!store.canApply(root, action)) return '该环境只剩一个可用信任根，不能移除';
+  if (!store.canApply(root, action)) return t('trust.disabled.lastRoot');
   return undefined;
 }
 
@@ -90,39 +99,38 @@ const confirmTitle = computed(() =>
 
 <template>
   <section class="trust">
-    <header class="trust__header">
-      <div>
-        <p class="eyebrow">{{ t('trust.eyebrow') }}</p>
-        <h1>签名信任根</h1>
-        <p class="trust__subtitle">
-          <!-- The prose word was already there; making it the control's <label> is what
-               associates it with the select (the wrapping <p> is a flex container, so the
-               label stays a separate flex item and the rendering is unchanged). -->
-          <label for="trust-environment">环境</label>
-          <select id="trust-environment" v-model="store.environment" name="environment" @change="store.load(store.environment)">
-            <option v-for="env in environments" :key="env" :value="env">{{ env }}</option>
-          </select>
-          <span v-if="store.policy">
-            策略版本 <strong>{{ store.policy.version }}</strong> {{ t('trust.revocationEpoch') }} <strong>{{ store.policy.revocationEpoch }}</strong>
-            · 可用信任根 <strong>{{ liveCount }}</strong>
-          </span>
-        </p>
-      </div>
-      <div class="trust__header-actions">
-        <button type="button" :disabled="store.loading" @click="store.load(store.environment)">
-          {{ store.loading ? '刷新中…' : '刷新' }}
+    <PageHeader :title="t('trust.page.title')" :eyebrow="t('trust.eyebrow')">
+      <template #actions>
+        <button type="button" class="trust__button" :disabled="store.loading" @click="store.load(store.environment)">
+          {{ store.loading ? t('trust.refreshing') : t('action.refresh') }}
         </button>
         <button
           v-if="auth.canManageTrustRoots"
           type="button"
+          class="trust__button"
           :disabled="store.saving"
           data-testid="trust-create-entry"
           @click="openCreate"
         >
           {{ t('trust.create.entry') }}
         </button>
-      </div>
-    </header>
+      </template>
+    </PageHeader>
+
+    <!-- The environment selector and the policy version live in a card: the hand-rolled
+         header wrapped them in a <p> that doubled as prose, which left the control
+         unlabelled and the page without a filter surface. -->
+    <div class="trust__filters">
+      <label for="trust-environment">{{ t('trust.filter.environment') }}</label>
+      <select id="trust-environment" v-model="store.environment" name="environment" @change="store.load(store.environment)">
+        <option v-for="env in environments" :key="env" :value="env">{{ env }}</option>
+      </select>
+      <span v-if="store.policy" class="trust__policy">
+        {{ t('trust.filter.version') }} <strong>{{ store.policy.version }}</strong>
+        {{ t('trust.revocationEpoch') }} <strong>{{ store.policy.revocationEpoch }}</strong>
+        · {{ t('trust.filter.liveRoots') }} <strong>{{ liveCount }}</strong>
+      </span>
+    </div>
 
     <!-- TASK-267: trust-root write outcomes use the shared Toast primitive. -->
     <Toast
@@ -137,10 +145,10 @@ const confirmTitle = computed(() =>
 
     <ErrorState
       v-if="store.failure"
-      title="信任根操作未成功"
+      :title="t('trust.error.title')"
       :message="store.failure.message"
       :details="store.failure.details"
-      action-label="刷新策略"
+      :action-label="t('trust.error.action')"
       @action="store.load(store.environment)"
     />
 
@@ -151,16 +159,16 @@ const confirmTitle = computed(() =>
       @close="closeEditor"
     />
 
-    <LoadingState v-if="store.loading && !store.policy" message="正在读取信任策略…" />
+    <LoadingState v-if="store.loading && !store.policy" :message="t('trust.loading')" />
     <EmptyState
       v-else-if="store.isEmpty"
-      title="该环境还没有信任根"
-      message="没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。"
+      :title="t('trust.empty.title')"
+      :message="t('trust.empty.message')"
     />
 
     <div
       v-else-if="store.policy && store.policy.roots.length > 0"
-      class="table-wrap"
+      class="table-wrap trust__table-wrap"
       role="region"
       :aria-label="t('trust.table.scrollRegion')"
       tabindex="0"
@@ -169,10 +177,10 @@ const confirmTitle = computed(() =>
       <thead>
         <tr>
           <th scope="col">{{ t('trust.keyId') }}</th>
-          <th scope="col">状态</th>
+          <th scope="col">{{ t('trust.table.state') }}</th>
           <th scope="col">{{ t('trust.issuerSubject') }}</th>
-          <th scope="col">生效自 / 宽限至</th>
-          <th scope="col">操作</th>
+          <th scope="col">{{ t('trust.table.validity') }}</th>
+          <th scope="col">{{ t('trust.table.actions') }}</th>
         </tr>
       </thead>
       <tbody>
@@ -189,7 +197,7 @@ const confirmTitle = computed(() =>
           <td>
             {{ formatTimestamp(root.validFrom) }}
             <br />
-            <small>宽限至 {{ formatTimestamp(root.graceUntil) }}</small>
+            <small>{{ t('trust.table.graceUntil', { time: formatTimestamp(root.graceUntil) }) }}</small>
           </td>
           <td v-if="auth.canManageTrustRoots" class="trust__actions">
             <button
@@ -211,7 +219,7 @@ const confirmTitle = computed(() =>
               :data-testid="`trust-${action}-${root.keyId}`"
               @click="request(root, action)"
             >
-              {{ ACTION_LABELS[action] }}
+              {{ t(ACTION_LABELS[action]) }}
             </button>
           </td>
         </tr>
@@ -232,12 +240,9 @@ const confirmTitle = computed(() =>
       :close-on-escape="!store.saving"
       @close="pendingAction = null"
     >
-      <p>
-        吊销会立即停止该密钥的签名校验，并<strong>提升吊销 epoch</strong>（缓存持有者据此失效）；记录会保留。
-        已用该密钥验证过的制品不会因此失去既有地位。
-      </p>
+      <p>{{ t('trust.dialog.revokeBody') }}</p>
       <template #footer>
-        <button type="button" :disabled="store.saving" @click="pendingAction = null">取消</button>
+        <button type="button" :disabled="store.saving" @click="pendingAction = null">{{ t('action.cancel') }}</button>
         <button
           type="button"
           class="trust__confirm-danger"
@@ -245,7 +250,7 @@ const confirmTitle = computed(() =>
           data-testid="trust-confirm-revoke"
           @click="confirm"
         >
-          {{ store.saving ? '提交中…' : '确认吊销' }}
+          {{ store.saving ? t('trust.dialog.submitting') : t('trust.dialog.confirmRevoke') }}
         </button>
       </template>
     </AppDialog>
@@ -256,47 +261,44 @@ const confirmTitle = computed(() =>
 .trust {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-/* TASK-394: title + actions side by side measured 483px at a 375px viewport. Wrapping is
-   inert on desktop and lets the action group drop below the title when it cannot fit. */
-.trust__header {
+/* Direction-C filter card: the environment control and the policy meta are one surface
+   with a strong border (`--color-border` is a ~1.3:1 hairline on the dark background). */
+.trust__filters {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.trust__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.trust__subtitle {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
   align-items: center;
-  margin: var(--space-1) 0 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
   color: var(--color-muted);
+  font-size: var(--font-size-sm);
 }
 
-.trust__subtitle select {
+.trust__filters label {
+  font-weight: var(--font-weight-bold);
+}
+
+.trust__filters select {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+}
+
+.trust__filters strong {
+  color: var(--color-text);
+}
+
+.trust__policy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: baseline;
 }
 
 .trust__notice {
@@ -308,16 +310,36 @@ const confirmTitle = computed(() =>
   color: var(--color-success-ink);
 }
 
+/* Direction-C table frame: `.table-wrap` keeps the 5-column table inside the page at
+   375px (overflow-x), and the strong border plus the surface make it a card. */
+.trust__table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
+
 .trust__table {
   width: 100%;
+  min-width: 48rem;
   border-collapse: collapse;
   background: var(--color-surface);
 }
 
-.trust__table th,
+/* Quiet header band; th and td used to share one rule, so the header had no band and
+   relied on the UA's bold weight. */
+.trust__table th {
+  padding: 10px 20px;
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
 .trust__table td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border-strong);
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-border-strong);
   text-align: left;
 }
 
@@ -353,19 +375,14 @@ const confirmTitle = computed(() =>
   gap: var(--space-2);
 }
 
-.trust__header-actions {
-  display: flex;
-  gap: var(--space-2);
-  align-items: flex-start;
-}
-
 .trust__actions button,
-.trust__header-actions button {
+.trust__button {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .trust__actions button.danger {
@@ -381,7 +398,7 @@ const confirmTitle = computed(() =>
 }
 
 .trust__actions button:disabled,
-.trust__header-actions button:disabled {
+.trust__button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }

@@ -157,6 +157,29 @@ describe('TrustPolicyPage', () => {
     expect(wrapper.find('.error-state').exists()).toBe(false);
   });
 
+  /*
+   * TASK-394 (consistency wave 3). The hand-rolled `.eyebrow` + `<h1>` is gone: the
+   * shared PageHeader owns both, keeping the same category word. The environment
+   * selector moved out of the header sentence into the filter card, and the table
+   * keeps its five columns with the direction-C frame wrapper.
+   */
+  it('renders the shared header with the 治理 eyebrow and a framed five-column table', async () => {
+    const wrapper = await mountPage();
+
+    expect(wrapper.find('.eyebrow').exists()).toBe(false);
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('治理');
+    expect(wrapper.get('.page-header__title').text()).toBe('签名信任根');
+
+    const table = wrapper.get('.table-wrap.trust__table-wrap');
+    expect(table.findAll('thead th').map((th) => th.text())).toEqual([
+      '密钥 ID',
+      '状态',
+      '签发者 / 主体',
+      '生效自 / 宽限至',
+      '操作',
+    ]);
+  });
+
   it('requires confirmation before revoking, and revokes with the row id', async () => {
     const wrapper = await mountPage();
 

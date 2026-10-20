@@ -68,6 +68,34 @@ describe('BundlesPage', () => {
     expect(mockedList).not.toHaveBeenCalled();
   });
 
+  /*
+   * TASK-394 (consistency wave 3). The hand-rolled `.eyebrow` + `<h1>` is gone: the
+   * shared PageHeader owns both, keeping the same category word. The table keeps its
+   * seven columns and gains the direction-C frame wrapper.
+   */
+  it('renders the shared header with the 发布 eyebrow and a framed seven-column table', async () => {
+    const wrapper = await mountPage();
+
+    expect(wrapper.find('.eyebrow').exists()).toBe(false);
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('发布');
+    expect(wrapper.get('.page-header__title').text()).toBe('发布 Bundle');
+
+    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('form.bundles__filters').trigger('submit');
+    await flushPromises();
+
+    const table = wrapper.get('.table-wrap.bundles__table-wrap');
+    expect(table.findAll('thead th').map((th) => th.text())).toEqual([
+      '名称',
+      '状态',
+      '摘要',
+      'Chart',
+      '镜像绑定',
+      '接收时间',
+      '操作',
+    ]);
+  });
+
   it('lists bundles once a definition is given', async () => {
     const wrapper = await mountPage();
     await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
