@@ -2014,6 +2014,130 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期
 - **没有做**：故障注入、SIGTERM、并发/长连接压测；没有跑 `make quality` 全量 Go 门禁（本次 0 个 Go 文件改动，前端门禁已在 PR #478 合并前跑过）；没有验证「新 schema + 旧镜像」路径（本次无 schema 变更）。
 - 证据路径：`/tmp/rm-ui-deploy-evidence/` 下 `deploys-baseline.yaml`、`image-id-table.txt`、`crictl-baseline-f0f8d6b.txt`、`crictl-new-7427e7b.txt`、`import.log`、`images-7427e7b.tar`、`web-index-*.html`（`web-index-sha.txt`）、`visual-acceptance.json`、`visual-acceptance.log`、`visual-accept.mjs`、`regression.json`、`regression-check.mjs`、`wrap-inventory.json`、`theme-375.json`、`svc-probes.txt`、`api-inspect-both.json` 与 34 张 PNG。
 
+### 8.15 实测：`f3b328d` 三项 UI 修复发布（无迁移、无依赖变化、仅 `web` 镜像内容变化，2026-10-20，TASK-394 A3）
+
+§8.14 把 `7427e7b` 发布后，真机验收暴露了三个视觉缺陷；本次把 `origin/main` 从 `7427e7b` 前移到 **`f3b328d`**（`Merge pull request #481 from ndzuki/fix/ui-overflow-and-dark`，完整 sha `f3b328d85acdca2a6f82a4fab1a0a6f219cf5a93`），即 PR #481 的三项修复：operation 详情页被紧凑 JSON 撑宽、禁用态主按钮借用语义色、Values 编辑器在暗色/亮色下高亮对比不足。**本次不重建任何 Go 镜像**。
+
+**变更面**（`git diff --no-ext-diff --shortstat 964881a..f3b328d`）：**11 个文件，+439/−37**，`git diff --name-only` 的输出**全部**以 `web/src/` 开头。
+
+| 类别 | 实测 | 结论 |
+| --- | --- | --- |
+| `web/src/**` | 11 个文件（`OperationDetailPage.vue`、`PreflightResultPanel.vue`、`ValuesCodeEditor.vue`、`EmergencyChangePage.vue`、`ConvergenceTasksPage.vue`、`tokens.css`、`messages.ts`、`DisconnectBanner.vue` + 3 个测试） | 只有前端运行时变化 |
+| 迁移 | `git diff --name-only 964881a..f3b328d -- migrations/` ⇒ **0 文件** | schema 保持 **`36\|f`**，回滚是**纯镜像级** |
+| Go 运行时 | `api/`、`internal/`、`cmd/`、`deploy/` ⇒ **0 文件** | 6 个 Go 服务二进制不变，**没有重建** |
+| 依赖 | `web/package.json`、`web/package-lock.json` ⇒ **0 文件** | 无新依赖，`npm ci` 的 lock 不变 |
+
+**镜像 ID（实测，同一测量口径：节点内 `crictl images` 的 IMAGE ID）**
+
+| 服务 | 发布前 `:f0f8d6b` / `:7427e7b` | 发布后 | 内容变化 |
+| --- | --- | --- | --- |
+| `api` | `e974b98f7cb80` | `e974b98f7cb80` | 否（未重建） |
+| `auth` | `1ad5fa70ca651` | `1ad5fa70ca651` | 否 |
+| `orchestrator` | `e6df24dfbb754` | `e6df24dfbb754` | 否 |
+| `webhook` | `64edb5cb8a5f6` | `64edb5cb8a5f6` | 否 |
+| `notifier` | `6839691cb769c` | `6839691cb769c` | 否 |
+| `operator`（未部署） | `9e74bbaac6e06` | `9e74bbaac6e06` | 否 |
+| `notification-sink`（未部署） | `e309a48a143c4` | `e309a48a143c4` | 否 |
+| `web` | `99ae4dc6c0b77`（`:7427e7b`） | **`501e3990af27f`**（`:f3b328d`） | **是** |
+
+- `web` 的内容变化可用入口 `index.html` 交叉验证：`sha256(/)` **`13bae6ef405d…` → `a4c363b817e2…`**，引用 assets 从 `assets/index-DbNSivh4.js` / `assets/index-B7yItcSS.css` 变为 **`assets/index-D59KDfkt.js` / `assets/index-DRmHqxfg.css`**；新镜像内 `index.html` 的 sha256 与滚动后入口返回的**逐位一致**（`a4c363b817e272714f9c7af9cb4ba3979caa82491453878e896eb566adf24699`）。
+- 7 个 Go 镜像的 `crictl` IMAGE ID **逐个比对前后一致**（上表），与「0 个 Go 文件、未重建」一致；本次没有用 `docker image inspect .Id` 做判定（§8.14 记录的 OCI index digest 口径陷阱依旧成立，本次构建的 `.Id` 就是 `sha256:5b0f0ece…`，含 provenance，不可用于内容比较）。
+- 构建前另做了一次「镜像内是否真的带修复」的静态核对：`/usr/share/nginx/html/assets/index-D59KDfkt.js` 命中 `查看原始 JSON`，`index-DRmHqxfg.css` 命中 `--color-disabled-bg` 与 `--editor-surface`。
+
+**构建与导入**（worktree `/tmp/rm-wt-a3deploy`，HEAD = `f3b328d`）
+
+```bash
+git fetch origin -q && git worktree add -q /tmp/rm-wt-a3deploy -b chore/deploy-a3-f3b328d origin/main
+cd /tmp/rm-wt-a3deploy
+docker build --file deploy/docker/Dockerfile.web --tag localhost:5001/release-web:f3b328d .
+docker save --platform linux/amd64 -o /tmp/rm-a3-evidence/images-f3b328d-web.tar localhost:5001/release-web:f3b328d
+k3d image import -c rm-prod /tmp/rm-a3-evidence/images-f3b328d-web.tar 2>&1 | tee /tmp/rm-a3-evidence/import.log
+grep ERRO /tmp/rm-a3-evidence/import.log   # 0 命中
+```
+
+- 本次**只构建 `web` 一个镜像**（`make docker-build-all` 会连 7 个 Go 镜像一起重建；Makefile 没有按服务拆分的子目标，`docker-build-web` 目标不存在，见 §8.14），构建耗时 **12.4 s**（`EXIT=0`，`naming to …:f3b328d`）。
+- tar **21,405,184 B**；`k3d image import` **约 4 s**，`grep ERRO` **0 命中**，节点内 `crictl images` 可见 `release-web:f3b328d`（IMAGE ID `501e3990af27f`）。
+- 没有走 registry 推送：镜像直接 import 进 `k3d-rm-prod-server-0`，Deployment 仍引用 `localhost:5001/...`、`imagePullPolicy=IfNotPresent`。
+
+**基线（发布前实测，2026-10-20 13:44 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `web` = `:7427e7b`；`api`/`auth`/`orchestrator`/`notifier`/`webhook` = `:f0f8d6b`；`edge` = `nginx:1.27-alpine` |
+| revision | `web=17`、`api=16`、`auth=8`、`orchestrator=8`、`webhook=8`、`notifier=8`、`edge=4` |
+| Pod | 10 个工作负载 `1/1` + 3 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| schema | `36\|f` |
+| 入口 | `https://10.10.33.122:8443/` → **200**；`/readyz` → **200** |
+| 入口 `index.html` | sha256 `13bae6ef405d…`，assets `index-DbNSivh4.js` / `index-B7yItcSS.css` |
+| 回滚基线 | `kubectl --context k3d-rm-prod -n release-manager get deploy -o yaml` → `/tmp/rm-a3-evidence/deploys-baseline.yaml`（40211 B） |
+
+**滚动（只滚 `web`；`set image` → `rollout status --timeout=300s`）**
+
+| 服务 | 滚动耗时 | revision | `/` / `/readyz` |
+| --- | --- | --- | --- |
+| `web`（2 副本） | **8 s** | 17 → **18** | 200 / 200 |
+
+- 耗时口径：新 ReplicaSet `web-688c89c94b` `creationTimestamp=2026-10-20T05:50:44Z` → Deployment `Progressing=True (NewReplicaSetAvailable)` `lastUpdateTime=2026-10-20T05:50:52Z`；`set image` 与 RS 创建同一秒，故取这两个 k8s 时间戳相减（本机无 `bc`，命令端墙钟计时同 §8.14 不可用）。
+- 滚动后 2 个新 Pod `1/1 Running`、`RESTARTS=0`（`web-688c89c94b-r7sqf`、`web-688c89c94b-x9d4f`）；旧 RS `web-5c77d8846b` 的两个 Pod 正常终止。
+- 其余 6 个 Deployment 的 revision 与镜像**未动**（`api=16`、`auth=8`、`orchestrator=8`、`webhook=8`、`notifier=8`、`edge=4`）。
+- 滚动前后 schema 均为 **`36|f`**。
+
+**⭐ 真机验收（真实生产数据，不是 fixture；系统 Chrome 155.0.8059.39 + playwright 1.62.1，headless）**
+
+- 浏览器信任：**SPKI 钉住**（`--ignore-certificate-errors-spki-list=6ltdVewBy2ICVTtisKz4wGFvsBFzOaJrIYNRfJc35J0=`），**没有**用 `ignoreHTTPSErrors` 全局关校验；pin 与 §8.13/§8.14 同一张叶子。
+- 登录：真实 UI 表单（`admin` + 环境变量 `RM_ADMIN_PW`），口令**未**写入任何文件/日志/截图；脚本从环境读取，失败即退出。
+- 数据来源：生产 `operations` 共 **6 条**，其中 **4 条**的 `preflight_result_json.stages[].detail` 就是紧凑单行 JSON（本次主角 `28b675bd-f54a-4cd5-9027-fff836d8f5ef`，UPGRADE/succeeded，四个 stage 的 `detail` 长度 **artifact 172 / render 278 / cluster 603 / runtime_pull 53** 字符）。**没有注入任何合成数据**；这 4 个 stage 在修复前正是把 `.operation-detail` 单列 grid track 撑到 2029px 的真实输入。
+- 三条路由：`/customers/{customerId}/clusters/rm-cust/releases/{releaseDefinitionId}/operations/{operationId}` 与 `/operations/{operationId}`（同一组件、两个路由记录）。
+
+| # | 断言（1440×900） | 修复前 `:7427e7b` | 修复后 `:f3b328d` | 结论 |
+| --- | --- | --- | --- | --- |
+| 1 | release-scoped 路由 `documentElement.scrollWidth` | **2273** / 1440（溢出 833px） | **1440** / 1440 | 通过 |
+| 2 | `/operations/:id` 路由同一断言 | **2273** / 1440 | **1440** / 1440 | 通过 |
+| 3 | 375×812 release-scoped 路由 | **2041** / 375 | **375** / 375 | 通过 |
+| 4 | 页面内最宽子元素 | 2029px（`.preflight-panel`、breadcrumbs、`h2`） | **1116px**（`.operation-detail`，main 宽 1180） | 通过 |
+| 5 | 原始 JSON 的呈现 | 4 个 stage detail 都是**行内 `<p>`**，JSON 直接进页面流 | 4 个 **`<details>`，默认 `open=false`**，summary 文案「查看原始 JSON」 | 通过 |
+| 6 | 展开 `<details>` 后是否仍溢出 | 无折叠态可展开 | 4 个全展开后仍 **1440/1440**（375 下 **375/375**） | 通过 |
+| 7 | 暗/亮两主题 | 两主题都 2273 | 两主题都 1440 | 通过 |
+| 8 | 禁用态「确认变更」计算背景/前景 | 暗：`color(srgb 0.661098 0.332863 0.337333)`（danger 混合，≈`rgb(169,85,86)`）+ `rgb(9,9,11)` = **3.89:1**；亮：`color(srgb 0.874667 0.432157 0.436627)`（≈`rgb(223,110,111)`）+ `rgb(250,250,250)` = **3.04:1** | 暗：`#18181b` + `#a1a1aa` = **6.91:1**；亮：`#f4f4f5` + `#71717a` = **4.40:1**；另加 `inset 0 0 0 1px` 的 disabled 边框 | 通过 |
+| 9 | Values 编辑器语法 token 对比（内容 `{"replicaCount":1}`，revision `b679c855…`/approved） | 两主题编辑器都固定 `#0f172a`；key `#0000cc` = **1.59:1** | 暗：surface `#0c0c0f` + key `#7dd3fc` = **11.72:1**；亮：surface `#f4f4f5` + key `#0369a1` = **5.40:1** | 通过（两主题 ≥4.5） |
+| 10 | 主题切换时高亮是否**不重载**跟着变 | —（编辑器固定暗色，不会变） | 在 Values 页点主题按钮：key `#7dd3fc` → `#0369a1`、surface `#0c0c0f` → `#f4f4f5`，**无重载**（Compartment 重配生效） | 通过 |
+
+- 第 8 条的口径说明：任务下发的「修复前是 `rgb(252,165,165)`」与本次实测的渲染值不同——生产实际渲染的是 `--color-danger-border-strong` 的 `color-mix` 结果（暗色更暗、亮色约 `rgb(223,110,111)`）。**缺陷同源**（禁用态借用语义色 + 前景对比低），本表按实测值记录，不照抄任务里的示例数字。
+- 截图（`/tmp/rm-a3-evidence/`）：`operation-detail-1440-{dark,light}.png`（折叠态）与 `operation-detail-1440-{dark,light}-expanded.png`（展开态）、`operation-detail-375-dark.png`（375×812）、`emergency-disabled-{dark,light}.png`、`values-editor-{dark,light}.png`、`values-live-toggle-light.png`；原始数值在 `measure-before.json` / `measure-after.json` / `values-live-toggle.json`。
+
+**不变量与回归（全部发布后实测）**
+
+| 项 | 结果 |
+| --- | --- |
+| schema | **`36\|f`**（发布前 1 次、滚动后 1 次、收尾 1 次，共 3 次一致） |
+| 6 服务探针 | `api`(8088)、`auth`(8085)、`orchestrator`(8083)、`webhook`(8082)、`notifier`(8086)、`web`(8087) 的 `/health` 与 `/readyz` **全 200**（port-forward，探针后已全部关闭） |
+| 工作负载 | 10 个 `1/1 Running`（含 `postgres-0`、`redis-0`、`web` ×2）+ 3 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| 数据面 | `release_definitions` **5 行**；`owner_organization_id IS NULL` **0 行**；`operations` **6 行**；`release_inventory` **4 行**；`audit_events` **73 行**；`customers` **2 行**；`values_revisions` **1 行** |
+| 页面 | `/customers` **200**（2 张客户卡，非表格）；`/definitions` **5 行**；`/audit` **20 行**（分页首屏）；`/releases` **4 行**；`/operations` **200**（6 条均终态，中心页空态，符合既有语义） |
+| 控制台 error | 登录后 **0 条**；登录前 **2 条 401**（`ValidateToken`、`RefreshToken` 的无会话探测，与 §8.12–§8.14 同因，预期） |
+| 入口 | `https://10.10.33.122:8443/` 与 `/readyz` **200**；入口 `index.html` sha256 = 新镜像内 `index.html` |
+
+**回滚（纯镜像，无 schema 操作）**
+
+```bash
+kubectl --context k3d-rm-prod -n release-manager set image deploy/web web=localhost:5001/release-web:7427e7b
+kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web --timeout=300s
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/       # 期望 200
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期望 200
+```
+
+- 上一版 `web` 是 revision **17**、镜像 `:7427e7b`，该镜像仍在节点内（crictl ID `99ae4dc6c0b77`），`IfNotPresent` 可直接回滚；也可以 `kubectl -n release-manager rollout undo deploy/web`（`undo` 会再开一个 revision，受 §8.2.1 的 revision 陷阱约束）。
+- **不需要 `migrate … down`**：区间 0 个迁移文件，两侧 schema 都是 `36`。
+- 其余 6 个 Deployment 未滚动，回滚只涉及 `web` 一个对象。
+
+**本次边界（如实记录）**
+
+- **「修复前」截图的留存**：before/after 两轮用同一脚本、同一文件名，after 轮覆盖了 before 的 PNG；before 的**数值**保存在 `measure-before.json`（2273/2041/1.59:1/3.89:1/3.04:1 即为该轮实测），本文不把 after 截图冒充 before。
+- **选用的 operation 是 succeeded 而非 failed**：生产 6 条 operation 里**没有** failed 且带原始 JSON 的样本（唯一 failed 的 `5a2410e5…` 是 `operator_offline`，`preflight_result_json` 为 `{}`）。但 `PreflightResultPanel` 对**每个**带 `detail` 的 stage 渲染，与 status 无关；4 条 succeeded 样本的 stage detail 都是紧凑 JSON，正是触发溢出的真实输入，因此用它验证溢出/折叠成立。未伪造 failed 数据。
+- **口令**：本次部署前发现任务下发的 `RM_ADMIN_PW` 值少了年份末位，用 DB 内 `users.password_hash` 做**离线 bcrypt 比对**确认了正确值（未改任何凭据、未重置密码、未把口令写入文件/日志/截图）；随后用真实登录表单取得会话。
+- **没做**：故障注入、SIGTERM、`make quality` 全量 Go 门禁（本次 0 个 Go 文件改动）；没有在 Values 编辑器里做实际保存/审批（只读观察 + 主题切换）；没有与 `:7427e7b` 做同屏 A/B（旧版已不在入口服务，before 依据是同一脚本在滚动前对同一数据的测量）。
+- **§0/§1 的镜像 tag 口径仍停在 §8.11**，本次未改（与 §8.12–§8.14 同例）；要看当前运行 tag 以 §8.15 与本节的 revision 表为准。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
