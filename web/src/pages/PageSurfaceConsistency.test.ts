@@ -167,23 +167,16 @@ describe('W7 page surfaces (TASK-394)', () => {
     expect(notice).toContain('background: var(--sf)');
     expect(notice).toContain('border-radius: var(--r)');
 
-    for (const file of [
-      '../components/emergency/EmergencyTargetSelector.vue',
-      '../components/emergency/EmergencyArtifactSelector.vue',
-    ]) {
-      const card = rule(styleOf(file), file.includes('Target') ? '.target-card' : '.artifact-card');
-      expect(card, file).toContain('background: var(--sf)');
-      expect(card, file).toContain('border: 1px solid var(--color-border-strong)');
-      expect(card, file).toContain('border-radius: var(--r)');
-    }
     for (const [file, selector] of [
+      ['../components/emergency/EmergencyTargetSelector.vue', '.target-card'],
+      ['../components/emergency/EmergencyArtifactSelector.vue', '.artifact-card'],
       ['../components/emergency/EmergencyActionSelector.vue', '.action-selector'],
       ['../components/emergency/EmergencyChangeForm.vue', '.policy-fieldset'],
     ] as const) {
-      const panel = rule(styleOf(file), selector);
-      expect(panel, file).toContain('background: var(--sf)');
-      expect(panel, file).toContain('border: 1px solid var(--color-border-strong)');
-      expect(panel, file).toContain('border-radius: var(--r)');
+      const card = rule(styleOf(file), selector);
+      expect(card, file).toContain('background: var(--sf)');
+      expect(card, file).toContain('border: 1px solid var(--color-border-strong)');
+      expect(card, file).toContain('border-radius: var(--r)');
     }
   });
 
