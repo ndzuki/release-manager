@@ -1876,6 +1876,144 @@ kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web --tim
 - 没有做故障注入、SIGTERM、并发/长连接压测；没有验证「新 schema + 旧镜像」路径（本次无 schema 变更）。
 - 证据路径：`/tmp/rm-d1/` 下 `build.log`、`import.log`、`images-f0f8d6b.tar`、`crictl-both.txt`、`deploys-baseline.yaml`、`deploys-post.yaml`、`cm-orchestrator.yaml`、`cm-orchestrator-de7b008.yaml`、`gw-cert-baseline.txt`、`rpc-probe-rm-d1-probe.json`（**仅发布后**：发布前的探针输出被同 `OPERATOR` 同路径的第二次运行覆盖，见「证据边界」）、`console-check.json`、`console-gateway-row.png`、`console-install-command-redacted.png`、`regression-375.json`、`revoke-pending.json`。
 
+### 8.14 实测：`7427e7b` 方向 C UI 改版发布（无迁移、无依赖变化、仅 `web` 镜像内容变化，2026-10-20，TASK-394）
+
+TASK-390 之后的第十次发布。本次把 `origin/main` 从 `f0f8d6b` 前移到 **`7427e7b`**（`Merge pull request #478 from ndzuki/feat/ui-direction-c-tokens`，完整 sha `7427e7bfcf119d6b80e6c1787c0c992713803a6d`），即 TASK-394 的方向 C 改版（新 token 主题、212px 侧栏、≤1024px 顶部条+抽屉、统一 1180px 内容宽、表格外框与 375 修复）。
+
+**变更面**（`git diff --no-ext-diff --stat f0f8d6b..7427e7b`）：**63 个文件，+3216/−299**。
+
+| 类别 | 实测 | 结论 |
+| --- | --- | --- |
+| `web/` | **62 个文件，+2995/−299**（`web/src/**` 与 `web/index.html`） | 只有前端运行时变化 |
+| `docs/` | `docs/production-deploy.md` +221（§8.13 的记录本身，随 PR 一起合并） | 与运行时不相关 |
+| 迁移 | `git diff --name-only f0f8d6b..7427e7b -- migrations/` ⇒ **0 文件** | schema 保持 **`36\|f`**，回滚是**纯镜像级** |
+| Go 运行时 | `api/`、`internal/`、`cmd/` ⇒ **0 文件** | 6 个 Go 服务二进制不变 |
+| 依赖 | `web/package.json`、`web/package-lock.json` ⇒ **0 文件** | 无新依赖，`npm ci` 的 lock 不变 |
+
+**镜像 ID（实测，同一测量口径：节点内 `crictl images` 的 IMAGE ID）**
+
+| 服务 | 基线 `:f0f8d6b` | `:7427e7b` | 内容变化 | 容器内二进制 sha256（前 12） |
+| --- | --- | --- | --- | --- |
+| `api` | `e974b98f7cb80` | `e974b98f7cb80` | 否 | `9212d37a4aa3`（两侧一致） |
+| `auth` | `1ad5fa70ca651` | `1ad5fa70ca651` | 否 | `bb02aef541ce`（一致） |
+| `orchestrator` | `e6df24dfbb754` | `e6df24dfbb754` | 否 | `96390c74398d`（一致） |
+| `webhook` | `64edb5cb8a5f6` | `64edb5cb8a5f6` | 否 | `0b326e35039d`（一致） |
+| `notifier` | `6839691cb769c` | `6839691cb769c` | 否 | `85d08fc03465`（一致） |
+| `operator`（未部署） | `9e74bbaac6e06` | `9e74bbaac6e06` | 否 | `2d5f936755fe`（一致） |
+| `notification-sink`（未部署） | `e309a48a143c4` | `e309a48a143c4` | 否 | `956714ea3444`（一致） |
+| `web` | `aadbffb6f4a77` | **`99ae4dc6c0b77`** | **是** | 主 bundle `c744459d0038` → **`e5f4467fdff9`**；`index.html` `1ddebf18adeb` → **`13bae6ef405d`** |
+
+- **只有 `web` 的内容真的变了**，与「62 文件全在 `web/`、无依赖变化」一致；滚动范围因此只有 `web`。
+- ⚠️ **口径陷阱（本次新增）**：本机 Docker **29.8.2 + containerd image store** 下，`docker image inspect --format '{{.Id}}'` 返回的是 **OCI index digest**，它把 buildx 的 provenance（`Identity.Build[].Ref`、`CreatedAt`）算进去了 ⇒ **同一份内容重新构建，8 个镜像的这个 ID 全都会变**。实测：7 个 Go 镜像的 `.RootFS.Layers`（layer digest 列表）与 `.Config` **逐字节相同**、容器内二进制 sha256 **逐位一致**，只有 index digest 不同。**判断「内容是否变化」用节点内 `crictl images` 的 IMAGE ID 或容器内文件 sha256，不要用 `docker image inspect .Id`。**
+- 交叉核对：本机 `:f0f8d6b` 的主 bundle `c744459d0038` 与 §8.13 记录的 `c744459d0038` **逐位一致**，说明本机基线镜像就是生产在跑的那一份，上表的「未变」不是空转。
+
+**构建与导入**（worktree `/tmp/rm-wt-ui-deploy`，HEAD = `7427e7b`）
+
+```bash
+git fetch origin -q && git worktree add -q /tmp/rm-wt-ui-deploy -b chore/deploy-ui-7427e7b origin/main
+cd /tmp/rm-wt-ui-deploy
+make docker-build-all IMAGE_TAG=7427e7b
+docker save --platform linux/amd64 -o /tmp/rm-ui-deploy-evidence/images-7427e7b.tar \
+  localhost:5001/release-api:7427e7b localhost:5001/release-auth:7427e7b \
+  localhost:5001/release-orchestrator:7427e7b localhost:5001/release-operator:7427e7b \
+  localhost:5001/release-webhook:7427e7b localhost:5001/release-notifier:7427e7b \
+  localhost:5001/release-notification-sink:7427e7b localhost:5001/release-web:7427e7b
+k3d image import -c rm-prod /tmp/rm-ui-deploy-evidence/images-7427e7b.tar 2>&1 | tee /tmp/rm-ui-deploy-evidence/import.log
+grep ERRO /tmp/rm-ui-deploy-evidence/import.log   # 0 命中
+```
+
+- `make docker-build-all` 没有按服务拆分的子目标（`docker-build-web` 不存在），因此**全构建 8 个**：`EXIT=0`、8 行 `naming to …:7427e7b`、`!! build failed` 0 命中。
+- 单 tar（`linux/amd64`）**113,170,432 B**（≈107.9 MiB）；导入 **约 4 s**（k3d 日志 `0000` → `0004`），`grep ERRO` **0 命中**，节点内 `crictl images | grep 7427e7b` 可见 **8 个**。
+- 没有走 registry 推送：镜像直接 import 进 `k3d-rm-prod-server-0`，Deployment 仍引用 `localhost:5001/...`，`imagePullPolicy=IfNotPresent`。
+
+**基线（发布前实测，2026-10-20 12:53 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment 镜像 | `api`/`auth`/`orchestrator`/`notifier`/`webhook`/`web` = `:f0f8d6b`；`edge` = `nginx:1.27-alpine` |
+| revision | `web=16`、`api=16`、`auth=8`、`orchestrator=8`、`webhook=8`、`notifier=8`、`edge=4` |
+| Pod | 10 个工作负载 `1/1` + 3 个 `Completed` 备份 Job Pod；`RESTARTS` 全 0 |
+| schema | `36\|f` |
+| 入口 | `https://10.10.33.122:8443/` → **200**；`/readyz` → **200** |
+| 控制台证书 | `CN=localhost`、SAN `DNS:localhost, DNS:rm-prod.local, IP:127.0.0.1, IP:10.10.33.122`、`notAfter=2029-10-18`；SPKI `6ltdVewBy2ICVTtisKz4wGFvsBFzOaJrIYNRfJc35J0=`（与 §8.13 同一张叶子，**未变**） |
+| 回滚基线 | `kubectl --context k3d-rm-prod -n release-manager get deploy -o yaml` → `/tmp/rm-ui-deploy-evidence/deploys-baseline.yaml`（40211 B） |
+
+**滚动（只滚 `web`；`set image` → `rollout status --timeout=300s`）**
+
+| 服务 | 滚动耗时 | revision | `/` / `/readyz` |
+| --- | --- | --- | --- |
+| `web`（2 副本） | **7 s** | 16 → **17** | 200 / 200 |
+
+- 耗时口径：新 ReplicaSet `web-5c77d8846b` `creationTimestamp=2026-10-20T04:54:43Z` → Deployment `Progressing=True (NewReplicaSetAvailable)` `lastUpdateTime=2026-10-20T04:54:50Z`。⚠️ 本机**没有 `bc`**，命令端的 `set image → rollout status` 墙钟计时取不到，故用上面两个 k8s 时间戳相减；两者起点一致（RS 由 `set image` 创建）。
+- 滚动后 2 个新 Pod `1/1 Running`、`RESTARTS=0`；旧 ReplicaSet 的两个 Pod 正常终止。
+- **新 bundle 确实生效**：入口返回的 `index.html` sha256 = `13bae6ef405d…`（新镜像内 `index.html`），而旧镜像是 `1ddebf18adeb…`；HTML 引用 `assets/index-DbNSivh4.js` / `assets/index-B7yItcSS.css`。
+- 其余 6 个 Deployment 的 revision 与镜像**未动**（`api=16`、`auth=8`、`orchestrator=8`、`webhook=8`、`notifier=8`、`edge=4`），与镜像 ID 表一致。
+- 滚动前后 schema 均为 **`36|f`**。
+
+**⭐ 真机视觉验收（系统 Chrome + Playwright；8 页 × 1440/375 × 暗/亮 = 32 组合）**
+
+- 浏览器：系统 Chrome **155.0.8059.39**（`/opt/google/chrome/chrome`）+ `playwright` 1.62.1，headless。
+- 证书信任方式：**SPKI 钉住**（`--ignore-certificate-errors-spki-list=6ltdVewBy2ICVTtisKz4wGFvsBFzOaJrIYNRfJc35J0=`），**没有**用 `ignoreHTTPSErrors` 全局关校验。这与 §8.13 的选择相同，pin 取自 Secret `release-manager-edge-tls` 叶子的公钥哈希。
+- 登录：真实 UI 表单（`admin` + 环境变量里的口令），口令**未**写入任何文件/日志/截图（脚本只从 `RM_ADMIN_PW` 读取）。
+- 断言表（每格 `scrollWidth/innerWidth · console error · 低于 AA 的文字对 · 病理性低对比`）：
+
+| 页面 | 1440 暗 | 1440 亮 | 375 暗 | 375 亮 |
+| --- | --- | --- | --- | --- |
+| `/` 首页 | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+| `/customers` | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+| releases 发布清单 | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+| `/audit` | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+| `/operations` | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+| `/definitions` | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+| `/settings/trust` | 1440/1440 · err 0 · 1 · 0 | 1440/1440 · err 0 · 1 · 0 | 375/375 · err 0 · 1 · 0 | 375/375 · err 0 · 1 · 0 |
+| `/settings/bindings` | 1440/1440 · err 0 · 0 · 0 | 1440/1440 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 | 375/375 · err 0 · 0 · 0 |
+
+| # | 断言 | 实测 |
+| --- | --- | --- |
+| 1 | `documentElement.scrollWidth <= innerWidth` | **32/32 通过**（1440 全 `1440/1440`，375 全 `375/375`；文档级横向溢出 **0**） |
+| 2 | 暗色无白底白字 / 黑底黑字 | 扫 **1854** 个自带文字元素的「文字 × 最近不透明祖先背景」计算色对：**病理性（<1.5:1）0 个**。低于 AA 的只有 **4 处，同一控件**：`/settings/trust` 的 `退休` 按钮，暗色 `rgba(255,255,255,.3)` on `rgb(17,17,20)` = **2.67:1**、亮色 `rgba(16,16,16,.3)` on `#fff` = **2.0:1**；该按钮 `disabled=true`、`title="该环境只剩一个可用信任根，不能移除"` ⇒ **禁用态，WCAG 1.4.3 豁免**，但如实登记为「已知最低对比项」 |
+| 3 | 侧栏 1440 = 212px；375 = 顶部条 + 抽屉 | 1440：`.app-shell__aside` **212px**、抽屉按钮 `display:none`（32/32 组合一致）；375：顶部条 **375px**、按钮可见、`aria-expanded=false` 且面板不可见 → 点击后 `true` + 12 条导航可见 → **Escape 关闭**（`false`）→ 重开点「Operation 中心」跳 `/operations` 且**导航后自动关闭**；暗/亮两轮同结果 |
+| 4 | 主题切换可用、`<html data-theme>` 变化、刷新保持 | 按钮按 `system → light → dark` 循环（label 同步「跟随系统/浅色/深色」），`localStorage['rm-theme']` 同步；刷新后仍 `data-theme=dark` + `stored=dark`；**375 抽屉内的同一个按钮**同样有效并持久化 |
+| 5 | 控制台 0 error | **登录后 0 条**（32 组合逐页记账）。登录前 **2 条 401**，URL 分别是 `POST /auth.v1.AuthService/ValidateToken` 与 `POST /auth.v1.AuthService/RefreshToken`（无会话探测，与 §8.12/§8.13 同因，**预期**） |
+| 6 | 标题/导航文字无竖排被挤 | 1440 的 12 条导航链接实测 **187×34**（单行，旧版「客户」14px 宽 ×2 行的形态已不存在）；`.app-shell__brand-name`、分组标题、`h1` 在 32 组合中**换行被挤 0 处** |
+
+- **375 的宽表不是页面溢出**：`/audit`、`/definitions`、`/settings/trust` 在 375 下有元素右边界超出视口，但都位于**内层横向滚动容器**内——`.audit-results__table-wrap` `overflow-x:auto`、`clientWidth 349 / scrollWidth 645`；`.definitions__scroll` `303 / 654`；`.trust__table` 外层 `303 / 433`。文档本身始终 `375/375`，表格可横向滚动查看。
+- **次级观察（不计入上述 6 条断言）**：`/releases` 的状态是「圆形徽章内逐字竖排」（`缺失` 23×37、`生效中` 19×56），属该页既有徽章样式；375 下部分表格单元（如 `已停用`）在滚动容器内按最小列宽折成 2–3 行。二者都不是本次改版引入的页面标题/导航挤压，留给后续视觉迭代判断。
+- **截图对照**（暗/亮为同页同视口同数据，仅主题不同）：每页 4 张，文件名 `<page>-<1440|375>-<dark|light>.png`，共 **32 张**；另有 `drawer-open-dark-375.png`、`drawer-open-light-375.png`（抽屉展开）与运行脚本/JSON，全部在 `/tmp/rm-ui-deploy-evidence/`。
+
+**不变量与回归（全部发布后实测）**
+
+| 项 | 结果 |
+| --- | --- |
+| schema | **`36\|f`**（发布前 1 次、滚动后 1 次、收尾 1 次，共 3 次一致） |
+| 6 服务探针 | `api`(8088)、`auth`(8085)、`orchestrator`(8083)、`webhook`(8082)、`notifier`(8086)、`web`(8087) 的 `/health` 与 `/readyz` **全 200**（port-forward，探针后已全部关闭） |
+| 工作负载 | 10 个 `1/1 Running`，新 `web` Pod `RESTARTS=0` |
+| 数据面 | `release_definitions` **5 行**；`owner_organization_id IS NULL` **0 行**；`operations` **6 行**；`release_inventory` **4 行**；`audit_events` **73 行**（窗口内 33 条，页面显示 20 行/页） |
+| 页面 | `/customers` **200**；`/definitions` 表格 **5 行**；`/audit` **20 行**（「已显示事件数 20 / 33」）；releases 表格 **4 行** |
+| 375 定宽 | `/settings/trust` 与 `/settings/bindings` 均 `scrollWidth === innerWidth === 375` |
+| 宿主/入口 | `k3d-rm-prod-serverlb` 映射未变（`127.0.0.1:8443→30443`、`127.0.0.1:8444→30844`）；宿主机直连 `https://10.10.33.122:8443` 实测 **200**（未走代理） |
+
+**回滚（纯镜像，无 schema 操作）**
+
+```bash
+kubectl --context k3d-rm-prod -n release-manager set image deploy/web web=localhost:5001/release-web:f0f8d6b
+kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web --timeout=300s
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/       # 期望 200
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期望 200
+```
+
+- 上一版 `web` 是 revision **16**、镜像 `:f0f8d6b`，该镜像仍在节点内（crictl ID `aadbffb6f4a77`），`IfNotPresent` 可直接回滚；也可以 `kubectl -n release-manager rollout undo deploy/web`（`undo` 会再开一个 revision，受 §8.2.1 的 revision 陷阱约束）。
+- **不需要 `migrate … down`**：区间 0 个迁移文件，两侧 schema 都是 `36`，`f0f8d6b` 的二进制已在 `36|f` 上运行过（§8.13）。
+- 其余 6 个 Deployment 未滚动，回滚只涉及 `web` 一个对象。
+
+**本次边界（如实记录）**
+
+- **发布前没有采样数据库行数**：本次第一条 DB 计数是在 `web` 滚动之后取的（`5 / 0 / 6 / 4 / 73`）。与 §8.13 记录的基线（`5 / 0 / 6`）一致，且本次只换 `web` 镜像、不动 Go 二进制与迁移，数据库行数不可能被这次滚动改变；但仍按「事后采样」口径标注，不冒充实测前后对比。
+- **没有与旧 UI 做同屏 A/B**：旧 bundle（`:f0f8d6b`）已不在入口提供服务；「旧版 1440 下『客户』14px 宽 ×2 行」引用 TASK-394 的记录，本次只实测新版的形态（187×34 单行）。
+- **构建非确定性的判定口径**：`docker image inspect .Id` 在 Docker 29 + containerd store 下包含 provenance，重构建必变；本次改用节点 `crictl` + 容器内二进制 sha256 判定，结论是「7 个 Go 镜像内容不变、只有 `web` 变」。如果后续发布仍用 `docker inspect .Id` 比较，会误判为「8 个全变」并多滚 6 个服务。
+- **没有做**：故障注入、SIGTERM、并发/长连接压测；没有跑 `make quality` 全量 Go 门禁（本次 0 个 Go 文件改动，前端门禁已在 PR #478 合并前跑过）；没有验证「新 schema + 旧镜像」路径（本次无 schema 变更）。
+- 证据路径：`/tmp/rm-ui-deploy-evidence/` 下 `deploys-baseline.yaml`、`image-id-table.txt`、`crictl-baseline-f0f8d6b.txt`、`crictl-new-7427e7b.txt`、`import.log`、`images-7427e7b.tar`、`web-index-*.html`（`web-index-sha.txt`）、`visual-acceptance.json`、`visual-acceptance.log`、`visual-accept.mjs`、`regression.json`、`regression-check.mjs`、`wrap-inventory.json`、`theme-375.json`、`svc-probes.txt`、`api-inspect-both.json` 与 34 张 PNG。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
