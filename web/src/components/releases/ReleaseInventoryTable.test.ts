@@ -101,11 +101,14 @@ describe('ReleaseInventoryTable narrow-screen structure (W15)', () => {
     expect(wrapper.get('tbody tr').attributes('role')).toBe('row');
     // canEmergency/canConvergence are off in this mount, so the emergency column
     // (and only it) is absent; Release has no data-label because it is the card header.
-    expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(7);
-    expect(wrapper.findAll('td[role="cell"]')).toHaveLength(7);
+    expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(6);
+    expect(wrapper.findAll('td[role="cell"]')).toHaveLength(6);
 
+    // TASK-394 (direction C): the grid is the inventory's, not the old
+    // Release/status/Chart/Revision/digest/sync/actions one. Chart and the last sync time
+    // moved into the row's context line, so they no longer carry a data-label.
     const labels = wrapper.findAll('td[data-label]').map((cell) => cell.attributes('data-label'));
-    expect(labels).toEqual(['状态', 'Chart', 'Revision', 'Values 摘要', '最近同步', '操作']);
+    expect(labels).toEqual(['集群', '当前 revision', '库存状态', 'Values 摘要', '操作']);
   });
 
   it('labels the emergency column when the capability renders it', () => {
@@ -114,8 +117,8 @@ describe('ReleaseInventoryTable narrow-screen structure (W15)', () => {
       global: { stubs: { RouterLink: true } },
     });
 
-    expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(8);
+    expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(7);
     const labels = wrapper.findAll('td[data-label]').map((cell) => cell.attributes('data-label'));
-    expect(labels).toEqual(['状态', 'Chart', 'Revision', 'Values 摘要', '最近同步', '紧急变更', '操作']);
+    expect(labels).toEqual(['集群', '当前 revision', '库存状态', '紧急变更', 'Values 摘要', '操作']);
   });
 });

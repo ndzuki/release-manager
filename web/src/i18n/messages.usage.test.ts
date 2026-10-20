@@ -472,8 +472,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/releases/ReleaseInventoryTable.vue',
-    allowed: ['Release', '状态', 'Chart', 'Revision', '最近同步', '紧急变更', '操作', '操作历史', '未绑定 Definition', '紧急变更', '紧急变更', '收敛', '创建操作', '未绑定 Definition', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更', '尚未同步', '${release.pendingConvergenceCount} 个待收敛任务'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['操作历史', '未绑定 Definition', '紧急变更', '紧急变更已阻断', '收敛', '创建操作', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更', 'Values', '尚未同步', '${release.pendingConvergenceCount} 个待收敛任务'],
+    reason:
+      'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the column headers and the three status tooltips into the catalog; what remains inline is the row-action copy and the `Values` domain noun',
   },
   {
     file: 'src/App.vue',

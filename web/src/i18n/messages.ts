@@ -892,6 +892,7 @@ const zhCN = {
   'annotation.table.scrollRegion': '注解表格（可横向滚动）',
   'definitions.mappings.scrollRegion': 'Promotion Mapping 表格（可横向滚动）',
 
+
   // --- home overview (TASK-394) ---
   'home.overview.subtitle': '发布活动与集群健康一览',
   'home.overview.loading': '正在加载…',
@@ -940,6 +941,25 @@ const zhCN = {
   'home.time.hours': '{count} 小时前',
   'home.time.days': '{count} 天前',
   'home.time.unknown': '时间未知',
+
+
+  // --- release inventory table (TASK-394) ---
+  /*
+   * Direction-C release inventory columns. The status LABELS are reused from the
+   * `release.status.*` entries above (they are the store's own vocabulary); what is new
+   * here is the column set and the per-status tooltip copy AC-054-02 requires. Those
+   * tooltips lived inline in ReleaseStatusBadge.vue, which the inventory table no longer
+   * renders now that the status is a StatusTag.
+   */
+  'release.table.release': '发布',
+  'release.table.cluster': '集群',
+  'release.table.revision': '当前 revision',
+  'release.table.status': '库存状态',
+  'release.table.emergency': '紧急变更',
+  'release.table.actions': '操作',
+  'release.status.tooltip.active': 'Release 与最近一次同步结果一致',
+  'release.status.tooltip.missing': 'Release 已从集群中消失',
+  'release.status.tooltip.outOfSync': '配置与期望不一致',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
