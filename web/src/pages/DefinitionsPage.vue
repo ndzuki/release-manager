@@ -205,12 +205,14 @@ function applyFilters(): void {
 <style scoped>
 .definitions {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
 
 .definitions__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -249,6 +251,11 @@ function applyFilters(): void {
 
 .definitions__filters label {
   display: grid;
+  /* A flex/grid item's automatic minimum is the control's intrinsic width, and a
+     text input's intrinsic width is wider than the 295px content box at 375px; the
+     explicit track lets the label and its input shrink instead of overflowing. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);

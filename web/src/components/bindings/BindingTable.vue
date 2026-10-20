@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n/messages';
 import type { BindingView } from '@/connect/binding-api';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 
@@ -29,44 +30,57 @@ function statusLabel(binding: BindingView): string {
 </script>
 
 <template>
-  <table class="governance__table">
-    <thead>
-      <tr>
-        <th scope="col">客户</th>
-        <th scope="col">状态</th>
-        <th scope="col">版本</th>
-        <th scope="col">建立时间</th>
-        <th scope="col">操作</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr v-for="binding in bindings" :key="binding.id" :data-testid="`binding-row-${binding.customerId}`">
-        <td><code>{{ binding.customerId }}</code></td>
-        <td>
-          <span class="governance__status" :class="`governance__status--${binding.status}`">{{ statusLabel(binding) }}</span>
-        </td>
-        <td>{{ binding.optimisticVersion }}</td>
-        <td>{{ formatTimestamp(binding.createdAt) }}</td>
-        <td>
-          <button
-            v-if="binding.status === 'active'"
-            type="button"
-            class="danger"
-            :disabled="saving"
-            @click="emit('revoke', binding)"
-          >
-            撤销
-          </button>
-          <span v-else class="governance__muted">—</span>
-        </td>
-      </tr>
-    </tbody>
-  </table>
+  <div
+    class="governance__scroll"
+    role="region"
+    :aria-label="t('governance.table.scrollRegion')"
+    tabindex="0"
+  >
+    <table class="governance__table">
+      <thead>
+        <tr>
+          <th scope="col">客户</th>
+          <th scope="col">状态</th>
+          <th scope="col">版本</th>
+          <th scope="col">建立时间</th>
+          <th scope="col">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="binding in bindings" :key="binding.id" :data-testid="`binding-row-${binding.customerId}`">
+          <td><code>{{ binding.customerId }}</code></td>
+          <td>
+            <span class="governance__status" :class="`governance__status--${binding.status}`">{{ statusLabel(binding) }}</span>
+          </td>
+          <td>{{ binding.optimisticVersion }}</td>
+          <td>{{ formatTimestamp(binding.createdAt) }}</td>
+          <td>
+            <button
+              v-if="binding.status === 'active'"
+              type="button"
+              class="danger"
+              :disabled="saving"
+              @click="emit('revoke', binding)"
+            >
+              撤销
+            </button>
+            <span v-else class="governance__muted">—</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </template>
 
 <style scoped>
+.governance__scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
 .governance__table {
   width: 100%;
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

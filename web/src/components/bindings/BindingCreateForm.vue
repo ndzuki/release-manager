@@ -34,6 +34,9 @@ const customerId = defineModel<string>('customerId', { required: true });
 <style scoped>
 .governance__panel {
   display: grid;
+  /* The select's intrinsic width (the longest capability option) is wider than the
+     295px panel content box at 375px; an explicit track lets the control shrink. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-3);
   padding: var(--space-4);
   border: 1px solid var(--color-border);
@@ -48,6 +51,8 @@ const customerId = defineModel<string>('customerId', { required: true });
 
 .governance__panel label {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);

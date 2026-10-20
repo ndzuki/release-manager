@@ -250,6 +250,8 @@ watch(organizationId, (next, previous) => {
 <style scoped>
 .audit-page {
   display: grid;
+  /* Explicit track so the audit table's scroll wrapper can shrink inside the page. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.5rem;
 }
 

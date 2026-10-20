@@ -126,6 +126,8 @@ const emit = defineEmits<{
 
 .definitions__table {
   width: 100%;
+  /* --sf and --bg differ by ~2%, so an unbordered table reads as a flat block in dark. */
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

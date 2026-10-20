@@ -166,60 +166,67 @@ watch(
         <option v-for="candidate in availableScopes" :key="candidate" :value="candidate">{{ candidate }}</option>
       </select>
     </label>
-    <table class="annotation-table">
-      <thead>
-        <tr>
-          <th scope="col">{{ t('annotation.keyWhitelist') }}</th>
-          <th scope="col">{{ t('annotation.value') }}</th>
-          <th scope="col">{{ t('annotation.scope') }}</th>
-          <th scope="col"></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="(entry, index) in drafts" :key="entry.localId">
-          <td>
-            <label class="visually-hidden" :for="rowFieldId(entry.localId, 'key')">
-              {{ t('common.labelledRowField', { field: t('annotation.keyWhitelist'), index: index + 1 }) }}
-            </label>
-            <select
-              :id="rowFieldId(entry.localId, 'key')"
-              class="field-input"
-              :value="entry.key"
-              :aria-invalid="validation.valid ? undefined : true"
-              :aria-describedby="validation.valid ? undefined : errorId"
-              @change="updateRow(entry.localId, { key: ($event.target as HTMLSelectElement).value })"
-            >
-              <option v-for="key in approvedKeys" :key="key" :value="key">{{ keyOptionLabel(key) }}</option>
-            </select>
-          </td>
-          <td>
-            <label class="visually-hidden" :for="rowFieldId(entry.localId, 'value')">
-              {{ t('common.labelledRowField', { field: t('annotation.value'), index: index + 1 }) }}
-            </label>
-            <input
-              :id="rowFieldId(entry.localId, 'value')"
-              class="field-input"
-              :value="entry.value"
-              :placeholder="t('annotation.valuePlaceholder')"
-              :aria-invalid="validation.valid ? undefined : true"
-              :aria-describedby="validation.valid ? undefined : errorId"
-              @input="updateRow(entry.localId, { value: ($event.target as HTMLInputElement).value })"
-            />
-          </td>
-          <td>{{ entry.scope }}</td>
-          <td>
-            <button
-              type="button"
-              class="row-remove"
-              :aria-label="t('annotation.removeRow', { key: entry.key })"
-              @click="removeRow(entry.localId)"
-            >
-              {{ t('annotation.remove') }}
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div
+      class="annotation-table-wrap"
+      role="region"
+      :aria-label="t('annotation.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="annotation-table">
+        <thead>
+          <tr>
+            <th scope="col">{{ t('annotation.keyWhitelist') }}</th>
+            <th scope="col">{{ t('annotation.value') }}</th>
+            <th scope="col">{{ t('annotation.scope') }}</th>
+            <th scope="col"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(entry, index) in drafts" :key="entry.localId">
+            <td>
+              <label class="visually-hidden" :for="rowFieldId(entry.localId, 'key')">
+                {{ t('common.labelledRowField', { field: t('annotation.keyWhitelist'), index: index + 1 }) }}
+              </label>
+              <select
+                :id="rowFieldId(entry.localId, 'key')"
+                class="field-input"
+                :value="entry.key"
+                :aria-invalid="validation.valid ? undefined : true"
+                :aria-describedby="validation.valid ? undefined : errorId"
+                @change="updateRow(entry.localId, { key: ($event.target as HTMLSelectElement).value })"
+              >
+                <option v-for="key in approvedKeys" :key="key" :value="key">{{ keyOptionLabel(key) }}</option>
+              </select>
+            </td>
+            <td>
+              <label class="visually-hidden" :for="rowFieldId(entry.localId, 'value')">
+                {{ t('common.labelledRowField', { field: t('annotation.value'), index: index + 1 }) }}
+              </label>
+              <input
+                :id="rowFieldId(entry.localId, 'value')"
+                class="field-input"
+                :value="entry.value"
+                :placeholder="t('annotation.valuePlaceholder')"
+                :aria-invalid="validation.valid ? undefined : true"
+                :aria-describedby="validation.valid ? undefined : errorId"
+                @input="updateRow(entry.localId, { value: ($event.target as HTMLInputElement).value })"
+              />
+            </td>
+            <td>{{ entry.scope }}</td>
+            <td>
+              <button
+                type="button"
+                class="row-remove"
+                :aria-label="t('annotation.removeRow', { key: entry.key })"
+                @click="removeRow(entry.localId)"
+              >
+                {{ t('annotation.remove') }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <button type="button" :disabled="!canAdd" @click="addRow">{{ t('annotation.add') }}</button>
     <p v-if="!validation.valid" :id="errorId" class="error-text" role="alert">{{ validation.message }}</p>
     <p v-if="error" class="error-text" role="alert">{{ error }}</p>
@@ -228,6 +235,7 @@ watch(
 
 <style scoped>
 .annotation-editor { display: grid; gap: var(--space-3); }
+.annotation-table-wrap { overflow-x: auto; min-width: 0; }
 .annotation-table { width: 100%; border-collapse: collapse; }
 .annotation-table th, .annotation-table td { padding: var(--space-2); border: 1px solid var(--color-border); text-align: left; }
 .field-input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }

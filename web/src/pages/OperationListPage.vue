@@ -194,32 +194,39 @@ onMounted(() => load(false));
         {{ error }}
         <button type="button" @click="load(false)">重试</button>
       </div>
-      <table class="operation-list__table">
-        <thead>
-          <tr>
-            <th scope="col">类型</th>
-            <th scope="col">状态</th>
-            <th scope="col">目标 Revision</th>
-            <th scope="col">创建时间</th>
-            <th scope="col">Operation</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in rows" :key="row.operationId" :data-testid="`operation-row-${row.operationId}`">
-            <td>{{ row.operationType }}</td>
-            <td>
-              <span class="operation-list__state" :class="`operation-list__state--${row.state}`">
-                {{ statusLabel('operation', row.state) }}
-              </span>
-            </td>
-            <td>{{ row.revision }}</td>
-            <td>{{ formatTimestamp(row.createdAt) }}</td>
-            <td>
-              <RouterLink :to="operationRoute(row)"><code>{{ row.operationId }}</code></RouterLink>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div
+        class="operation-list__scroll"
+        role="region"
+        :aria-label="t('operation.list.scrollRegion')"
+        tabindex="0"
+      >
+        <table class="operation-list__table">
+          <thead>
+            <tr>
+              <th scope="col">类型</th>
+              <th scope="col">状态</th>
+              <th scope="col">目标 Revision</th>
+              <th scope="col">创建时间</th>
+              <th scope="col">Operation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in rows" :key="row.operationId" :data-testid="`operation-row-${row.operationId}`">
+              <td>{{ row.operationType }}</td>
+              <td>
+                <span class="operation-list__state" :class="`operation-list__state--${row.state}`">
+                  {{ statusLabel('operation', row.state) }}
+                </span>
+              </td>
+              <td>{{ row.revision }}</td>
+              <td>{{ formatTimestamp(row.createdAt) }}</td>
+              <td>
+                <RouterLink :to="operationRoute(row)"><code>{{ row.operationId }}</code></RouterLink>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <button
         v-if="nextCursor"
         type="button"
@@ -236,6 +243,7 @@ onMounted(() => load(false));
 <style scoped>
 .operation-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
@@ -338,8 +346,14 @@ onMounted(() => load(false));
   color: var(--color-warning-ink);
 }
 
+.operation-list__scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
 .operation-list__table {
   width: 100%;
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

@@ -64,6 +64,10 @@ const role = defineModel<OrganizationRole>('role', { required: true });
 
 .organization__add label {
   display: grid;
+  /* TASK-367 already let the row wrap; the label still could not shrink below the
+     control's intrinsic width (324px), so the form overflowed a 375px page. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);

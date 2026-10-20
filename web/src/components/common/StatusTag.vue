@@ -87,7 +87,8 @@ withDefaults(
 }
 
 .status-tag--info {
-  color: var(--ac);
+  /* Info has its own hue (cyan); the accent green is success's colour. */
+  color: var(--color-info);
 }
 
 .status-tag__label {

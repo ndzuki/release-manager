@@ -168,6 +168,14 @@ function cellText(value: unknown): string {
 </template>
 
 <style scoped>
+/* The root is the scroll container, not the table: the state components and the table
+   share it, and `min-width: 0` keeps a page grid from re-inflating to the table's
+   min-content width (the page-level bug the wrapper fixes). */
+.data-table {
+  overflow-x: auto;
+  min-width: 0;
+}
+
 .data-table__table {
   width: 100%;
   border-collapse: collapse;

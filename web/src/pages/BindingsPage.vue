@@ -169,12 +169,16 @@ async function confirmRevoke(): Promise<void> {
 <style scoped>
 .governance {
   display: grid;
+  /* One explicit track: an `auto` track would grow to a panel's min-content and push the
+     document sideways (the 20rem panel used to force 381px at a 375px viewport). */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
 
 .governance__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -211,6 +215,9 @@ async function confirmRevoke(): Promise<void> {
 .governance__panels {
   display: grid;
   gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  /* `min(20rem, 100%)` keeps two columns on a desktop and degrades to a single column
+     whenever the container is narrower than 20rem (295px at a 375px viewport), instead of
+     forcing a 320px track and overflowing the page. */
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
 }
 </style>

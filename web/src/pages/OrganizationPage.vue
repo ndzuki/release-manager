@@ -253,12 +253,14 @@ function removeMember(member: OrganizationMemberView): void {
 <style scoped>
 .organization {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
 
 .organization__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;

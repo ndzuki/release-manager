@@ -51,6 +51,7 @@ const zhCN = {
   'account.security': '账号安全',
   'governance.eyebrow': '治理',
   'governance.sourcePolicy': '来源 / 策略',
+  'governance.table.scrollRegion': '授权绑定表格（可横向滚动）',
   'release.status.outOfSync': '不同步',
   'release.status.missing': '缺失',
   'release.status.active': '生效中',
@@ -553,6 +554,7 @@ const zhCN = {
     '该 Operation 已终态但集群效果未知（Unresolved Emergency Effect）：目标锁继续保留，页面持续观察 late Result，直到解析为 APPLIED 或 NOT_APPLIED。',
   'emergency.result.resolved': '效果已解析，观察已停止。',
   'emergency.tasks.caption': '待收敛任务',
+  'emergency.tasks.scrollRegion': '收敛任务表格（可横向滚动）',
   'emergency.tasks.target': '目标',
   'emergency.tasks.type': '类型',
   'emergency.tasks.reason': '原因',
@@ -576,6 +578,7 @@ const zhCN = {
   'annotation.keyWhitelist': 'Key（白名单）',
   'emergency.tasks.pendingPromotion': '待提升',
   'annotation.scope': '作用域',
+  'annotation.table.scrollRegion': '注解表格（可横向滚动）',
   // Emergency action selector + replicas/annotations payload (REQ-081, REQ-058)
   'emergency.action.label': '变更动作',
   'emergency.action.image': '镜像变更',
@@ -687,6 +690,7 @@ const zhCN = {
   'operation.timeline.ack': 'ACK 已确认',
   'operation.timeline.workload': '未上报的 Workload',
   'operation.timeline.effectConfirmed': 'Emergency 生效结果已确认',
+  'operation.list.scrollRegion': '操作历史表格（可横向滚动）',
   'operation.timeline.scrollRegion': '状态时间线（可滚动）',
   'convergence.card.title': '收敛任务（REQUIRE_PROMOTION）',
   'convergence.card.awaitingCreate': '结果已生效，等待创建收敛任务。',
@@ -734,9 +738,12 @@ const zhCN = {
   'bundle.detail.sbom': 'SBOM 引用',
   'bundle.detail.bundleId': 'Bundle 标识',
   'bundle.eyebrow': '发布',
+  'bundle.table.scrollRegion': 'Bundle 列表（可横向滚动）',
+  'bundle.images.scrollRegion': '镜像绑定表格（可横向滚动）',
   'definitions.releaseDefinitionIdRequired': 'Release Definition ID（必填）',
   'definitions.chartNameOptional': 'Chart 名称（可空）',
   'stuck.eyebrow': '紧急',
+  'stuck.table.scrollRegion': '卡住的锁表格（可横向滚动）',
   // Stuck-lock confirmation (TASK-296). The warning is a catalog entry so the
   // hand-rolled dialog could drop its inline copy: AppDialog renders it as
   // `description` and therefore also wires aria-describedby to the dialog.
@@ -746,6 +753,7 @@ const zhCN = {
   'trust.keyId': '密钥 ID',
   'trust.issuerSubject': '签发者 / 主体',
   'trust.revocationEpoch': '· 吊销代数',
+  'trust.table.scrollRegion': '信任根表格（可横向滚动）',
   // Writes: create + rotate (TASK-280 D11). Rotation takes only PUBLIC key material;
   // the signing private key never enters the browser or the wire.
   'trust.create.entry': '新建信任根',
@@ -830,6 +838,7 @@ const zhCN = {
   'localUser.list.empty': '还没有本地账号。',
   'localUser.list.loading': '正在加载本地用户…',
   'localUser.list.loadMore': '加载更多',
+  'localUser.table.scrollRegion': '本地账号表格（可横向滚动）',
   'localUser.create.title': '创建本地账号',
   'localUser.create.username': '用户名',
   'localUser.create.password': '初始密码',

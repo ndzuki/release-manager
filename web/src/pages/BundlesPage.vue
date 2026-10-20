@@ -90,40 +90,48 @@ function applyFilters(): void {
       message="当前过滤条件下没有 Bundle；清空过滤可查看全部（注意：无权限时服务端会返回拒绝而不是空列表）。"
     />
 
-    <table v-else-if="store.bundles.length > 0" class="bundles__table">
-      <thead>
-        <tr>
-          <th scope="col">名称</th>
-          <th scope="col">状态</th>
-          <th scope="col">摘要</th>
-          <th scope="col">Chart</th>
-          <th scope="col">镜像绑定</th>
-          <th scope="col">接收时间</th>
-          <th scope="col">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="bundle in store.bundles" :key="bundle.id" :data-testid="`bundle-row-${bundle.id}`">
-          <td>
-            <strong>{{ bundle.name }}</strong>
-            <br />
-            <small>{{ bundle.id }}</small>
-          </td>
-          <td><span class="bundles__status">{{ bundle.statusLabel }}</span></td>
-          <td><code class="bundles__digest">{{ bundle.digest }}</code></td>
-          <td>
-            {{ bundle.chartRef }}@{{ bundle.chartVersion }}
-            <br />
-            <small>{{ bundle.chartDigest }}</small>
-          </td>
-          <td>{{ bundle.images.length }} 个</td>
-          <td>{{ formatTimestamp(bundle.createdAt) }}</td>
-          <td>
-            <button type="button" :data-testid="`bundle-detail-${bundle.id}`" @click="store.openDetail(bundle)">明细</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div
+      v-else-if="store.bundles.length > 0"
+      class="bundles__scroll"
+      role="region"
+      :aria-label="t('bundle.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="bundles__table">
+        <thead>
+          <tr>
+            <th scope="col">名称</th>
+            <th scope="col">状态</th>
+            <th scope="col">摘要</th>
+            <th scope="col">Chart</th>
+            <th scope="col">镜像绑定</th>
+            <th scope="col">接收时间</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="bundle in store.bundles" :key="bundle.id" :data-testid="`bundle-row-${bundle.id}`">
+            <td>
+              <strong>{{ bundle.name }}</strong>
+              <br />
+              <small>{{ bundle.id }}</small>
+            </td>
+            <td><span class="bundles__status">{{ bundle.statusLabel }}</span></td>
+            <td><code class="bundles__digest">{{ bundle.digest }}</code></td>
+            <td>
+              {{ bundle.chartRef }}@{{ bundle.chartVersion }}
+              <br />
+              <small>{{ bundle.chartDigest }}</small>
+            </td>
+            <td>{{ bundle.images.length }} 个</td>
+            <td>{{ formatTimestamp(bundle.createdAt) }}</td>
+            <td>
+              <button type="button" :data-testid="`bundle-detail-${bundle.id}`" @click="store.openDetail(bundle)">明细</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <div v-if="store.hasMore" class="bundles__more">
       <button type="button" :disabled="store.appending" data-testid="bundles-load-more" @click="store.appendNextPage">
@@ -154,18 +162,25 @@ function applyFilters(): void {
         </dl>
 
         <h3>镜像绑定（{{ store.detail.images.length }}）</h3>
-        <table class="bundles__images">
-          <thead>
-            <tr><th scope="col">引用</th><th scope="col">摘要</th><th scope="col">Values 路径</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="image in store.detail.images" :key="`${image.valuesPath}-${image.ref}`">
-              <td><code>{{ image.ref }}</code></td>
-              <td><code>{{ image.digest }}</code></td>
-              <td>{{ image.valuesPath }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div
+          class="bundles__images-scroll"
+          role="region"
+          :aria-label="t('bundle.images.scrollRegion')"
+          tabindex="0"
+        >
+          <table class="bundles__images">
+            <thead>
+              <tr><th scope="col">引用</th><th scope="col">摘要</th><th scope="col">Values 路径</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="image in store.detail.images" :key="`${image.valuesPath}-${image.ref}`">
+                <td><code>{{ image.ref }}</code></td>
+                <td><code>{{ image.digest }}</code></td>
+                <td>{{ image.valuesPath }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <button type="button" @click="store.closeDetail()">关闭明细</button>
       </template>
@@ -176,12 +191,14 @@ function applyFilters(): void {
 <style scoped>
 .bundles {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
 
 .bundles__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -234,6 +251,10 @@ function applyFilters(): void {
 
 .bundles__filters label {
   display: grid;
+  /* See DefinitionsPage: the control's intrinsic width must not become the label's
+     minimum, or the filter row overflows a 375px viewport. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
@@ -247,9 +268,17 @@ function applyFilters(): void {
   background: var(--color-surface);
 }
 
+.bundles__scroll,
+.bundles__images-scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
 .bundles__table,
 .bundles__images {
   width: 100%;
+  /* --sf is only ~2% lighter than --bg, so the panel needs an edge to read as a surface. */
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

@@ -217,6 +217,8 @@ onMounted(() => {
 <style scoped>
 .operation-center {
   display: grid;
+  /* Explicit track: the DataTable's scroll container cannot shrink an `auto` track. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }

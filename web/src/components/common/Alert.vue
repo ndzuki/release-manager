@@ -55,7 +55,8 @@ const role = computed(() => (props.tone === 'error' || props.tone === 'warning' 
 }
 
 .alert--info {
-  color: var(--ac);
+  /* Info has its own hue (cyan); --ac equals --ok, so the neutral tone read as success. */
+  color: var(--color-info);
 }
 
 .alert--success {

@@ -112,24 +112,32 @@ onMounted(() => {
         :message="t('localUser.list.empty')"
       />
 
-      <table v-else class="local-users__table">
-        <thead>
-          <tr>
-            <th scope="col">{{ t('localUser.column.username') }}</th>
-            <th scope="col">{{ t('localUser.column.role') }}</th>
-            <th scope="col">{{ t('localUser.column.org') }}</th>
-            <th scope="col">{{ t('localUser.column.status') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="user in store.users" :key="user.id" :data-testid="`local-user-${user.username}`">
-            <td>{{ user.username }}</td>
-            <td>{{ user.roles.map((name) => roleLabels[name] ?? name).join('、') }}</td>
-            <td>{{ user.orgId }}</td>
-            <td>{{ statusLabel('localUser', user.status) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div
+        v-else
+        class="local-users__scroll"
+        role="region"
+        :aria-label="t('localUser.table.scrollRegion')"
+        tabindex="0"
+      >
+        <table class="local-users__table">
+          <thead>
+            <tr>
+              <th scope="col">{{ t('localUser.column.username') }}</th>
+              <th scope="col">{{ t('localUser.column.role') }}</th>
+              <th scope="col">{{ t('localUser.column.org') }}</th>
+              <th scope="col">{{ t('localUser.column.status') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="user in store.users" :key="user.id" :data-testid="`local-user-${user.username}`">
+              <td>{{ user.username }}</td>
+              <td>{{ user.roles.map((name) => roleLabels[name] ?? name).join('、') }}</td>
+              <td>{{ user.orgId }}</td>
+              <td>{{ statusLabel('localUser', user.status) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <button v-if="store.hasMore" type="button" :disabled="store.loadingMore" @click="store.loadMore()">
         {{ t('localUser.list.loadMore') }}
@@ -192,11 +200,13 @@ onMounted(() => {
 <style scoped>
 .local-users-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
 .local-users-page__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
@@ -205,6 +215,11 @@ onMounted(() => {
 .local-users-page__description {
   color: var(--color-muted);
   max-width: 48rem;
+}
+
+.local-users__scroll {
+  overflow-x: auto;
+  min-width: 0;
 }
 
 .local-users__table {

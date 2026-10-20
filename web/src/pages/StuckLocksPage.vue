@@ -139,38 +139,46 @@ async function submit(): Promise<void> {
       message="当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。"
     />
 
-    <table v-else-if="store.locks.length > 0" class="stuck__table">
-      <thead>
-        <tr>
-          <th scope="col">定义 / 操作</th>
-          <th scope="col">动作</th>
-          <th scope="col">锁定路径</th>
-          <th scope="col">终态时间 / 卡住自</th>
-          <th scope="col">观察窗口</th>
-          <th scope="col">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="lock in store.locks" :key="lock.intentId" :data-testid="`stuck-lock-${lock.intentId}`">
-          <td>
-            <code>{{ lock.releaseDefinitionId }}</code>
-            <br />
-            <small>op {{ lock.operationId }}</small>
-          </td>
-          <td>{{ lock.action }}</td>
-          <td>{{ lock.lockPathSummary }}</td>
-          <td>
-            {{ formatTimestamp(lock.terminalAt) }}
-            <br />
-            <small>卡住自 {{ formatTimestamp(lock.stuckSince) }}</small>
-          </td>
-          <td>{{ lock.observeTimeoutDisplay || '—' }}</td>
-          <td>
-            <button v-if="auth.canWrite" type="button" class="danger" :disabled="store.releasing" @click="open(lock)">释放锁</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div
+      v-else-if="store.locks.length > 0"
+      class="stuck__scroll"
+      role="region"
+      :aria-label="t('stuck.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="stuck__table">
+        <thead>
+          <tr>
+            <th scope="col">定义 / 操作</th>
+            <th scope="col">动作</th>
+            <th scope="col">锁定路径</th>
+            <th scope="col">终态时间 / 卡住自</th>
+            <th scope="col">观察窗口</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="lock in store.locks" :key="lock.intentId" :data-testid="`stuck-lock-${lock.intentId}`">
+            <td>
+              <code>{{ lock.releaseDefinitionId }}</code>
+              <br />
+              <small>op {{ lock.operationId }}</small>
+            </td>
+            <td>{{ lock.action }}</td>
+            <td>{{ lock.lockPathSummary }}</td>
+            <td>
+              {{ formatTimestamp(lock.terminalAt) }}
+              <br />
+              <small>卡住自 {{ formatTimestamp(lock.stuckSince) }}</small>
+            </td>
+            <td>{{ lock.observeTimeoutDisplay || '—' }}</td>
+            <td>
+              <button v-if="auth.canWrite" type="button" class="danger" :disabled="store.releasing" @click="open(lock)">释放锁</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <!-- Releasing a lock is irreversible and not replayable, so the confirmation
          goes through the shared primitive with `danger` (role=alertdialog) instead
@@ -230,12 +238,14 @@ async function submit(): Promise<void> {
 <style scoped>
 .stuck {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
 
 .stuck__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -274,6 +284,10 @@ async function submit(): Promise<void> {
 .stuck__filter label {
   display: grid;
   flex: 1;
+  /* Same shrink rule as the other filter rows: the input's intrinsic width is the
+     label's automatic minimum, and it exceeds the content box at 375px. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
@@ -295,8 +309,14 @@ async function submit(): Promise<void> {
   color: var(--color-success-ink);
 }
 
+.stuck__scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
 .stuck__table {
   width: 100%;
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

@@ -91,7 +91,7 @@ describe('design tokens', () => {
     '--color-danger': 'var(--er)',
     '--color-warning': 'var(--wn)',
     '--color-success': 'var(--ok)',
-    '--color-info': 'var(--ac)',
+    '--color-info': 'var(--k)',
     '--color-cyan': 'var(--k)',
     '--color-violet': 'var(--n)',
   };
@@ -168,6 +168,14 @@ describe('design tokens', () => {
       '--s': '#b45309',
       '--n': '#6d28d9',
     });
+  });
+
+  it('does not collapse info onto success in either palette', () => {
+    // The first direction-C pass aliased --color-info* to --ac, and --ac equals --ok, so
+    // every neutral notice rendered in the success green. The info family now derives from
+    // the cyan --k; this fails if the two hues become the same value again.
+    expect(darkPalette.get('--k')).not.toBe(darkPalette.get('--ok'));
+    expect(lightPalette.get('--k')).not.toBe(lightPalette.get('--ok'));
   });
 
   it('declares the light palette for the OS media query as well as the explicit attribute', () => {

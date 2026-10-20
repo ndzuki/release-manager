@@ -158,58 +158,66 @@ const confirmTitle = computed(() =>
       message="没有任何签名密钥被信任（策略版本 1、epoch 0）——这是「尚未配置」而不是错误。"
     />
 
-    <table v-else-if="store.policy && store.policy.roots.length > 0" class="trust__table">
-      <thead>
-        <tr>
-          <th scope="col">{{ t('trust.keyId') }}</th>
-          <th scope="col">状态</th>
-          <th scope="col">{{ t('trust.issuerSubject') }}</th>
-          <th scope="col">生效自 / 宽限至</th>
-          <th scope="col">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="root in store.policy.roots" :key="root.id" :data-testid="`trust-root-${root.keyId}`">
-          <td><code>{{ root.keyId }}</code></td>
-          <td>
-            <span class="trust__state" :class="`trust__state--${root.state}`">{{ statusLabel('trustRoot', root.state) }}</span>
-          </td>
-          <td>
-            {{ root.issuer }}
-            <br />
-            <small>{{ root.subjectPattern }}</small>
-          </td>
-          <td>
-            {{ formatTimestamp(root.validFrom) }}
-            <br />
-            <small>宽限至 {{ formatTimestamp(root.graceUntil) }}</small>
-          </td>
-          <td v-if="auth.canManageTrustRoots" class="trust__actions">
-            <button
-              v-if="root.state === 'active'"
-              type="button"
-              :disabled="store.saving"
-              :data-testid="`trust-rotate-${root.keyId}`"
-              @click="openRotate(root)"
-            >
-              {{ t('trust.rotate.entry') }}
-            </button>
-            <button
-              v-for="action in allowedActions(root.state)"
-              :key="action"
-              type="button"
-              :class="{ danger: action === 'revoke' }"
-              :disabled="store.saving || !store.canApply(root, action)"
-              :title="disabledReason(root, action)"
-              :data-testid="`trust-${action}-${root.keyId}`"
-              @click="request(root, action)"
-            >
-              {{ ACTION_LABELS[action] }}
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div
+      v-else-if="store.policy && store.policy.roots.length > 0"
+      class="trust__scroll"
+      role="region"
+      :aria-label="t('trust.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="trust__table">
+        <thead>
+          <tr>
+            <th scope="col">{{ t('trust.keyId') }}</th>
+            <th scope="col">状态</th>
+            <th scope="col">{{ t('trust.issuerSubject') }}</th>
+            <th scope="col">生效自 / 宽限至</th>
+            <th scope="col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="root in store.policy.roots" :key="root.id" :data-testid="`trust-root-${root.keyId}`">
+            <td><code>{{ root.keyId }}</code></td>
+            <td>
+              <span class="trust__state" :class="`trust__state--${root.state}`">{{ statusLabel('trustRoot', root.state) }}</span>
+            </td>
+            <td>
+              {{ root.issuer }}
+              <br />
+              <small>{{ root.subjectPattern }}</small>
+            </td>
+            <td>
+              {{ formatTimestamp(root.validFrom) }}
+              <br />
+              <small>宽限至 {{ formatTimestamp(root.graceUntil) }}</small>
+            </td>
+            <td v-if="auth.canManageTrustRoots" class="trust__actions">
+              <button
+                v-if="root.state === 'active'"
+                type="button"
+                :disabled="store.saving"
+                :data-testid="`trust-rotate-${root.keyId}`"
+                @click="openRotate(root)"
+              >
+                {{ t('trust.rotate.entry') }}
+              </button>
+              <button
+                v-for="action in allowedActions(root.state)"
+                :key="action"
+                type="button"
+                :class="{ danger: action === 'revoke' }"
+                :disabled="store.saving || !store.canApply(root, action)"
+                :title="disabledReason(root, action)"
+                :data-testid="`trust-${action}-${root.keyId}`"
+                @click="request(root, action)"
+              >
+                {{ ACTION_LABELS[action] }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <!-- Revocation cannot be undone, so it goes through the shared primitive with
          `danger` (role=alertdialog) instead of a hand-rolled block: that adds
@@ -247,12 +255,16 @@ const confirmTitle = computed(() =>
 <style scoped>
 .trust {
   display: grid;
+  /* One explicit track: an `auto` track grows to the table's min-content width, which is
+     how a wide row pushed the whole document sideways at 375px (567px with a one-row probe). */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-5);
 }
 
 .trust__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -297,8 +309,14 @@ const confirmTitle = computed(() =>
   color: var(--color-success-ink);
 }
 
+.trust__scroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+
 .trust__table {
   width: 100%;
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

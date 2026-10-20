@@ -93,6 +93,7 @@ const emit = defineEmits<{
 
 .organization__table {
   width: 100%;
+  border: 1px solid var(--color-border);
   border-collapse: collapse;
   background: var(--color-surface);
 }

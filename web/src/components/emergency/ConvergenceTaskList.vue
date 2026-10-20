@@ -17,50 +17,58 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
 </script>
 
 <template>
-  <table class="task-table">
-    <!-- UX-017 (W14): the header cells already carry scope; the missing piece
-         was an accessible name for the table itself. -->
-    <caption class="visually-hidden">{{ t('emergency.tasks.caption') }}</caption>
-    <thead>
-      <tr>
-        <th scope="col" aria-label="选择"></th>
-        <th scope="col">{{ t('emergency.tasks.target') }}</th>
-        <th scope="col">{{ t('emergency.tasks.type') }}</th>
-        <th scope="col">{{ t('emergency.tasks.reason') }}</th>
-        <th scope="col">{{ t('emergency.tasks.promotionPaths') }}</th>
-        <th scope="col">{{ t('emergency.tasks.status') }}</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr v-for="task in tasks" :key="task.taskId">
-        <td>
-          <input
-            v-if="task.selectable"
-            type="checkbox"
-            :checked="selectedTaskIds.includes(task.taskId)"
-            :aria-label="`选择收敛任务 ${task.taskId}`"
-            @change="emit('toggle', task.taskId)"
-          />
-          <span v-else aria-hidden="true">—</span>
-        </td>
-        <td>{{ task.targetSummary }}</td>
-        <td>{{ opTypeLabel(task.opType) }}</td>
-        <td class="reason">{{ task.reasonDisplay }}</td>
-        <td><code v-for="path in task.promotionPaths" :key="path" class="path">{{ path }}</code></td>
-        <td>
-          <span v-if="task.activeRevisionId" class="status">
-            {{ t('emergency.tasks.bound') }} {{ statusLabel('valuesRevision', task.activeRevisionStatus || 'draft') }}
-            <button type="button" class="continue" @click="emit('continue', task.taskId)">{{ t('emergency.tasks.continue') }}</button>
-          </span>
-          <span v-else-if="!task.selectable" class="status muted">{{ task.incompatibilityReason || '不可选' }}</span>
-          <span v-else class="status">{{ t('emergency.tasks.pendingPromotion') }}</span>
-        </td>
-      </tr>
-    </tbody>
-  </table>
+  <div
+    class="task-table-wrap"
+    role="region"
+    :aria-label="t('emergency.tasks.scrollRegion')"
+    tabindex="0"
+  >
+    <table class="task-table">
+      <!-- UX-017 (W14): the header cells already carry scope; the missing piece
+           was an accessible name for the table itself. -->
+      <caption class="visually-hidden">{{ t('emergency.tasks.caption') }}</caption>
+      <thead>
+        <tr>
+          <th scope="col" aria-label="选择"></th>
+          <th scope="col">{{ t('emergency.tasks.target') }}</th>
+          <th scope="col">{{ t('emergency.tasks.type') }}</th>
+          <th scope="col">{{ t('emergency.tasks.reason') }}</th>
+          <th scope="col">{{ t('emergency.tasks.promotionPaths') }}</th>
+          <th scope="col">{{ t('emergency.tasks.status') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="task in tasks" :key="task.taskId">
+          <td>
+            <input
+              v-if="task.selectable"
+              type="checkbox"
+              :checked="selectedTaskIds.includes(task.taskId)"
+              :aria-label="`选择收敛任务 ${task.taskId}`"
+              @change="emit('toggle', task.taskId)"
+            />
+            <span v-else aria-hidden="true">—</span>
+          </td>
+          <td>{{ task.targetSummary }}</td>
+          <td>{{ opTypeLabel(task.opType) }}</td>
+          <td class="reason">{{ task.reasonDisplay }}</td>
+          <td><code v-for="path in task.promotionPaths" :key="path" class="path">{{ path }}</code></td>
+          <td>
+            <span v-if="task.activeRevisionId" class="status">
+              {{ t('emergency.tasks.bound') }} {{ statusLabel('valuesRevision', task.activeRevisionStatus || 'draft') }}
+              <button type="button" class="continue" @click="emit('continue', task.taskId)">{{ t('emergency.tasks.continue') }}</button>
+            </span>
+            <span v-else-if="!task.selectable" class="status muted">{{ task.incompatibilityReason || '不可选' }}</span>
+            <span v-else class="status">{{ t('emergency.tasks.pendingPromotion') }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </template>
 
 <style scoped>
+.task-table-wrap { overflow-x: auto; min-width: 0; }
 .task-table { width: 100%; border-collapse: collapse; }
 .task-table th, .task-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-border); text-align: left; }
 .task-table th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); text-transform: uppercase; }

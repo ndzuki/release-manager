@@ -72,7 +72,8 @@ withDefaults(
 }
 
 .stat-card--info .stat-card__value {
-  color: var(--ac);
+  /* Info has its own hue (cyan); --ac equals --ok, which read as "success". */
+  color: var(--color-info);
 }
 
 .stat-card__hint {

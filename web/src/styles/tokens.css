@@ -30,7 +30,7 @@
  *   --color-border        → --bd            --color-success        → --ok
  *   --color-text          → --tx            --color-warning        → --wn
  *   --color-muted         → --mu            --color-error/danger   → --er
- *   --color-info*         → --ac            --color-violet*        → --n
+ *   --color-info*         → --k             --color-violet*        → --n
  *   --color-cyan          → --k
  *   Derived pairs are computed instead of duplicated: every `*-soft`, `*-surface` and
  *   `*-subtle` mixes the semantic colour INTO the background, and every `*-ink` mixes it
@@ -111,14 +111,21 @@
   --color-success-border: color-mix(in srgb, var(--ok) 45%, var(--bd));
   --color-success-border-soft: color-mix(in srgb, var(--ok) 28%, var(--bd));
 
-  --color-info: var(--ac);
-  --color-info-soft: color-mix(in srgb, var(--ac) 8%, var(--bg));
-  --color-info-surface: color-mix(in srgb, var(--ac) 14%, var(--bg));
-  --color-info-subtle: color-mix(in srgb, var(--ac) 18%, var(--bg));
-  --color-info-border: color-mix(in srgb, var(--ac) 40%, var(--bd));
-  --color-info-border-soft: color-mix(in srgb, var(--ac) 24%, var(--bd));
-  --color-info-ink: color-mix(in srgb, var(--ac) 76%, var(--tx));
-  --color-info-ink-strong: color-mix(in srgb, var(--ac) 66%, var(--tx));
+  /*
+   * Info is its own hue. Direction C has no separate info colour, so the first theme pass
+   * derived it from --ac (which equals --ok), and every neutral notice read as "success".
+   * It now comes from the palette's cyan (--k), which is distinguishable from the green
+   * success tone in both themes; --ac stays the generic accent (timeline dots, stat
+   * values) and --ok stays success.
+   */
+  --color-info: var(--k);
+  --color-info-soft: color-mix(in srgb, var(--k) 8%, var(--bg));
+  --color-info-surface: color-mix(in srgb, var(--k) 14%, var(--bg));
+  --color-info-subtle: color-mix(in srgb, var(--k) 18%, var(--bg));
+  --color-info-border: color-mix(in srgb, var(--k) 40%, var(--bd));
+  --color-info-border-soft: color-mix(in srgb, var(--k) 24%, var(--bd));
+  --color-info-ink: color-mix(in srgb, var(--k) 76%, var(--tx));
+  --color-info-ink-strong: color-mix(in srgb, var(--k) 66%, var(--tx));
 
   --color-violet: var(--n);
   --color-violet-ink: color-mix(in srgb, var(--n) 78%, var(--tx));
