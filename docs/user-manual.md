@@ -1,310 +1,411 @@
-# Release Manager Web 控制台 · 使用手册
+# Release Manager Web 控制台 · 使用教程
 
-本手册面向**使用控制台的人**（平台管理员 / 发布管理员 / 只读观察者），回答「每个页面是干什么的、
-怎么点、点完会发生什么、出错先看哪里」。系统边界与契约见 `docs/architecture.md`，
-环境如何起与清见 `docs/dev-environment.md`，值班处置见 `docs/runbook.md` —— 本文不重复这些内容。
+本教程面向**使用控制台的人**（平台管理员 / 发布管理员 / 部署者 / 只读观察者），按「第一次登录 → 认识导航 → 走完一条发布」
+的顺序编排，并在每个页面说明「它是干什么的、怎么点、点完会发生什么、出错先看哪里」。
+系统边界与契约见 `docs/architecture.md`，本地环境见 `docs/dev-environment.md`，故障处置见 `docs/runbook.md` —— 本文不重复这些内容。
 
-## 0. 手册的证据与适用边界
+## 0. 证据与适用边界
 
 | 项 | 值 |
 | --- | --- |
-| 截图环境 | 本机 dev 环境：`make dev-up` 起的 5 个 k3d 集群（1 控制面 + 4 客户集群）+ `release-manager-registry` + 管理面服务 8082–8088 |
-| 夹具数据 | canonical fixture `v2`（2 Customer / 4 Cluster / 8 路由 / 4 Operator / 4 ReleaseDefinition / 1 Bundle），**另经** `test/e2e/prerequisite/smoke.sh` 跑出真实 Operation（UPGRADE / CANCELLED / ROLLBACK） |
-| 截图入口 | 已部署的控制台 `http://127.0.0.1:8087`（`release-web`，nginx 反代），视口 1440×900，整页截图 |
-| 截图日期 | 2026-09-28（共 22 张，全部本日实测；其中 `21-login-unpatched-no-progress.png` 取自**回滚后的交付版本**，其余取自出图补丁环境） |
-| 账号 | `dev-admin`（platform_admin），口令在 `data/dev-credentials.env`（**不入库、不入文档**） |
+| 截图环境 | **生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:5080198` rev22 + 6 个 Go 服务 `:f0f8d6b`） |
+| 截图方式 | Playwright + 系统 Chrome，真实登录（`admin` / platform_admin），视口 1440×900、长页面整页截图；另含 375×812 两张 |
+| 截图日期 | **2026-10-21**，共 **37 张**（暗色 29 张 + 亮色 6 张 + 375 两张），全部当日实测 |
+| 夹具数据 | 生产库现状：1 个客户（RM Cust Demo）/ 1 个集群（rm-cust）/ 4 个 release / 6 个历史操作（5 succeeded、1 failed）/ 1 个已验证 Bundle |
+| 关键限制 | **生产环境当前没有在线 Operator**（客户集群里未部署 operator）。因此所有依赖 Operator 的读都会被拒绝并**显式降级**（例如 Values 页的 Secret 列表、紧急变更的候选制品），本教程在对应位置标注了「本环境降级表现」 |
+| 主题 | 控制台**暗色优先**；亮色样本见 `dc-03-home-light.png`、`dc-09-release-inventory-light.png`、`dc-10-values-editor-light.png`、`dc-14-audit-light.png`、`dc-17-operation-detail-light.png` |
 
-> ⚠️ **重要前提：本手册的截图是在一个临时补丁下取得的。**
-> 该版本的 Web 控制台**无法通过自身登录流程进入**，因此无法直接截到任何已登录页面。
-> 为了给出手册所需的真实界面，本次在**独立 worktree**（`.worktrees/ux-manual`）上打了一个
-> dual-mode 认证补丁（`cmd/auth/main.go:194` 传入 `BrowserSessionConfig`，并在浏览器分支下
-> 同时返回 bearer token），只重建 `release-auth` 镜像、只作用于本次 dev 环境；
-> 主工作树**零改动**。补丁与验证记录见第 15 节与 `docs/ux-review.md`。
-> 未打补丁时的真实表现为：登录接口返回 200 但 `user` 为空且不下发 cookie，前端被守卫弹回
-> `/login`；这是本次审查的头号 blocker。
+> 本轮的界面是「方向 C」改版后的版本：统一 `PageHeader`（面包屑只显示**名称**）、语义化状态胶囊、`Steps` 阶段条、
+> 并排 diff、可折叠原始 JSON。旧版截图仍保留在 `docs/images/user-manual/`（文件名不带 `dc-` 前缀）作为历史证据，
+> 供 `docs/ux-revamp-plan.md` 与 `docs/ux-review.md` 引用；**本教程只引用 `dc-` 前缀的新截图**。
 
 ## 1. 术语与页面地图
 
 | 术语 | 含义 |
 | --- | --- |
-| **Customer** | 租户边界，拥有自己的 Cluster、ReleaseDefinition、Operator 与 Release 数据 |
-| **Cluster** | 归属单个 Customer 的目标 Kubernetes 集群，是 Release 部署与 Operator 运行的隔离边界 |
-| **ReleaseDefinition** | 描述目标 Customer/Cluster、namespace、release name 与 chart 的持久发布目标配置 |
-| **Release** | Operator 从目标集群同步回来的 Helm Release 实况（含 revision、values digest、最近同步时间） |
-| **ValuesRevision** | 不可变的配置版本；发布操作绑定一个**已审批**的 ValuesRevision |
-| **Operation** | 一次发布动作（INSTALL / UPGRADE / ROLLBACK），有状态机、Preflight 与时间线 |
-| **Preflight** | 发布前的有序准入检查（artifact → render → cluster dry-run → runtime image pull 等） |
+| **客户 / Customer** | 租户边界，拥有自己的集群、发布定义、Operator 与发布数据 |
+| **集群 / Cluster** | 归属单个客户的发布目标集群，也是 Operator 运行的边界 |
+| **发布定义 / Definition** | 描述目标客户/集群、namespace、release name 与 chart 的持久发布配置（Promotion Mapping） |
+| **发布 / Release** | Operator 从目标集群同步回来的 Helm Release 实况（revision、values digest、最近同步时间） |
+| **Values 版本 / ValuesRevision** | 不可变的配置版本；发布操作必须绑定一个**已审批**版本 |
+| **操作 / Operation** | 一次发布动作（安装 / 升级 / 回滚），有状态机、预检与时间线 |
+| **预检 / Preflight** | 下发前的有序准入检查（制品 → 渲染 → 集群 → 镜像拉取） |
+| **制品 Bundle** | 已校验的 chart + 镜像集合，发布操作的输入 |
+| **紧急变更 / Emergency change** | 绕过常规流程、直接改副本或镜像的应急通道，会留下收敛任务 |
+| **紧急锁 / Stuck lock** | 效果未知且已过观察窗口的紧急操作，需要显式收敛或人工放行 |
 
-页面与路由：
+页面与路由（`web/src/router/index.ts`）：
 
-| 页面 | 路由 | 一句话 |
+| 侧栏分组 | 页面 | 路由 |
 | --- | --- | --- |
-| 登录 | `/login` | 建立服务端会话 |
-| 首屏 | `/` | 当前组织与身份；无发布活动时是空态 |
-| 客户列表 | `/customers` | 租户总览 |
-| 客户详情 | `/customers/:id` | 编辑客户、禁用客户、变更历史 |
-| 集群列表 | `/customers/:customerId/clusters` | 该客户的发布目标清单 |
-| 集群详情 | `/customers/:customerId/clusters/:clusterId` | 摘要 + 镜像/Chart 路由只读视图 |
-| 集群编辑 | `/customers/:customerId/clusters/:clusterId/edit` | 名称、是否作为发布目标、路由规则 |
-| Operator 列表 | `/customers/:customerId/clusters/:clusterId/operators` | 注册历史与在线状态 |
-| Operator 详情 | `.../operators/:operatorId` | 身份、会话、能力、撤销 |
-| Release 清单 | `.../releases` | Operator 同步回来的 Release |
-| Values 编辑器 | `.../releases/:releaseId/values` | 编辑 canonical values、SecretRef、审批 |
-| 创建操作 | `.../operations/new` | 选制品与已审批配置，确认后启动 |
-| 操作详情 | `.../operations/:operationId` | Preflight 结果、状态、时间线、取消 |
-| 紧急变更 | `.../emergency` | 绕过常规流程的镜像/副本变更 |
-| 收敛任务 | `.../emergency/convergence` | 紧急变更后的收敛补齐 |
-| 审计 | `/audit` | 组织级审计事件查询与导出 |
+| 发布与运维 | 操作中心 | `/operations` |
+| 发布与运维 | 发布定义 | `/definitions` |
+| 发布与运维 | 发布 Bundle | `/bundles` |
+| 发布与运维 | 制品生命周期 | `/artifacts/lifecycle` |
+| 发布与运维 | 紧急锁 | `/emergency/stuck-locks` |
+| 资产与审计 | 客户 | `/customers` |
+| 资产与审计 | 集群 | `/customers/:customerId/clusters` |
+| 资产与审计 | 审计 | `/audit` |
+| 治理与账号 | 信任根 | `/settings/trust` |
+| 治理与账号 | 授权绑定 | `/settings/bindings` |
+| 治理与账号 | 组织成员 | `/settings/organization` |
+| 治理与账号 | 本地用户 | `/settings/users` |
+| 治理与账号 | 修改密码 | `/settings/password` |
 
-## 2. 起环境、拿账号、收尾
+页内层级（都在客户/集群/发布之下）：`发布清单` → `/customers/:customerId/clusters/:clusterId/releases`，
+`Values` → `.../releases/:releaseId/values`，`操作历史` → `.../releases/:releaseId/operations`，
+`创建操作` → `.../operations/new`，`操作详情` → `.../operations/:operationId`，
+`紧急变更` → `.../emergency`，`收敛任务` → `.../emergency/convergence`。
 
-```bash
-make dev-up        # 起完整 dev 环境（幂等；含 install 阶段 seed）
-make dev-seed      # 需要单独重跑夹具时
-make dev-status    # 打印机器可读的 data/dev-status.json
-```
+## 2. 登录、登出与主题
 
-- 宿主端口冲突时用 `REGISTRY_PORT` / `DEV_K3D_API_PORT` 覆盖（本手册使用 `REGISTRY_PORT=5011`、`DEV_K3D_API_PORT=6449`，因为默认的 5001/6443 被同机另一套环境占用）。
-- 账号口令落在 `data/dev-credentials.env`（0600）：`dev-admin` / `dev-deployer` / `dev-reader` / `e2e-runner`。
-- 控制台两种入口：**容器部署** `http://localhost:8087`（`release-web` + nginx 反代，本手册截图所用）；**开发服务器** `cd web && npm run dev` → `http://127.0.0.1:5173`（Vite 按包名前缀代理到 8082–8088）。
-- 收尾：`make dev-down`（删 5 个集群、保留 registry），或 `make dev-purge CONFIRM=1`（连 registry 与 `data/` 运行时文件一起删）。两者都是**破坏性操作**，执行前确认没有需要保留的现场。
+![登录页](images/user-manual/dc-01-login.png)
 
-## 3. 登录与首屏
+1. 打开 `/login`，填**用户名**与**密码**。表单用服务端管理的 HttpOnly 会话，浏览器里不存 bearer token。
+2. 点**登录**；成功后落到 `/`。若之前被守卫拦下，会回到原来的 return URL。
+3. 会话过期会跳回 `/login?reason=expired`，登录后回到原页面。
+4. 登出在侧栏左下角（`退出登录`），会撤销服务端会话。
 
-![登录页](images/user-manual/01-login.png)
+**主题**：侧栏左下角有一个循环按钮，顺序是 **跟随系统 → 浅色 → 深色**，按钮文案会写成「切换主题（当前：跟随系统）」。
+选择存在浏览器 `localStorage['rm-theme']`，刷新后保持；`跟随系统` 会跟随操作系统的 `prefers-color-scheme` 实时切换。
 
-1. 打开 `/login`，填 `Username` 与 `Password`（表单用服务端管理的 HttpOnly 会话，前端不存 token）。
-2. 点 `Sign in`。提交中按钮变 `Signing in…` 并禁用。
-3. 成功后落到 `/`；若之前被守卫拦下过，会先回到原来的 `return URL`。
+![首页·亮色](images/user-manual/dc-03-home-light.png)
 
-![首屏](images/user-manual/03-home.png)
+## 3. 外壳与导航
 
-首屏只回答三件事：**当前是哪个组织**、**当前是谁**、**有没有发布活动**。
-顶栏固定提供 `Customers` / `Audit`、身份区与 `Sign out`；组织切换器只在
-**该账号可切换组织时**才渲染（`OrganizationSwitcher.vue:37` 的 `v-if="canSwitchOrganizations"`，
-即 platform_admin 且可切换组织不止一个；本环境只有 1 个组织，所以截图里没有它）。进入某个客户后
-顶栏会多出 `Clusters`。
+改版后的外壳是**固定 212px 侧栏 + 内容区（最大 1180px）**：
 
-> 会话过期或任一请求返回 `unauthenticated` 时会跳回 `/login?reason=expired`，登录页顶部显示
-> `Your session expired. Sign in again to return to your previous page.`，登录后回到原页面。
+- **侧栏顶部**：品牌 `Release Manager`（点击回首页）。
+- **三个分组**：`发布与运维`、`资产与审计`、`治理与账号`；没有权限的条目**不渲染**（不是禁用）。
+  `集群` 只有在进入某个客户之后才出现（它需要 `customerId`）。
+- **侧栏左下角**：当前用户与组织名、主题按钮、`退出登录`。
+- **窄屏（≤1024px）**：侧栏收进顶部条，点「导航菜单」打开抽屉（`aria-expanded`、`Esc` 关闭、焦点留在抽屉内）。
+  375px 下的首页与审计页见下图（单列、无横向滚动）：
 
-## 4. Customer 管理
+  ![首页·375](images/user-manual/dc-36-home-375.png)
+  ![审计·375](images/user-manual/dc-37-audit-375.png)
+- **页内页头**：每个页面顶部是统一的页头——**面包屑（只显示名称，不显示 UUID）**、标题、副标题、右侧动作。
+  面包屑的层级就是数据层级：`客户 / 集群 / 页面`。
 
-![客户列表](images/user-manual/04-customers.png)
+![首页·暗色](images/user-manual/dc-03-home.png)
 
-每张卡片是一个租户：名称、slug、`ACTIVE`/禁用状态、配置版本与创建时间，动作是 `View` / `Edit`。
-`Create customer` 仅对有写权限的角色可见。
+## 4. 首页总览
 
-![客户详情](images/user-manual/05-customer-detail.png)
+首页回答四个问题，下面再给两块「正在发生什么」：
 
-- 编辑 `Name` / `Slug` 后 `Save changes`（提交中变 `Saving…`）。
-- `Disable customer` 是**级联破坏性操作**（吊销 token/证书/会话），需要勾选确认后执行。
-- 下方 `History` 是该客户的变更事件流。
+| 卡片 | 口径 |
+| --- | --- |
+| **待收敛发布** | 发布清单里状态为「不同步」「缺失」的条数；下方提示「共 N 个发布」 |
+| **进行中操作** | 跨发布非终态操作数（有下一页时显示 `N+`） |
+| **发布同步率** | `状态为生效中 ÷ 发布总数`；没有发布时显示 `—`（不会显示 0%） |
+| **紧急变更** | 效果未知且已过观察窗口、需要显式收敛的操作数 |
 
-## 5. Cluster 管理
+> 这四张卡**只显示真实读到的数据**：任何一个读失败，卡片显示 `—` 并在提示行写原因（加载失败 / 功能未启用），
+> 而不是显示 0。历史版本里的「7 天成功率」因缺少跨发布终态聚合接口**已下线**，避免长期空卡。
 
-![集群列表](images/user-manual/06-cluster-list.png)
+- **进行中的操作**：按等待时长升序列出，行内是操作类型 + 发布名 + 所在集群 + `StatusTag`。
+  它只包含**非终态**操作（接口只提供这个 feed），成功/失败的历史请去「操作历史」。
+- **集群健康**：按集群显示「已同步 N/M」进度条与在线 Operator 数；没有 Operator 时写「暂无 Operator」。
+- **快速入口**：12 个磁贴，是窄屏抽屉之外的第二条导航路径（宽屏下与侧栏功能重叠，属刻意保留的兜底）。
 
-卡片显示集群名、`Active`/禁用、配置版本、路由规则条数。页面下半部是 `Release target preview`：
-选一个集群即可预览它作为发布目标时的路由解析结果。
+## 5. 资产：客户与集群
 
-![集群详情](images/user-manual/07-cluster-detail.png)
+### 5.1 客户
 
-- 摘要三项：`Version` / `Status` / `Routing rules`。
-- `Image routes` 与 `Chart routes` 是**只读**呈现（`Mode` / `Provider` / `Source prefix` / `Target prefix`，以及派生出的 `Central URI` / `Target URI`）。
-- `Operators` 进入该集群的 Operator 页面；`Edit` 进入编辑页；`Disable cluster` 会弹原生确认框。
+![客户列表](images/user-manual/dc-04-customers.png)
 
-![集群编辑](images/user-manual/23-cluster-edit.png)
+客户卡片显示名称、标识（slug）、启用状态、配置版本与创建时间。有写权限才出现「新建客户」。
 
-编辑页可改 `Cluster name`、勾选 `Enabled as release target`，并用 `Add rule` / `Remove` 维护路由规则
-（`Mode` 的 `Direct` / `Pull-through cache` / `Replicated`，以及 provider 与前缀）。
+![客户详情](images/user-manual/dc-05-customer-detail.png)
 
-## 6. Operator 管理
+- 编辑名称/标识后保存（提交中按钮变「保存中…」）。
+- **停用客户是级联破坏性操作**：会吊销该客户下 Operator 的证书与会话，需要勾选确认。
+- 下方「变更历史」是该客户的事件流。
 
-Operator 是跑在客户集群里的 agent，负责执行 Helm 操作并回传库存。
+### 5.2 集群
 
-![Operator 列表](images/user-manual/08-operator-list.png)
+![集群列表](images/user-manual/dc-06-cluster-list.png)
 
-- 顶部动作：`Refresh`、`Generate token`。
-- `Filter operator history` 可按 `Lifecycle`（All/Active/Superseded/Revoked）与 `Session`（All/No session/Online/Suspect/Offline/Revoked）过滤。
-- 表格列：`NAME` / `LIFECYCLE` / `SESSION` / `LAST HEARTBEAT` / `REGISTERED` / `ACTIONS`；行内可进详情或 `Revoke`。
+集群卡片显示集群名、是否作为发布目标、配置版本、路由规则条数；页面下方是「发布目标预览」。
 
-![Operator 详情](images/user-manual/19-operator-detail.png)
+![集群详情](images/user-manual/dc-07-cluster-detail.png)
 
-详情页有两块**总会渲染**的信息：`Status`（生命周期、会话、最后心跳、注册时间）与
-`Identity and runtime`（Customer / Cluster / Instance / Version / Superseded by / Revoked at）。
-第三块 `Capabilities` 是**条件渲染**的——仅当该 Operator 上报的能力集合非空时才出现
-（`OperatorDetailPage.vue:100` 的 `v-if="Object.keys(...capabilities).length"`），
-本环境的 Operator 未上报能力，所以截图里只有两块。
-注册流程：`Generate token` 生成一次性注册令牌 → 按弹窗给出的 `Deployment command` 在客户集群部署 →
-勾选「已保存到密钥库」后关闭（未勾选则关闭会吊销待用令牌）。
-完整接入步骤（客户集群 YAML、网关地址替换、证书信任与排障）见 [客户集群接入手册](customer-onboarding.md)。
+摘要三项（版本 / 状态 / 路由规则数），下面分「镜像路由」「Chart 路由」两块**只读**呈现
+（模式 / 提供方 / 源前缀 / 目标前缀，以及派生出的中央 URI 与目标 URI）。`编辑` 进编辑页；停用会弹确认框。
 
-## 7. Release 清单
+![集群编辑](images/user-manual/dc-23-cluster-edit.png)
 
-![Release 清单](images/user-manual/09-release-inventory.png)
+编辑页可改集群名、是否作为发布目标，并用「添加规则 / 删除」维护路由规则
+（模式：直连 / 透传缓存 / 复制；以及提供方与前缀）。
 
-- 顶部两行说明数据来源（Operator 最近一次同步）与条数；动作 `刷新` / `触发同步`。
-- 可按 `状态`（全部状态 / Active / Missing / Out of sync）与 release name 搜索过滤。
-- 表格列：`RELEASE` / `状态` / `CHART` / `REVISION` / `VALUES DIGEST` / `最近同步` / `紧急变更` / `操作`。
-- 绑定 Definition 的行才有 `紧急变更` 与 `创建操作`；未绑定的行这两列是灰色阻断态，并给出原因。
+### 5.3 Operator
 
-## 8. ValuesRevision 编辑与审批
+Operator 是跑在客户集群里的 agent：执行 Helm 操作并回传发布库存。
 
-![Values 编辑器](images/user-manual/10-values-editor.png)
+![Operator 列表](images/user-manual/dc-08-operator-list.png)
 
-- 编辑器支持 `YAML` / `JSON` 两种语言视图，右侧是 `CANONICAL DIFF`（Parent → Current），只显示语义差异。
-- `SECRET REFERENCES` 只保存 namespace 内 Secret 的 `name` / `key` / 目标 `path`，**不读取也不传输 value**。
-- `保存 Draft` → `Submit` → 审批人 `Approve` / `Reject`。Draft 会存到浏览器本地，刷新后提示
-  `已恢复未保存的编辑`；只读角色会看到 `当前角色为只读。服务端仍会独立执行授权。`
+- 顶部可刷新、生成一次性注册令牌（仅平台管理员/发布管理员）。
+- 列表可按生命周期（全部/生效/已被取代/已撤销）与会话（全部/无会话/在线/可疑/离线/已撤销）过滤。
+- 注册流程：生成令牌 → 按弹窗给出的部署命令在客户集群部署 → 勾选「已保存到密钥库」后关闭（不勾选则关闭会吊销待用令牌）。
 
-## 9. 发布操作（创建 → 确认 → Preflight → 详情）
+> **本环境降级表现**：生产当前没有 Operator，列表是空态，因此没有「Operator 详情」截图。
+> 详情页内容包括状态、身份与运行时、能力集合（只有 Operator 上报了能力才显示）。
 
-### 9.1 创建
+## 6. 发布清单
 
-![创建操作](images/user-manual/11-operation-create.png)
+![发布清单](images/user-manual/dc-09-release-inventory.png)
 
-1. `操作类型` 选 `INSTALL` / `UPGRADE` / `ROLLBACK`。
-2. `制品 Bundle` 下拉选制品（显示版本与 digest）。
-3. `已审批 ValuesRevision ID` 填已审批的 Revision；`UPGRADE` / `ROLLBACK` 还会出现 `当前 Revision`（必填，≥1）。
-4. 需要覆盖时用 `添加 Patch`（只允许 dot-path；Secret 类字段必须用 Secret 引用）。
-5. 点 `检查并确认` 进入最终确认。
+- 顶部说明数据来源（Operator 最近一次同步）与条数，动作是「刷新」「触发同步」。
+- 筛选：状态（全部/生效中/缺失/不同步/未知）+ 名称搜索。
+- 表格列：**发布 / 集群 / 当前版本 / 库存状态 / 紧急变更 / 配置摘要 / 操作**。
+  - 「发布」单元格：`namespace/name`、`chart@version`、最近同步时间，以及「操作历史」入口。
+  - 「库存状态」是**服务端枚举**的语义色胶囊：生效中（绿）/ 不同步（琥珀）/ 缺失（红）/ 未知（灰）。
+  - 「配置摘要」显示 values digest 的**前 8 位**，右侧「复制」拷贝完整 64 位（`title` 里也是完整值）。
+  - 「紧急变更」是**小号红色标签**（不是整列红字），未绑定发布定义的行显示「未绑定发布定义」。
+- 空态是「没有匹配的发布」，与错误态互斥：加载失败会显示带「重试」的错误面板，而不是空表。
 
-> 表单的必填项由浏览器原生校验兜底：漏填 `当前 Revision` 时点击不会提交，只有原生 tooltip 提示，
-> 页面内没有字段级错误文案。
+![发布清单·亮色](images/user-manual/dc-09-release-inventory-light.png)
 
-![填写完成](images/user-manual/15-operation-create-filled.png)
+## 7. Values 编辑与审批
 
-### 9.2 确认
+![Values 编辑器](images/user-manual/dc-10-values-editor.png)
 
-![最终确认](images/user-manual/16-operation-confirm-panel.png)
+- 顶部是页头 + 动作区：语言切换（**YAML / JSON 分段按钮，真的切换编辑器语言**）、「保存为新版本」。
+- 左栏是编辑器（保留语法高亮，暗色/亮色两套高亮）、右栏是**并排差异**（父级 → 当前，`N 处变更` 或「无变更」）。
+  只有**语义差异**会展示：格式、注释、键顺序的变化不产生无意义 diff。
+- 下方「Secret 引用」只保存 namespace 内 Secret 的**名称 / key / 目标路径**，**不读取也不传输 value**。
+- 版本流程：`保存草稿` → `提交` → 审批人 `批准 / 拒绝`。草稿存在浏览器本地，刷新后提示「已恢复未保存的编辑」。
+  只读角色会看到「当前角色为只读。服务端仍会独立执行授权。」
 
-确认面板复述完整目标：`Release` / `Cluster` / `制品` / `配置版本` / `Patch` / `当前 Revision`，
-并明确告知 `提交后将立即进入 Preflight`。点 `确认创建` 后创建并进入详情页。
+![Values·亮色](images/user-manual/dc-10-values-editor-light.png)
 
-> ⚠️ **当前交付版本下这一步会失败**：点 `确认创建` 得到
-> `操作创建失败 invalid token: parse access token: token has invalid claims: token is expired`，
-> 而用户的会话其实是好的 —— 这是服务端授权快照拉取失败的**透传消息**（`docs/ux-review.md` 的 B4）。
-> 下面 9.3 的详情截图来自**已修复该链路**的临时环境，且其中的 Operation 由项目自带的
-> `test/e2e/prerequisite/smoke.sh` 真实创建（`44 pass / 0 fail`）。
+> **本环境降级表现**：因为 Operator 不在线，Secret 列表读（`ListSecrets`）返回 503，
+> 页面顶部显示「网络或 Operator 暂不可用，请检查连接后重试」+「重试」按钮 —— 这是**预期降级**，不是白屏。
 
-### 9.3 详情与 Preflight
+## 8. 创建操作
 
-![操作详情·成功](images/user-manual/17-operation-detail-upgrade.png)
+![创建操作](images/user-manual/dc-11-operation-create.png)
 
-详情页自上而下是：**Preflight 面板**（本次为 `通过`，逐 stage 显示 `artifact` / `render` 及 detail）、
-状态徽章、`取消操作` / `刷新`、目标与状态元数据（`ReleaseDefinition` / `StateVersion` /
-`TargetRevision` / 创建·更新·终止时间）、`状态时间线`。
+1. **操作类型**：`安装 / 升级 / 回滚` 三个**分段按钮**（`aria-pressed`），切换会改变需要填写的字段。
+2. **制品 Bundle**：下拉选制品（显示版本与 digest）。
+3. **已审批的 Values 版本**：下拉选已审批版本。
+4. **补丁覆盖**（可选）：只允许点分路径（如 `spec.replicas`）；Secret 类字段必须用 Secret 引用，不允许明文。
+5. **检查并确认**：先做本地必填校验，再 arm 右侧「确认创建」。
 
-> 注意截图里的 Preflight detail 是**原始 JSON 原文**，长值不换行会把整页撑出横向滚动
-> （该整页截图宽 2121px > 视口 1440px），右侧内容在默认窗口下看不到；见 `docs/ux-review.md` 的 B6。
+![必填项未选时的校验](images/user-manual/dc-15-operation-create-validation.png)
 
-![操作详情·已取消](images/user-manual/18-operation-detail-cancelled.png)
+漏选必填项时，字段下方出现红色错误文案（例如「请选择制品」「请选择已审批的配置版本」），
+右侧确认按钮保持禁用（禁用态用专门的 disabled token，不是降低不透明度的灰按钮）。
 
-已取消的操作同样可回看；被取消、失败的操作不会再产生新的时间线事件。
+右侧「最终确认」面板**常显**并复述五件事：类型、发布名、集群、制品、配置版本、补丁覆盖。
+只有通过检查后「确认创建」才可用；**任何字段修改都会自动解除确认**（防止提交陈旧值）。
 
-> 上图里的 `实时更新已断开，正在重连…` 不是偶发网络问题：服务端流式拦截器要求
-> `Authorization` 头而**不接受 cookie 会话**，所以浏览器会话下时间线实时更新必然失败
-> （`internal/auth/interceptor.go:172`）。详见 `docs/ux-review.md` 的 B3。
+> **本环境限制**：生产没有在线 Operator，`检查并确认` 之后的预检链路无法真实推进，
+> 因此本教程不提供「确认创建成功」截图；操作详情见下一节（历史真实操作）。
 
-## 10. 紧急变更与收敛
+## 9. 操作历史与操作详情
 
-![紧急变更](images/user-manual/12-emergency-change.png)
+![操作历史](images/user-manual/dc-34-operation-list.png)
 
-紧急变更用于「常规流程来不及」的场景，页面按四步编排：选择变更目标（工作负载）→ 选择容器与制品 →
-填写变更信息（`变更原因`，0/1000 字节计数）→ 确认变更（收敛策略 `REQUIRE_PROMOTION` 或
-`REVERT_ON_NEXT_RECONCILE`，并勾选风险确认）。
+单个发布下的操作历史：操作类型、状态、开始/结束时间、操作人，行内可进入详情。
+跨发布的视图在侧栏「操作中心」（`/operations`）。
 
-页面顶部的三个状态指示决定你能做多少：`镜像可变更` / `副本不可用` —— 当平台尚未采集到该工作负载的
-容器信息时，会显示 `镜像变更暂不可用：平台尚未采集到该工作负载的容器信息…` 并禁用相应控件；
-没有 `VERIFIED` 候选制品时显示 `没有可用的 VERIFIED 候选制品`。
+![操作中心](images/user-manual/dc-33-operation-center.png)
 
-![收敛任务](images/user-manual/13-convergence-tasks.png)
+操作中心是跨发布的非终态操作列表（终态操作不在此），可按状态与发布过滤。
 
-收敛页把紧急变更欠下的账列成任务（`目标` / `类型` / `原因` / `PROMOTION PATHS` / `状态`），
-勾选 1–50 个任务后 `Prepare 收敛`；选择数为 0 时按钮禁用并提示
-`选择不兼容：需选择 1–50 个任务（当前 0 个）`。
+![操作详情（成功）](images/user-manual/dc-17-operation-detail.png)
+
+详情页自上而下：
+
+1. **页头**：标题是「操作类型 · 发布名」（这里是「安装操作」），副标题是「状态 · 状态版本 5」；右侧是「取消操作 / 刷新」。
+2. **阶段条**：预检 → 审批 → 下发 → 收敛，四段都由状态机派生（不是写死的 UI）。
+3. **摘要**：操作 ID、发布定义（都是**缩略 + 复制**，`title` 为完整值）、状态版本、目标版本、创建/更新/终止时间。
+4. **两栏**：左「预检结果」（每项检查「通过/失败」+「查看原始响应」折叠 JSON），右「状态时间线」（事件按时间倒序）。
+   时间线里的操作 ID / 请求 ID 同样是缩略 + 复制。
+
+![操作详情·亮色](images/user-manual/dc-17-operation-detail-light.png)
+
+![操作详情（失败）](images/user-manual/dc-18-operation-detail-failed.png)
+
+失败/取消的操作同样可回看；失败操作的错误信息与错误码显示在预检区与时间线里。
+
+![无效 id 的错误态](images/user-manual/dc-21-operation-invalid-error.png)
+
+⭐ **无效的操作 id 现在会明确报错**：直接访问 `/operations/<不存在的 uuid>` 会显示
+「操作加载失败」+ 稳定错误码（例如 `not_found`）+ 返回操作历史/操作中心的链接 + 「重试」，
+**不再永久停在「正在加载 Operation…」**。这是 2026-10-20 改版修掉的一个真实缺陷。
+
+## 10. 紧急变更、收敛任务与紧急锁
+
+![紧急变更](images/user-manual/dc-12-emergency-change.png)
+
+紧急变更用于「常规流程来不及」的场景，页面按四步编排：**选择目标工作负载 → 选容器与制品 → 填变更信息 → 确认变更**。
+顶部有三个状态指示决定你能做多少：镜像可变更 / 副本可变更；平台尚未采集到工作负载信息、
+或没有 `VERIFIED` 候选制品时，对应控件会禁用并给出原因。确认变更时要选收敛策略
+（`需异人审批提升` / `下次对账时回退`）并勾选风险确认。
+
+![收敛任务](images/user-manual/dc-13-convergence-tasks.png)
+
+收敛页把紧急变更「欠的账」列成任务（目标 / 类型 / 原因 / 提升路径 / 状态）；勾选 1–50 个任务后「准备收敛」，
+选择数为 0 时按钮禁用并提示需要选择 1–50 个。页头右侧会用缩略 + 复制的形式显示当前发布定义 id。
+
+![紧急锁](images/user-manual/dc-32-stuck-locks.png)
+
+紧急锁页列出**效果未知且已过观察窗口**的紧急操作，需要人工确认实际状态后再决定「释放锁」或显式收敛。
+释放锁要求填写原因并勾选确认；处置流程与值班口径见 `docs/runbook.md` 的「紧急变更 / stuck lock」章节。
 
 ## 11. 审计
 
-![审计（修复前的失败态）](images/user-manual/14-audit.png)
+![审计事件](images/user-manual/dc-14-audit.png)
 
-审计页可按 `Actor` / `Resource type` / `Resource ID` / `Action` / `Status` / `From` / `To` 过滤，
-`Export current query` 生成导出任务。**注意 `Actor` 是私有过滤条件，不会写进 URL。**
+- 筛选栏六项：操作人、资源类型、资源 ID、动作、状态、时间范围（起/止）。
+- 结果表：时间（只显示 `HH:MM:SS`，完整时间在 `title` 里）、操作人、动作、资源（**缩略 + 复制**）、状态、耗时。
+- 状态列用语义色胶囊（成功/被拒/中性），动作与资源类型都显示为**中文标签**（未知值显示「未知事件」）。
+- 「导出当前查询」生成导出任务；**操作人筛选是私有条件，不写进 URL**。
 
-> ⚠️ 上图是**修复前**的失败态（保留以说明当时的现象）：审计 RPC 返回 `HTTP 405`，页面同时渲染了
-> `Audit request failed HTTP 405` 与 `No audit events`（把错误解释成空结果）。原因是当时控制台入口
-> 没有把 `/audit.v1.AuditService` 路由到 `release-api`。**现状（TASK-174 之后）**：容器侧
-> `web/nginx.conf:91` 已有 `location ^~ /audit.v1.` → `api:8088`，dev 侧 `web/vite.config.ts:62-63`
-> 指向 8088（`:62` 是 key、`:63` 是 target）⇒ 该 405 已修复。
-> 详见 `docs/ux-review.md` 的 B5。
+![审计·亮色](images/user-manual/dc-14-audit-light.png)
 
-## 12. 权限与角色
+> 三种异步态**互斥**：加载中只显示骨架屏；失败只显示错误面板 + 重试；成功但为空才显示空态。
+> 不会出现「同时显示错误和空结果」这种把故障解释成没数据的情况。
 
-前端只做 UI 门禁，**服务端 Casbin 才是唯一裁决点**：
+## 12. 发布定义、发布 Bundle 与制品生命周期
 
-| 门禁 | 派生量 | 谁可以通过 |
+![发布定义](images/user-manual/dc-24-definitions.png)
+
+发布定义页维护 Promotion Mapping 与定义设置（新建/编辑/包含已停用的开关、表格）。
+
+![发布 Bundle](images/user-manual/dc-25-bundles.png)
+
+Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，行内可展开明细（镜像、证据引用）。
+
+![制品生命周期](images/user-manual/dc-26-artifact-lifecycle.png)
+
+制品生命周期页管理保留期清理与归档恢复：可以手动触发清理、从归档恢复；页面顶部说明
+「仅平台管理员可用，维护模式下会被拒绝」。清理是同步执行的（服务端预算可达约 1 小时），
+重复提交同一请求会在保留窗口内被拒绝。
+
+## 13. 治理与账号
+
+![签名信任根](images/user-manual/dc-27-trust-policy.png)
+
+信任根页维护签名信任策略与版本（信任根编辑器、吊销、轮换）。环境选择器决定你看哪一套策略。
+
+![授权绑定](images/user-manual/dc-28-bindings.png)
+
+授权绑定页把组织与客户绑定，并授予能力（capability grants）。只有平台管理员/发布管理员能读。
+
+![组织成员](images/user-manual/dc-29-organization.png)
+
+组织成员页管理组织内的成员与角色（行内可改角色、移除成员）。
+
+![本地用户](images/user-manual/dc-30-local-users.png)
+
+本地用户页管理平台本地账号（创建、禁用、改角色），仅平台管理员可见。
+
+![修改密码](images/user-manual/dc-31-change-password.png)
+
+修改密码页改当前账号口令；**改后会吊销该账号的全部会话**，需要用新口令重新登录。
+
+## 14. 权限与角色
+
+前端只做 UI 门禁，**服务端 Casbin 才是唯一裁决点**（`internal/auth/casbin.go`、`internal/auth/procedure_policy.go`）。
+
+| 门禁（`web/src/stores/auth.ts`） | 判定 | 谁能通过 |
 | --- | --- | --- |
-| 写操作入口（`Create customer` / `Edit` / `Save`） | `canWrite`（非 `viewer` 即可写） | platform_admin、release_admin、deployer |
-| Operator 注册/撤销 | `canEnrollOperators` / `canRevokeOperators` | platform_admin、release_admin |
-| 创建发布操作 | `canCreateReleaseOperation` | platform_admin、release_admin |
-| 紧急变更执行 | 服务端 Authorization Snapshot 的 `canExecuteEmergency` | 由服务端裁决 |
-| 收敛任务 Prepare | 服务端 `canCreateValuesRevision` | 由服务端裁决 |
+| `canWrite` | 角色里没有 `viewer` | platform_admin、release_admin、deployer |
+| `canEnrollOperators` / `canRevokeOperators` | 含 `platform_admin` 或 `release_admin` | 平台管理员、发布管理员 |
+| `canCreateReleaseOperation` | 同上 | 平台管理员、发布管理员 |
+| `canReadBundles` | 含 `platform_admin` 或 `release_admin` | **仅**平台管理员、发布管理员（部署者与只读都不行） |
+| `canReadBindings` | 含 `platform_admin` 或 `release_admin` | **仅**平台管理员、发布管理员（部署者与只读都不行） |
+| `canRunCleanup` / `canManageLocalUsers` | 含 `platform_admin` | 平台管理员 |
 
-无权限时的表现分三层：入口隐藏（`v-if`）、路由 404（特性开关关闭）、页面 403
-（`ForbiddenState`，例如 `/forbidden`）。
+> 注意 `canWrite` 与上面两条读能力的差别：`canWrite` 只要求「不是只读」，所以**部署者**能看到编辑入口；
+> 但 Bundle 与授权绑定的读规则只授予平台管理员与发布管理员（`internal/auth/casbin.go` 的 `bundle read` / `binding read`
+> 只覆盖这两个角色），所以部署者看不到这两个页面 —— 这是**有意隐藏**，不是页面坏了。
 
-![403](images/user-manual/20-forbidden.png)
+无权限时表现分三层：**入口不渲染**（不是禁用）、**路由 404**（特性开关关闭）、**页面 403**。
 
-## 13. 特性开关
+![403](images/user-manual/dc-20-forbidden.png)
 
-`web/.env.example` 是完整清单。所有开关的判定语义都是 `!== 'false'`：**默认全开，只有精确字符串
-`false` 才关闭**（写 `FALSE` / `0` 无效）。
+## 15. 特性开关
+
+`web/.env.example` 是完整清单；所有开关的语义都是 `!== 'false'`：**默认全开，只有精确字符串 `false` 才关闭**
+（写 `FALSE` / `0` 无效）。
 
 | 变量 | 关掉后 |
 | --- | --- |
-| `VITE_ENABLE_RELEASE_INVENTORY` | Release 清单与 Values、操作、紧急变更路由整组消失 |
-| `VITE_ENABLE_VALUES_REVISION` | Values 编辑器路由与表格入口消失 |
-| `VITE_ENABLE_RELEASE_OPERATIONS` | 操作创建/详情、紧急变更、收敛路由消失 |
-| `VITE_FEATURE_CLUSTER_ROUTING` | 集群路由与导航入口消失 |
+| `VITE_ENABLE_RELEASE_INVENTORY` | 发布清单与 Values、操作、紧急变更路由整组消失 |
+| `VITE_ENABLE_VALUES_REVISION` | Values 编辑器路由与入口消失 |
+| `VITE_ENABLE_RELEASE_OPERATIONS` | 操作中心/创建/详情、紧急变更、收敛、紧急锁、发布定义、Bundle、制品生命周期路由消失 |
+| `VITE_FEATURE_CLUSTER_ROUTING` | 集群路由与侧栏「集群」入口消失 |
 | `VITE_FEATURE_OPERATOR_MANAGEMENT` | Operator 入口消失 |
-| `VITE_OPERATION_LIVE_UPDATES` | 操作详情不做实时刷新（只保留 `刷新`） |
+| `VITE_OPERATION_LIVE_UPDATES` | 操作详情不做实时刷新（只保留「刷新」） |
 
-## 14. 常见问题
+## 16. 常见问题与错误态
 
 | 症状 | 先查什么 | 说明 |
 | --- | --- | --- |
-| 页面全白、无任何报错 | 后端是否可达（`curl http://localhost:8085/readyz`） | 引导阶段 `GetInitStatus` 抛错会让应用**根本挂载不上**（`web/src/main.ts:12`），表现是白屏而非错误页；留档 `docs/images/user-manual/22-blank-page-backend-down.png` |
-| 登录成功却停在 `/login` | 登录响应是否带 `Set-Cookie`、`user` 是否非空 | 后端若跑在 token 模式，前端（只实现 cookie 模式）永远进不去；见 B1 |
-| 操作详情一直显示 `实时更新已断开，正在重连…` | 服务端 `WatchOperation` 是否 `unauthenticated` | 流式拦截器不接受 cookie 会话；见 B3 |
-| 点 `确认创建` 报 `invalid token … token is expired` | 会话本身是否过期（通常没有） | 这是 orchestrator 后台快照拉取失败的**透传消息**，不是你的会话问题；见 B4 |
-| 审计页 405 | 审计 RPC 是否被代理到 `release-api` | 见第 11 节；B5 |
-| Operator 显示 `Offline` / 心跳陈旧 | 客户集群里 operator Pod 是否存活 | 控制台只呈现状态，处置见 `docs/runbook.md` |
+| 登录成功却停在 `/login` | 登录响应是否带 `Set-Cookie`、`user` 是否非空 | 控制台只实现 cookie 会话模式；服务端跑 token 模式时前端进不去 |
+| 操作详情一直「正在加载」 | 操作 id 是否存在 | **改版后已修**：不存在的 id 会显示带错误码的错误态（见第 9 节截图） |
+| 页面顶部提示「网络或 Operator 暂不可用」 | 客户集群的 Operator 是否在线 | 依赖 Operator 的读（Secret 列表、候选制品）会返回 503；这是**显式降级**，联系值班按 `docs/runbook.md` 处理 |
+| 审计页没有数据 | 筛选条件是否过窄、时间范围是否为空 | 空态与错误态互斥：有错误会显示错误面板而不是「暂无事件」 |
+| 发布清单行显示「未绑定发布定义」 | 该 release 是否已有发布定义绑定 | 未绑定的行不能创建操作/紧急变更，这是数据前置而不是权限问题 |
+| 首页某张卡显示 `—` | 卡片提示行的原因文案 | 该指标读失败或本环境不提供；**不会用 0 冒充健康** |
+| 主题切换无效 | 浏览器是否禁用 localStorage | 选择存在 `rm-theme`；禁用存储时只能跟随系统 |
 
-## 15. 本次环境与补丁记录（可复现）
+## 17. 截图索引（全部为 `docs/images/user-manual/dc-*.png`）
+
+| 文件 | 页面 | 主题 | 尺寸 |
+| --- | --- | --- | --- |
+| `dc-01-login.png` | 登录 | 暗 | 1440×900 |
+| `dc-03-home.png` / `dc-03-home-light.png` | 首页总览 | 暗 / 亮 | 1440×900 |
+| `dc-04-customers.png` | 客户列表 | 暗 | 1440×900 |
+| `dc-05-customer-detail.png` | 客户详情 | 暗 | 1440×900 |
+| `dc-06-cluster-list.png` | 集群列表 | 暗 | 1440×900 |
+| `dc-07-cluster-detail.png` | 集群详情 | 暗 | 1440×900 |
+| `dc-23-cluster-edit.png` | 集群编辑 | 暗 | 1440×900 |
+| `dc-08-operator-list.png` | Operator 列表 | 暗 | 1440×900 |
+| `dc-09-release-inventory.png` / `-light.png` | 发布清单 | 暗 / 亮 | 1440×900 |
+| `dc-10-values-editor.png` / `-light.png` | Values 编辑与并排 diff | 暗 / 亮 | 1440×1088 |
+| `dc-11-operation-create.png` | 创建操作（初始态） | 暗 | 1440×900 |
+| `dc-15-operation-create-validation.png` | 创建操作（必填校验） | 暗 | 1440×900 |
+| `dc-17-operation-detail.png` / `-light.png` | 操作详情（安装·成功） | 暗 / 亮 | 1440×1476 |
+| `dc-18-operation-detail-failed.png` | 操作详情（紧急变更·失败） | 暗 | 1440×1258 |
+| `dc-21-operation-invalid-error.png` | 操作详情的无效 id 错误态 | 暗 | 1440×900 |
+| `dc-33-operation-center.png` | 操作中心 | 暗 | 1440×900 |
+| `dc-34-operation-list.png` | 单发布的操作历史 | 暗 | 1440×900 |
+| `dc-12-emergency-change.png` | 紧急变更 | 暗 | 1440×1043 |
+| `dc-13-convergence-tasks.png` | 收敛任务 | 暗 | 1440×900 |
+| `dc-32-stuck-locks.png` | 紧急锁 | 暗 | 1440×900 |
+| `dc-14-audit.png` / `-light.png` | 审计 | 暗 / 亮 | 1440×1425 |
+| `dc-24-definitions.png` | 发布定义 | 暗 | 1440×900 |
+| `dc-25-bundles.png` | 发布 Bundle | 暗 | 1440×900 |
+| `dc-26-artifact-lifecycle.png` | 制品生命周期 | 暗 | 1440×900 |
+| `dc-27-trust-policy.png` | 签名信任根 | 暗 | 1440×900 |
+| `dc-28-bindings.png` | 授权绑定 | 暗 | 1440×900 |
+| `dc-29-organization.png` | 组织成员 | 暗 | 1440×900 |
+| `dc-30-local-users.png` | 本地用户 | 暗 | 1440×900 |
+| `dc-31-change-password.png` | 修改密码 | 暗 | 1440×900 |
+| `dc-20-forbidden.png` | 403 | 暗 | 1440×900 |
+| `dc-36-home-375.png` | 首页（375px） | 暗 | 375×2040 |
+| `dc-37-audit-375.png` | 审计（375px） | 暗 | 375×2084 |
+
+## 18. 复现方式（截图与巡检脚本）
+
+截图由 Playwright 驱动真实浏览器、真实登录采集，口令只经环境变量传入（不落盘）：
 
 ```bash
-# 1) 环境（避开同机另一套环境占用的默认端口）
-REGISTRY_PORT=5011 DEV_K3D_API_PORT=6449 make dev-up
-make dev-status                       # 期望：5 集群 ready、fixture v2、2 customer / 4 cluster
-
-# 2) 补丁（独立 worktree，主工作树不动）
-git worktree add .worktrees/ux-manual -b ux/manual-auth-dualmode
-#    改动：cmd/auth/main.go（传入 BrowserSessionConfig）、
-#          internal/auth/{browser_session.go,service.go}（dual-mode：同时返回 token 与 cookie）
-go test ./internal/auth/...           # ok，17s
-
-# 3) 只重建、只替换 release-auth
-docker build -f .worktrees/ux-manual/deploy/docker/Dockerfile.auth \
-  -t localhost:5011/release-auth:ux-manual .worktrees/ux-manual
-docker push localhost:5011/release-auth:ux-manual
-KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control \
-  -n release-manager-dev set image deployment/auth auth=localhost:5011/release-auth:ux-manual
-
-# 4) 回归证据（token 链未被破坏）
-bash test/e2e/prerequisite/smoke.sh   # 44 pass / 0 fail，含 auth 跨重启 ValidateToken/RefreshToken
+cd web
+RM_ADMIN_PW='<admin 口令>' node <采集脚本>.mjs   # 脚本把 BASE 指向 https://10.10.33.122:8443
 ```
 
-> 事实源：`deploy/dev/dev.sh`、`Makefile`（dev-* 目标）、`docs/dev-environment.md`、
-> `web/src/router/index.ts`、`web/src/pages/`、`web/src/components/`、`web/.env.example`、
-> `internal/auth/interceptor.go`、`internal/authorization/module.go`、`internal/devfixture/`。
+- 采集前先确认生产可达：`curl -sk -o /dev/null -w '%{http_code}' https://10.10.33.122:8443/` ⇒ `200`。
+- 深/浅主题通过 `localStorage['rm-theme']` 切换后再 reload，保证与用户实际操作一致。
+- 每张图都断言 `document.documentElement.scrollWidth === window.innerWidth`（不允许横向溢出）；
+  本轮 37 张全部通过。
+- 值班巡检命令、故障处置与回滚步骤见 `docs/runbook.md`；部署与镜像级回滚见 `docs/production-deploy.md` 的 §8.16。
+
+> 事实源：`web/src/router/index.ts`、`web/src/components/common/AppShell.vue`、`web/src/components/common/PageHeader.vue`、
+> `web/src/stores/auth.ts`、`web/src/i18n/messages.ts`、`web/.env.example`、`internal/auth/casbin.go`、
+> `internal/auth/procedure_policy.go`、`docs/runbook.md`、`docs/production-deploy.md`。

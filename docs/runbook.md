@@ -50,6 +50,11 @@
 | Operation 长时间非终态、`cancelling` 不消失、锁 stuck | §6 |
 | 要回滚、要放行紧急变更、要解 stuck lock | §7 |
 | 升级到新版本、镜像/pin 配置、升级失败回退 | §8 |
+| **生产环境（k3d-rm-prod）日常巡检、发布 web、镜像级回滚** | §11.1 / §11.2 |
+| **密钥与证书异地备份、证书轮换、Secret 未纳入备份** | §11.3 |
+| **数据库备份 / 恢复演练、备份 CronJob 覆盖范围** | §11.4 |
+| **控制台（前端）发布后缓存、主题偏好、UI 冒烟** | §11.5 |
+| **CI 门禁失败怎么判、哪些是已知 flake、重跑纪律** | §11.6 |
 | 只读诊断命令、该找谁 | §9 |
 
 ## 1. 服务不可用、探针失败、CrashLoopBackOff
@@ -478,6 +483,10 @@ KUBECONFIG=data/kubeconfig.yaml kubectl --context k3d-release-manager-control -n
 
 ## 8. 升级到新版本
 
+> **本章是 dev 环境口径**（`k3d-release-manager-control`、内容哈希 tag、`make dev-up` 收敛）。
+> **生产环境**（`k3d-rm-prod`、固定 tag 如 `:f0f8d6b` / `web:5080198`）的发布、镜像导入与回滚见 **§11.2**，
+> 逐次发布的实测记录见 `docs/production-deploy.md` 的 §8.12–§8.16。
+
 **症状 / 触发**：要把环境收敛到当前工作树（或某个提交）的代码与配置版本。
 
 **先查什么**
@@ -590,6 +599,7 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 
 叫级判据（现状）：影响「写路径正确性」（错误回滚、错误紧急放行、审计丢失）→ 立即升级；只影响「可读性/及时性」（timeline 不动、通知延迟、`sequence gap detected` 噪声）→ 记录并观察。通知侧现状参数：轮询 10s、投递上限 10 次、指数退避 5s→24h、任务 deadline 24h 后 dead-letter、dead-letter 保留 30 天（`internal/notifier/consumer.go:42-52`、`internal/notifier/retry.go:24-32`）。
 
+
 ## 10. 已知不一致与需核实项（不要按文档想象行为）
 
 以下是读码过程中发现的「文档/配置与代码不一致」，值班时以**代码**为准：
@@ -608,3 +618,195 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 12. **需核实（无法从代码判定）**：① 「全局 outbox 序列导致跨 operator 误判 gap」是否为有意设计（`internal/operator/service.go:1182-1222`）；② `agent.mode` 何时切到 `gateway`（`cmd/operator/main.go:39-42` 注释称 TASK-065 将移除该路径）；③ 生产形态（本仓只有 `deploy/kustomize/dev` 一套 overlay）下的 retention/告警责任方。
 
 > 事实源：`internal/handler/health.go`、`internal/handler/ready.go`、`internal/app/app.go`、`internal/app/maintenance.go`、`internal/config/config.go`、`internal/postgres/db.go`、`internal/postgres/config.go`、`internal/postgres/migrate.go`、`internal/migration/migrate.go`、`internal/store/sqlite/db.go`、`internal/store/sqlite/operators.go`、`internal/store/postgres/operators.go`、`internal/store/postgres/audit.go`、`internal/store/store.go`、`internal/orchestrator/service.go`、`internal/orchestrator/rollback.go`、`internal/orchestrator/emergency.go`、`internal/orchestrator/emergency_stuck.go`、`internal/orchestrator/emergency_queries.go`、`internal/orchestrator/cleanup.go`、`internal/orchestrator/gc_health.go`、`internal/orchestrator/operation/state.go`、`internal/orchestrator/operation/recover.go`、`internal/orchestrator/audit.go`、`internal/operator/service.go`、`internal/operator/errors.go`、`internal/operator/session_registry.go`、`internal/operator/session_client.go`、`internal/operator/identity_metrics.go`、`internal/operator/agent/agent.go`、`internal/audit/emitter.go`、`internal/audit/spool.go`、`internal/audit/event.go`、`internal/audit/normalize.go`、`internal/audit/sanitize.go`、`internal/audit/archive_config.go`、`internal/audit/archive_worker.go`、`internal/audit/archiver.go`、`internal/audit/audit_service_handler.go`、`internal/audit/metrics.go`、`internal/redact/sanitize.go`、`internal/auth/interceptor.go`、`internal/auth/service.go`、`internal/auth/jwt.go`、`internal/auth/browser_session.go`、`internal/auth/service_token.go`、`internal/authorization/metrics.go`、`internal/authorization/module.go`、`internal/authorization/tracing.go`、`internal/notifier/consumer.go`、`internal/notifier/retry.go`、`internal/store/redis/adapter.go`、`cmd/api/main.go`、`cmd/auth/main.go`、`cmd/orchestrator/main.go`、`cmd/operator/main.go`、`cmd/notifier/main.go`、`cmd/webhook/main.go`、`cmd/notification-sink/main.go`、`cmd/store-migrate/main.go`、`cmd/devseed/main.go`、`migrations/embed.go`、`api/proto/audit/v1/audit.proto`、`api/proto/operator/v1/operator.proto`、`api/proto/orchestrator/v1/orchestrator.proto`、`api/gen/orchestrator/v1/orchestratorv1connect/orchestrator.connect.go`、`deploy/dev/dev.sh`、`deploy/dev/lib/host.sh`、`deploy/dev/lib/errors.sh`、`deploy/dev/lib/lock.sh`、`deploy/kustomize/base/pvc.yaml`、`deploy/kustomize/base/secret.yaml`、`deploy/kustomize/dev/kustomization.yaml`、`deploy/kustomize/dev/configs/orchestrator.dev.yaml`、`deploy/kustomize/dev/configs/notifier.dev.yaml`、`deploy/kustomize/services/kustomization.yaml`、`deploy/kustomize/services/orchestrator.yaml`、`deploy/kustomize/services/auth.yaml`、`deploy/kustomize/services/webhook.yaml`、`deploy/kustomize/services/notifier.yaml`、`deploy/kustomize/services/web.yaml`、`deploy/kustomize/services/notification-sink.yaml`、`deploy/kustomize/postgres/deployment.yaml`、`deploy/kustomize/postgres/init.sql`、`deploy/kustomize/redis/deployment.yaml`、`deploy/kustomize/customer-agent/base/deployment.yaml`、`deploy/kustomize/customer-agent/base/kustomization.yaml`、`deploy/kustomize/customer-agent/c1-direct/configs/operator.dev.yaml`、`deploy/docker/Dockerfile.operator`、`deploy/docker/Dockerfile.orchestrator`、`configs/orchestrator.dev.yaml`、`configs/auth.dev.yaml`、`configs/notifier.dev.yaml`、`configs/api.dev.yaml`、`web/nginx.conf`、`web/src/connect/client.ts`、`Makefile`、`docs/architecture.md`、`docs/dev-environment.md`、`docs/testing.md`、`docs/glossary.md`、`docs/cli.md`、`docs/dependencies.md`、`docs/decisions/ADR-011-controlled-emergency-change-and-convergence.md`、`docs/decisions/ADR-016-prometheus-otel.md`
+
+## 11. 生产环境（`k3d-rm-prod`）运维
+
+> 本章针对**实际对外的生产环境**。它和 dev 环境（§8）的口径不同：生产用**固定 tag**（Go 服务 `:f0f8d6b`、`web` 按发布递增）、
+> 命名空间 `release-manager`、固定 context `k3d-rm-prod`、入口 `https://10.10.33.122:8443`。
+>
+> 历史发布的逐次实测记录（镜像 ID、revision、schema、回滚命令）见 `docs/production-deploy.md` §8.12–§8.16。
+
+### 11.1 日常巡检（只读，5 分钟）
+
+```bash
+CTX=k3d-rm-prod; NS=release-manager
+
+# 1) 入口与探针
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/          # 期望 200
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz    # 期望 200
+
+# 2) 工作负载（期望 10 个 1/1 Running + 3 个 Completed 备份 Job）
+kubectl --context $CTX -n $NS get pods -o wide
+kubectl --context $CTX -n $NS get pods --field-selector=status.phase=Running --no-headers | awk '$2!="1/1"'
+
+# 3) 重启次数（期望 0；任何非 0 都要查）
+kubectl --context $CTX -n $NS get pods -o jsonpath='{range .items[*]}{.metadata.name} {.status.containerStatuses[*].restartCount}{"\n"}{end}'
+
+# 4) 部署镜像与 revision
+kubectl --context $CTX -n $NS get deploy -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image,REV:.metadata.annotations.deployment\.kubernetes\.io/revision'
+
+# 5) schema（期望 36|false —— 版本|dirty）
+kubectl --context $CTX -n $NS exec postgres-0 -- psql -U release_manager -d release_manager \
+  -tAc 'select version||chr(124)||dirty from schema_migrations'
+
+# 6) 备份 Job 是否每天在跑（02:00 UTC，见 11.4）
+kubectl --context $CTX -n $NS get cronjob release-manager-backup
+kubectl --context $CTX -n $NS get pods | grep release-manager-backup
+```
+
+补充判据与口径：
+
+- **`RESTARTS` 增长、Pod 反复重启** ⇒ 走 §1；**入口 200 但页面空白** ⇒ 先看浏览器控制台与 `/readyz`，
+  再用 §11.5 的「静态资源一致性」步骤确认是否是发布/缓存问题。
+- **首页「发布同步率」显示 `—`**：没有发布数据或读失败，卡片提示行会写原因；不是故障本身。
+- **首页「暂无 Operator」/「0 个 Operator 在线」**：生产当前**没有部署客户侧 operator**（接入流程见
+  `docs/customer-onboarding.md`）。这会导致依赖 Operator 的读被拒绝（Values 的 Secret 列表、紧急变更候选制品等），
+  UI 会显式降级，不要误判为控制台故障。
+
+### 11.2 生产发布与镜像级回滚
+
+**只滚变更的服务**。改版期间只有 `web` 变化（`internal/`、`cmd/`、`api/proto/`、`migrations/`、`web/package*.json`
+为 0 文件时，Go 服务与 schema 都不动）。
+
+```bash
+CTX=k3d-rm-prod; NS=release-manager; SHA=<目标提交短 sha>
+
+# 1) 在 origin/main 的干净 worktree 里构建（不要在停在旧提交的主 checkout 上构建）
+git fetch origin -q && git worktree add -q /tmp/deploy-$SHA -b chore/deploy-$SHA origin/main
+cd /tmp/deploy-$SHA
+docker build -f deploy/docker/Dockerfile.web -t localhost:5001/release-web:$SHA .
+
+# 2) 用“文件形态”导入（⚠️ 见下一节：stdin 形态不可靠）
+docker save -o /tmp/web-$SHA.tar localhost:5001/release-web:$SHA
+k3d image import /tmp/web-$SHA.tar -c rm-prod
+
+# 3) 判定镜像真的进了节点（唯一可靠口径：节点内 crictl 的 IMAGE ID）
+docker exec k3d-rm-prod-server-0 crictl images | grep "release-web.*$SHA"
+
+# 4) 滚动并验证
+kubectl --context $CTX -n $NS set image deploy/web web=localhost:5001/release-web:$SHA
+kubectl --context $CTX -n $NS rollout status deploy/web --timeout=240s
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/
+kubectl --context $CTX -n $NS get deploy web -o jsonpath='{.spec.template.spec.containers[0].image}{" rev="}{.metadata.annotations.deployment\.kubernetes\.io/revision}{"\n"}'
+```
+
+> ⚠️ **镜像 ID 口径陷阱（两次踩到）**：
+> 1. `docker image inspect .Id` 在 Docker 29 + containerd 镜像仓里返回**OCI index digest**（含 buildx provenance），
+>    内容完全相同的两次构建也会得到不同 `.Id`；判定必须用**节点内 `crictl images` 的 IMAGE ID**。
+> 2. `docker save … | k3d image import -c rm-prod -`（stdin）在本机实测会打印
+>    `ERRO Failed to import image(s) … failed to load image to cluster from stdin: <nil>`，
+>    但节点里可能**已经**出现该 tag（半成功），极易误判。改用 `docker save -o` + `k3d image import <tar>`，
+>    并以 `crictl images` 为准（§8.16 有完整记录）。
+
+**回滚（纯镜像级，不动 schema）**：
+
+```bash
+kubectl --context k3d-rm-prod -n release-manager \
+  set image deploy/web web=localhost:5001/release-web:<上一个已部署 tag>
+kubectl --context k3d-rm-prod -n release-manager rollout status deploy/web --timeout=240s
+curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz
+```
+
+- schema 只有 6 个 Go 服务变更时才可能前滚；`web` 发布**不动 schema**（本轮两次 web 发布 schema 都是 `36|f`）。
+- `rollout undo` 同样只回镜像、不回 schema；若 Go 服务伴随 schema 前滚，见 §2 与 §8 的「不可逆」说明。
+
+### 11.3 密钥与证书（异地备份是硬缺口）
+
+生产命名空间有 9 个 Secret（`kubectl --context k3d-rm-prod -n release-manager get secret`），其中**三份是必须异地备份的私钥材料**：
+
+| Secret | 类型 | 内容性质 | 丢失后果 |
+| --- | --- | --- | --- |
+| `release-manager-jwt-private` | Opaque | JWT 签名私钥 | 所有会话/令牌失效，需重新签发并让所有人重新登录 |
+| `release-manager-mtls-ca` | Opaque | Operator mTLS CA 私钥 | 已接入的客户 operator 全部无法再认证，需重签 CA 并重新下发 |
+| `release-manager-edge-tls` | kubernetes.io/tls | 入口 TLS 证书与私钥 | 入口证书无法恢复（自签场景只能重建） |
+
+- ⚠️ **备份 CronJob（§11.4）只备份 PostgreSQL，不覆盖任何 Secret**。这三份私钥目前**没有任何自动备份**，
+  必须人工导出并**放到异地的密码库/加密介质**（至少两份、不同故障域）。
+- 导出方式（只在受信终端执行，产物立刻加密后移走，不要留在 `/tmp` 或仓库里）：
+
+  ```bash
+  kubectl --context k3d-rm-prod -n release-manager get secret release-manager-jwt-private -o yaml > jwt-private.yaml
+  kubectl --context k3d-rm-prod -n release-manager get secret release-manager-mtls-ca     -o yaml > mtls-ca.yaml
+  kubectl --context k3d-rm-prod -n release-manager get secret release-manager-edge-tls     -o yaml > edge-tls.yaml
+  # 立刻加密（示例）并移出本机：
+  #   age -r <recipient> -o jwt-private.yaml.age jwt-private.yaml && shred -u jwt-private.yaml
+  ```
+
+- **证书轮换**：当前**没有自动轮换**（无 cert-manager/无 cron 轮换）。入口证书到期或需要换 CA 时，按
+  `docs/production-deploy.md` 的部署章节手工替换 Secret 并滚动 `edge`/`orchestrator`；客户端（浏览器）自签证书需手工信任导入
+  （Chrome 要加「受信任的服务器证书 / 受信任对端」）。轮换属**建议能力**，落地前不要按「已自动化」处置。
+- **入口 IP**：`10.10.33.122` 是 DHCP 地址，IP 漂移会让 forwarder 监听与 `advertise_url` 失配（§3 的 operator 失联症状之一）。
+  变更前先确认当前 IP 与 forwarder 进程。
+
+### 11.4 数据库备份与恢复
+
+**现状**：CronJob `release-manager-backup`（**每天 02:00 UTC**，`0 2 * * *`；不是本地时间）在 `release-manager` 命名空间里用
+`postgres:16` 镜像跑 `pg_dump` 到 `/backups`（PVC），备份前用 `pg_isready` 有界等待数据库可连。
+
+```bash
+# 最近是否成功（Completed 即成功；Failed 需要看日志）
+kubectl --context k3d-rm-prod -n release-manager get pods | grep release-manager-backup
+kubectl --context k3d-rm-prod -n release-manager logs job/<最近的 job 名>
+```
+
+**恢复演练（在隔离环境做，不要直接覆盖生产）**：
+
+1. 取最新备份文件：`kubectl --context k3d-rm-prod -n release-manager exec <备份 pod> -- ls -lt /backups`（只读）。
+2. 按 §11.1 记录当前 schema（`36|f`）与关键计数（definitions / releases / operations / audit 事件数）。
+3. 在一个**独立** Postgres 容器里 `pg_restore` 该 dump，再按第 2 步的计数逐项比对。
+4. 生产恢复属 ⚠️ **破坏性操作**：必须先停写路径（维护窗口，见 §7.4），再恢复、再核对 schema 与健康。
+
+**已知缺口**：备份不覆盖 Secret（§11.3）、不做增量/WAL 归档（RPO=24h）、没有异地副本。
+这三条是**建议能力**，不要按「已具备」处置。
+
+### 11.5 控制台（前端）发布后检查
+
+前端是 SPA（nginx 托管静态资源 + 反代 API）。发布后按下面顺序确认，避免把「缓存没刷」当成发布失败：
+
+```bash
+SHA=<目标提交短 sha>
+# 入口 HTML 的 sha 变化（发布前后各取一次）
+curl -sk https://10.10.33.122:8443/ | sha256sum
+
+# 镜像内的 index.html 与实际对外的是否一致（容器内取）
+kubectl --context k3d-rm-prod -n release-manager exec deploy/web -- sha256sum /usr/share/nginx/html/index.html
+```
+
+- `index.html` 是**不缓存**的入口，`assets/*` 是内容哈希文件名、可长期缓存；因此「页面还是旧样子」通常是
+  浏览器缓存了 `index.html`，强制刷新（`Ctrl/Cmd+Shift+R`）即可。
+- **主题偏好存在浏览器**（`localStorage['rm-theme']` = `system` / `light` / `dark`），跟随系统时会随
+  `prefers-color-scheme` 实时切换；服务端不保存这个偏好，换浏览器会回到默认（跟随系统）。
+- **发布后 UI 冒烟清单**（与 `docs/user-manual.md` 的页面一一对应，3 分钟）：
+  1. 登录 → 首页：四张统计卡都有值或 `—`（不能是空白），「进行中的操作」「集群健康」有终态；
+  2. 客户 → 集群 → 发布清单：面包屑是**名称**不是 UUID，状态胶囊有语义色，配置摘要只显示 8 位且能复制完整值；
+  3. 任一发布 → 操作历史 → 操作详情：阶段条四段、预检折叠 JSON、时间线；
+     直接打开 `/operations/<乱写的 uuid>` 应当显示**错误态**而不是一直「正在加载」；
+  4. 审计：筛选栏 6 项、结果表有状态胶囊；空态与错误态不同屏；
+  5. 侧栏左下角主题按钮循环 跟随系统 → 浅色 → 深色，刷新后保持；
+  6. 375px（手机宽度）：无横向滚动，导航从「导航菜单」抽屉打开。
+
+### 11.6 CI 门禁与已知不稳定项
+
+**门禁含义（PR 与 main 都要看）**
+
+| 门禁 | 什么时候跑 | 失败意味着什么 |
+| --- | --- | --- |
+| `docs-check` | 每次 push | 文档里的 `make <target>`、仓库路径、相对链接、`文件:行号` 引用与现实不符（**改动纪律：修文档或补实现，不得放宽检查**） |
+| `check-tasks` | 每次 push | 知识库任务卡的 `status: done` 缺少可验证的合并证据（`merge_status` + `pr_url`） |
+| `web`（lint / `npm test` / build / contract） | 每次 PR | 前端门禁；测试只许增不许减，禁止放宽断言 |
+| `e2e-pr` | PR | Playwright 子集（导航等），需要浏览器 |
+| `e2e-prerequisite` | **只在 push main / 手动 dispatch** | Go smoke（48 项）+ 完整 console 车道；**PR 上通常 skipped，不要以为「PR 绿了就等于它绿」** |
+| `test-postgres-integration` / `test-sqlite` / `test` | 每次 push | Go 全量测试（含真实 PostgreSQL） |
+
+**已知不稳定项与处置纪律**
+
+1. **`test-postgres-integration` 偶发失败**：确认失败信息是环境型（连接/超时）后，用
+   `gh run rerun <run-id> --failed` 重跑；**不要把重跑当成通过**——连续两次同类失败必须按 §2 查根因。
+2. **`e2e-prerequisite` 曾长期为红（2026-10-20 之前）**：根因是 `test/e2e/prerequisite/smoke.sh` 的三处
+   `ExecuteEmergencyChange` **没有传必填 `reason`**（服务端要求 1..1000 UTF-8 字节）⇒ Go smoke 必然 400；
+   同一条红在 §8.13–§8.15 三个生产部署点上都存在，也就是说**那三次部署是在该门禁为红的状态下完成的**。
+   修复后该车道于 2026-10-21 首次全绿。遗留教训：**看到长期红的门禁要先当缺陷查，而不是当背景噪声**。
+3. **一次性 flake 的判定**：失败快照若显示页面停在启动失败（「无法连接发布管理服务 / [internal] internal error」），
+   那是引导 RPC 抖动，`rerun --failed` 后应转绿；若连续复现则按 §1/§2 查服务。
+4. **不要为了变绿改断言**：改版导致的选择器/文案变化要更新 spec，但必须**保持断言强度**
+   （例如操作 id 从 `innerText` 升级为对 `CopyableHash.title` 的**全值**对账）。
