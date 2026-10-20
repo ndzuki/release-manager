@@ -143,7 +143,7 @@ function createFieldId(field: string): string {
 
 .definitions__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 

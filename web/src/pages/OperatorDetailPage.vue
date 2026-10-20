@@ -147,7 +147,7 @@ h1, h2, h3, p { margin: 0; }
 .page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
 .eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
 .actions button { padding: 0.55rem 0.8rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
-.actions .danger { border-color: var(--color-danger-border); color: var(--color-error); }
+.actions .danger { border-color: var(--color-danger-border); color: var(--color-error-strong); }
 .warning { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); }
 .card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 .summary, .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin: 0; }

@@ -159,6 +159,6 @@ function isConflictingRule(rule: RouteRuleInput, index: number): boolean {
 input, select { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 [aria-invalid='true'] { border-color: var(--color-danger); }
 button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
-button.danger { color: var(--color-error); }
+button.danger { color: var(--color-error-strong); }
 @media (max-width: 720px) { .rule-grid { grid-template-columns: 1fr; } }
 </style>

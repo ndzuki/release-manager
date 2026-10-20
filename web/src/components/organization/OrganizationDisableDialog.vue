@@ -56,12 +56,12 @@ const emit = defineEmits<{
 /* AppDialog's footer supplies the baseline; the danger tone is the caller's rule. */
 .organization__confirm-danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .organization__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

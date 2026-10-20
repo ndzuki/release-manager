@@ -104,7 +104,7 @@ const describedBy = computed(() => {
 }
 
 .form-field__required {
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .form-field__error {

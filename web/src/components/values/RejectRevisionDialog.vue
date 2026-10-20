@@ -68,7 +68,7 @@ function submit(): void {
 
 .reject-reason__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 

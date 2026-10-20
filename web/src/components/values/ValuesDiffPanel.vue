@@ -151,11 +151,12 @@ const countTone = computed<'wn' | 'neutral'>(() => (props.result.hasChanges ? 'w
 .diff-side { display: grid; align-content: start; gap: 0.25rem; min-width: 0; }
 .diff-side__label { color: var(--mu); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
 .diff-line { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: start; gap: 0.4rem; min-width: 0; padding: 0.35rem 0.45rem; border-left: 2px solid transparent; border-radius: 0.3rem; background: var(--bg); }
-/* Removed lines read as `--er`, added lines as `--ok`, on `--bg`: the measured pairs clear
-   4.5:1 in both themes (tokens.test.ts owns the palette; the numbers are in the task record).
-   The tinted surfaces were rejected on purpose — a 10% tint drops light-theme --er to 4.13. */
-.diff-line--removed { border-left-color: var(--er); color: var(--er); }
-.diff-line--added { border-left-color: var(--ok); color: var(--ok); }
+/* Removed lines read as `--er`, added lines as `--ok`, on `--bg`. The 2px rail keeps the
+   palette BASE so the line still reads as a single tone; the text takes the ink step,
+   which clears 4.5:1 on every surface in both themes (TASK-394). The tinted surfaces
+   were rejected on purpose — a 10% tint drops light-theme base --er to 4.13. */
+.diff-line--removed { border-left-color: var(--er); color: var(--color-error-strong); }
+.diff-line--added { border-left-color: var(--ok); color: var(--color-success-ink); }
 .diff-line__number { color: var(--mu); font-family: var(--font-family-mono); font-size: var(--font-size-xs); text-align: right; }
 .diff-line__marker { font-family: var(--font-family-mono); font-size: var(--font-size-xs); font-weight: 800; }
 .diff-line__text { max-height: 12rem; margin: 0; padding: 0; overflow: auto; background: transparent; color: inherit; font-family: var(--font-family-mono); font-size: var(--font-size-xs); white-space: pre-wrap; overflow-wrap: anywhere; }

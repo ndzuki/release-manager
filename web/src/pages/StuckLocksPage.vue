@@ -333,7 +333,7 @@ async function submit(): Promise<void> {
 .stuck__table button.danger,
 .stuck__dialog-actions button.danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 /* The confirmation body lives inside AppDialog, which owns the panel shell, the
@@ -373,7 +373,7 @@ async function submit(): Promise<void> {
 
 .stuck__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 

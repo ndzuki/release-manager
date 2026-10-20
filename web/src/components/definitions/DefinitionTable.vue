@@ -121,7 +121,7 @@ const emit = defineEmits<{
 
 .definitions__row-actions button.danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .definitions__table {
@@ -143,7 +143,7 @@ const emit = defineEmits<{
 }
 
 .definitions__bad {
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-weight: var(--font-weight-bold);
 }
 

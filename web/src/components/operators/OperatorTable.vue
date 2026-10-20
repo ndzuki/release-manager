@@ -58,5 +58,5 @@ const emit = defineEmits<{
 .operators th { background: var(--color-bg); color: var(--color-muted-strong); font-size: var(--font-size-sm); text-transform: uppercase; }
 .operators small { display: block; max-width: 18rem; margin-top: 0.35rem; color: var(--color-muted); white-space: normal; }
 .link { border: 0; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 700; }
-.danger { padding: 0.35rem 0.6rem; border: 1px solid var(--color-danger-border); border-radius: 0.375rem; background: var(--color-surface); color: var(--color-error); cursor: pointer; }
+.danger { padding: 0.35rem 0.6rem; border: 1px solid var(--color-danger-border); border-radius: 0.375rem; background: var(--color-surface); color: var(--color-error-strong); cursor: pointer; }
 </style>

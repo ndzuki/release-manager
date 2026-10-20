@@ -76,7 +76,7 @@ async function selectOrganization(organizationId: string): Promise<void> {
 .organization-switcher__error {
   margin: 0;
   max-width: 18rem;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-xs);
 }
 </style>

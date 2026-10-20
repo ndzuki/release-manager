@@ -79,13 +79,13 @@ function updateKey(item: SecretRefFormItem, event: Event): void {
 .secret-editor__header h2, .secret-editor__header p, .secret-editor__help, .secret-editor__empty, .secret-editor__error { margin: 0; }
 .eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
 .secret-editor__help, .secret-editor__empty { color: var(--color-muted); font-size: var(--font-size-sm); }
-.secret-editor__error { color: var(--color-error); font-size: var(--font-size-sm); }
+.secret-editor__error { color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .secret-row { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(10rem, 1fr) minmax(14rem, 1.4fr) auto; align-items: end; gap: 0.75rem; padding: 0.85rem; border: 1px solid var(--color-border); border-radius: 0.55rem; }
 .secret-row > strong { grid-column: 1 / -1; }
 label { display: grid; gap: 0.35rem; color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 700; }
 button, select, input { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
 button { cursor: pointer; }
 button:disabled, select:disabled { cursor: not-allowed; opacity: 0.6; }
-.danger-text { border-color: transparent; color: var(--color-error); }
+.danger-text { border-color: transparent; color: var(--color-error-strong); }
 @media (max-width: 56rem) { .secret-row { grid-template-columns: 1fr; } }
 </style>

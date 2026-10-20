@@ -106,8 +106,8 @@ function valuesLabel(values: EmergencyTypedValuesDisplay | null): string {
  * longer widens the page.
  */
 .result-grid dd { margin: 0; overflow-wrap: anywhere; }
-.effect-applied { color: var(--color-success); }
-.effect-unknown { color: var(--color-warning); }
+.effect-applied { color: var(--color-success-ink); }
+.effect-unknown { color: var(--color-warning-ink); }
 .effect-not_applied, .effect-not_started { color: var(--color-muted); }
 .unresolved { padding: 0.6rem 0.75rem; border: 1px solid var(--color-warning-border-strong); border-radius: 0.375rem; background: var(--color-warning-surface); color: var(--color-warning-ink-strong); }
 .hint { color: var(--color-muted); font-size: var(--font-size-sm); }

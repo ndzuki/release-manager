@@ -83,7 +83,7 @@ const kindLabel: Record<string, string> = {
 .timeline-entry__header { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; }
 .timeline-entry__header time { color: var(--color-muted); font-size: var(--font-size-sm); }
 .timeline-entry__text { margin: 0; color: var(--color-text-secondary); font-size: var(--font-size-md); overflow-wrap: anywhere; }
-.timeline-entry__code { margin: 0; color: var(--color-error); font-size: var(--font-size-sm); }
+.timeline-entry__code { margin: 0; color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .timeline-entry__identities { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .timeline-entry--error { border-color: var(--color-danger-border-soft); background: var(--color-danger-soft); }
 .timeline-entry--emergency_effect_resolved { border-color: var(--color-info-border-soft); background: var(--color-info-soft); }

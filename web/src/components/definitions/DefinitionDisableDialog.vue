@@ -57,12 +57,12 @@ const emit = defineEmits<{
    caller's rule (same split as BindingsPage's confirm). */
 .definitions__confirm-danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .definitions__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

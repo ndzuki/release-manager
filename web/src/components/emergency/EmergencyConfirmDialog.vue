@@ -115,7 +115,7 @@ const emit = defineEmits<{
 
 .emergency-confirm__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 /* HEAD's primary button was borderless on a red-600 fill; the emergency

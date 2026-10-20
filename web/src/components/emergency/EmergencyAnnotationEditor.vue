@@ -242,7 +242,7 @@ watch(
 .scope-field { display: flex; gap: var(--space-2); align-items: center; }
 .scope-label { color: var(--color-muted-strong); font-size: var(--font-size-sm); }
 .scope-select { padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
-.row-remove { color: var(--color-error); }
+.row-remove { color: var(--color-error-strong); }
 .hint { margin: 0; color: var(--color-muted); font-size: var(--font-size-sm); }
-.error-text { margin: 0; color: var(--color-error); font-size: var(--font-size-sm); }
+.error-text { margin: 0; color: var(--color-error-strong); font-size: var(--font-size-sm); }
 </style>

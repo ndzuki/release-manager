@@ -87,11 +87,11 @@ function submit(): void {
 
 .revoke-reason__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 
 .revoke-reason__danger {
   border-color: var(--color-danger-border);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 </style>

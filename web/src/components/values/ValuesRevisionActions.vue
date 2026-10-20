@@ -112,9 +112,12 @@ h2, p { margin: 0; }
 .revision-actions__buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.65rem; }
 button { min-height: 2.5rem; padding: 0.5rem 0.8rem; border: 1px solid var(--color-border-strong); border-radius: 0.45rem; background: var(--color-surface); cursor: pointer; }
 button.primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
-button.secondary { border-color: var(--color-error); color: var(--color-error); }
+/* Outlined danger buttons: the 1px rail keeps the palette base `--color-error`, the label
+   takes the readable `--color-error-strong`. Changing only the label leaves the pair one
+   tone (both resolve through `--er`) without lightening the outline (TASK-394). */
+button.secondary { border-color: var(--color-error); color: var(--color-error-strong); }
 button.success { border-color: var(--color-success); background: var(--color-success); color: var(--color-on-accent); }
-button.danger { border-color: var(--color-error); color: var(--color-error); }
+button.danger { border-color: var(--color-error); color: var(--color-error-strong); }
 button:disabled { cursor: not-allowed; opacity: 0.6; }
 @media (max-width: 48rem) { .revision-actions { flex-direction: column; } .revision-actions__buttons { justify-content: flex-start; } }
 </style>

@@ -128,7 +128,7 @@ function createOrgFieldId(field: string): string {
 
 .organization__error {
   margin: 0;
-  color: var(--color-error);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 </style>

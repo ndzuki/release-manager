@@ -90,8 +90,10 @@ function confirm() {
   align-items: flex-start;
 }
 
+/* Outlined danger button: the rail keeps the palette base, the label takes the readable
+   step (TASK-394). Both resolve through `--er`, so the border still frames the label. */
 .disable-dialog__danger {
   border-color: var(--color-error);
-  color: var(--color-error);
+  color: var(--color-error-strong);
 }
 </style>

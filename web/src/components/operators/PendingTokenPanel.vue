@@ -39,5 +39,5 @@ const emit = defineEmits<{
 .actions { display: flex; align-items: center; gap: 0.75rem; }
 button { padding: 0.55rem 0.8rem; border: 1px solid var(--color-warning-solid-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.5; }
-.danger { border-color: var(--color-danger-border); color: var(--color-error); }
+.danger { border-color: var(--color-danger-border); color: var(--color-error-strong); }
 </style>

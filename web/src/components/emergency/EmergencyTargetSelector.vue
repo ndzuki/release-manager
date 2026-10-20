@@ -84,7 +84,7 @@ function annotationAvailabilityLabel(target: EmergencyTargetDisplay): string {
 .target-card.selected { border-color: var(--color-primary); background: var(--color-info-soft); }
 .target-body { display: grid; gap: 0.35rem; }
 .target-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; color: var(--color-muted-strong); font-size: var(--font-size-sm); }
-.blocked { color: var(--color-error); }
+.blocked { color: var(--color-error-strong); }
 .hint { color: var(--color-muted); }
-.error-text { color: var(--color-error); }
+.error-text { color: var(--color-error-strong); }
 </style>

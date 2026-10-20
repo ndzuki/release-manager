@@ -91,7 +91,7 @@ function removeRow(index: number): void {
 
 .patch-editor__error {
   margin: 0;
-  color: var(--er);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 
@@ -112,7 +112,7 @@ function removeRow(index: number): void {
 .patch-editor__row-error {
   grid-column: 1 / -1;
   margin: 0;
-  color: var(--er);
+  color: var(--color-error-strong);
   font-size: var(--font-size-sm);
 }
 
@@ -142,7 +142,7 @@ function removeRow(index: number): void {
 }
 
 .patch-editor__remove {
-  color: var(--er);
+  color: var(--color-error-strong);
 }
 
 @media (max-width: 48rem) {

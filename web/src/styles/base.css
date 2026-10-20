@@ -146,21 +146,24 @@ table {
 
 /* Code-surface syntax accents from the direction-C palette. The editor keeps its own
    CodeMirror theme (tokens.css `--editor-*`); these classes are for read-only code
-   previews and diff panes that must not inline hex. `--code` is the surface itself. */
+   previews and diff panes that must not inline hex. `--code` is the surface itself.
+   Text takes the readable ink step of each accent rather than the base (`--k/--s/--n`):
+   a base-coloured keyword is 5.40:1 on the light `--code` and drops below AA on any
+   tint, while the ink step stays >= 6:1 in both themes (TASK-394). */
 .code-surface {
   background: var(--code);
 }
 
 .code-keyword {
-  color: var(--k);
+  color: var(--color-info-ink);
 }
 
 .code-string {
-  color: var(--s);
+  color: var(--color-warning-ink);
 }
 
 .code-number {
-  color: var(--n);
+  color: var(--color-violet-ink);
 }
 
 /* Selection is drawn from the primary/accent pair instead of the UA blue, which is
