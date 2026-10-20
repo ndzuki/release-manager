@@ -82,9 +82,13 @@ async function handleSubmit(): Promise<void> {
   width: min(100%, 28rem);
   gap: 1rem;
   padding: 2rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
-  background: var(--color-surface);
+  /* Direction-C card, identical to LoginPage: the hairline `--color-border` was ~1.3:1 on
+     the near-black surface, so the card edge disappeared in dark; `--color-border-strong`
+     clears the 3:1 non-text threshold in both themes. Radius, surface and fill come from
+     the palette tokens (TASK-394). */
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
   /* Theme-aware elevation: the shadow is the ink colour at 8%, so it is a soft dark
      cast in light and a soft light halo in dark — the slate literal disappeared on the
      near-black surface (TASK-394). */
@@ -94,19 +98,29 @@ async function handleSubmit(): Promise<void> {
 .init-page__eyebrow,
 .init-page__description {
   margin: 0;
+}
+
+.init-page__description {
   color: var(--color-muted);
 }
 
+/* Direction-C eyebrow, matching PageHeader.vue and LoginPage: 12px / 600 / 0.04em / --mu,
+   without the uppercase the auth cards used to carry (TASK-394). */
 .init-page__eyebrow {
+  color: var(--mu);
   font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
+/* Same 24px step as LoginPage: these are full-screen card pages, not PageHeader pages. */
 .init-page__title {
   margin: 0.25rem 0;
+  color: var(--tx);
   font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-heading);
+  letter-spacing: -0.01em;
+  line-height: var(--line-height-tight);
 }
 
 .init-page__field {
