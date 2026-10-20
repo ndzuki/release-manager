@@ -213,6 +213,8 @@ describe('W7 page surfaces (TASK-394)', () => {
     expect(template).not.toContain('class="values-section__title"');
     expect(template).not.toContain("t('values.page.editor')");
     expect(template).toContain('id="values-editor-title"');
+    expect(template).toContain("t('values.page.content')");
+    expect(template).not.toContain("t('values.page.title') }}</h2>");
 
     const title = rule(style, '.values-panel__header h2');
     expect(title).toContain('font-size: var(--font-size-h2)');
