@@ -193,7 +193,7 @@ test('Convergence: Prepare → ValuesEditor draft → Submit → cross-actor App
   expect(url.searchParams.get('prepareToken')).toBeTruthy();
 
   await expect(pageA.getByText('收敛锁定路径（只读）')).toBeVisible();
-  await pageA.getByRole('button', { name: '保存 Draft' }).click();
+  await pageA.getByRole('button', { name: '保存草稿' }).click();
   await pageA.getByRole('button', { name: '提交' }).click();
   await expect(pageA.getByText('待审批')).toBeVisible();
   // Capture the convergence URL BEFORE closing context A: page.url() on a closed

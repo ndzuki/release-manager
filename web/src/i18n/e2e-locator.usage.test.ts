@@ -36,12 +36,6 @@ interface RecordedLocator {
 const RECORDED: RecordedLocator[] = [
   {
     spec: 'emergency-smoke.spec.ts',
-    literal: '保存 Draft',
-    kind: 'rendered',
-    reason: 'the button keeps the English domain noun Draft inside Chinese copy',
-  },
-  {
-    spec: 'emergency-smoke.spec.ts',
     literal: 'Username',
     kind: 'fallback',
     reason: 'fallback half of /用户名|Username/ for environments still serving the English login',
