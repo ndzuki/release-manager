@@ -127,7 +127,7 @@ describe('design tokens', () => {
    * The direction-C sample was approved byte for byte ("务必逐字节照抄颜色"), so both
    * palettes are pinned exactly. `--r` is theme-invariant and lives once in :root.
    *
-   * `--s` (the string accent, byte-identical to `--wn`) is deliberately absent: the
+   * `--s` (the string accent, the same value as `--wn` in the light palette (the dark palettes differ)) is deliberately absent: the
    * TASK-394 ink migration moved its only consumer — the CodeMirror string tag — to
    * `--color-warning-ink`, and a palette entry nobody reads fails the dead-token gate
    * above. No colour VALUE changed; the slot had no other reader.
@@ -273,17 +273,46 @@ describe('design tokens', () => {
    * channel interpolation the browser performs. Without this the theme-following tokens
    * would only be checkable by eye.
    */
+  /*
+   * `color-mix(...)` has to be resolved generically, not only through MIX_RULES: the ink
+   * steps (`--color-error-strong`, `--color-*-ink`) are declared as mixes, and a resolver
+   * that handed back the declaration text made every contrast assertion downstream compare
+   * NaN — which passes silently. This parses the declared expression, and resolveToken()
+   * now refuses to return anything that is not a concrete colour.
+   */
+  const COLOUR_LITERAL = /^(?:#[0-9a-f]{3,8}|rgba?\([^)]*\)|hsla?\([^)]*\))$/i;
+
+  function resolveExpression(expression: string, palette: Map<string, string>): string {
+    const trimmed = expression.trim();
+    const mixed =
+      /^color-mix\(in srgb,\s*var\((--[a-z0-9-]+)\)\s+(\d+)%,\s*var\((--[a-z0-9-]+)\)\s*\)$/.exec(trimmed);
+    if (mixed) {
+      return mix(
+        resolveToken(mixed[1]!, palette),
+        Number(mixed[2]),
+        resolveToken(mixed[3]!, palette),
+      );
+    }
+    const alias = /^var\((--[a-z0-9-]+)\)$/.exec(trimmed);
+    if (alias) return resolveToken(alias[1]!, palette);
+    return trimmed;
+  }
+
   function resolveToken(token: string, palette: Map<string, string>): string {
     const fromPalette = palette.get(token);
     if (fromPalette) return fromPalette;
-    const raw = declared.get(token) ?? '';
-    const alias = /^var\((--[a-z0-9-]+)\)$/.exec(raw.trim());
-    if (alias) return resolveToken(alias[1]!, palette);
     const rule = MIX_RULES[token];
     if (rule) {
       return mix(resolveToken(rule.from, palette), rule.percent, resolveToken(rule.to, palette));
     }
-    return raw;
+    const raw = declared.get(token) ?? '';
+    const resolved = resolveExpression(raw, palette);
+    if (!COLOUR_LITERAL.test(resolved)) {
+      throw new Error(
+        `token ${token} did not resolve to a colour: ${JSON.stringify(raw)} -> ${JSON.stringify(resolved)}`,
+      );
+    }
+    return resolved;
   }
 
   const THEMES = [
