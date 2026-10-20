@@ -5,6 +5,7 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import { LOCAL_USER_ROLES, type LocalUserRole } from '@/connect/local-user-api';
 import { PASSWORD_MAX_BYTES, passwordTooLong } from '@/connect/auth-api';
@@ -74,14 +75,17 @@ onMounted(() => {
     />
 
     <template v-else>
-      <header class="local-users-page__header">
-        <div>
-          <p class="eyebrow">{{ t('localUser.page.eyebrow') }}</p>
-          <h1>{{ t('localUser.page.title') }}</h1>
-          <p class="local-users-page__description">{{ t('localUser.page.description') }}</p>
-        </div>
-        <button type="button" @click="store.load()">{{ t('action.refresh') }}</button>
-      </header>
+      <PageHeader
+        :eyebrow="t('localUser.page.eyebrow')"
+        :title="t('localUser.page.title')"
+        :subtitle="t('localUser.page.description')"
+      >
+        <template #actions>
+          <div class="actions">
+            <button type="button" @click="store.load()">{{ t('action.refresh') }}</button>
+          </div>
+        </template>
+      </PageHeader>
 
       <!--
         TASK-299: the primitive, used without `auto-dismiss`. The store puts both the
@@ -184,9 +188,17 @@ onMounted(() => {
         </FormField>
         <label>
           {{ t('localUser.create.role') }}
-          <select v-model="role" name="role">
-            <option v-for="value in LOCAL_USER_ROLES" :key="value" :value="value">{{ roleLabels[value] }}</option>
-          </select>
+          <!--
+            W2 (TASK-394): the select was the console's last raw native control. The UA
+            arrow is painted outside the token palette, so it is suppressed and the caret
+            is drawn with the muted text colour instead.
+          -->
+          <span class="select-wrap">
+            <select v-model="role" name="role">
+              <option v-for="value in LOCAL_USER_ROLES" :key="value" :value="value">{{ roleLabels[value] }}</option>
+            </select>
+            <span class="select-wrap__caret" aria-hidden="true" />
+          </span>
         </label>
         <p v-if="store.failure && store.hasUsers" class="error" role="alert">{{ store.failure.message }}</p>
         <button type="submit" :disabled="!canSubmit">
@@ -201,18 +213,45 @@ onMounted(() => {
 .local-users-page {
   display: grid;
   gap: var(--space-4);
+  min-width: 0;
 }
 
-.local-users-page__header {
+/* PageHeader owns a 20px bottom margin; the grid gap above already spaces the header
+   from the table, so the two must not stack. */
+.local-users-page :deep(.page-header) {
+  margin-bottom: 0;
+}
+
+.actions {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
-.local-users-page__description {
-  color: var(--color-muted);
-  max-width: 48rem;
+.actions button,
+.local-users__create button {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.local-users__create button:disabled {
+  border-color: var(--color-disabled-border);
+  background: var(--color-disabled-bg);
+  color: var(--color-disabled-text);
+  cursor: not-allowed;
+}
+
+/* W2 (TASK-394): the table used to float on the page with only row rules. Direction C
+   gives the scroller the frame and the surface, so the table reads as one card. */
+.table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--color-surface);
 }
 
 .local-users__table {
@@ -227,14 +266,63 @@ onMounted(() => {
   text-align: left;
 }
 
+/* W2 (TASK-394): direction-C header — the muted surface and the strong muted ink, so
+   the header row separates from the body instead of relying on the UA bold. */
+.local-users__table th {
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.01em;
+}
+
 .local-users__create {
   display: grid;
   gap: var(--space-3);
   max-width: 32rem;
+  min-width: 0;
 }
 
 .local-users__create label {
   display: grid;
   gap: var(--space-1);
+}
+
+/* W2 (TASK-394): the create form's controls were unauthored UA widgets; the muted
+   surface and the strong border put them on the same vocabulary as the rest of the
+   console's forms. */
+.local-users__create input,
+.local-users__create select {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+/* Direction C select: the UA arrow is suppressed and the caret comes from the muted
+   text colour (the same pattern ReleaseInventoryPage established). */
+.select-wrap {
+  position: relative;
+  display: block;
+}
+
+.select-wrap select {
+  width: 100%;
+  padding-right: 30px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.select-wrap__caret {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid var(--color-muted);
+  border-bottom: 1px solid var(--color-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
 }
 </style>

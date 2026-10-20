@@ -7,6 +7,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import OperatorFilters from '@/components/operators/OperatorFilters.vue';
 import OperatorPollingNotice from '@/components/operators/OperatorPollingNotice.vue';
@@ -70,21 +71,31 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
 
     <OperatorPollingNotice :stopped="pollingStopped" @resume="resumePolling" />
 
-    <header class="page__header">
-      <div>
-        <p class="eyebrow">{{ t('operator.list.title') }}</p>
-        <h1>{{ t('operator.list.subtitle') }}</h1>
-        <p>{{ t('operator.list.description') }}</p>
-      </div>
-      <div class="actions">
-        <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
-        <RouterLink
-          v-if="auth.canEnrollOperators"
-          class="primary"
-          :to="{ name: 'OperatorEnroll', params: { customerId: customerId, clusterId: clusterId } }"
-        >{{ t('operator.list.generate') }}</RouterLink>
-      </div>
-    </header>
+    <!--
+      W2 (TASK-394): the hand-rolled header had the title and the subtitle in the wrong
+      slots — the eyebrow carried the LIST NAME ("集群 Operator") and the h1 carried the
+      descriptor ("Operator 注册历史"). PageHeader now takes the list name as title and
+      that descriptor as subtitle; the sentence that explains the page keeps its own line
+      because PageHeader has exactly one subtitle. The category eyebrow is deliberately
+      absent here: the only eyebrow string this page ever had is the title above.
+    -->
+    <PageHeader
+      :title="t('operator.list.title')"
+      :subtitle="t('operator.list.subtitle')"
+    >
+      <template #actions>
+        <div class="actions">
+          <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
+          <RouterLink
+            v-if="auth.canEnrollOperators"
+            class="primary"
+            :to="{ name: 'OperatorEnroll', params: { customerId: customerId, clusterId: clusterId } }"
+          >{{ t('operator.list.generate') }}</RouterLink>
+        </div>
+      </template>
+    </PageHeader>
+
+    <p class="page__intro">{{ t('operator.list.description') }}</p>
 
     <LoadingState v-if="store.loading && !store.hasOperators" :message="t('operator.list.loading')" />
     <ForbiddenState v-else-if="store.forbidden" />
@@ -136,14 +147,15 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
 </template>
 
 <style scoped>
-.page { display: grid; gap: 1.5rem; max-width: 76rem; margin: 0 auto; }
-.page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-h1, p { margin: 0; }
-.page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
-.actions { justify-content: flex-end; }
+.page { display: grid; gap: 1.5rem; max-width: 76rem; margin: 0 auto; min-width: 0; }
+/* PageHeader owns a 20px bottom margin; this page is a grid, so the gap above is the
+   spacing between the header and the content and the margin must not stack on it. */
+.page :deep(.page-header) { margin-bottom: 0; }
+p { margin: 0; }
+.page__intro { max-width: 72ch; color: var(--color-muted); }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 1rem; }
 .actions button, .primary, .content > button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); color: inherit; cursor: pointer; text-decoration: none; }
 .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
-.content { display: grid; gap: 1rem; }
+.content { display: grid; gap: 1rem; min-width: 0; }
 .warning { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); }
 </style>

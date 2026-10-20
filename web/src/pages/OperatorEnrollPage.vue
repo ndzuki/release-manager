@@ -7,6 +7,7 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import EnrollmentTokenModal from '@/components/operators/EnrollmentTokenModal.vue';
 import PendingTokenPanel from '@/components/operators/PendingTokenPanel.vue';
 import { useAuthStore } from '@/stores/auth';
@@ -91,14 +92,17 @@ watch([customerId, clusterId], async () => {
 
 <template>
   <section class="page">
-    <header class="page__header">
-      <div>
-        <p class="eyebrow">{{ t('operator.enroll.eyebrow') }}</p>
-        <h1>{{ t('operator.enroll.title') }}</h1>
-        <p>{{ t('operator.enroll.note') }}</p>
-      </div>
-      <button type="button" @click="router.push({ name: 'OperatorList', params: { customerId, clusterId } })">{{ t('operator.enroll.back') }}</button>
-    </header>
+    <PageHeader
+      :eyebrow="t('operator.enroll.eyebrow')"
+      :title="t('operator.enroll.title')"
+      :subtitle="t('operator.enroll.note')"
+    >
+      <template #actions>
+        <div class="actions">
+          <button type="button" @click="router.push({ name: 'OperatorList', params: { customerId, clusterId } })">{{ t('operator.enroll.back') }}</button>
+        </div>
+      </template>
+    </PageHeader>
 
     <ForbiddenState v-if="!auth.canEnrollOperators || store.forbidden" />
     <LoadingState v-else-if="pendingLoading" :message="t('operator.enroll.checking')" />
@@ -206,18 +210,24 @@ watch([customerId, clusterId], async () => {
 </template>
 
 <style scoped>
-.page { display: grid; gap: 1.5rem; max-width: 54rem; margin: 0 auto; }
-.page__header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-h1, h2, p { margin: 0; }
-.page__header > div > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
-.page__header button, .card button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
-.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
-/* TASK-275: the label/hint chrome now belongs to FormField; only the control is styled here. */
-.card input { padding: 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
+.page { display: grid; gap: 1.5rem; max-width: 54rem; margin: 0 auto; min-width: 0; }
+/* PageHeader owns a 20px bottom margin; the grid gap above already spaces the header
+   from the first card, so the two must not stack. */
+.page :deep(.page-header) { margin-bottom: 0; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.75rem; }
+h2, p { margin: 0; }
+.actions button, .card button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
+/* W2 (TASK-394): direction-C card — surface fill under the strong border, 8px radius. */
+.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); min-width: 0; }
+/* TASK-275: the label/hint chrome now belongs to FormField; only the control is styled here.
+   W2 (TASK-394): the control gets the muted-surface fill so it reads as a field on the
+   card instead of an outline. */
+.card input { padding: 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface-muted); color: var(--color-text); font: inherit; }
 .hint { color: var(--color-muted); font-weight: 400; }
 .card .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
-.card button:disabled { cursor: not-allowed; opacity: 0.5; }
+/* Disabled is its own state, not a translucent enabled primary: at half opacity the
+   light-on-dark accent turned into a grey bar that still read as the page's main action. */
+.card button:disabled { border-color: var(--color-disabled-border); background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
 .error { color: var(--color-error-strong); }
 /* Slotted into AppDialog's footer, whose baseline must lose to a danger variant. */
 .dialog-danger { border-color: var(--color-danger-border); color: var(--color-error-strong); }

@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import OperatorListPage from './OperatorListPage.vue';
 import * as api from '@/connect/operator-api';
 import * as polling from '@/composables/useOperatorPolling';
+import { t } from '@/i18n/messages';
 
 /*
  * TASK-330 (AC-330-03): the page-level half of the polling notice's contract.
@@ -79,5 +80,33 @@ describe('OperatorListPage polling notice wiring', () => {
     // The one affordance that restores the chain is the notice's own button.
     await wrapper.get('[data-testid="operator-polling-resume"]').trigger('click');
     expect(resume).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * W2 (TASK-394): the hand-rolled header had the list name in the eyebrow and the
+ * descriptor in the h1. The swap is a semantic fix, so it is asserted against the
+ * catalog values rather than against the markup shape alone.
+ */
+describe('OperatorListPage header (W2)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+    mockedPolling.mockReturnValue({ stopped: ref(false), resume: vi.fn() });
+  });
+
+  it('uses the list name as the title and the history line as the subtitle', async () => {
+    mockedList.mockResolvedValue(emptyPage);
+    const wrapper = await mountPage();
+
+    const header = wrapper.get('.page-header');
+    expect(header.get('h1').text()).toBe(t('operator.list.title'));
+    expect(header.get('.page-header__subtitle').text()).toBe(t('operator.list.subtitle'));
+    // The reversed header put the list name in the eyebrow, so there is no separate
+    // category string to keep above the title: the eyebrow must be absent, not a copy
+    // of the title.
+    expect(header.find('.page-header__eyebrow').exists()).toBe(false);
+    // The explanation the old third line carried is still rendered, exactly once.
+    expect(wrapper.get('.page__intro').text()).toBe(t('operator.list.description'));
   });
 });

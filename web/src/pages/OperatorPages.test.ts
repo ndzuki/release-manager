@@ -16,6 +16,7 @@ import type * as OperatorApi from '@/connect/operator-api';
 import { t } from '@/i18n/messages';
 import { useAuthStore } from '@/stores/auth';
 import { useOperatorStore } from '@/stores/operator';
+import type { OperatorDetailResult } from '@/types/operator';
 vi.mock('@/connect/operator-api', async (importOriginal) => {
   const original = await importOriginal<typeof OperatorApi>();
   return {
@@ -51,6 +52,48 @@ async function mountEnrollPage() {
   await router.push('/customers/customer-1/clusters/cluster-1/operators/new');
   await router.isReady();
   const wrapper = mount(OperatorEnrollPage, { global: { plugins: [router] } });
+  await flushPromises();
+  return wrapper;
+}
+
+// W2 (TASK-394): a full detail payload for the header cases; the id is a UUID on
+// purpose, because the assertion is that it no longer reaches the header.
+function detailPayload(id: string, name: string): OperatorDetailResult {
+  return {
+    operator: {
+      id,
+      name,
+      customerId: 'customer-1',
+      clusterId: 'cluster-1',
+      clusterName: 'Staging',
+      lifecycleStatus: 'active',
+      sessionStatus: 'offline',
+      sessionStatusReason: 'heartbeat_timeout',
+      lastHeartbeat: '2026-07-20T01:02:03.000Z',
+      registeredAt: '2026-07-01T00:00:00.000Z',
+      supersededAt: null,
+      revokedAt: null,
+      supersededBy: null,
+      revokeReason: null,
+      instanceId: null,
+      version: null,
+      capabilities: {},
+    },
+    heartbeatIntervalSeconds: 15,
+  };
+}
+
+async function mountDetailPage(operatorId: string) {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/customers/:customerId/clusters/:clusterId/operators', name: 'OperatorList', component: { template: '<div />' } },
+      { path: '/customers/:customerId/clusters/:clusterId/operators/:operatorId', name: 'OperatorDetail', component: OperatorDetailPage },
+    ],
+  });
+  await router.push(`/customers/customer-1/clusters/cluster-1/operators/${operatorId}`);
+  await router.isReady();
+  const wrapper = mount(OperatorDetailPage, { global: { plugins: [router] } });
   await flushPromises();
   return wrapper;
 }
@@ -296,6 +339,43 @@ describe('Operator pages', () => {
 
     expectFieldErrorIsDescription(wrapper, 'Operator 名称', t('operator.validation.name'));
     expectFieldErrorIsDescription(wrapper, 'TTL 分钟', t('operator.validation.ttl'));
+  });
+
+  /*
+   * W2 (TASK-394): the detail header printed the operator UUID on a line of its own,
+   * and fell back to it as the h1 when the name was empty. The name is the title now and
+   * the id lives in the identity card as a CopyableHash (truncated, full value in title).
+   */
+  it('heads the detail with the operator name and keeps the UUID out of the header (W2)', async () => {
+    authenticate('viewer');
+    const operatorId = '0f6c3f2e-1b7a-4a56-9a68-2d2f6c1e4b90';
+    vi.mocked(getOperator).mockResolvedValue(detailPayload(operatorId, 'operator-one'));
+
+    const wrapper = await mountDetailPage(operatorId);
+
+    const header = wrapper.get('.page-header');
+    expect(header.get('h1').text()).toBe('operator-one');
+    expect(header.get('.page-header__eyebrow').text()).toBe(t('operator.detail.title'));
+    expect(header.text()).not.toContain(operatorId);
+
+    // The id is still reachable — truncated on screen, complete in `title` and copyable.
+    const hash = wrapper.get('.copyable-hash__value');
+    expect(hash.attributes('title')).toBe(operatorId);
+    expect(hash.text()).toBe(`${operatorId.slice(0, 8)}…`);
+  });
+
+  it('falls back to the page label rather than a UUID when the operator has no name (W2)', async () => {
+    authenticate('viewer');
+    const operatorId = '0f6c3f2e-1b7a-4a56-9a68-2d2f6c1e4b90';
+    vi.mocked(getOperator).mockResolvedValue(detailPayload(operatorId, ''));
+
+    const wrapper = await mountDetailPage(operatorId);
+
+    const header = wrapper.get('.page-header');
+    expect(header.get('h1').text()).toBe(t('operator.detail.title'));
+    expect(header.text()).not.toContain(operatorId);
+    // An eyebrow identical to the title would read as a duplicated label.
+    expect(header.find('.page-header__eyebrow').exists()).toBe(false);
   });
 });
 
