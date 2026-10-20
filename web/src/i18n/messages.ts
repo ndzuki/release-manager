@@ -1155,6 +1155,19 @@ const zhCN = {
   'trust.action.retire': '退休',
   'trust.action.revoke': '吊销',
   'trust.disabled.lastRoot': '该环境只剩一个可用信任根，不能移除',
+
+
+  // --- consistency w5 (TASK-394) ---
+  /*
+   * The convergence-tasks and operation-history pages moved their heading and action copy
+   * out of the template. The two `definition` labels name the CopyableHash that now carries
+   * the release definition id the h1/subtitle used to print: CopyableHash itself only knows
+   * a value, so the surrounding label says what the value is.
+   */
+  'convergence.page.definition': '发布定义',
+  'operation.list.back': '返回发布清单',
+  'operation.list.create': '创建操作',
+  'operation.list.definition': '发布定义',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

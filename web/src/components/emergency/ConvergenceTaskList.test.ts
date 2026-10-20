@@ -65,3 +65,21 @@ describe('ConvergenceTaskList revision status labelling', () => {
     expect(wrapper.text()).toContain('草稿');
   });
 });
+
+/*
+ * TASK-394: the list was the one table on the convergence page with no frame (rows floated on
+ * the page background) and its header painted `--color-bg`, which is the page background
+ * rather than a header surface. The structure below is what the page relies on: one scroll
+ * region, framed, with the header inside it.
+ */
+describe('ConvergenceTaskList direction-C frame (TASK-394)', () => {
+  it('keeps the header inside a framed scroll region', () => {
+    const wrapper = mountList([task()]);
+
+    const frame = wrapper.get('.task-table-wrap');
+    expect(frame.classes()).toContain('table-wrap');
+    expect(frame.attributes('role')).toBe('region');
+    expect(frame.find('table.task-table').exists()).toBe(true);
+    expect(wrapper.findAll('thead th')).toHaveLength(6);
+  });
+});

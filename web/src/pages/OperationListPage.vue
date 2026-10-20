@@ -3,9 +3,12 @@ import { t } from '@/i18n/messages';
 import { computed, onMounted, ref } from 'vue';
 import { statusLabel } from '@/i18n/status-labels';
 import { useRoute } from 'vue-router';
+import type { RouteLocationRaw } from 'vue-router';
+import CopyableHash from '@/components/common/CopyableHash.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import { listOperations, mapOperationError, type OperationSummaryItem } from '@/connect/operation-api';
 import type {} from '@/types/operation';
@@ -124,35 +127,68 @@ const createRoute = computed(() => ({
   query: { customerName: customerName.value, clusterName: clusterName.value, releaseName: releaseName.value },
 }));
 
+/*
+ * TASK-394 (consistency wave 5): the hand-rolled `<nav aria-label="面包屑">` became
+ * PageHeader's `crumbs`. The trail keeps the old navigation graph (customer list →
+ * clusters → release inventory → this page) and stays a `computed`, so a route/query change
+ * re-derives both the labels and the link targets at render time.
+ *
+ * Labels are NAMES only. `customerName` falls back to the route id when a direct URL carries
+ * no query name (in-app links always carry it), and a crumb whose label would be that id is
+ * DROPPED rather than printed — PageHeader's contract forbids a trail built from params, and
+ * this page is only reached with a customer/cluster in the URL. The release level has the
+ * same rule one level down: without `releaseName` the definition is identified by the
+ * CopyableHash in the header actions, never by the raw id in the trail.
+ */
+const crumbs = computed<Array<{ label: string; to?: RouteLocationRaw }>>(() => {
+  const trail: Array<{ label: string; to?: RouteLocationRaw }> = [
+    { label: t('nav.customers'), to: { name: 'CustomerList' } },
+  ];
+  if (customerName.value && customerName.value !== customerId.value) {
+    trail.push({
+      label: customerName.value,
+      to: { name: 'ClusterList', params: { customerId: customerId.value } },
+    });
+  }
+  if (clusterName.value && clusterName.value !== clusterId.value) {
+    trail.push({ label: clusterName.value, to: inventoryRoute.value });
+  }
+  // The last crumb is the current page; PageHeader renders it as aria-current, not a link.
+  trail.push({ label: t('operation.list.eyebrow') });
+  return trail;
+});
+
+/* The release NAME is the subtitle; a direct URL has none, so the subtitle is omitted and
+   the definition id surfaces as a truncated CopyableHash in the header actions instead. */
+const subtitle = computed(() => releaseName.value);
+
 onMounted(() => load(false));
 </script>
 
 <template>
   <section class="operation-list">
-    <nav class="operation-list__crumbs" aria-label="面包屑">
-      <RouterLink :to="{ name: 'CustomerList' }">{{ t('nav.customers') }}</RouterLink>
-      <span aria-hidden="true">/</span>
-      <RouterLink :to="{ name: 'ClusterList', params: { customerId } }">{{ customerName }}</RouterLink>
-      <span aria-hidden="true">/</span>
-      <RouterLink :to="inventoryRoute">{{ clusterName }}</RouterLink>
-      <span aria-hidden="true">/</span>
-      <span>{{ t('operation.list.eyebrow') }}</span>
-    </nav>
-
-    <header class="operation-list__header">
-      <div>
-        <p class="eyebrow">{{ t('operation.list.subtitle') }}</p>
-        <h1>操作历史</h1>
-        <p class="operation-list__subtitle">
-          {{ releaseName || releaseId }}
-          <span v-if="releaseName" class="operation-list__id">{{ releaseId }}</span>
-        </p>
-      </div>
-      <div class="operation-list__actions">
-        <RouterLink :to="inventoryRoute">返回发布清单</RouterLink>
-        <RouterLink class="primary" :to="createRoute">创建操作</RouterLink>
-      </div>
-    </header>
+    <PageHeader
+      :title="t('operation.list.eyebrow')"
+      :eyebrow="t('operation.list.subtitle')"
+      :subtitle="subtitle"
+      :crumbs="crumbs"
+    >
+      <template #actions>
+        <div class="operation-list__actions">
+          <!--
+            Identity fallback (TASK-394): without a `releaseName` the definition would
+            otherwise be unnamed on screen. CopyableHash keeps the id readable and copyable
+            while the full value lives in `title`; the raw UUID is never printed as text.
+          -->
+          <span v-if="!releaseName && releaseId" class="operation-list__definition">
+            <span class="operation-list__definition-label">{{ t('operation.list.definition') }}</span>
+            <CopyableHash :value="releaseId" />
+          </span>
+          <RouterLink :to="inventoryRoute">{{ t('operation.list.back') }}</RouterLink>
+          <RouterLink class="primary" :to="createRoute">{{ t('operation.list.create') }}</RouterLink>
+        </div>
+      </template>
+    </PageHeader>
 
     <form class="operation-list__filter" @submit.prevent="refresh">
       <label>
@@ -195,7 +231,7 @@ onMounted(() => load(false));
         <button type="button" @click="load(false)">重试</button>
       </div>
       <div
-        class="table-wrap"
+        class="table-wrap operation-list__table-wrap"
         role="region"
         :aria-label="t('operations.table.scrollRegion')"
         tabindex="0"
@@ -241,56 +277,37 @@ onMounted(() => load(false));
 </template>
 
 <style scoped>
+/* Direction-C page root: the shell's `main` already pads 24px (12px at 375). The old
+   `padding: var(--space-5)` was a second padding on top of it. */
 .operation-list {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-.operation-list__crumbs {
-  display: flex;
-  gap: var(--space-2);
-  color: var(--color-muted);
-  font-size: var(--font-size-sm);
-}
-
-.operation-list__header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.operation-list__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.operation-list__subtitle {
-  margin: var(--space-1) 0 0;
-  color: var(--color-muted);
-}
-
-.operation-list__id {
-  margin-left: var(--space-2);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
+/* PageHeader keeps a 20px bottom margin for pages that are not grids; the grid gap is
+   the only space between the header and the filter card here. */
+.operation-list :deep(.page-header) {
+  margin-bottom: 0;
 }
 
 .operation-list__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
+}
+
+.operation-list__definition {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.operation-list__definition-label {
+  color: var(--mu);
+  font-size: var(--font-size-xs);
 }
 
 .operation-list__actions .primary {
@@ -303,10 +320,17 @@ onMounted(() => load(false));
   text-decoration: none;
 }
 
+/* Direction-C filter card. It used to be a bare form row, which read as part of the page
+   rather than as a control group; the strong border is the one that is visible in dark. */
 .operation-list__filter {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-end;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
 }
 
 .operation-list__filter label {
@@ -345,16 +369,37 @@ onMounted(() => load(false));
   color: var(--color-warning-ink);
 }
 
-.operation-list__table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--color-surface);
+/* Direction-C table frame. `.table-wrap` owns horizontal containment (base.css), so the
+   5-column table scrolls inside its own box at 375px instead of widening the page. */
+.operation-list__table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
 }
 
-.operation-list__table th,
+.operation-list__table {
+  width: 100%;
+  min-width: 44rem;
+  border-collapse: collapse;
+  background: var(--sf);
+}
+
+/* The header used to share one th/td rule, so it had no band and only the UA bold weight
+   separated it from the rows. Muted band + readable ink is the direction-C table header. */
+.operation-list__table th {
+  padding: 10px 20px;
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-align: left;
+  /* Without nowrap the header breaks one glyph per line at 375px; the frame scrolls. */
+  white-space: nowrap;
+}
+
 .operation-list__table td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border-strong);
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-border-strong);
   text-align: left;
 }
 
@@ -364,6 +409,9 @@ onMounted(() => load(false));
   background: var(--color-surface-muted);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
+  /* The label is a two-character CJK word; without nowrap a narrow column breaks it one
+     glyph per line. The table scrolls inside its frame instead. */
+  white-space: nowrap;
 }
 
 .operation-list__state--succeeded {
