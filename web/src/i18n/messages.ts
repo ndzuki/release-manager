@@ -1026,6 +1026,20 @@ const zhCN = {
   'operation.detail.loadTimeout': '加载超时，未能读取该操作。',
   'operation.detail.backToHistory': '返回操作历史',
   'operation.detail.backToCenter': '返回操作中心',
+
+
+  // --- values diff (TASK-394) ---
+  /*
+   * Direction C gives the Values page a header action that names what the save creates
+   * (a new ValuesRevision, not an in-place edit), and gives the side-by-side diff card a
+   * heading plus a zero-change label. The count itself composes with the existing
+   * `values.diff.changes` unit, so "N 处变更" and "无变更" are one vocabulary.
+   */
+  'values.page.saveNew': '保存为新版本',
+  'values.page.saving': '保存中…',
+  'values.page.saveBlocked': '保存为新版本需要写权限，且内容需通过校验。',
+  'values.diff.heading': '与上一版本的差异',
+  'values.diff.none': '无变更',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

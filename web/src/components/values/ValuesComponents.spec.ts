@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import SecretRefEditor from './SecretRefEditor.vue';
 import ValuesDiffPanel from './ValuesDiffPanel.vue';
 import ValuesRevisionActions from './ValuesRevisionActions.vue';
-import type { ValuesRevision } from '@/types/valuesRevision';
+import type { DiffResult, ValuesRevision } from '@/types/valuesRevision';
 
 const draft: ValuesRevision = {
   id: 'draft-1', releaseDefinitionId: 'definition-1', revision: 2, stateVersion: '1',
@@ -20,6 +20,40 @@ describe('values editor presentation', () => {
   it('explains when canonical diff has no changes', () => {
     const wrapper = mount(ValuesDiffPanel, { props: { result: { changes: [], hasChanges: false } } });
     expect(wrapper.text()).toContain('无 canonical 变化');
+  });
+
+  // TASK-394: the card counts its changes next to the title. A zero diff is a neutral
+  // state ("无变更"), not a warning, and a non-zero one is the warning tone the spec asks
+  // for — the tag is the same StatusTag primitive every other page uses.
+  it('tags a zero diff as neutral and explains it', () => {
+    const wrapper = mount(ValuesDiffPanel, { props: { result: { changes: [], hasChanges: false } } });
+
+    const tag = wrapper.get('.status-tag');
+    expect(tag.text()).toContain('无变更');
+    expect(tag.classes()).toContain('status-tag--neutral');
+  });
+
+  it('counts the changes and renders each one as a removed/added pair', () => {
+    const result: DiffResult = {
+      changes: [
+        { path: '.replicas', kind: 'modified', oldValue: 1, newValue: 2 },
+        { path: '.image.tag', kind: 'added', newValue: 'v2' },
+      ],
+      hasChanges: true,
+    };
+    const wrapper = mount(ValuesDiffPanel, { props: { result } });
+
+    const tag = wrapper.get('.status-tag');
+    expect(tag.text()).toContain('2 处变更');
+    expect(tag.classes()).toContain('status-tag--wn');
+
+    // One removal (the modified before-value) and two additions (modified after + added).
+    expect(wrapper.findAll('.diff-line--removed')).toHaveLength(1);
+    expect(wrapper.findAll('.diff-line--added')).toHaveLength(2);
+    // The gutter numbers each side of the patch in order; the added-only hunk leaves the
+    // "before" side empty instead of shifting the columns.
+    expect(wrapper.findAll('.diff-line__number').map((line) => line.text())).toEqual(['1', '1', '2']);
+    expect(wrapper.findAll('.diff-side__empty')).toHaveLength(1);
   });
 
   it('emits a complete SecretRef update with an automatically derived path', async () => {

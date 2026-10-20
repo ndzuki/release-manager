@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import AuthorizationStaleNotice from '@/components/common/AuthorizationStaleNotice.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import ConvergenceLockedPathsPanel from '@/components/emergency/ConvergenceLockedPathsPanel.vue';
 import SecretRefEditor from '@/components/values/SecretRefEditor.vue';
@@ -14,6 +15,7 @@ import ValuesDiffPanel from '@/components/values/ValuesDiffPanel.vue';
 import ValuesEditorSkeleton from '@/components/values/ValuesEditorSkeleton.vue';
 import RejectRevisionDialog from '@/components/values/RejectRevisionDialog.vue';
 import ValuesRevisionActions from '@/components/values/ValuesRevisionActions.vue';
+import { useScopeNames } from '@/composables/useScopeNames';
 import { useAuthStore } from '@/stores/auth';
 import { useEmergencyAuthorizationStore } from '@/stores/emergencyAuthorization';
 import { useValuesEditorStore } from '@/stores/valuesEditor';
@@ -32,17 +34,39 @@ const reloadingParent = shallowRef(false);
 const discardConfirmOpen = ref(false);
 // AC-055-11: the reject reason is captured in a dialog, not submitted blind.
 const rejectDialogOpen = ref(false);
+// The visible label names the segmented group; the page owns the id because the buttons
+// live in the PageHeader's action slot (same pattern as OperationForm's type group).
+const languageLabelId = 'values-language-label';
 
-const customerId = computed(() => String(route.params.customerId ?? ''));
-const clusterId = computed(() => String(route.params.clusterId ?? ''));
+/*
+ * NAMES, never identifiers (TASK-394). In-app navigation carries customerName/clusterName
+ * in the query, and `useScopeNames` resolves them for a direct entry. Its last-resort
+ * fallback is the identifier itself, and printing a UUID as a breadcrumb level is the
+ * anti-pattern the direction-C audit called out — so a crumb whose label would be the id is
+ * omitted instead. The release has no lookup here (this page only reads revisions), so its
+ * crumb is dropped when the query does not carry the name.
+ */
+const { customerId, clusterId, customerName, clusterName } = useScopeNames();
 const releaseDefinitionId = computed(() => String(route.params.releaseId ?? ''));
-const customerName = computed(() => String(route.query.customerName ?? customerId.value));
-const clusterName = computed(() => String(route.query.clusterName ?? clusterId.value));
-const releaseName = computed(() => String(route.query.releaseName ?? releaseDefinitionId.value));
+const releaseName = computed(() => (typeof route.query.releaseName === 'string' ? route.query.releaseName : ''));
+const crumbs = computed<Array<{ label: string }>>(() => {
+  const trail: Array<{ label: string }> = [];
+  if (customerName.value && customerName.value !== customerId.value) trail.push({ label: customerName.value });
+  if (clusterName.value && clusterName.value !== clusterId.value) trail.push({ label: clusterName.value });
+  if (releaseName.value) trail.push({ label: releaseName.value });
+  // The last crumb is the current page; PageHeader never links it.
+  trail.push({ label: t('values.page.title') });
+  return trail;
+});
+// Direction C: the title names the release and the surface. Without a name the title falls
+// back to the catalog label rather than to the release-definition UUID.
+const pageTitle = computed(() => (releaseName.value ? `${releaseName.value} Values` : t('values.page.title')));
 const roles = computed(() => auth.user?.roles.map((role) => role.toLowerCase()) ?? []);
 const canWrite = computed(() => roles.value.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)));
 const firstRevision = computed(() => !editor.currentRevision && !editor.parentRevision);
 const readOnly = computed(() => !canWrite.value || !editor.canEdit);
+const saveBlocked = computed(() => readOnly.value || editor.saving || editor.saveDisabled);
+const saveBlockedReason = computed(() => (saveBlocked.value ? t('values.page.saveBlocked') : undefined));
 // Convergence mode (REQ-058 Step 8): URL carries ONLY mode + opaque token.
 const convergenceMode = computed(() => String(route.query.mode ?? '') === 'convergence');
 const prepareToken = computed(() => String(route.query.prepareToken ?? ''));
@@ -76,8 +100,13 @@ watch(
   { immediate: true },
 );
 
-function handleLanguage(event: Event): void {
-  editor.setEditorLanguage((event.target as HTMLSelectElement).value as EditorLanguage);
+/*
+ * The YAML/JSON switch really switches the editor language: the store value is the same
+ * `language` prop ValuesCodeEditor feeds its CodeMirror language compartment, which is
+ * reconfigured in a watcher (ValuesCodeEditor.vue watch(() => props.language)).
+ */
+function setLanguage(language: EditorLanguage): void {
+  editor.setEditorLanguage(language);
 }
 
 function updateSecretRef(id: string, patch: Partial<SecretRef>): void {
@@ -138,27 +167,48 @@ onBeforeUnmount(() => {
 <template>
   <section class="values-page">
     <AuthorizationStaleNotice :stale="writeBlocked" />
-    <nav class="breadcrumbs" :aria-label="t('values.page.breadcrumb')">
-      <span>{{ customerName }}</span><span aria-hidden="true">/</span>
-      <span>{{ clusterName }}</span><span aria-hidden="true">/</span>
-      <span>{{ releaseName }}</span><span aria-hidden="true">/</span>
-      <strong>{{ t('values.page.title') }}</strong>
-    </nav>
 
-    <header class="values-page__header">
-      <div>
-        <p class="eyebrow">{{ t('values.page.editor') }}</p>
-        <h1>{{ releaseName }} {{ t('values.page.title') }}</h1>
-        <p>编辑 canonical values 并通过 SecretRef 引用集群 Secret。</p>
-      </div>
-      <label class="language-select">
-        {{ t('values.page.language') }}
-        <select :value="editor.editorLanguage" :disabled="readOnly" @change="handleLanguage">
-          <option value="yaml">YAML</option>
-          <option value="json">JSON</option>
-        </select>
-      </label>
-    </header>
+    <PageHeader :title="pageTitle" subtitle="编辑 canonical values，通过 SecretRef 引用集群 Secret。" :crumbs="crumbs">
+      <template #actions>
+        <div class="values-actions">
+          <span :id="languageLabelId" class="values-actions__label">{{ t('values.page.language') }}</span>
+          <div class="seg" role="group" :aria-labelledby="languageLabelId">
+            <button
+              type="button"
+              class="seg__button"
+              :class="{ 'seg__button--selected': editor.editorLanguage === 'yaml' }"
+              :aria-pressed="editor.editorLanguage === 'yaml'"
+              :disabled="readOnly"
+              data-testid="values-language-yaml"
+              @click="setLanguage('yaml')"
+            >
+              YAML
+            </button>
+            <button
+              type="button"
+              class="seg__button"
+              :class="{ 'seg__button--selected': editor.editorLanguage === 'json' }"
+              :aria-pressed="editor.editorLanguage === 'json'"
+              :disabled="readOnly"
+              data-testid="values-language-json"
+              @click="setLanguage('json')"
+            >
+              JSON
+            </button>
+          </div>
+          <button
+            type="button"
+            class="values-actions__save"
+            :disabled="saveBlocked"
+            :title="saveBlockedReason"
+            data-testid="values-save-new"
+            @click="editor.save"
+          >
+            {{ editor.saving ? t('values.page.saving') : t('values.page.saveNew') }}
+          </button>
+        </div>
+      </template>
+    </PageHeader>
 
     <!-- TASK-267: operation results (saved / submitted / approved / rejected / discarded)
          render through the shared Toast primitive; the page class keeps the box unchanged. -->
@@ -198,8 +248,15 @@ onBeforeUnmount(() => {
         <button type="button" @click="editor.load">重试</button>
       </div>
 
-      <div class="editor-grid">
-        <div class="editor-column">
+      <!-- Direction C: the editor and the diff are equal halves of one row at 1440 and
+           stack below 900px. The diff is the parent → editor patch, so it belongs beside
+           the text it describes rather than under the action bar. -->
+      <div class="values-layout">
+        <section class="values-panel" aria-labelledby="values-editor-title">
+          <header class="values-panel__header">
+            <p class="eyebrow">{{ t('values.page.editor') }}</p>
+            <h2 id="values-editor-title">{{ t('values.page.title') }}</h2>
+          </header>
           <ValuesCodeEditor
             :model-value="editor.editorContent"
             :language="editor.editorLanguage"
@@ -208,7 +265,7 @@ onBeforeUnmount(() => {
             @update:model-value="editor.setEditorContent"
           />
           <p v-if="editor.validationIssue" class="validation-message" role="alert">{{ editor.validationIssue.message }}</p>
-        </div>
+        </section>
         <ValuesDiffPanel :result="editor.diffResult" />
       </div>
 
@@ -283,33 +340,32 @@ onBeforeUnmount(() => {
    96rem, so it was the only surface asking for more than the shell allows — the extra
    width never materialised and the editor still had to work at 1180. */
 .values-page { display: grid; gap: 1.25rem; max-width: 1180px; margin: 0 auto; }
-.breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--color-muted); font-size: var(--font-size-sm); }
-.values-page__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
-.values-page__header h1, .values-page__header p { margin: 0; }
-.values-page__header > div { display: grid; gap: 0.35rem; }
-.values-page__header > div > p:last-child { color: var(--color-muted); }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
-.language-select { display: grid; gap: 0.35rem; color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: 700; }
-.language-select select, .notice button, .save-bar button { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
-.save-bar button.primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
-.save-bar button:disabled { cursor: not-allowed; opacity: 0.6; }
-.editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(22rem, 0.65fr); gap: 1rem; align-items: start; }
-.editor-column { display: grid; gap: 0.55rem; }
+
+/* Header actions: a named segmented group for the language plus the write entry. */
+.values-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.values-actions__label { color: var(--mu); font-size: var(--font-size-xs); font-weight: 700; }
+.seg { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--bd); border-radius: var(--r); background: var(--sf2); }
+.seg__button { min-height: 2.2rem; padding: 0.3rem 0.75rem; border: 0; border-radius: calc(var(--r) - 3px); background: transparent; color: var(--mu); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); cursor: pointer; }
+.seg__button:hover:not(:disabled) { color: var(--tx); }
+.seg__button--selected { background: var(--sf); color: var(--tx); box-shadow: 0 0 0 1px var(--bd); }
+/* Disabled is its own neutral state (never the primary fill next to it). */
+.seg__button:disabled { background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
+.values-actions__save { min-height: 2.4rem; padding: 0.4rem 0.9rem; border: 1px solid var(--pr); border-radius: 0.4rem; background: var(--pr); color: var(--on); font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); cursor: pointer; }
+.values-actions__save:disabled { border-color: var(--color-disabled-border); background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
+
+/* Direction C two-column row: editor | diff, equal halves, single column ≤900px. */
+.values-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+.values-panel { display: grid; align-content: start; gap: 0.55rem; min-width: 0; padding: 1rem; border: 1px solid var(--bd); border-radius: 0.75rem; background: var(--sf); }
+.values-panel__header { display: grid; gap: 0.2rem; min-width: 0; }
+.values-panel__header h2 { margin: 0; color: var(--tx); font-size: var(--font-size-lg); }
+.eyebrow { margin: 0; color: var(--mu); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
 .validation-message { margin: 0; padding: 0.65rem 0.8rem; border-left: 3px solid var(--color-danger); background: var(--color-danger-soft); color: var(--color-error-strong); font-size: var(--font-size-sm); }
 .notice { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.75rem 0.9rem; border: 1px solid var(--color-info-border); border-radius: 0.5rem; background: var(--color-info-soft); color: var(--color-info-ink); }
 .notice--warning { border-color: var(--color-warning-border-bright); background: var(--color-warning-surface); color: var(--color-warning-ink-strong); }
 .notice--error { border-color: var(--color-danger-border-strong); background: var(--color-danger-soft); color: var(--color-error-strong); }
-.save-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 0.75rem; background: var(--color-surface); }
-.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0; }
-.status-line code { color: var(--color-muted); font-size: var(--font-size-xs); overflow-wrap: anywhere; }
-.status { padding: 0.2rem 0.45rem; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 800; }
-.status--draft { background: var(--color-info-subtle); color: var(--color-info-ink-strong); }
-.status--approved { background: var(--color-success-surface); color: var(--color-success-ink); }
-.status--rejected { background: var(--color-danger-surface); color: var(--color-error-strong); }
-.status--superseded { background: var(--color-border); color: var(--color-muted-strong); }
-.status--pending_approval { background: var(--color-warning-subtle); color: var(--color-warning-ink-strong); }
+.notice button { min-height: 2.4rem; padding: 0.45rem 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
 .discard-dialog__body { margin: 0; }
 .discard-dialog__danger { border-color: var(--color-error); background: var(--color-error); color: var(--color-on-accent); }
-@media (max-width: 72rem) { .editor-grid { grid-template-columns: 1fr; } }
-@media (max-width: 48rem) { .values-page__header, .save-bar { flex-direction: column; } }
+@media (max-width: 56.25rem) { .values-layout { grid-template-columns: 1fr; } }
+@media (max-width: 48rem) { .values-actions { width: 100%; } .values-actions__save { flex: 1 1 auto; } }
 </style>
