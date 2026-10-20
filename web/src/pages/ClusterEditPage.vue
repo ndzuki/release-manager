@@ -6,7 +6,9 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import FormField from '@/components/common/FormField.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import RouteRuleEditor from '@/components/clusters/RouteRuleEditor.vue';
+import { useScopeNames } from '@/composables/useScopeNames';
 import { useClusterStore } from '@/stores/cluster';
 import type { ArtifactType, RouteRuleInput } from '@/types/cluster';
 import { useAuthStore } from '@/stores/auth';
@@ -32,6 +34,28 @@ const endpoints = {
   cacheEndpoint: import.meta.env.VITE_ARTIFACT_CACHE_ENDPOINT ?? 'cache.local',
   registryEndpoint: import.meta.env.VITE_ARTIFACT_REGISTRY_ENDPOINT ?? 'registry.local',
 };
+
+/*
+ * Direction C (TASK-394). Both labels the hand-rolled `.eyebrow` carried move to
+ * PageHeader verbatim: "新建集群" / "编辑集群" stay the category line above the title.
+ * The trail is names only — the customer from `useScopeNames` and, when editing, the
+ * loaded cluster. A level whose name cannot be resolved is omitted rather than printed
+ * as its route identifier (PageHeader's contract forbids UUID crumbs).
+ */
+const { customerName } = useScopeNames({ resolveCluster: false });
+const modeLabel = computed(() => (isCreate.value ? t('cluster.edit.newLabel') : t('cluster.edit.editLabel')));
+const pageTitle = computed(() =>
+  isCreate.value ? t('cluster.edit.createTitle') : (store.current?.name ?? t('cluster.edit.editLabel')),
+);
+const customerLabel = computed(() =>
+  customerName.value && customerName.value !== customerId ? customerName.value : '',
+);
+const crumbs = computed(() =>
+  [customerLabel.value, isCreate.value ? '' : (store.current?.name ?? '')]
+    .filter((label) => label !== '')
+    .map((label) => ({ label })),
+);
+
 onMounted(async () => {
   if (!auth.canWrite) {
     await router.replace({ name: 'ClusterList', params: { customerId } });
@@ -75,19 +99,21 @@ async function handleSave() {
     </ErrorState>
 
     <form v-else-if="store.draft" class="cluster-form" @submit.prevent="handleSave">
-      <header class="page__header">
-        <div>
-          <p class="eyebrow">{{ isCreate ? t('cluster.edit.newLabel') : t('cluster.edit.editLabel') }}</p>
-          <h1>{{ isCreate ? t('cluster.edit.createTitle') : store.current?.name }}</h1>
-          <p>{{ t('cluster.edit.credentials') }}</p>
-        </div>
-        <div class="actions">
-          <RouterLink :to="clusterId ? { name: 'ClusterDetail', params: { customerId, clusterId } } : { name: 'ClusterList', params: { customerId } }">{{ t('action.cancel') }}</RouterLink>
-          <button type="submit" class="primary" :disabled="store.saving">
-            {{ store.saving ? t('cluster.edit.saving') : t('cluster.edit.save') }}
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        :title="pageTitle"
+        :eyebrow="modeLabel"
+        :subtitle="t('cluster.edit.credentials')"
+        :crumbs="crumbs"
+      >
+        <template #actions>
+          <div class="actions">
+            <RouterLink :to="clusterId ? { name: 'ClusterDetail', params: { customerId, clusterId } } : { name: 'ClusterList', params: { customerId } }">{{ t('action.cancel') }}</RouterLink>
+            <button type="submit" class="primary" :disabled="store.saving">
+              {{ store.saving ? t('cluster.edit.saving') : t('cluster.edit.save') }}
+            </button>
+          </div>
+        </template>
+      </PageHeader>
 
       <div v-if="store.saveError" class="save-error" role="alert">
         <strong>{{ store.saveError.code === 'optimistic_lock_conflict' ? t('cluster.edit.conflict') : store.saveError.message }}</strong>
@@ -139,16 +165,40 @@ async function handleSave() {
 </template>
 
 <style scoped>
-.page, .cluster-form { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
-.page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-h1, p { margin: 0; }
-.eyebrow { color: var(--color-primary); font-weight: 700; text-transform: uppercase; font-size: var(--font-size-xs); }
-.page__header p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
-.cluster-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+.page { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
+/* The form is the page's only child, so the page frame owns the width. Repeating
+   `max-width: 72rem; margin: 0 auto` here made the form a shrink-to-fit grid item
+   (auto margins on a grid item disable the stretch), which centred a ~470px column on a
+   1116px content area — in create mode, where no rule card sets the max-content width. */
+.cluster-form { display: grid; gap: 1.5rem; }
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the form. */
+.cluster-form :deep(.page-header) { margin-bottom: 0; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 1rem; }
+/* Direction C card: surface fill + the STRONG border (`--color-border` is a hairline and
+   vanishes in the dark theme). */
+.cluster-fields {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
 label { display: grid; gap: 0.375rem; font-weight: 600; }
 .checkbox { display: flex; align-items: center; }
-input { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
+/* Direction C control: 7px/11px padding, the shared radius, the strong border and the
+   page background so the field reads as an inset of the card rather than a hole in it. */
+input {
+  padding: 7px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
 .save-error { display: grid; gap: 0.5rem; padding: 1rem; border: 1px solid var(--color-danger-border-bright); border-radius: 0.5rem; background: var(--color-danger-soft); color: var(--color-error-strong); }
-.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
+.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); }
 .primary { background: var(--color-primary); color: var(--color-on-accent); border-color: var(--color-primary); }
 </style>

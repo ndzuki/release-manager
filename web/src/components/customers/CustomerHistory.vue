@@ -92,6 +92,16 @@ function eventLabel(eventType: string): string {
    plain, page-scrolling list. */
 .customer-history__viewport--virtual { max-height: min(50vh, 26rem); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .customer-history__viewport--virtual:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.customer-history__item { display: flex; justify-content: space-between; gap: 1rem; padding: 0.75rem; border: 1px solid var(--color-border); border-radius: 0.375rem; }
+/* Direction C row card: the STRONG border (`--color-border` is a ~1.3:1 hairline in the
+   dark theme, i.e. no visible outline) plus the surface fill. */
+.customer-history__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
 .customer-history__item time { color: var(--color-muted); font-size: var(--font-size-md); }
 </style>

@@ -6,6 +6,7 @@ import AppDialog from '@/components/common/AppDialog.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import RouteRuleEditor from '@/components/clusters/RouteRuleEditor.vue';
 import { useScopeNames } from '@/composables/useScopeNames';
@@ -31,6 +32,29 @@ const endpoints = {
   cacheEndpoint: import.meta.env.VITE_ARTIFACT_CACHE_ENDPOINT ?? 'cache.local',
   registryEndpoint: import.meta.env.VITE_ARTIFACT_REGISTRY_ENDPOINT ?? 'registry.local',
 };
+
+/*
+ * Direction C (TASK-394). The category label the hand-rolled `.eyebrow` carried ("集群")
+ * moves to PageHeader's `eyebrow` verbatim. The trail is names only: the customer level
+ * comes from `useScopeNames`, the cluster level from the loaded cluster. Neither falls
+ * back to its route identifier — a level whose name is unknown is omitted, because a
+ * breadcrumb printing a UUID is the anti-pattern PageHeader exists to stop.
+ */
+const customerLabel = computed(() =>
+  customerName.value && customerName.value !== customerId ? customerName.value : '',
+);
+const clusterLabel = computed(() => store.current?.name ?? '');
+const crumbs = computed(() =>
+  [customerLabel.value, clusterLabel.value]
+    .filter((label) => label !== '')
+    .map((label) => ({ label })),
+);
+/* The subtitle names the cluster's release-target state; it only exists once loaded. */
+const subtitle = computed(() =>
+  store.current
+    ? (store.current.enabled ? t('cluster.detail.activeTarget') : t('cluster.detail.inactiveTarget'))
+    : undefined,
+);
 
 onMounted(() => store.loadCluster(clusterId));
 
@@ -83,27 +107,29 @@ async function confirmDisable() {
     </ErrorState>
 
     <template v-else-if="store.current">
-      <header class="page__header">
-        <div>
-          <p class="eyebrow">{{ t('cluster.detail.label') }}</p>
-          <h1>{{ store.current.name }}</h1>
-          <p>{{ store.current.enabled ? t('cluster.detail.activeTarget') : t('cluster.detail.inactiveTarget') }}</p>
-        </div>
-        <div class="actions">
-          <!-- W3 (UX plan N8/N10): the whole release subtree was reachable only
-               through the inventory table, which itself had no entry from here. -->
-          <RouterLink
-            v-if="releaseInventoryEnabled"
-            :to="{ name: 'ReleaseInventory', params: { customerId, clusterId }, query: { customerName, clusterName } }"
-          >{{ t('cluster.detail.releases') }}</RouterLink>
-          <RouterLink
-            v-if="operatorManagementEnabled"
-            :to="{ name: 'OperatorList', params: { customerId, clusterId } }"
-          >{{ t('cluster.detail.operators') }}</RouterLink>
-          <RouterLink v-if="auth.canWrite" :to="{ name: 'ClusterEdit', params: { customerId, clusterId } }">{{ t('customer.list.edit') }}</RouterLink>
-          <button v-if="auth.canWrite && store.current.enabled" type="button" class="danger" @click="disableDialogOpen = true">{{ t('cluster.detail.disable') }}</button>
-        </div>
-      </header>
+      <PageHeader
+        :title="store.current.name"
+        :eyebrow="t('cluster.detail.label')"
+        :subtitle="subtitle"
+        :crumbs="crumbs"
+      >
+        <template #actions>
+          <div class="actions">
+            <!-- W3 (UX plan N8/N10): the whole release subtree was reachable only
+                 through the inventory table, which itself had no entry from here. -->
+            <RouterLink
+              v-if="releaseInventoryEnabled"
+              :to="{ name: 'ReleaseInventory', params: { customerId, clusterId }, query: { customerName, clusterName } }"
+            >{{ t('cluster.detail.releases') }}</RouterLink>
+            <RouterLink
+              v-if="operatorManagementEnabled"
+              :to="{ name: 'OperatorList', params: { customerId, clusterId } }"
+            >{{ t('cluster.detail.operators') }}</RouterLink>
+            <RouterLink v-if="auth.canWrite" :to="{ name: 'ClusterEdit', params: { customerId, clusterId } }">{{ t('customer.list.edit') }}</RouterLink>
+            <button v-if="auth.canWrite && store.current.enabled" type="button" class="danger" @click="disableDialogOpen = true">{{ t('cluster.detail.disable') }}</button>
+          </div>
+        </template>
+      </PageHeader>
 
       <dl class="summary">
         <div><dt>{{ t('cluster.detail.version') }}</dt><dd>{{ store.current.version }}</dd></div>
@@ -145,15 +171,24 @@ async function confirmDisable() {
 
 <style scoped>
 .page { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
-.page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-h1, p { margin: 0; }
-.eyebrow { color: var(--color-primary); font-weight: 700; text-transform: uppercase; font-size: var(--font-size-xs); }
-.page__header p:last-child { color: var(--color-muted); margin-top: 0.375rem; }
-.summary { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the summary. */
+.page :deep(.page-header) { margin-bottom: 0; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 1rem; }
+/* Direction C card: surface fill + the STRONG border (`--color-border` is a hairline and
+   vanishes in the dark theme). */
+.summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
 .summary div { padding: 1rem; }
 .summary dt { color: var(--color-muted); }
 .summary dd { margin: 0.25rem 0 0; font-weight: 700; }
-.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
+.actions a, button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); }
 .danger { color: var(--color-error-strong); }
 /*
  * W21 (UX-032): the three-column summary had no breakpoint, so at a narrow width
@@ -163,6 +198,6 @@ h1, p { margin: 0; }
  */
 @media (max-width: 48rem) {
   .summary { grid-template-columns: 1fr; }
-  .page__header, .actions { flex-wrap: wrap; }
+  .actions { justify-content: flex-start; }
 }
 </style>

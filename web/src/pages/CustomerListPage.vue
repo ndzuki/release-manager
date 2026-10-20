@@ -6,6 +6,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useCustomerStore } from '@/stores/customers';
 
@@ -14,17 +15,23 @@ const clusterRoutingEnabled = import.meta.env.VITE_FEATURE_CLUSTER_ROUTING !== '
 const store = useCustomerStore();
 
 onMounted(() => store.loadList(true));
+
+/*
+ * Direction C (TASK-394). This page is the top of the customer subtree: the audit found
+ * neither a breadcrumb nor a category label here, so it gets neither — PageHeader is not
+ * asked to invent one. What moves is the heading itself: the h1 becomes the shared
+ * `--font-size-h1` (22px) instead of a page-owned title, and the create action rides in
+ * PageHeader's action slot instead of a hand-rolled flex header.
+ */
 </script>
 
 <template>
   <section class="customer-page">
-    <header class="customer-page__header">
-      <div>
-        <h1>{{ t('customer.list.title') }}</h1>
-        <p>{{ t('customer.list.subtitle') }}</p>
-      </div>
-      <RouterLink v-if="auth.canWrite" class="primary" :to="{ name: 'CustomerNew' }">{{ t('customer.list.create') }}</RouterLink>
-    </header>
+    <PageHeader :title="t('customer.list.title')" :subtitle="t('customer.list.subtitle')">
+      <template #actions>
+        <RouterLink v-if="auth.canWrite" class="primary" :to="{ name: 'CustomerNew' }">{{ t('customer.list.create') }}</RouterLink>
+      </template>
+    </PageHeader>
 
     <LoadingState v-if="store.loading" :message="t('state.loading.customers')" />
     <ForbiddenState v-else-if="store.forbidden" />
@@ -70,12 +77,24 @@ onMounted(() => store.loadList(true));
 
 <style scoped>
 .customer-page { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
-.customer-page__header, .customer-card__header, .customer-card__actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.customer-page__header h1, .customer-page__header p, .customer-card h2, .customer-card p { margin: 0; }
-.customer-page__header p, .customer-card p { color: var(--color-muted); margin-top: 0.375rem; }
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the grid. */
+.customer-page :deep(.page-header) { margin-bottom: 0; }
+.customer-card__header, .customer-card__actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.customer-card h2, .customer-card p { margin: 0; }
+.customer-card p { color: var(--color-muted); margin-top: 0.375rem; }
 .primary { padding: 0.625rem 0.875rem; border-radius: 0.375rem; background: var(--color-primary); color: var(--color-on-accent); text-decoration: none; }
 .customer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; }
-.customer-card { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+/* Direction C card: a surface fill plus the STRONG border. `--color-border` is a hairline
+   (~1.3:1 in the dark theme), so a card outlined with it reads as having no outline. */
+.customer-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
 .status { font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
 .status--active { color: var(--color-success-ink); }
 .status--disabled { color: var(--color-error-strong); }
