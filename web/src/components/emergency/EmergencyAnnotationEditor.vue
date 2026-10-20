@@ -166,7 +166,13 @@ watch(
         <option v-for="candidate in availableScopes" :key="candidate" :value="candidate">{{ candidate }}</option>
       </select>
     </label>
-    <table class="annotation-table">
+    <div
+      class="table-wrap"
+      role="region"
+      :aria-label="t('annotation.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="annotation-table">
       <thead>
         <tr>
           <th scope="col">{{ t('annotation.keyWhitelist') }}</th>
@@ -219,7 +225,8 @@ watch(
           </td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
     <button type="button" :disabled="!canAdd" @click="addRow">{{ t('annotation.add') }}</button>
     <p v-if="!validation.valid" :id="errorId" class="error-text" role="alert">{{ validation.message }}</p>
     <p v-if="error" class="error-text" role="alert">{{ error }}</p>
@@ -229,7 +236,7 @@ watch(
 <style scoped>
 .annotation-editor { display: grid; gap: var(--space-3); }
 .annotation-table { width: 100%; border-collapse: collapse; }
-.annotation-table th, .annotation-table td { padding: var(--space-2); border: 1px solid var(--color-border); text-align: left; }
+.annotation-table th, .annotation-table td { padding: var(--space-2); border: 1px solid var(--color-border-strong); text-align: left; }
 .field-input { width: 100%; padding: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); }
 .field-input:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; box-shadow: var(--focus-ring); }
 .scope-field { display: flex; gap: var(--space-2); align-items: center; }

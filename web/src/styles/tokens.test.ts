@@ -188,6 +188,119 @@ describe('design tokens', () => {
     expect(declared.get('--editor-text')).toBe('#e2e8f0');
   });
 
+  /*
+   * Contrast floor (TASK-394). The design pass found three places where the token existed
+   * but its VALUE could not be read in one of the themes:
+   *
+   *  - `--color-border` (#27272a) is 1.34:1 on #09090b, so an input or table rule drawn
+   *    with it was invisible rather than quiet — control boundaries now use
+   *    `--color-border-strong`;
+   *  - `--color-subtle` was mixed into `--bd`, which LOWERED contrast in both themes
+   *    (3.8:1 dark, 2.6:1 light), and it is used as text (empty states, pagination, muted
+   *    cells);
+   *  - `--editor-gutter-text` was slate-500, 3.7:1 on the editor gutter.
+   *
+   * The ratios are computed here rather than eyeballed, and the mix rules are pinned first
+   * so a silent ratio change cannot sneak past: the mirror must move with the declaration,
+   * exactly like the byte-for-byte palettes above.
+   */
+  const MIX_RULES: Record<string, { from: string; percent: number; to: string }> = {
+    '--color-subtle': { from: '--mu', percent: 88, to: '--tx' },
+    '--color-border-strong': { from: '--bd', percent: 48, to: '--mu' },
+  };
+
+  it.each(Object.entries(MIX_RULES))('pins the %s derivation', (token, rule) => {
+    expect(declared.get(token)).toBe(
+      `color-mix(in srgb, var(${rule.from}) ${rule.percent}%, var(${rule.to}))`,
+    );
+  });
+
+  function channels(hex: string): [number, number, number] {
+    const body = hex.replace('#', '');
+    const expanded =
+      body.length === 3
+        ? body
+            .split('')
+            .map((digit) => digit + digit)
+            .join('')
+        : body;
+    return [0, 2, 4].map((offset) => Number.parseInt(expanded.slice(offset, offset + 2), 16)) as [
+      number,
+      number,
+      number,
+    ];
+  }
+
+  /** `color-mix(in srgb, …)` interpolates the encoded sRGB channels, so this is exact. */
+  function mix(from: string, percent: number, to: string): string {
+    const a = channels(from);
+    const b = channels(to);
+    const weight = percent / 100;
+    return `#${[0, 1, 2]
+      .map((index) => Math.round(a[index]! * weight + b[index]! * (1 - weight)).toString(16).padStart(2, '0'))
+      .join('')}`;
+  }
+
+  /** WCAG 2.1 relative luminance. */
+  function luminance(hex: string): number {
+    const [r, g, b] = channels(hex).map((value) => {
+      const scaled = value / 255;
+      return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+
+  function contrastRatio(foreground: string, background: string): number {
+    const [lighter, darker] = [luminance(foreground), luminance(background)].sort((x, y) => y - x) as [
+      number,
+      number,
+    ];
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+
+  it('keeps --color-subtle readable on every surface in both themes', () => {
+    const failures: string[] = [];
+    for (const [theme, palette] of [
+      ['dark', darkPalette],
+      ['light', lightPalette],
+    ] as const) {
+      const rule = MIX_RULES['--color-subtle']!;
+      const value = mix(palette.get(rule.from)!, rule.percent, palette.get(rule.to)!);
+      for (const surface of ['--bg', '--sf', '--sf2']) {
+        const ratio = contrastRatio(value, palette.get(surface)!);
+        if (ratio < 4.5) failures.push(`${theme} ${value} on ${surface} = ${ratio.toFixed(2)}:1`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('keeps the input/table border visible against every dark surface', () => {
+    // 3:1 is the WCAG non-text contrast floor for a control boundary; below it the border
+    // is just a darker rectangle on a dark rectangle.
+    const rule = MIX_RULES['--color-border-strong']!;
+    const value = mix(darkPalette.get(rule.from)!, rule.percent, darkPalette.get(rule.to)!);
+    for (const surface of ['--bg', '--sf', '--sf2']) {
+      expect(
+        contrastRatio(value, darkPalette.get(surface)!),
+        `--color-border-strong (${value}) on ${surface}`,
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('keeps --editor-gutter-text readable on the editor gutter', () => {
+    expect(contrastRatio(declared.get('--editor-gutter-text')!, declared.get('--editor-gutter-surface')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('keeps the on-accent ink readable on the primary fill in both themes', () => {
+    // The defect direction C fixed: a primary button whose label inherited the page ink
+    // was white-on-white in dark. Pinning the pair keeps a future palette edit honest.
+    for (const palette of [darkPalette, lightPalette]) {
+      expect(
+        contrastRatio(palette.get('--on')!, palette.get('--pr')!),
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   // The retired sizes must not come back: their reappearance would mean someone
   // reintroduced a one-off size instead of using the scale (the defect AC-180-09
   // cleaned up). TASK-394 added exactly three named steps for direction C — the page

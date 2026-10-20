@@ -73,7 +73,13 @@ function mappingFieldId(index: number, field: string): string {
         </div>
 
         <h3>{{ t('definitions.promotionMapping') }}（{{ draftMappings.length }} 条）</h3>
-        <table class="definitions__mappings">
+        <div
+          class="table-wrap"
+          role="region"
+          :aria-label="t('definitions.mappings.scrollRegion')"
+          tabindex="0"
+        >
+          <table class="definitions__mappings">
           <thead>
             <tr>
               <th scope="col">{{ t('definitions.workloadKind') }}</th>
@@ -133,7 +139,8 @@ function mappingFieldId(index: number, field: string): string {
               </td>
             </tr>
           </tbody>
-        </table>
+          </table>
+        </div>
 
         <button type="button" data-testid="mapping-add" @click="emit('add-mapping')">新增映射</button>
 
@@ -183,7 +190,7 @@ function mappingFieldId(index: number, field: string): string {
 .definitions__mappings th,
 .definitions__mappings td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

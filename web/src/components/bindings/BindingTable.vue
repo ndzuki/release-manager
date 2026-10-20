@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import type { BindingView } from '@/connect/binding-api';
+import { t } from '@/i18n/messages';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
  * TASK-363: the bindings table, carved out of BindingsPage unchanged.
  *
  * Purely presentational: the page owns the store and decides what "revoke" means;
- * this component only reports which row asked for it. The root element is still
- * the original `<table class="governance__table">`, so the DOM (columns, row
- * testids, status classes, action cell) is the one the page rendered.
+ * this component only reports which row asked for it. The table itself is still
+ * `<table class="governance__table">` (columns, row testids, status classes, action
+ * cell), now inside the labelled scroll region TASK-394 added so a wide row cannot
+ * push the page sideways and the region is reachable by keyboard.
  *
  * ListBindings includes revoked rows on purpose (history is kept), so the table
  * shows the status rather than filtering them out, and only an active row offers
@@ -29,7 +31,13 @@ function statusLabel(binding: BindingView): string {
 </script>
 
 <template>
-  <table class="governance__table">
+  <div
+    class="table-wrap"
+    role="region"
+    :aria-label="t('bindings.table.scrollRegion')"
+    tabindex="0"
+  >
+    <table class="governance__table">
     <thead>
       <tr>
         <th scope="col">客户</th>
@@ -61,7 +69,8 @@ function statusLabel(binding: BindingView): string {
         </td>
       </tr>
     </tbody>
-  </table>
+    </table>
+  </div>
 </template>
 
 <style scoped>
@@ -74,7 +83,7 @@ function statusLabel(binding: BindingView): string {
 .governance__table th,
 .governance__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

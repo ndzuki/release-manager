@@ -17,7 +17,13 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
 </script>
 
 <template>
-  <table class="task-table">
+  <div
+    class="table-wrap"
+    role="region"
+    :aria-label="t('emergency.tasks.scrollRegion')"
+    tabindex="0"
+  >
+    <table class="task-table">
     <!-- UX-017 (W14): the header cells already carry scope; the missing piece
          was an accessible name for the table itself. -->
     <caption class="visually-hidden">{{ t('emergency.tasks.caption') }}</caption>
@@ -57,12 +63,13 @@ const opTypeLabel = (opType: string): string => statusLabel('emergencyOperation'
         </td>
       </tr>
     </tbody>
-  </table>
+    </table>
+  </div>
 </template>
 
 <style scoped>
 .task-table { width: 100%; border-collapse: collapse; }
-.task-table th, .task-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-border); text-align: left; }
+.task-table th, .task-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-border-strong); text-align: left; }
 .task-table th { color: var(--color-muted-strong); background: var(--color-bg); font-size: var(--font-size-xs); text-transform: uppercase; }
 .reason { max-width: 16rem; overflow-wrap: anywhere; }
 .path { display: block; font-size: var(--font-size-xs); color: var(--color-text-secondary); }

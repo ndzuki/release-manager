@@ -67,12 +67,22 @@
   --color-surface: var(--sf);
   --color-surface-muted: var(--sf2);
   --color-border: var(--bd);
-  --color-border-strong: color-mix(in srgb, var(--bd) 55%, var(--mu));
+  /* `--bd` is a hairline: on the near-black surface it measures ~1.3:1, so an input or a
+     table rule drawn with it is invisible rather than quiet (the defect TASK-394 fixed).
+     Strong mixes it almost halfway to `--mu`, which clears 3:1 on every dark surface — the WCAG
+     non-text threshold for a control boundary — without becoming a grid line. */
+  --color-border-strong: color-mix(in srgb, var(--bd) 48%, var(--mu));
   --color-text: var(--tx);
   --color-text-secondary: color-mix(in srgb, var(--tx) 82%, var(--mu));
   --color-muted: var(--mu);
   --color-muted-strong: color-mix(in srgb, var(--mu) 78%, var(--tx));
-  --color-subtle: color-mix(in srgb, var(--mu) 62%, var(--bd));
+  /* The "quietest text" step. It mixes `--mu` TOWARD `--tx`, not toward `--bd`: `--bd` is
+     darker than `--mu` in dark and lighter in light, so mixing into it lowered contrast in
+     BOTH themes (dark 3.8:1 on --sf2, light 2.6:1 on --bg — unreadable body copy). Toward
+     the text colour the mix always raises contrast, and it clears 4.5:1 on --bg/--sf/--sf2
+     in both themes (tokens.test.ts pins the ratios). Border roles use --color-border-strong
+     instead: a text-safe grey is far too loud as a hairline. */
+  --color-subtle: color-mix(in srgb, var(--mu) 88%, var(--tx));
 
   --color-primary: var(--pr);
   --color-primary-hover: color-mix(in srgb, var(--pr) 85%, var(--bg));
@@ -181,6 +191,10 @@
   /* A slate-tinted shadow is invisible on a near-black surface, so the elevation token
      is neutral black at a weight that still separates a dialog from --bg in dark. */
   --shadow-lg: 0 12px 32px rgb(0 0 0 / 40%);
+  /* Backdrop behind a modal. Theme-invariant, like the elevation token above: a scrim has
+     to darken the page in both themes, so it must not be derived from --bg (which is
+     near-white in light). AppDialog is the consumer. */
+  --scrim: rgb(0 0 0 / 62%);
   --z-dialog-backdrop: 100;
   --z-dialog: 101;
 
@@ -196,7 +210,9 @@
   --editor-text: #e2e8f0;
   --editor-caret: #f8fafc;
   --editor-gutter-surface: #111827;
-  --editor-gutter-text: #64748b;
+  /* Slate-400, not slate-500 (#64748b): the gutter is text a reader compares line numbers
+     by, and #64748b measured 3.7:1 on --editor-gutter-surface — below AA. */
+  --editor-gutter-text: #94a3b8;
   --editor-active-line: #1e293b80;
   --editor-active-line-gutter: #1e293b;
 }

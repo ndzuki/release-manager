@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { RouteLocationRaw } from 'vue-router';
 import { t } from '@/i18n/messages';
@@ -132,11 +132,27 @@ async function handleLogout(): Promise<void> {
   await auth.logout();
   await router.replace({ name: 'Login' });
 }
+
+/*
+ * The rail is a disclosure below 1024px. A drawer is the only shape that survives 375px:
+ * the old horizontal bar kept every entry in the flow and the content got whatever was
+ * left (163px at 375). The state is local because nothing else needs to read it, and it
+ * closes on navigation so a tapped link cannot leave the panel covering the page it just
+ * opened.
+ */
+const menuOpen = ref(false);
+
+watch(
+  () => route.fullPath,
+  () => {
+    menuOpen.value = false;
+  },
+);
 </script>
 
 <template>
   <div class="app-shell">
-    <aside class="app-shell__aside">
+    <aside class="app-shell__aside" @keydown.escape="menuOpen = false">
       <RouterLink class="app-shell__brand" :to="{ name: 'Home' }">
         <span class="app-shell__mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="13" height="13" focusable="false" aria-hidden="true">
@@ -146,34 +162,50 @@ async function handleLogout(): Promise<void> {
         <span class="app-shell__brand-name">Release Manager</span>
       </RouterLink>
 
-      <nav class="app-shell__nav" :aria-label="t('shell.nav.label')">
-        <div v-for="group in navGroups" :key="group.key" class="app-shell__group">
-          <p class="app-shell__group-title">{{ group.title }}</p>
-          <RouterLink v-for="link in group.items" :key="link.routeName" class="app-shell__link" :to="link.to">
-            {{ link.label }}
-          </RouterLink>
-        </div>
-      </nav>
+      <!-- The drawer control. A native <button>, so Tab/Enter/Space/aria-expanded come
+           free; `aria-controls` names the panel that is hidden while collapsed. It is
+           display:none above 1024px, where the rail is always visible. -->
+      <button
+        class="app-shell__menu"
+        type="button"
+        :aria-expanded="menuOpen"
+        aria-controls="app-shell-panel"
+        @click="menuOpen = !menuOpen"
+      >
+        <span class="app-shell__menu-icon" aria-hidden="true">☰</span>
+        <span>{{ t('shell.nav.menu') }}</span>
+      </button>
 
-      <div class="app-shell__footer">
-        <OrganizationSwitcher />
-        <div class="app-shell__identity">
-          <strong>{{ auth.user?.username }}</strong>
-          <span>{{ auth.activeOrganization?.name }}</span>
+      <div id="app-shell-panel" class="app-shell__panel" :class="{ 'app-shell__panel--open': menuOpen }">
+        <nav class="app-shell__nav" :aria-label="t('shell.nav.label')">
+          <div v-for="group in navGroups" :key="group.key" class="app-shell__group">
+            <p class="app-shell__group-title">{{ group.title }}</p>
+            <RouterLink v-for="link in group.items" :key="link.routeName" class="app-shell__link" :to="link.to">
+              {{ link.label }}
+            </RouterLink>
+          </div>
+        </nav>
+
+        <div class="app-shell__footer">
+          <OrganizationSwitcher />
+          <div class="app-shell__identity">
+            <strong>{{ auth.user?.username }}</strong>
+            <span>{{ auth.activeOrganization?.name }}</span>
+          </div>
+          <button
+            class="app-shell__control app-shell__theme"
+            type="button"
+            :aria-label="themeToggleLabel"
+            :title="themeToggleLabel"
+            @click="toggleTheme()"
+          >
+            <span class="app-shell__theme-icon" aria-hidden="true">{{ resolvedTheme === 'dark' ? '☀' : '☾' }}</span>
+            <span>{{ currentThemeLabel }}</span>
+          </button>
+          <button class="app-shell__control app-shell__logout" type="button" @click="handleLogout">
+            {{ t('shell.signOut') }}
+          </button>
         </div>
-        <button
-          class="app-shell__control app-shell__theme"
-          type="button"
-          :aria-label="themeToggleLabel"
-          :title="themeToggleLabel"
-          @click="toggleTheme()"
-        >
-          <span class="app-shell__theme-icon" aria-hidden="true">{{ resolvedTheme === 'dark' ? '☀' : '☾' }}</span>
-          <span>{{ currentThemeLabel }}</span>
-        </button>
-        <button class="app-shell__control app-shell__logout" type="button" @click="handleLogout">
-          {{ t('shell.signOut') }}
-        </button>
       </div>
     </aside>
 
@@ -344,66 +376,109 @@ async function handleLogout(): Promise<void> {
 .app-shell__main {
   flex: 1;
   min-width: 0;
+  /* Direction C settled on ONE content width (the old shell capped it at 90rem/1440px,
+     which produced 120-character table rows). Pages narrower than this keep their own cap
+     — ArtifactLifecycle 56rem, OperatorEnroll 54, Definitions 52, Bundles 50, LocalUsers
+     48, StuckLocks 46, ChangePassword 32, Login 26, Init 28 — and the one page that was
+     wider (ValuesEditorPage, 96rem) converges here. */
   max-width: 1180px;
   padding: 24px 32px 48px;
 }
 
-/* Narrow viewports: the sidebar becomes a horizontal, scrollable bar above the content.
-   Group headings disappear (they are labels for a column) and the identity block is
-   dropped because the organization switcher already names the scope. */
-@media (max-width: 900px) {
+/* The drawer control. display:none above 1024px: the rail is always visible there, so a
+   menu button would be a second way to do nothing. */
+.app-shell__menu {
+  display: none;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  background: var(--sf);
+  color: var(--tx);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.app-shell__menu[aria-expanded='true'] {
+  background: var(--sf2);
+}
+
+.app-shell__menu-icon {
+  font-size: var(--font-size-md);
+  line-height: 1;
+}
+
+/* Nav + footer travel together so the drawer can hide and show both in one move, and so
+   the desktop column still stretches (nav flex:1, footer margin-top:auto). */
+.app-shell__panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 0;
+}
+
+/*
+ * Collapse at 1024px, not at the previous 900px: between 900 and 1024 the fixed 212px
+ * rail plus a wide table page still forced the DOCUMENT to scroll sideways, and below
+ * that the old horizontal bar left the content 163px at 375. The drawer is the shape
+ * that survives both: the bar is two items (brand + toggle), and the navigation only
+ * occupies space while it is open.
+ */
+@media (max-width: 1024px) {
   .app-shell {
     flex-direction: column;
   }
 
   .app-shell__aside {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 10;
     flex-direction: row;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
     align-items: center;
     width: 100%;
     height: auto;
-    padding: 10px 12px;
-    overflow-x: auto;
+    padding: 8px 12px;
+    /* The panel clips its own overflow; the bar must not grow a scrollbar of its own. */
+    overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--bd);
   }
 
-  .app-shell__nav {
-    flex: 1 1 auto;
-    flex-direction: row;
-    gap: 14px;
-    align-items: center;
-    min-width: 0;
-    overflow-x: auto;
+  .app-shell__menu {
+    display: inline-flex;
   }
 
-  .app-shell__group {
-    flex-direction: row;
-    gap: 2px;
-    align-items: center;
-  }
-
-  .app-shell__group-title {
+  .app-shell__panel {
     display: none;
+    flex: 1 1 100%;
+    flex-basis: 100%;
+    max-height: calc(100vh - 4.5rem);
+    padding: 4px 0 8px;
+    overflow-y: auto;
   }
 
-  .app-shell__footer {
-    flex: none;
-    flex-direction: row;
-    gap: 8px;
-    align-items: center;
-    margin-top: 0;
-    padding-top: 0;
-    border-top: 0;
-  }
-
-  .app-shell__identity {
-    display: none;
+  .app-shell__panel--open {
+    display: flex;
   }
 
   .app-shell__main {
     padding: 16px 16px 32px;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-shell__main {
+    padding: 12px 12px 32px;
+  }
+
+  .app-shell__brand-name {
+    font-size: var(--font-size-sm);
   }
 }
 </style>

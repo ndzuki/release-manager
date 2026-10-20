@@ -74,8 +74,8 @@ function removeRow(index: number): void {
 .patch-editor__row { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: 0.5rem; }
 .patch-editor__row--error { padding: 0.65rem; border: 1px solid var(--color-danger); border-radius: 0.5rem; background: var(--color-danger-soft); }
 .patch-editor__row-error { grid-column: 1 / -1; margin: 0; color: var(--color-error); }
-.patch-editor input, .patch-editor select { min-width: 0; padding: 0.6rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; }
-.patch-editor__add, .patch-editor__remove { width: fit-content; padding: 0.55rem 0.75rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); }
+.patch-editor input, .patch-editor select { min-width: 0; padding: 0.6rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; }
+.patch-editor__add, .patch-editor__remove { width: fit-content; padding: 0.55rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); }
 .patch-editor__remove { color: var(--color-error); }
 @media (max-width: 48rem) { .patch-editor__row { grid-template-columns: 1fr; } }
 </style>

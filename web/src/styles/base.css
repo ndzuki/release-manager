@@ -60,6 +60,21 @@ textarea {
   font: inherit;
 }
 
+/*
+ * A control's UA intrinsic width (roughly `size=20`, ~177px) becomes its automatic
+ * minimum as a flex/grid item, so a filter row of four controls could not shrink below
+ * ~400px: at 375 the document measured 386–438px on six pages (bindings, definitions,
+ * bundles, organization, stuck locks, artifact lifecycle; TASK-394). `min-width: 0` lets
+ * the control shrink with its container instead, and `max-width: 100%` stops a wide
+ * control from overflowing a narrow one. Measured after the rule: all six at 375px.
+ */
+input,
+select,
+textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* One focus policy for the whole console. Only two `:focus-visible` rules
    existed before, so most of the 93 buttons and 55 form controls relied on the
    UA outline — which `border-radius`/`overflow` clipping can eat. */
@@ -112,6 +127,17 @@ textarea {
    the non-table surfaces (StatCard, aggregates). */
 table {
   font-variant-numeric: tabular-nums;
+}
+
+/* Wide tables scroll inside their own box instead of widening the document (TASK-394).
+   `min-width: 0` is load-bearing: a grid/flex item's automatic minimum is min-content,
+   which for this wrapper is the table's min-content width — the exact re-inflation the
+   wrapper exists to stop. Pair it with role="region" + aria-label + tabindex="0" so the
+   scroller is reachable by keyboard (the pattern DefinitionTable established). */
+.table-wrap {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .tabular-nums {

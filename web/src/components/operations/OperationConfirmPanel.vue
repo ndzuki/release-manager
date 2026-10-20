@@ -53,7 +53,7 @@ defineEmits<{
 .confirm-panel__summary dt { color: var(--color-muted); font-size: var(--font-size-sm); }
 .confirm-panel__summary dd { margin: 0.2rem 0 0; font-weight: 650; overflow-wrap: anywhere; }
 .confirm-panel__actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
-.confirm-panel__actions button { padding: 0.65rem 1rem; border: 1px solid var(--color-subtle); border-radius: 0.4rem; background: var(--color-surface); }
+.confirm-panel__actions button { padding: 0.65rem 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.4rem; background: var(--color-surface); }
 .confirm-panel__confirm { border-color: var(--color-primary) !important; background: var(--color-primary) !important; color: var(--color-on-accent); }
 @media (max-width: 42rem) { .confirm-panel__summary { grid-template-columns: 1fr; } }
 </style>

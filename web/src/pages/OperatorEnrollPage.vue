@@ -211,10 +211,10 @@ watch([customerId, clusterId], async () => {
 h1, h2, p { margin: 0; }
 .page__header > div > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
 .eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
-.page__header button, .card button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
+.page__header button, .card button { padding: 0.6rem 0.85rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
 .card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
 /* TASK-275: the label/hint chrome now belongs to FormField; only the control is styled here. */
-.card input { padding: 0.65rem; border: 1px solid var(--color-subtle); border-radius: 0.375rem; font: inherit; }
+.card input { padding: 0.65rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
 .hint { color: var(--color-muted); font-weight: 400; }
 .card .primary { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-accent); }
 .card button:disabled { cursor: not-allowed; opacity: 0.5; }

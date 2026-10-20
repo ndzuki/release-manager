@@ -279,7 +279,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.values-page { display: grid; gap: 1.25rem; max-width: 96rem; margin: 0 auto; }
+/* TASK-394: the console has ONE content width (AppShell main = 1180px). This page used
+   96rem, so it was the only surface asking for more than the shell allows — the extra
+   width never materialised and the editor still had to work at 1180. */
+.values-page { display: grid; gap: 1.25rem; max-width: 1180px; margin: 0 auto; }
 .breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--color-muted); font-size: var(--font-size-sm); }
 .values-page__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
 .values-page__header h1, .values-page__header p { margin: 0; }

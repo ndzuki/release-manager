@@ -173,8 +173,11 @@ async function confirmRevoke(): Promise<void> {
   padding: var(--space-5);
 }
 
+/* TASK-394: title + refresh button measured 379px at 375; wrapping keeps the document
+   from scrolling sideways for two words. */
 .governance__header {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-start;
   justify-content: space-between;
@@ -211,6 +214,9 @@ async function confirmRevoke(): Promise<void> {
 .governance__panels {
   display: grid;
   gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  /* `minmax(20rem, …)` = a 320px minimum track, which overflows the 287px a 375px
+     viewport leaves inside the page padding (TASK-394). `min()` lets the track collapse
+     to the container, and auto-fit still puts the panels side by side when there is room. */
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
 }
 </style>

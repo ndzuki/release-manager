@@ -202,7 +202,7 @@ async function submit(): Promise<void> {
 .trust-editor input,
 .trust-editor textarea {
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-subtle);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
   font-family: var(--font-family-mono);

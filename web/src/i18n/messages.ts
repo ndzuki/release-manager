@@ -23,6 +23,9 @@ const zhCN = {
   // Shared states
   // Shared chrome (Chinese since the 2026-09-28 locale decision)
   'shell.nav.label': '主导航',
+  /* The ≤1024px drawer control. `aria-expanded` carries open/closed, so the name states
+     the destination ("navigation menu") rather than repeating the state. */
+  'shell.nav.menu': '导航菜单',
   'shell.organization.choose': '组织',
   'shell.organization.switchError': '切换组织失败，请重试',
   'shell.signOut': '退出登录',
@@ -874,6 +877,22 @@ const zhCN = {
   'reason.rollback_values_not_allowed': '回滚不能携带 Values 修订或补丁',
   'reason.optimistic_lock_conflict': '记录已被其他人修改，已为你刷新最新数据',
   'reason.AUTHORIZATION_VERSION_CONFLICT': '授权版本已变化，请重新读取后重试',
+  /*
+   * Accessible names for the scroll regions added by TASK-394. A table that can outgrow
+   * its column becomes a labelled, focusable region (the shape DefinitionTable /
+   * OrganizationMemberTable / ReleaseInventoryTable already use), so a screen-reader user
+   * hears WHERE they are before scrolling and a keyboard user can Tab to it at all.
+   */
+  'trust.table.scrollRegion': '信任根表格（可横向滚动）',
+  'operations.table.scrollRegion': '操作历史表格（可横向滚动）',
+  'bundles.table.scrollRegion': 'Bundle 列表表格（可横向滚动）',
+  'bundles.images.scrollRegion': 'Bundle 镜像绑定表格（可横向滚动）',
+  'bindings.table.scrollRegion': '授权绑定表格（可横向滚动）',
+  'localUser.table.scrollRegion': '本地用户表格（可横向滚动）',
+  'stuckLocks.table.scrollRegion': '紧急锁表格（可横向滚动）',
+  'emergency.tasks.scrollRegion': '收敛任务表格（可横向滚动）',
+  'annotation.table.scrollRegion': '注解表格（可横向滚动）',
+  'definitions.mappings.scrollRegion': 'Promotion Mapping 表格（可横向滚动）',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

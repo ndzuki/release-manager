@@ -1,4 +1,4 @@
-import { RouterLinkStub, mount } from '@vue/test-utils';
+import { RouterLinkStub, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -129,6 +129,54 @@ describe('AppShell', () => {
 
     expect(button.attributes('aria-label')).not.toBe(before);
     expect(['light', 'dark']).toContain(document.documentElement.dataset.theme);
+  });
+
+  /*
+   * The rail has to survive 375px. Above 1024px it is a fixed column; below, the same
+   * markup becomes a bar plus a drawer, and the ONLY state that can strand a reader is the
+   * drawer staying open over the page it just navigated to — hence the two closing paths
+   * below. `aria-expanded` is the state (not a CSS class), and the control is a native
+   * button, so keyboard activation needs no handler of its own.
+   */
+  it('exposes the drawer control with aria-expanded and aria-controls', async () => {
+    const { wrapper } = await mountShell();
+    const toggle = wrapper.get('.app-shell__menu');
+
+    expect(toggle.element.tagName).toBe('BUTTON');
+    expect(toggle.attributes('type')).toBe('button');
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+    expect(toggle.attributes('aria-controls')).toBe('app-shell-panel');
+    // The glyph is decoration (aria-hidden), the label carries the name.
+    expect(toggle.text()).toContain('导航菜单');
+    expect(toggle.find('[aria-hidden="true"]').exists()).toBe(true);
+    expect(wrapper.get('#app-shell-panel').classes()).not.toContain('app-shell__panel--open');
+  });
+
+  it('opens and closes the drawer, including on Escape', async () => {
+    const { wrapper } = await mountShell();
+    const toggle = wrapper.get('.app-shell__menu');
+
+    await toggle.trigger('click');
+    expect(toggle.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.get('#app-shell-panel').classes()).toContain('app-shell__panel--open');
+
+    await toggle.trigger('click');
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+
+    await toggle.trigger('click');
+    await wrapper.get('.app-shell__aside').trigger('keydown', { key: 'Escape' });
+    expect(toggle.attributes('aria-expanded')).toBe('false');
+  });
+
+  it('closes the drawer after a navigation', async () => {
+    const { wrapper } = await mountShell();
+    await wrapper.get('.app-shell__menu').trigger('click');
+    expect(wrapper.get('.app-shell__menu').attributes('aria-expanded')).toBe('true');
+
+    await wrapper.vm.$router.push('/audit');
+    await flushPromises();
+
+    expect(wrapper.get('.app-shell__menu').attributes('aria-expanded')).toBe('false');
   });
 
   it('signs out through the auth store', async () => {

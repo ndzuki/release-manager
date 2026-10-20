@@ -112,7 +112,14 @@ onMounted(() => {
         :message="t('localUser.list.empty')"
       />
 
-      <table v-else class="local-users__table">
+      <div
+        v-else
+        class="table-wrap"
+        role="region"
+        :aria-label="t('localUser.table.scrollRegion')"
+        tabindex="0"
+      >
+        <table class="local-users__table">
         <thead>
           <tr>
             <th scope="col">{{ t('localUser.column.username') }}</th>
@@ -129,7 +136,8 @@ onMounted(() => {
             <td>{{ statusLabel('localUser', user.status) }}</td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
 
       <button v-if="store.hasMore" type="button" :disabled="store.loadingMore" @click="store.loadMore()">
         {{ t('localUser.list.loadMore') }}
@@ -214,7 +222,7 @@ onMounted(() => {
 
 .local-users__table th,
 .local-users__table td {
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   padding: var(--space-2) var(--space-3);
   text-align: left;
 }

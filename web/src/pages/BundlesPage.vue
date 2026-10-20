@@ -90,7 +90,14 @@ function applyFilters(): void {
       message="当前过滤条件下没有 Bundle；清空过滤可查看全部（注意：无权限时服务端会返回拒绝而不是空列表）。"
     />
 
-    <table v-else-if="store.bundles.length > 0" class="bundles__table">
+    <div
+      v-else-if="store.bundles.length > 0"
+      class="table-wrap"
+      role="region"
+      :aria-label="t('bundles.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="bundles__table">
       <thead>
         <tr>
           <th scope="col">名称</th>
@@ -123,7 +130,8 @@ function applyFilters(): void {
           </td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
 
     <div v-if="store.hasMore" class="bundles__more">
       <button type="button" :disabled="store.appending" data-testid="bundles-load-more" @click="store.appendNextPage">
@@ -154,7 +162,13 @@ function applyFilters(): void {
         </dl>
 
         <h3>镜像绑定（{{ store.detail.images.length }}）</h3>
-        <table class="bundles__images">
+        <div
+          class="table-wrap"
+          role="region"
+          :aria-label="t('bundles.images.scrollRegion')"
+          tabindex="0"
+        >
+          <table class="bundles__images">
           <thead>
             <tr><th scope="col">引用</th><th scope="col">摘要</th><th scope="col">Values 路径</th></tr>
           </thead>
@@ -165,7 +179,8 @@ function applyFilters(): void {
               <td>{{ image.valuesPath }}</td>
             </tr>
           </tbody>
-        </table>
+          </table>
+        </div>
 
         <button type="button" @click="store.closeDetail()">关闭明细</button>
       </template>
@@ -259,7 +274,7 @@ function applyFilters(): void {
 .bundles__images th,
 .bundles__images td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

@@ -139,7 +139,14 @@ async function submit(): Promise<void> {
       message="当前范围内没有「效果未知且已过观察窗口」的紧急操作——这正是期望状态。"
     />
 
-    <table v-else-if="store.locks.length > 0" class="stuck__table">
+    <div
+      v-else-if="store.locks.length > 0"
+      class="table-wrap"
+      role="region"
+      :aria-label="t('stuckLocks.table.scrollRegion')"
+      tabindex="0"
+    >
+      <table class="stuck__table">
       <thead>
         <tr>
           <th scope="col">定义 / 操作</th>
@@ -170,7 +177,8 @@ async function submit(): Promise<void> {
           </td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
 
     <!-- Releasing a lock is irreversible and not replayable, so the confirmation
          goes through the shared primitive with `danger` (role=alertdialog) instead
@@ -304,7 +312,7 @@ async function submit(): Promise<void> {
 .stuck__table th,
 .stuck__table td {
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
 }
 

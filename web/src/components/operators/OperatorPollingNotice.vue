@@ -54,7 +54,7 @@ const emit = defineEmits<{ resume: [] }>();
 .polling-stopped__resume {
   flex: none;
   padding: 0.4rem 0.7rem;
-  border: 1px solid var(--color-subtle);
+  border: 1px solid var(--color-border-strong);
   border-radius: 0.375rem;
   background: var(--color-surface);
   color: inherit;
