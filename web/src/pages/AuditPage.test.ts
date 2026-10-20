@@ -430,3 +430,150 @@ describe('AuditPage URL mirror (UX-011)', () => {
     }
   });
 });
+
+/*
+ * TASK-394 (direction C audit page): the result area has exactly one state.
+ *
+ * The regression this locks was real (B5): the error state sat OUTSIDE the
+ * loading/empty chain, so a failed request rendered "审计请求失败" next to
+ * "暂无审计事件", and the reader saw a failure described as "there is nothing here".
+ * The page now derives ONE `viewState` (`loading | forbidden | error | empty | data`)
+ * and every branch is a `v-if`/`v-else-if` on it.
+ *
+ * `renderedStates` is the assertion that makes "only one" mechanical: it collects the
+ * root element of every state component that is actually in the DOM, so a future edit
+ * cannot pass by adding a state rather than replacing one.
+ */
+function renderedStates(wrapper: ReturnType<typeof mount>): string[] {
+  const states = [
+    ['error', '.error-state'],
+    ['empty', '.empty-state'],
+    ['loading', '.loading-state'],
+    ['forbidden', '.forbidden-state'],
+  ] as const;
+  return states.filter(([, selector]) => wrapper.find(selector).exists()).map(([name]) => name);
+}
+
+describe('AuditPage result-state exclusivity (TASK-394)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    queryAuditEvents.mockReset();
+  });
+
+  it('renders only the error state on a failed first query — never the empty copy', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockRejectedValue(new ConnectError('audit unavailable', Code.Unavailable));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    expect(renderedStates(wrapper)).toEqual(['error']);
+    expect(wrapper.text()).toContain('审计请求失败');
+    // The empty copy must not be readable next to a failure: empty is a positive
+    // statement about the data ("there are none"), not a fallback for an error.
+    expect(wrapper.text()).not.toContain('暂无审计事件');
+    expect(wrapper.text()).not.toContain('当前组织与筛选条件下没有匹配事件');
+  });
+
+  it('renders only the empty state on an empty result — never an error message', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockResolvedValue(queryResponse([]));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    expect(renderedStates(wrapper)).toEqual(['empty']);
+    expect(wrapper.text()).toContain('暂无审计事件');
+    expect(wrapper.text()).not.toContain('审计请求失败');
+    expect(wrapper.text()).not.toContain('查询被拒绝');
+  });
+
+  it('shows loading alone while the first query is in flight, then replaces it', async () => {
+    signInAs('org-1');
+    let resolveQuery: (value: QueryAuditEventsResponse) => void = () => {};
+    queryAuditEvents.mockImplementation(
+      () =>
+        new Promise<QueryAuditEventsResponse>((resolve) => {
+          resolveQuery = resolve;
+        }),
+    );
+
+    const wrapper = mountAuditPage();
+
+    // No flushPromises: this is the state while the request is still pending.
+    expect(renderedStates(wrapper)).toEqual(['loading']);
+    expect(wrapper.text()).not.toContain('暂无审计事件');
+    expect(wrapper.text()).not.toContain('审计请求失败');
+
+    resolveQuery(queryResponse([]));
+    await flushPromises();
+
+    // The loading state is replaced, not left on screen with the empty one.
+    expect(renderedStates(wrapper)).toEqual(['empty']);
+  });
+
+  it('renders only the 403 state for a permission refusal', async () => {
+    signInAs('org-1');
+    queryAuditEvents.mockRejectedValue(new ConnectError('denied', Code.PermissionDenied));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+
+    expect(renderedStates(wrapper)).toEqual(['forbidden']);
+    expect(wrapper.text()).toContain('403');
+    expect(wrapper.text()).not.toContain('暂无审计事件');
+    expect(wrapper.text()).not.toContain('审计请求失败');
+  });
+});
+
+/*
+ * TASK-394: the filter bar is a visual migration, so the request it builds is pinned
+ * here field by field. Each expectation names the audit.v1.AuditQueryFilter field the
+ * control maps to (api/proto/audit/v1/audit.proto): actor_id, resource_type,
+ * resource_id, action, status and time_range. There is no free-text search field
+ * because the contract has none.
+ */
+describe('AuditPage filter → AuditQueryFilter mapping (TASK-394)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    queryAuditEvents.mockReset();
+  });
+
+  it('sends every filter control under its contract field name', async () => {
+    signInAs('org-1', ['viewer']);
+    queryAuditEvents.mockResolvedValue(queryResponse([]));
+
+    const wrapper = mountAuditPage();
+    await flushPromises();
+    expect(queryAuditEvents).toHaveBeenCalledTimes(1);
+
+    await wrapper.get('input[name="actor"]').setValue('alice');
+    await wrapper.get('select[name="resource"]').setValue('operation');
+    await wrapper.get('input[name="resource_id"]').setValue('op-1');
+    await wrapper.get('select[name="action"]').setValue('upgrade');
+    await wrapper.get('select[name="status"]').setValue('succeeded');
+    await wrapper.get('input[name="from"]').setValue('2026-10-19T00:00');
+    await wrapper.get('input[name="to"]').setValue('2026-10-19T12:00');
+
+    await wrapper.get('form.audit-filters').trigger('submit');
+    await flushPromises();
+
+    expect(queryAuditEvents).toHaveBeenCalledTimes(2);
+    expect(queryAuditEvents).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        filter: expect.objectContaining({
+          organizationId: 'org-1',
+          actorId: 'alice',
+          resourceType: 'operation',
+          resourceId: 'op-1',
+          action: 'upgrade',
+          status: 'succeeded',
+          timeRange: expect.objectContaining({
+            start: expect.anything(),
+            end: expect.anything(),
+          }),
+        }),
+      }),
+    );
+  });
+});

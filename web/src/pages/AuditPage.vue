@@ -2,10 +2,12 @@
 import { t } from '@/i18n/messages';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import Alert from '@/components/common/Alert.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import AuditEventDetail from '@/components/audit/AuditEventDetail.vue';
 import AuditEventTable from '@/components/audit/AuditEventTable.vue';
 import AuditExportPanel from '@/components/audit/AuditExportPanel.vue';
@@ -49,6 +51,33 @@ const scopeLabel = computed(() => {
 const canQuery = computed(
   () => (queryAllOrganizations.value || queryOrganizationId.value.length > 0) && !audit.loading,
 );
+
+/*
+ * TASK-394: ONE state for the result area. The page used to render the error state
+ * outside the loading/empty chain, so "request failed" and "no audit events" could
+ * appear together (B5). A single derived value makes the states exclusive by
+ * construction: every branch below is a `v-if`/`v-else-if` on this one value, so no
+ * two of loading / error / forbidden / empty / data can be on screen at once.
+ *
+ * `hasQueried` closes the first-paint hole: before onMounted fires, `loading` is still
+ * false and `events` is empty, which the old chain rendered as "no audit events" for
+ * one frame. Until the first request starts, the honest state is loading.
+ *
+ * "data" also covers a failed REFRESH with the previous page still loaded
+ * (AC-059-08): the table stays and the failure is reported inline, which is not the
+ * error state — that one replaces the results because there are none.
+ */
+type AuditViewState = 'loading' | 'forbidden' | 'error' | 'empty' | 'data';
+const hasQueried = ref(false);
+
+const viewState = computed<AuditViewState>(() => {
+  const failure = audit.error;
+  if (failure?.reason === 'permission_denied') return 'forbidden';
+  if (failure && audit.events.length === 0) return 'error';
+  if (audit.events.length > 0) return 'data';
+  if (audit.loading || !hasQueried.value) return 'loading';
+  return 'empty';
+});
 
 function replaceForm(filters: AuditFilterState): void {
   Object.assign(form, { ...filters });
@@ -135,6 +164,7 @@ onMounted(async () => {
   replaceForm(filters);
   audit.setFilters(filters);
   initialized = true;
+  hasQueried.value = true;
   await audit.query(queryOrganizationId.value, 'first', queryAllOrganizations.value);
 });
 
@@ -166,30 +196,27 @@ watch(organizationId, (next, previous) => {
 
 <template>
   <section class="audit-page">
-    <header class="audit-page__heading">
-      <div>
-        <p class="audit-page__eyebrow">{{ t('audit.page.title') }}</p>
-        <h1>{{ t('audit.page.subtitle') }}</h1>
-        <p>{{ t('audit.page.description') }} {{ scopeLabel }}.</p>
-      </div>
-      <div class="audit-page__actions">
-        <button
-          type="button"
-          :disabled="!canQuery || audit.exporting || queryAllOrganizations"
-          :title="queryAllOrganizations ? t('audit.page.exportScopeHint') : undefined"
-          @click="createExport"
-        >
-          {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
-        </button>
-        <!-- TASK-339 review: an export row carries exactly one organization, so
-             the server rejects all_organizations with INVALID_ARGUMENT. Disable
-             the action and say why, instead of letting the click fail. -->
-        <small v-if="queryAllOrganizations" class="audit-page__export-hint">
-          {{ t('audit.page.exportScopeHint') }}
-        </small>
-      </div>
-    </header>
-
+    <PageHeader :title="t('audit.page.subtitle')" :subtitle="t('audit.page.headerSubtitle', { scope: scopeLabel })">
+      <template #actions>
+        <div class="audit-page__actions">
+          <button
+            type="button"
+            class="audit-page__export"
+            :disabled="!canQuery || audit.exporting || queryAllOrganizations"
+            :title="queryAllOrganizations ? t('audit.page.exportScopeHint') : undefined"
+            @click="createExport"
+          >
+            {{ audit.exporting ? t('audit.page.creatingExport') : t('audit.page.export') }}
+          </button>
+          <!-- TASK-339 review: an export row carries exactly one organization, so
+               the server rejects all_organizations with INVALID_ARGUMENT. Disable
+               the action and say why, instead of letting the click fail. -->
+          <small v-if="queryAllOrganizations" class="audit-page__export-hint">
+            {{ t('audit.page.exportScopeHint') }}
+          </small>
+        </div>
+      </template>
+    </PageHeader>
 
     <AuditFilters
       v-model="form"
@@ -202,47 +229,48 @@ watch(organizationId, (next, previous) => {
     />
     <AuditExportPanel :tasks="audit.exportTasks" />
 
-    <!-- One chain, so a failed request can never be rendered as an empty
-         result: the previous shape chained LoadingState/EmptyState to each
-         other and left ErrorState outside the chain, which printed
-         "Audit request failed" and "No audit events" at the same time (B5). -->
-    <ForbiddenState
-      v-if="audit.error && audit.error.reason === 'permission_denied'"
-      :message="audit.error.message"
-    />
-    <ErrorState
-      v-else-if="audit.error && audit.events.length === 0"
-      :title="audit.error.reason === 'range_too_large' ? t('audit.page.narrowRange') : t('audit.page.failedTitle')"
-      :message="audit.error.message"
-      :action-label="t('action.retry')"
-      @action="submit"
-    />
-    <LoadingState v-else-if="audit.loading && audit.events.length === 0" :message="t('audit.page.loading')" />
-    <EmptyState
-      v-else-if="!audit.loading && audit.events.length === 0"
-      :title="t('audit.page.empty')"
-      :message="t('audit.page.emptyHint')"
-    />
-    <template v-else>
-      <!-- AC-059-08: a failed refresh keeps the loaded page, so the failure is
-           reported inline instead of replacing the table. -->
-      <div v-if="audit.error" class="notice notice--warning" role="alert">
-        {{ audit.error.message }}
-        <button type="button" @click="submit">{{ t('action.retry') }}</button>
-      </div>
-      <AuditEventTable
-        ref="resultsTable"
-        :events="audit.events"
-        :total-size="audit.totalSize"
-        :page="audit.pageNumber"
-        :loading="audit.loading"
-        :has-previous="audit.hasPrevious"
-        :has-more="audit.hasMore"
-        @select="audit.selectEvent"
-        @previous="pagePrevious"
-        @next="pageNext"
+    <h2 class="audit-page__section">{{ t('audit.page.title') }}</h2>
+
+    <div class="audit-page__results">
+      <!-- The single chain: exactly one of these branches renders (see viewState). -->
+      <ForbiddenState v-if="viewState === 'forbidden'" :message="audit.error?.message" />
+      <ErrorState
+        v-else-if="viewState === 'error'"
+        :title="audit.error?.reason === 'range_too_large' ? t('audit.page.narrowRange') : t('audit.page.failedTitle')"
+        :message="audit.error?.message"
+        :action-label="t('action.retry')"
+        @action="submit"
       />
-    </template>
+      <LoadingState v-else-if="viewState === 'loading'" :message="t('audit.page.loading')" />
+      <EmptyState
+        v-else-if="viewState === 'empty'"
+        :title="t('audit.page.empty')"
+        :message="t('audit.page.emptyHint')"
+      />
+      <template v-else>
+        <!-- AC-059-08: a failed refresh keeps the loaded page, so the failure is
+             reported inline instead of replacing the table. This is a notice ABOUT
+             the rows on screen, not the error state (which owns the empty result). -->
+        <Alert v-if="audit.error" tone="warning" :title="t('audit.page.failedTitle')" :message="audit.error.message">
+          <template #actions>
+            <button type="button" class="audit-page__retry" @click="submit">{{ t('action.retry') }}</button>
+          </template>
+        </Alert>
+        <AuditEventTable
+          ref="resultsTable"
+          :events="audit.events"
+          :total-size="audit.totalSize"
+          :page="audit.pageNumber"
+          :loading="audit.loading"
+          :has-previous="audit.hasPrevious"
+          :has-more="audit.hasMore"
+          @select="audit.selectEvent"
+          @previous="pagePrevious"
+          @next="pageNext"
+        />
+      </template>
+    </div>
+
     <AuditEventDetail v-if="audit.selectedEvent" :event="audit.selectedEvent" @close="audit.selectEvent(null)" />
   </section>
 </template>
@@ -250,81 +278,68 @@ watch(organizationId, (next, previous) => {
 <style scoped>
 .audit-page {
   display: grid;
-  gap: 1.5rem;
+  gap: 16px;
+  min-width: 0;
 }
 
-/* Inline partial-failure notice: the loaded page stays, the failure is
-   reported next to it (same pattern as ReleaseInventoryPage). */
-.notice {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.8rem 1rem;
-  border: 1px solid var(--color-info-border);
-  border-radius: 0.5rem;
-  background: var(--color-info-soft);
-  color: var(--color-info-ink);
-}
-
-.notice--warning {
-  border-color: var(--color-warning-border);
-  background: var(--color-warning-soft);
-  color: var(--color-warning-ink);
-}
-
-.audit-page__heading {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.audit-page__heading h1,
-.audit-page__heading p {
+.audit-page__section {
   margin: 0;
+  color: var(--tx);
 }
 
-.audit-page__eyebrow {
-  color: var(--color-muted);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.audit-page__results {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
 }
 
 .audit-page__actions {
   display: grid;
-  gap: 0.35rem;
+  gap: 6px;
   justify-items: end;
 }
 
 .audit-page__export-hint {
   max-width: 16rem;
-  color: var(--color-muted);
+  color: var(--mu);
   font-size: var(--font-size-sm);
   text-align: right;
 }
 
-.audit-page__heading button {
-  padding: 0.55rem 0.85rem;
+/* Direction C primary action: the accent is the text colour and the ink is the page
+   background, so the button inverts per theme instead of carrying a fixed blue. */
+.audit-page__export,
+.audit-page__retry {
+  padding: 8px 14px;
   border: 1px solid var(--color-primary-hover);
-  border-radius: 0.375rem;
-  background: var(--color-primary);
-  color: var(--color-on-accent);
+  border-radius: 6px;
+  background: var(--pr);
+  color: var(--on);
   cursor: pointer;
   font: inherit;
   font-weight: 600;
 }
 
-.audit-page__heading button:disabled {
+.audit-page__export:disabled {
+  border-color: var(--color-disabled-border);
+  background: var(--color-disabled-bg);
+  color: var(--color-disabled-text);
   cursor: not-allowed;
-  opacity: 0.55;
 }
 
+/* The inline refresh failure is a notice next to the table: on a 375px screen the
+   alert and its retry button wrap instead of pushing the page wider. */
+.audit-page__results :deep(.alert) {
+  flex-wrap: wrap;
+}
 
 @media (max-width: 48rem) {
-  .audit-page__heading {
-    flex-direction: column;
+  .audit-page__actions {
+    justify-items: start;
+  }
+
+  .audit-page__export-hint {
+    text-align: left;
   }
 }
 </style>
