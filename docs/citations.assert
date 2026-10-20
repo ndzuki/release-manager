@@ -62,17 +62,17 @@ deploy/dev/dev.sh	549	-ensure-mtls-ca	TASK-379 d：dev.sh 调用 devseed 生成/
 cmd/auth/main.go	201	authorization.TraceInterceptor()	TASK-379 e：auth 装配 trace 拦截器（原引 :193）	docs/observability.md:93
 cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	TASK-379 f：auth readiness 检查入口（原引 :68-88）	docs/observability.md:205
 cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	TASK-379 f：同一条目的孪生引用，本次一并修正	docs/observability.md:118
-deploy/dev/dev.sh	1320	release-$svc:content-sha256-$hash	TASK-379 g：管理面 manifest 的 :dev → 内容寻址 tag 替换（原引 :1104-1118）	docs/runbook.md:493
-deploy/dev/dev.sh	1565	release-$svc:content-sha256-$hash	TASK-379 g：客户 agent overlay 的同一 tag 替换（原引 :1298-1330 指错位置）	docs/runbook.md:493
-cmd/auth/main.go	131	DialTimeout:           time.Second	TASK-379 边缘1：Redis 客户端 1s 级超时（原引 :114-127 少 4 行）	docs/runbook.md:320
+deploy/dev/dev.sh	1320	release-$svc:content-sha256-$hash	TASK-379 g：管理面 manifest 的 :dev → 内容寻址 tag 替换（原引 :1104-1118）	docs/runbook.md:502
+deploy/dev/dev.sh	1565	release-$svc:content-sha256-$hash	TASK-379 g：客户 agent overlay 的同一 tag 替换（原引 :1298-1330 指错位置）	docs/runbook.md:502
+cmd/auth/main.go	131	DialTimeout:           time.Second	TASK-379 边缘1：Redis 客户端 1s 级超时（原引 :114-127 少 4 行）	docs/runbook.md:325
 deploy/dev/dev.sh	424	jwt_ci_temp_cleanup() {	TASK-379 边缘2：ci JWT 临时文件删除函数（原引 :387-390 是说明注释）	.github/SECRETS.md:134
 
 # --- seeds: high-frequency cited / high-churn files --------------------------
-cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	auth readiness 贡献 database/redis 两项检查	docs/runbook.md:69
+cmd/auth/main.go	75	func (s *authSvc) ReadinessChecks()	auth readiness 贡献 database/redis 两项检查	docs/runbook.md:74
 cmd/auth/main.go	171	auth.NewStoreCustomerResolver	BindingService 使用本地 customer resolver（TASK-191）	docs/api.md:255
 cmd/auth/main.go	104	postgresstore.Open	auth 也经 postgresstore.Open 触发迁移（TASK-338）	docs/production-deploy.md:955
 cmd/orchestrator/main.go	173	caInst.SignServerCert	dev mTLS CA 为网关签服务端证书	.github/SECRETS.md:27
-cmd/orchestrator/main.go	105	operator.NewSessionRegistry	SessionRegistry 注入网关 operator service	docs/runbook.md:173
+cmd/orchestrator/main.go	105	operator.NewSessionRegistry	SessionRegistry 注入网关 operator service	docs/runbook.md:178
 cmd/orchestrator/main.go	202	NewOrchestratorServiceHandler	网关另建 OrchestratorService handler	docs/production-deploy.md:1184
 cmd/orchestrator/main.go	210	OrchestratorServiceSyncInventoryProcedure	网关只挂 SyncInventory 单路径	docs/production-deploy.md:1184
 cmd/orchestrator/main.go	484	NewOrchestratorServiceHandler	管理面完整 OrchestratorService handler	docs/production-deploy.md:1184
@@ -87,7 +87,7 @@ deploy/dev/dev.sh	455	service_token_ensure_one() {	service token 逐项生成/�
 deploy/dev/dev.sh	527	mtls_ca_key_path() {	dev mTLS CA key 路径	.github/SECRETS.md:141
 deploy/dev/dev.sh	533	DEV_M_TLS_CA_KEY	ci profile 缺 mTLS CA 即失败	.github/SECRETS.md:27
 deploy/dev/dev.sh	158	diagnostics/	失败诊断落盘 data/diagnostics/<ISO8601>/	docs/observability.md:174
-deploy/dev/dev.sh	1390	require_tcp_ready operator	operator 网关只做 TCP 连通性探测	docs/runbook.md:76
+deploy/dev/dev.sh	1390	require_tcp_ready operator	operator 网关只做 TCP 连通性探测	docs/runbook.md:81
 internal/orchestrator/service.go	1067	func (s *Service) CancelOperation(	Queued 操作取消路径	docs/delivery-evidence.md:113
 internal/orchestrator/service.go	1102	cancel_not_allowed	Running 操作取消拒绝	docs/delivery-evidence.md:114
 internal/orchestrator/service.go	183	X-Reason-Code	release_busy 原因码 header	docs/delivery-evidence.md:64
@@ -97,10 +97,10 @@ internal/orchestrator/service.go	1582	revision_not_approved	未批准 ValuesRevi
 internal/orchestrator/service.go	386	DigestValue	DigestAlg + ":" + DigestValue 拼接	docs/production-deploy.md@注意这个 hex 是**服务端对
 internal/orchestrator/service.go	1671	expected_current_revision	UPGRADE 的 expected_current_revision 校验	docs/production-deploy.md@必须等于 inventory 里的 revision，否则
 internal/store/store.go	38	ErrApprovalPending	store 稳定哨兵错误清单	docs/api.md:319
-internal/store/store.go	207	ValuesStatusPendingApproval	values revision pending_approval 状态	docs/runbook.md:381
-internal/store/store.go	652	type OperatorStatus string	OperatorStatus 状态机词汇	docs/runbook.md:168
-internal/store/store.go	661	type SessionStatus string	SessionStatus 状态机词汇	docs/runbook.md:168
-internal/store/store.go	671	type SessionStatusReason string	SessionStatusReason 状态机词汇	docs/runbook.md:168
+internal/store/store.go	207	ValuesStatusPendingApproval	values revision pending_approval 状态	docs/runbook.md:386
+internal/store/store.go	652	type OperatorStatus string	OperatorStatus 状态机词汇	docs/runbook.md:173
+internal/store/store.go	661	type SessionStatus string	SessionStatus 状态机词汇	docs/runbook.md:173
+internal/store/store.go	671	type SessionStatusReason string	SessionStatusReason 状态机词汇	docs/runbook.md:173
 internal/store/store.go	1044	type AuditEvent struct	审计事件模型结构体	docs/observability.md:137
 internal/store/store.go	916	release.emergency.execute	显式 deployer capability 动作常量	docs/delivery-evidence.md:91
 internal/orchestrator/rollback.go	24	func (s *Service) RollbackRelease(	RollbackRelease handler 定义	docs/api.md:536
@@ -113,9 +113,9 @@ internal/orchestrator/service.go	628	func (s *Service) PublishRelease(	TASK-381 
 internal/orchestrator/service.go	769	func (s *Service) WatchOperation(	TASK-381 a：WatchOperation handler 定义（原引 :543）	docs/api.md:538
 internal/orchestrator/service.go	1067	func (s *Service) CancelOperation(	TASK-381 a：CancelOperation handler 定义（原引 :914）	docs/api.md:539
 cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-381 b：auth /metrics 挂载点（原引 :136-137 是 Redis ping）	docs/observability.md:115
-cmd/auth/main.go	152	auth.NewJWTManager(jwtPrivateKey, 15*time.Minute, 7*24*time.Hour)	TASK-381 c：access 15m / refresh 7d 的硬编码 TTL（原引 :140）	docs/runbook.md:318
-internal/store/store.go	2848	redact.Sanitize(lastError)	TASK-381 d：last_error 的脱敏实现（原引 :2802-2803 是接口方法）	docs/runbook.md:384
-deploy/dev/dev.sh	1155	docker build "${build_args[@]}"	TASK-381 e：内容寻址 tag 的 docker build/push（原引 :960-1000 是 kubeconfig 与 content_hash）	docs/runbook.md:492
+cmd/auth/main.go	152	auth.NewJWTManager(jwtPrivateKey, 15*time.Minute, 7*24*time.Hour)	TASK-381 c：access 15m / refresh 7d 的硬编码 TTL（原引 :140）	docs/runbook.md:323
+internal/store/store.go	2848	redact.Sanitize(lastError)	TASK-381 d：last_error 的脱敏实现（原引 :2802-2803 是接口方法）	docs/runbook.md:389
+deploy/dev/dev.sh	1155	docker build "${build_args[@]}"	TASK-381 e：内容寻址 tag 的 docker build/push（原引 :960-1000 是 kubeconfig 与 content_hash）	docs/runbook.md:501
 
 # --- TASK-382: api.md bare error-code sub-citations / observability / runbook -----------------
 internal/orchestrator/service.go	205	connect.CodeInvalidArgument	TASK-382 a：CreateOperation 仅接受 INSTALL/UPGRADE 的 invalid_argument 行（原裸引 :124）	docs/api.md:534
@@ -135,9 +135,9 @@ internal/orchestrator/service.go	254	CreateOperationGateDetail	TASK-382 f：rele
 cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-382 g：auth /metrics 挂载点（observability §2 原引 :136-137 是 Redis ping）	docs/observability.md:50
 cmd/orchestrator/main.go	343	mux.Handle("GET /metrics", metrics.Handler())	TASK-382 g：orchestrator /metrics 挂载点（原引 :332-336 是 emergency seed）	docs/observability.md:115
 cmd/orchestrator/main.go	340	registry := prometheus.NewRegistry()	TASK-382 g：orchestrator 共享 registry 起点（原引 :332-336）	docs/observability.md:51
-cmd/auth/main.go	148	ParseEd25519PrivateKeyPEM	TASK-382 h：auth 解析 Ed25519 私钥（原引 :145 是 /metrics 挂载）	docs/runbook.md:317
-cmd/orchestrator/main.go	462	ParseEd25519PublicKeyPEM	TASK-382 h：orchestrator 解析 Ed25519 公钥（原引 :459 是 preflight resume 日志）	docs/runbook.md:317
-cmd/auth/main.go	158	maxAttempts := 5	TASK-382 i：登录限流默认值与覆盖的起点（原引 :141-154）	docs/runbook.md:319
+cmd/auth/main.go	148	ParseEd25519PrivateKeyPEM	TASK-382 h：auth 解析 Ed25519 私钥（原引 :145 是 /metrics 挂载）	docs/runbook.md:322
+cmd/orchestrator/main.go	462	ParseEd25519PublicKeyPEM	TASK-382 h：orchestrator 解析 Ed25519 公钥（原引 :459 是 preflight resume 日志）	docs/runbook.md:322
+cmd/auth/main.go	158	maxAttempts := 5	TASK-382 i：登录限流默认值与覆盖的起点（原引 :141-154）	docs/runbook.md:324
 
 # --- TASK-383: api.md /metrics mounts, JWT flag/parse anchors, PublishRelease error codes ----
 cmd/auth/main.go	145	mux.Handle("GET /metrics", metrics.Handler())	TASK-383 a：auth 的 /metrics 挂载点（原引 :137 是 Redis ping 失败返回）	docs/api.md:41
@@ -148,9 +148,9 @@ cmd/auth/main.go	148	ParseEd25519PrivateKeyPEM	TASK-383 b：私钥 PEM 解析点
 cmd/auth/main.go	268	startup instead of silently falling back	TASK-383 b：「刻意没有默认值」注释末行（原引 :254-260 是旧注释位置）	docs/api.md:146
 cmd/orchestrator/main.go	988	flag.String("jwt-public-key"	TASK-383 b：orchestrator 的 --jwt-public-key flag（原引 :983 是密钥约定注释首行）	docs/api.md:146
 cmd/api/main.go	223	flag.String("jwt-public-key"	TASK-383 b：api 的 --jwt-public-key flag（原引 :183 是 timeout 校验）	docs/api.md:146
-cmd/auth/main.go	269	flag.String("jwt-private-key"	TASK-383 d：runbook 同组 JWT 私钥 flag 的孪生修正	docs/runbook.md:315
-cmd/orchestrator/main.go	988	flag.String("jwt-public-key"	TASK-383 d：runbook 同组公钥 flag 的孪生修正	docs/runbook.md:315
-cmd/api/main.go	223	flag.String("jwt-public-key"	TASK-383 d：runbook 同组 api 公钥 flag 的孪生修正	docs/runbook.md:315
+cmd/auth/main.go	269	flag.String("jwt-private-key"	TASK-383 d：runbook 同组 JWT 私钥 flag 的孪生修正	docs/runbook.md:320
+cmd/orchestrator/main.go	988	flag.String("jwt-public-key"	TASK-383 d：runbook 同组公钥 flag 的孪生修正	docs/runbook.md:320
+cmd/api/main.go	223	flag.String("jwt-public-key"	TASK-383 d：runbook 同组 api 公钥 flag 的孪生修正	docs/runbook.md:320
 internal/orchestrator/service.go	637	connect.CodeNotFound	TASK-383 c：PublishRelease 定义不存在（原引 :470 是 now := time.Now().UTC()）	docs/api.md:535
 internal/orchestrator/service.go	654	connect.CodeNotFound	TASK-383 c：PublishRelease 集群不存在（与 :637 同一处漂移）	docs/api.md:535
 internal/orchestrator/service.go	648	connect.CodePermissionDenied	TASK-383 c：PublishRelease 客户已停用（原引 :481 是 IdempotencyKey 字段）	docs/api.md:535
@@ -177,10 +177,10 @@ internal/auth/external_idp_service.go	277	DingTalkCallback	TASK-384 f：钉钉�
 internal/config/config.go	614	bindDatabaseEnvironment(	TASK-387/388 修正：configuration.md 称 LoadService 在 :614 调用 bindDatabaseEnvironment（原引 :616 实为 `}`）；核验：sed -n '614p' 见 if err := bindDatabaseEnvironment(v)	docs/configuration.md:12
 internal/config/config.go	610	func LoadService(	TASK-387/388 修正：cli.md 的 LoadService 区间 609-634（以注释行为起点，原引 541-559 实为 AuthorizationCfg）；核验：sed -n '609,634p' 见注释+函数体+闭合	docs/cli.md:37
 internal/config/config.go	551	c.AuthURL = "http://localhost:8085"	TASK-387/388 修正：cli.md 的 auth_url 默认值在 AuthorizationCfg.WithDefaults（原引 253-268 是 Notifier/VaultResolver 区域）；核验：sed -n '549,552p' 见 c.AuthURL 赋值	docs/cli.md:91
-internal/config/config.go	571	"database.driver"	TASK-387/388 修正：runbook.md 的 DATABASE_* env 映射首条（原引 274-281 是 VaultResolverCfg）；核验：sed -n '571,575p' 逐条比对 5 个绑定	docs/runbook.md:114
+internal/config/config.go	571	"database.driver"	TASK-387/388 修正：runbook.md 的 DATABASE_* env 映射首条（原引 274-281 是 VaultResolverCfg）；核验：sed -n '571,575p' 逐条比对 5 个绑定	docs/runbook.md:119
 internal/config/config.go	570	bindings := map[string]string{	TASK-387/388 修正：SECRETS.md 的可注入 env 绑定表 570-600（原引 272-299 是 ServiceConfig/VaultResolver）；核验：sed -n '570,600p' 数出 29 条键	.github/SECRETS.md:152
 internal/config/config.go	599	VALUES_SECRET_PATTERNS	TASK-387/388 修正：SECURITY.md 的 VALUES_SECRET_PATTERNS 绑定行（原引 297 实为 VaultResolverCfg 的 `}`）；核验：sed -n '599p' 见 values.secret_patterns 映射	SECURITY.md:178
 internal/config/config.go	150	LogLevel	TASK-387/388 修正：observability.md 的 ServiceConfig.LogLevel（原引 133 是 SecureCookies 注释）；核验：sed -n '148,156p' 见 ServiceConfig 字段	docs/observability.md:17
 internal/config/config.go	154	Maintenance	TASK-387/388 修正：api.md 的 ServiceConfig.Maintenance（原引 21 是死结构体 Config 的 Maintenance）；核验：sed -n '21p' 与 '154p' 对比两个声明	docs/api.md:215
-internal/config/config.go	154	Maintenance	TASK-387/388 修正：runbook.md 维护模式配置键（原引 21 是死结构体 Config）；核验：sed -n '148,156p' 见 ServiceConfig.Maintenance	docs/runbook.md:327
-internal/config/config.go	154	Maintenance	TASK-387/388 修正：runbook.md §7.4 维护窗口配置键；原句并列的 :21（死结构体 Config）已改指唯一活的 :154；核验：sed -n '148,156p'	docs/runbook.md:455
+internal/config/config.go	154	Maintenance	TASK-387/388 修正：runbook.md 维护模式配置键（原引 21 是死结构体 Config）；核验：sed -n '148,156p' 见 ServiceConfig.Maintenance	docs/runbook.md:332
+internal/config/config.go	154	Maintenance	TASK-387/388 修正：runbook.md §7.4 维护窗口配置键；原句并列的 :21（死结构体 Config）已改指唯一活的 :154；核验：sed -n '148,156p'	docs/runbook.md:460
