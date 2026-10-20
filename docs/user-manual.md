@@ -80,6 +80,10 @@
   `集群` 只有在进入某个客户之后才出现（它需要 `customerId`）。
 - **侧栏左下角**：当前用户与组织名、主题按钮、`退出登录`。
 - **窄屏（≤1024px）**：侧栏收进顶部条，点「导航菜单」打开抽屉（`aria-expanded`、`Esc` 关闭、焦点留在抽屉内）。
+  375px 下的首页与审计页见下图（单列、无横向滚动）：
+
+  ![首页·375](images/user-manual/dc-36-home-375.png)
+  ![审计·375](images/user-manual/dc-37-audit-375.png)
 - **页内页头**：每个页面顶部是统一的页头——**面包屑（只显示名称，不显示 UUID）**、标题、副标题、右侧动作。
   面包屑的层级就是数据层级：`客户 / 集群 / 页面`。
 
@@ -312,9 +316,13 @@ Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，�
 | `canWrite` | 角色里没有 `viewer` | platform_admin、release_admin、deployer |
 | `canEnrollOperators` / `canRevokeOperators` | 含 `platform_admin` 或 `release_admin` | 平台管理员、发布管理员 |
 | `canCreateReleaseOperation` | 同上 | 平台管理员、发布管理员 |
-| `canReadBundles` | 有 bundle read 规则 | 平台管理员、发布管理员、部署者 |
-| `canReadBindings` | 有 binding read 规则 | 平台管理员、发布管理员、部署者 |
+| `canReadBundles` | 含 `platform_admin` 或 `release_admin` | **仅**平台管理员、发布管理员（部署者与只读都不行） |
+| `canReadBindings` | 含 `platform_admin` 或 `release_admin` | **仅**平台管理员、发布管理员（部署者与只读都不行） |
 | `canRunCleanup` / `canManageLocalUsers` | 含 `platform_admin` | 平台管理员 |
+
+> 注意 `canWrite` 与上面两条读能力的差别：`canWrite` 只要求「不是只读」，所以**部署者**能看到编辑入口；
+> 但 Bundle 与授权绑定的读规则只授予平台管理员与发布管理员（`internal/auth/casbin.go` 的 `bundle read` / `binding read`
+> 只覆盖这两个角色），所以部署者看不到这两个页面 —— 这是**有意隐藏**，不是页面坏了。
 
 无权限时表现分三层：**入口不渲染**（不是禁用）、**路由 404**（特性开关关闭）、**页面 403**。
 

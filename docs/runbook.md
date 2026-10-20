@@ -649,7 +649,7 @@ kubectl --context $CTX -n $NS get deploy -o custom-columns='NAME:.metadata.name,
 kubectl --context $CTX -n $NS exec postgres-0 -- psql -U release_manager -d release_manager \
   -tAc 'select version||chr(124)||dirty from schema_migrations'
 
-# 6) 备份 Job 是否每天在跑（02:00，见 11.4）
+# 6) 备份 Job 是否每天在跑（02:00 UTC，见 11.4）
 kubectl --context $CTX -n $NS get cronjob release-manager-backup
 kubectl --context $CTX -n $NS get pods | grep release-manager-backup
 ```
@@ -740,7 +740,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz
 
 ### 11.4 数据库备份与恢复
 
-**现状**：CronJob `release-manager-backup`（每天 02:00，`0 2 * * *`）在 `release-manager` 命名空间里用
+**现状**：CronJob `release-manager-backup`（**每天 02:00 UTC**，`0 2 * * *`；不是本地时间）在 `release-manager` 命名空间里用
 `postgres:16` 镜像跑 `pg_dump` 到 `/backups`（PVC），备份前用 `pg_isready` 有界等待数据库可连。
 
 ```bash
