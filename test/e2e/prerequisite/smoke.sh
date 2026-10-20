@@ -342,7 +342,7 @@ WORKLOAD_REF="${WKIND,,}s/$WNS/$WNAME"
 step "Emergency SetReplicas 2 -> succeeded + effect APPLIED, then restore to 1"
 EM="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/ExecuteEmergencyChange" \
   "${AUTH_H[@]}" \
-  -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":2,\"convergenceStrategy\":\"REVERT_ON_NEXT_RECONCILE\",\"idempotencyKey\":\"smoke-emergency-2-$(date +%s)\"}")"
+  -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":2,\"convergenceStrategy\":\"REVERT_ON_NEXT_RECONCILE\",\"reason\":\"AC-066-17 prerequisite smoke emergency change\",\"idempotencyKey\":\"smoke-emergency-2-$(date +%s)\"}")"
 EM_ID="$(jq -r '.operationId // empty' <<<"$EM")"
 [ -n "$EM_ID" ] || fail "ExecuteEmergencyChange(set_replicas=2) rejected: $EM"
 ok "Emergency set_replicas=2 op=$EM_ID"
@@ -362,7 +362,7 @@ fi
 
 EM_REST="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/ExecuteEmergencyChange" \
   "${AUTH_H[@]}" \
-  -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":1,\"convergenceStrategy\":\"REVERT_ON_NEXT_RECONCILE\",\"idempotencyKey\":\"smoke-emergency-restore-$(date +%s)\"}")"
+  -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":1,\"convergenceStrategy\":\"REVERT_ON_NEXT_RECONCILE\",\"reason\":\"AC-066-17 prerequisite smoke restore replicas\",\"idempotencyKey\":\"smoke-emergency-restore-$(date +%s)\"}")"
 EM_REST_ID="$(jq -r '.operationId // empty' <<<"$EM_REST")"
 [ -n "$EM_REST_ID" ] || fail "ExecuteEmergencyChange(restore=1) rejected: $EM_REST"
 wait_op "$EM_REST_ID" 'OPERATION_STATUS_SUCCEEDED' "emergency restore op=$EM_REST_ID" || true
@@ -603,7 +603,7 @@ if [ -n "$PENDING_TASK" ]; then
 else
   CONV="$(curl -sS -X POST "$BASE_URL/orchestrator.v1.OrchestratorService/ExecuteEmergencyChange" \
     "${AUTH_H[@]}" \
-    -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":2,\"convergenceStrategy\":\"REQUIRE_PROMOTION\",\"targetLocks\":[\"replicaCount\"],\"idempotencyKey\":\"smoke-convergence-$(date +%s)\"}")"
+    -d "{\"releaseDefinitionId\":\"$EMERGENCY_DEF_ID\",\"workloadRef\":\"$WORKLOAD_REF\",\"setReplicas\":2,\"convergenceStrategy\":\"REQUIRE_PROMOTION\",\"targetLocks\":[\"replicaCount\"],\"reason\":\"AC-066-17 prerequisite smoke require-promotion change\",\"idempotencyKey\":\"smoke-convergence-$(date +%s)\"}")"
   CONV_ID="$(jq -r '.operationId // empty' <<<"$CONV" 2>/dev/null || true)"
   [ -n "$CONV_ID" ] || fail "ExecuteEmergencyChange(REQUIRE_PROMOTION) rejected: $CONV"
   ok "REQUIRE_PROMOTION emergency accepted op=$CONV_ID"
