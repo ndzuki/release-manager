@@ -51,7 +51,7 @@ describe('emergency components (Step 4)', () => {
     const wrapper = mount(EmergencyTargetSelector, {
       props: { targets: [target()], selectedUid: null, loading: false, error: null },
     });
-    expect(wrapper.text()).toContain('DEPLOYMENT ns1/api');
+    expect(wrapper.text()).toContain('Deployment ns1/api');
     expect(wrapper.text()).toContain('副本数由自动扩缩容管理');
     await wrapper.find('input[type="radio"]').setValue();
     expect(wrapper.emitted('select')).toEqual([['u1']]);

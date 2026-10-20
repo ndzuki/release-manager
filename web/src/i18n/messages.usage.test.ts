@@ -637,6 +637,12 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
     reason: 'cluster sub-component converged to Chinese (wave 3)',
   },
   {
+    file: 'src/i18n/status-labels.ts',
+    allowed: ['Deployment', 'Job', 'Pod'],
+    reason:
+      'canonical Kubernetes resource kind names (proper nouns rendered in their conventional casing); every label in this module comes from the catalog',
+  },
+  {
     file: 'src/components/clusters/RouteRuleEditor.vue',
     allowed: ['（暂不可用）'],
     reason: 'cluster routing-rule editor converged to Chinese (wave 3)',

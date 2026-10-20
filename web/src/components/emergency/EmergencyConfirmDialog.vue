@@ -6,6 +6,7 @@ import { t } from '@/i18n/messages';
 // dialog keeps the page form and the frozen key (reopening the same intent
 // reuses it — handled by the store).
 import AppDialog from '@/components/common/AppDialog.vue';
+import { workloadKindLabel } from '@/i18n/status-labels';
 import type { CandidateArtifactDisplay, WorkloadRefDisplay } from '@/features/emergency/model';
 
 defineProps<{
@@ -44,7 +45,7 @@ const emit = defineEmits<{
     <dl class="emergency-confirm__summary">
       <template v-if="workload">
         <dt>{{ t('emergency.confirm.target') }}</dt>
-        <dd>{{ workload.kind }} {{ workload.namespace }}/{{ workload.name }}</dd>
+        <dd>{{ workloadKindLabel(workload.kind) }} {{ workload.namespace }}/{{ workload.name }}</dd>
       </template>
       <dt>{{ t('emergency.confirm.container') }}</dt>
       <dd>{{ container || '—' }}</dd>

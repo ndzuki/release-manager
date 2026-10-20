@@ -3,6 +3,7 @@
 // from the server target projection; reason codes explain the blocking cause
 // (AC-058-01/09). No v-html anywhere.
 import type { EmergencyTargetDisplay } from '@/features/emergency/model';
+import { workloadKindLabel } from '@/i18n/status-labels';
 
 const props = defineProps<{
   targets: EmergencyTargetDisplay[];
@@ -56,7 +57,7 @@ function annotationAvailabilityLabel(target: EmergencyTargetDisplay): string {
         @change="select(target)"
       />
       <div class="target-body">
-        <strong>{{ target.workloadRef.kind }} {{ target.workloadRef.namespace }}/{{ target.workloadRef.name }}</strong>
+        <strong>{{ workloadKindLabel(target.workloadRef.kind) }} {{ target.workloadRef.namespace }}/{{ target.workloadRef.name }}</strong>
         <span class="target-actions">
           <span>{{ imageAvailabilityLabel(target) }}</span>
           <span :class="{ blocked: !target.replicasAction?.availability.available }">
