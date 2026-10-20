@@ -153,7 +153,9 @@ describe('summarizeOverview', () => {
   // An organization with no clusters is not a failed probe: zero operators online
   // is the truth, so the header may say so.
   it('treats an empty inventory as complete coverage', () => {
-    expect(summarize({ inventory: [] }).operatorCoverage).toBe('complete');
+    // Zero clusters means zero probes, so '0 operators online' would be an unbacked
+    // positive claim; the summary must say unavailable (review of PR #484).
+    expect(summarize({ inventory: [] }).operatorCoverage).toBe('unavailable');
     expect(summarize({ inventory: [], inventoryLoaded: false }).operatorCoverage).toBe('unavailable');
   });
 

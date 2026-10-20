@@ -903,12 +903,14 @@ const zhCN = {
    * the audit query is a cursor-paginated event list with no aggregate, so a "7-day
    * success rate" would have to invent its sample. The card says so instead.
    */
-  'home.overview.unavailable': '接口未提供',
   'home.stat.pendingConvergence': '待收敛发布',
   'home.stat.pendingConvergenceHint': '共 {count} 个发布',
   'home.stat.activeOperations': '进行中操作',
   'home.stat.activeOperationsHint': '{count} 个在下发阶段',
-  'home.stat.successRate': '近 7 天成功率',
+  'home.stat.syncRate': '发布同步率',
+  'home.stat.syncRateValue': '{percent}%',
+  'home.stat.syncRateHint': '{total} 个发布中 {synced} 个与集群一致',
+  'home.stat.syncRateEmpty': '当前没有发布',
   'home.stat.emergency': '紧急变更',
   'home.stat.emergencyHint': '需要显式收敛',
   'home.create.open': '创建操作',

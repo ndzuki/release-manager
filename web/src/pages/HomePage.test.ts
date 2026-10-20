@@ -154,7 +154,9 @@ describe('HomePage workbench', () => {
     expect(tiles.length).toBeGreaterThan(5);
     expect(wrapper.find('[data-testid="home-tile-CustomerList"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="home-tile-Audit"]').exists()).toBe(true);
-    expect(wrapper.get('#home-quicklinks-title').text()).toBe('快速入口');
+    // The tiles live behind a collapsed <details> so the sidebar stays the primary
+    // navigation; the summary is the visible label (review of PR #484).
+    expect(wrapper.get('.home-page__quicklinks summary').text()).toBe('快速入口');
   });
 
   // A tile whose route name is misspelled would render and then explode on click; this
@@ -219,12 +221,32 @@ describe('HomePage stat cards', () => {
    * The one number the page must never invent: there is no cross-release terminal
    * operation query, so the success rate has no sample size to divide by.
    */
-  it('shows the 7-day success rate as unavailable instead of a made-up percentage', async () => {
-    const { wrapper } = await mountHome();
+  /*
+   * The hero row used to spend a slot on a "7-day success rate" the contract cannot
+   * compute; the independent review of PR #484 called the permanent "—" card a broken
+   * hero. It now reports the sync rate of the inventory the page already reads, and stays
+   * honest when that inventory has no rows.
+   */
+  it('reports the inventory sync rate and never invents a percentage', async () => {
+    const { wrapper } = await mountHome({
+      source: {
+        listInventory: async () => [
+          release({ status: 'active' }),
+          release({ status: 'out_of_sync' }),
+          release({ status: 'active', releaseDefinitionId: 'def-2', releaseName: 'search' }),
+        ],
+      },
+    });
 
-    expect(wrapper.get('[data-testid="home-stat-success"] .stat-card__label').text()).toBe('近 7 天成功率');
-    expect(statValue(wrapper, 'home-stat-success')).toBe('—');
-    expect(statHint(wrapper, 'home-stat-success')).toBe('接口未提供');
+    expect(wrapper.get('[data-testid="home-stat-sync"] .stat-card__label').text()).toBe('发布同步率');
+    expect(statValue(wrapper, 'home-stat-sync')).toBe('67%');
+    expect(statHint(wrapper, 'home-stat-sync')).toBe('3 个发布中 2 个与集群一致');
+  });
+
+  it('shows no sync percentage when the inventory read returns nothing', async () => {
+    const { wrapper } = await mountHome();
+    expect(statValue(wrapper, 'home-stat-sync')).toBe('—');
+    expect(statHint(wrapper, 'home-stat-sync')).toBe('当前没有发布');
   });
 
   it('degrades the inventory-backed cards without blanking the page when the read fails', async () => {
@@ -419,6 +441,9 @@ describe('HomePage operation panel', () => {
 
     expect(wrapper.text()).toContain('维护中不可用');
     expect(statValue(wrapper, 'home-stat-pending')).toBe('1');
+    // The queue panel degrades to a status notice, not an assertive alert: nothing here is
+    // a new failure the user must act on (the operator is told to come back later).
+    expect(wrapper.find('.home-page__columns [role="alert"]').exists()).toBe(false);
   });
 
   it('offers a retry with the failure copy when the queue read fails', async () => {

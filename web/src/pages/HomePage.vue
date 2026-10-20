@@ -101,6 +101,25 @@ const emergencyHint = computed(() =>
 );
 
 /*
+ * The hero row must not spend a slot on a metric the contract cannot produce. The first
+ * revision of this page shipped a hardcoded "—/unavailable" success-rate card; the
+ * independent review called that a broken-looking hero. Sync rate is computed from the
+ * release-inventory read the page already performs, so it is real data at no extra cost.
+ */
+const syncedReleases = computed(() => summary.value.clusters.reduce((total, cluster) => total + cluster.synced, 0));
+const syncRateValue = computed(() => {
+  if (!inventoryReady.value) return '—';
+  const total = summary.value.releaseTotal;
+  return total === 0 ? '—' : t('home.stat.syncRateValue', { percent: Math.round((syncedReleases.value / total) * 100) });
+});
+const syncRateHint = computed(() => {
+  if (!inventoryReady.value) return sourceHint(inventoryState.value);
+  return summary.value.releaseTotal === 0
+    ? t('home.stat.syncRateEmpty')
+    : t('home.stat.syncRateHint', { synced: syncedReleases.value, total: summary.value.releaseTotal });
+});
+
+/*
  * The live indicator states its OWN coverage. Only the clusters the health panel
  * renders are probed (ListOperators is cluster-scoped), so a partial probe says
  * "已探测 K/M 个集群" instead of presenting a subset as the organization total.
@@ -247,10 +266,10 @@ const tiles = computed<Tile[]>(() => {
         data-testid="home-stat-operations"
       />
       <StatCard
-        :label="t('home.stat.successRate')"
-        value="—"
-        :hint="t('home.overview.unavailable')"
-        data-testid="home-stat-success"
+        :label="t('home.stat.syncRate')"
+        :value="syncRateValue"
+        :hint="syncRateHint"
+        data-testid="home-stat-sync"
       />
       <StatCard
         :label="t('home.stat.emergency')"
@@ -278,8 +297,11 @@ const tiles = computed<Tile[]>(() => {
       />
     </div>
 
-    <section class="home-page__quicklinks" aria-labelledby="home-quicklinks-title">
-      <h2 id="home-quicklinks-title" class="home-page__quicklinks-title">{{ t('home.quickLinks.title') }}</h2>
+    <!-- The tiles duplicate the sidebar, so they start collapsed. They stay in the DOM
+         because the rail folds into a drawer at <=1024px, where the tiles are the only
+         discovery surface (independent review of PR #484 asked for exactly this). -->
+    <details class="home-page__quicklinks">
+      <summary class="home-page__quicklinks-title">{{ t('home.quickLinks.title') }}</summary>
       <nav class="home-page__tiles" :aria-label="t('home.workbench')">
         <RouterLink
           v-for="tile in tiles"
@@ -292,7 +314,7 @@ const tiles = computed<Tile[]>(() => {
           <span>{{ tile.hint }}</span>
         </RouterLink>
       </nav>
-    </section>
+    </details>
 
     <AppDialog v-if="canCreate" :open="createOpen" :title="t('home.create.title')" @close="createOpen = false">
       <div class="home-page__dialog">

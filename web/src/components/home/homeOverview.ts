@@ -138,11 +138,13 @@ export function summarizeOverview(input: HomeOverviewInput): HomeSummary {
   });
 
   const probedClusters = clusters.filter((cluster) => cluster.onlineOperators !== null).length;
+  // An empty release inventory says nothing about operators: with zero clusters we never
+  // probed one, so the only honest answer is "unavailable". Reporting 'complete' here
+  // rendered a positive claim ("0 operators online") the page had no evidence for
+  // (independent review of PR #484).
   const coverage: OperatorCoverage =
     clusters.length === 0
-      ? input.inventoryLoaded
-        ? 'complete'
-        : 'unavailable'
+      ? 'unavailable'
       : probedClusters === 0
         ? 'unavailable'
         : probedClusters === clusters.length
