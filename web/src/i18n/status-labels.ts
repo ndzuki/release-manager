@@ -25,7 +25,12 @@ export type StatusDomain =
   | 'localUser'
   | 'customer'
   | 'stage'
-  | 'emergencyOperation';
+  | 'emergencyOperation'
+  | 'ackStage'
+  | 'bundle'
+  | 'preflightStage'
+  | 'auditAction'
+  | 'auditResource';
 
 const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
   // internal/store/store.go: OperationStatus
@@ -93,6 +98,71 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     failed: 'status.audit.failed',
     accepted: 'status.audit.accepted',
   },
+  // Audit event action and resource type. The values come from internal/audit writers and
+  // the orchestrator services (grep Action:/ResourceType: internal) plus the filter list in
+  // web/src/stores/audit.ts, so the labelled form must not drift from them: a value the map
+  // does not know falls through to the identifier, which is what the server sent.
+  auditAction: {
+    create: 'status.auditAction.create',
+    update: 'status.auditAction.update',
+    delete: 'status.auditAction.delete',
+    read: 'status.auditAction.read',
+    write: 'status.auditAction.write',
+    query: 'status.auditAction.query',
+    submit: 'status.auditAction.submit',
+    submitted: 'status.auditAction.submitted',
+    close: 'status.auditAction.close',
+    seed: 'status.auditAction.seed',
+    approve: 'status.auditAction.approve',
+    approved: 'status.auditAction.approved',
+    reject: 'status.auditAction.reject',
+    rejected: 'status.auditAction.rejected',
+    discarded: 'status.auditAction.discarded',
+    superseded: 'status.auditAction.superseded',
+    install: 'status.auditAction.install',
+    upgrade: 'status.auditAction.upgrade',
+    rollback: 'status.auditAction.rollback',
+    emergency_change: 'status.auditAction.emergency_change',
+    'cleanup.gc': 'status.auditAction.cleanup.gc',
+    'export.created': 'status.auditAction.export.created',
+    verify_trust: 'status.auditAction.verify_trust',
+    login: 'status.auditAction.login',
+    logout: 'status.auditAction.logout',
+    enrolled: 'status.auditAction.enrolled',
+    'operator.revoked': 'status.auditAction.operator.revoked',
+    'operator.revoked.again': 'status.auditAction.operator.revoked.again',
+    'operator.enrollment_token.created': 'status.auditAction.operator.enrollment_token.created',
+    'operator.enrollment_token.replaced': 'status.auditAction.operator.enrollment_token.replaced',
+    'operator.enrollment_token.revoked': 'status.auditAction.operator.enrollment_token.revoked',
+    'release.emergency.execute': 'status.auditAction.release.emergency.execute',
+    'release.emergency.resolve': 'status.auditAction.release.emergency.resolve',
+    'release.operation.create': 'status.auditAction.release.operation.create',
+    'release.values.approve': 'status.auditAction.release.values.approve',
+    'release.values.create': 'status.auditAction.release.values.create',
+    set_approved_annotation: 'status.auditAction.set_approved_annotation',
+    set_container_image: 'status.auditAction.set_container_image',
+    set_image: 'status.auditAction.set_image',
+    set_replicas: 'status.auditAction.set_replicas',
+  },
+  auditResource: {
+    customer: 'status.auditResource.customer',
+    cluster: 'status.auditResource.cluster',
+    release: 'status.auditResource.release',
+    operation: 'status.auditResource.operation',
+    release_operation: 'status.auditResource.release_operation',
+    release_definition: 'status.auditResource.release_definition',
+    release_bundle: 'status.auditResource.release_bundle',
+    values_revision: 'status.auditResource.values_revision',
+    trust_root: 'status.auditResource.trust_root',
+    audit_export: 'status.auditResource.audit_export',
+    audit_outbox: 'status.auditResource.audit_outbox',
+    organization: 'status.auditResource.organization',
+    operator: 'status.auditResource.operator',
+    enrollment_token: 'status.auditResource.enrollment_token',
+    api_service: 'status.auditResource.api_service',
+    gc_cycle: 'status.auditResource.gc_cycle',
+    migration: 'status.auditResource.migration',
+  },
   // Audit export task status. Only "pending" is confirmed server-side (the export store
   // creates a receipt and never advances it); the others are accepted values with the
   // raw fallback covering anything else.
@@ -140,6 +210,30 @@ const LABELS: Record<StatusDomain, Record<string, MessageKey>> = {
     timeout: 'status.stage.timeout',
     cancelled: 'status.stage.cancelled',
   },
+  // internal/orchestrator/preflight/stage.go: StageName. The stage id is a wire value,
+  // so the panel labels it instead of printing `runtime_pull` to the operator.
+  preflightStage: {
+    artifact: 'status.preflightStage.artifact',
+    render: 'status.preflightStage.render',
+    cluster: 'status.preflightStage.cluster',
+    runtime_pull: 'status.preflightStage.runtime_pull',
+  },
+  // api/proto/common/v1/domain.proto: BundleStatus. The archive restore response returns
+  // the status a bundle was archived FROM (`previous_status`), so this is display copy.
+  bundle: {
+    received: 'status.bundle.received',
+    validated: 'status.bundle.validated',
+    rejected: 'status.bundle.rejected',
+    archived: 'status.bundle.archived',
+    unspecified: 'status.bundle.unspecified',
+  },
+  // TimelineEntry.ack_stage on an ACK entry. The operator reports `persisted` once the
+  // command is fsynced locally; the console shows that as a stage note, never the wire
+  // word itself (unknown values fall back to the neutral label in the component).
+  ackStage: {
+    persisted: 'operation.timeline.ackStage.persisted',
+    unknown: 'operation.timeline.ackStage.unknown',
+  },
 };
 
 /**
@@ -152,4 +246,26 @@ export function statusLabel(domain: StatusDomain, value: string | null | undefin
   if (!value) return '';
   const key = LABELS[domain][value];
   return key ? t(key) : value;
+}
+
+/*
+ * Kubernetes resource kinds are proper nouns and stay English, but the wire value can be
+ * shouted (`DEPLOYMENT`, from a fixture or an older operator). Rendering it through the
+ * canonical casing keeps the emergency target line readable and out of the all-caps
+ * register the copy pass removed. Custom resources fall through unchanged: the console
+ * cannot know their canonical spelling and must not invent one.
+ */
+const WORKLOAD_KIND_LABELS: Record<string, string> = {
+  DEPLOYMENT: 'Deployment',
+  STATEFULSET: 'StatefulSet',
+  DAEMONSET: 'DaemonSet',
+  REPLICASET: 'ReplicaSet',
+  CRONJOB: 'CronJob',
+  JOB: 'Job',
+  POD: 'Pod',
+};
+
+export function workloadKindLabel(kind: string | null | undefined): string {
+  if (!kind) return '';
+  return WORKLOAD_KIND_LABELS[kind.toUpperCase()] ?? kind;
 }

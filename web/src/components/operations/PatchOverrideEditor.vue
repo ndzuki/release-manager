@@ -42,20 +42,20 @@ function removeRow(index: number): void {
     >
       <input
         v-model.trim="override.path"
-        :aria-label="`Patch ${index + 1} path`"
+        :aria-label="t('operation.patch.pathAria', { index: index + 1 })"
         :aria-invalid="props.errorIndex === index"
         placeholder="image.tag"
         @blur="emit('blur')"
       />
-      <select v-model="override.kind" :aria-label="`Patch ${index + 1} kind`">
+      <select v-model="override.kind" :aria-label="t('operation.patch.kindAria', { index: index + 1 })">
         <option value="LITERAL">{{ t('operation.patch.literal') }}</option>
         <option value="SECRET_REF">{{ t('operation.patch.secretRef') }}</option>
       </select>
       <input
         v-model="override.value"
-        :aria-label="`Patch ${index + 1} value`"
+        :aria-label="t('operation.patch.valueAria', { index: index + 1 })"
         :aria-invalid="props.errorIndex === index"
-        :placeholder="override.kind === 'SECRET_REF' ? 'secret-name' : 'value'"
+        :placeholder="override.kind === 'SECRET_REF' ? t('operation.patch.secretPlaceholder') : t('operation.patch.valuePlaceholder')"
         @blur="emit('blur')"
       />
       <button type="button" class="patch-editor__remove" @click="removeRow(index)">{{ t('cluster.rules.remove') }}</button>

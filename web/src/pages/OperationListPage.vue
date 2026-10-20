@@ -222,7 +222,7 @@ onMounted(() => load(false));
     <EmptyState
       v-else-if="showEmpty"
       title="暂无操作记录"
-      :message="statusFilter ? '当前筛选条件下没有操作。' : '该 ReleaseDefinition 还没有执行过操作。'"
+      :message="statusFilter ? '当前筛选条件下没有操作。' : '该发布定义还没有执行过操作。'"
     />
     <template v-else>
       <!-- A refresh failure keeps the loaded page and reports inline (UX-010). -->
@@ -241,14 +241,14 @@ onMounted(() => load(false));
           <tr>
             <th scope="col">类型</th>
             <th scope="col">状态</th>
-            <th scope="col">目标 Revision</th>
+            <th scope="col">目标版本</th>
             <th scope="col">创建时间</th>
-            <th scope="col">Operation</th>
+            <th scope="col">操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="row in rows" :key="row.operationId" :data-testid="`operation-row-${row.operationId}`">
-            <td>{{ row.operationType }}</td>
+            <td>{{ statusLabel('operationType', row.operationType) }}</td>
             <td>
               <span class="operation-list__state" :class="`operation-list__state--${row.state}`">
                 {{ statusLabel('operation', row.state) }}

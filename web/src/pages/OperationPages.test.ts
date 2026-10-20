@@ -137,23 +137,23 @@ describe('operation pages', () => {
     const { wrapper } = await mountCreatePage(optionsClients());
 
     expect(wrapper.text()).toContain('制品 Bundle');
-    expect(wrapper.text()).not.toContain('当前 Revision');
+    expect(wrapper.text()).not.toContain('当前版本');
     expect(wrapper.text()).not.toContain('回退目标 Operation');
 
     // TASK-394: the operation type is a segmented button group, not a set of radios.
     await wrapper.find('[data-testid="operation-type-UPGRADE"]').trigger('click');
-    expect(wrapper.text()).toContain('当前 Revision');
+    expect(wrapper.text()).toContain('当前版本');
 
     await wrapper.find('[data-testid="operation-type-ROLLBACK"]').trigger('click');
     // TASK-153 / AC-056-08: ROLLBACK collects a target revision instead of a bundle and a
     // values revision, and it renders no patch editor.
-    expect(wrapper.text()).toContain('当前 Revision');
-    expect(wrapper.text()).toContain('回滚目标 Revision');
+    expect(wrapper.text()).toContain('当前版本');
+    expect(wrapper.text()).toContain('回滚目标版本');
     expect(wrapper.text()).not.toContain('制品 Bundle');
-    expect(wrapper.text()).not.toContain('已审批 ValuesRevision');
-    // The always-visible confirmation panel still summarises a rollback as "Patch 覆盖: 无";
+    expect(wrapper.text()).not.toContain('已审批的 Values 版本');
+    // The always-visible confirmation panel still summarises a rollback as "补丁覆盖: 无";
     // what must be absent is the patch EDITOR, so scope the assertion to the form.
-    expect(wrapper.get('form').text()).not.toContain('Patch 覆盖');
+    expect(wrapper.get('form').text()).not.toContain('补丁覆盖');
     expect(wrapper.find('.patch-editor').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('回退目标 Operation');
   });
@@ -181,14 +181,14 @@ describe('operation pages', () => {
 
     expect(step('操作类型')?.classes()).toContain('steps__item--done');
     expect(step('制品与配置')?.classes()).toContain('steps__item--now');
-    expect(step('Patch 覆盖')?.classes()).toContain('steps__item--todo');
+    expect(step('补丁覆盖')?.classes()).toContain('steps__item--todo');
     expect(step('确认')?.classes()).toContain('steps__item--todo');
 
     await fillBundleAndValues(wrapper);
 
     expect(step('操作类型')?.classes()).toContain('steps__item--done');
     expect(step('制品与配置')?.classes()).toContain('steps__item--done');
-    expect(step('Patch 覆盖')?.classes()).toContain('steps__item--done');
+    expect(step('补丁覆盖')?.classes()).toContain('steps__item--done');
     expect(step('确认')?.classes()).toContain('steps__item--now');
   });
 
@@ -208,16 +208,16 @@ describe('operation pages', () => {
   it('marks a non-bundle image patch on the invalid row', async () => {
     const { wrapper } = await mountCreatePage(optionsClients());
     await fillBundleAndValues(wrapper);
-    await wrapper.findAll('button').find((button) => button.text() === '添加 Patch')?.trigger('click');
-    await wrapper.find('input[aria-label="Patch 1 path"]').setValue('sidecar.image.tag');
-    await wrapper.find('input[aria-label="Patch 1 value"]').setValue('v2');
+    await wrapper.findAll('button').find((button) => button.text() === '添加补丁')?.trigger('click');
+    await wrapper.find('input[aria-label="补丁 1 路径"]').setValue('sidecar.image.tag');
+    await wrapper.find('input[aria-label="补丁 1 值"]').setValue('v2');
 
     await wrapper.find('form').trigger('submit');
 
     const invalidRow = wrapper.find('.patch-editor__row--error');
     expect(invalidRow.exists()).toBe(true);
     expect(invalidRow.text()).toContain('Patch 引用了 Bundle 外镜像');
-    expect(invalidRow.find('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('true');
+    expect(invalidRow.find('input[aria-label="补丁 1 路径"]').attributes('aria-invalid')).toBe('true');
   });
 
   it('keeps confirmation disabled until the form is checked, and cancel preserves the form', async () => {
@@ -250,7 +250,7 @@ describe('operation pages', () => {
     const confirm = () => wrapper.findAll('button').find((button) => button.text() === '确认创建');
     expect(confirm()?.attributes('disabled')).toBeUndefined();
 
-    await wrapper.findAll('button').find((button) => button.text() === '添加 Patch')?.trigger('click');
+    await wrapper.findAll('button').find((button) => button.text() === '添加补丁')?.trigger('click');
 
     expect(confirm()?.attributes('disabled')).toBeDefined();
     expect(clients.operations.createOperation).not.toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe('operation pages', () => {
     const wrapper = mount(OperationCreatePage, { global: { plugins: [createPinia(), router] } });
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('没有可创建操作的选项'));
-    expect(wrapper.text()).toContain('validated Bundle');
+    expect(wrapper.text()).toContain('已验证的 Bundle');
   });
 
   it('locks confirmation and links to the active operation on release_busy', async () => {

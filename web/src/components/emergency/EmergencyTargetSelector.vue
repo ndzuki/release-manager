@@ -3,6 +3,7 @@
 // from the server target projection; reason codes explain the blocking cause
 // (AC-058-01/09). No v-html anywhere.
 import type { EmergencyTargetDisplay } from '@/features/emergency/model';
+import { workloadKindLabel } from '@/i18n/status-labels';
 
 const props = defineProps<{
   targets: EmergencyTargetDisplay[];
@@ -25,7 +26,7 @@ function imageAvailabilityLabel(target: EmergencyTargetDisplay): string {
 function replicasAvailabilityLabel(target: EmergencyTargetDisplay): string {
   const action = target.replicasAction;
   if (!action) return '副本不可用';
-  if (action.availability.reasonCode === 'hpa_managed') return '副本由 HPA 管理';
+  if (action.availability.reasonCode === 'hpa_managed') return '副本数由自动扩缩容管理';
   if (!action.availability.available) return '副本不可用';
   return '副本可变更';
 }
@@ -42,7 +43,7 @@ function annotationAvailabilityLabel(target: EmergencyTargetDisplay): string {
   <div class="target-selector" role="radiogroup" aria-label="选择变更目标">
     <p v-if="loading" class="hint">正在加载候选目标…</p>
     <p v-else-if="error" class="hint error-text">{{ error }}</p>
-    <p v-else-if="targets.length === 0" class="hint">该发布定义没有可变更的 workload</p>
+    <p v-else-if="targets.length === 0" class="hint">该发布定义没有可变更的工作负载</p>
     <label
       v-for="target in targets"
       :key="target.workloadRef.uid"
@@ -56,7 +57,7 @@ function annotationAvailabilityLabel(target: EmergencyTargetDisplay): string {
         @change="select(target)"
       />
       <div class="target-body">
-        <strong>{{ target.workloadRef.kind }} {{ target.workloadRef.namespace }}/{{ target.workloadRef.name }}</strong>
+        <strong>{{ workloadKindLabel(target.workloadRef.kind) }} {{ target.workloadRef.namespace }}/{{ target.workloadRef.name }}</strong>
         <span class="target-actions">
           <span>{{ imageAvailabilityLabel(target) }}</span>
           <span :class="{ blocked: !target.replicasAction?.availability.available }">

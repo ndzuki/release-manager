@@ -36,7 +36,7 @@ function formatDecidedAt(value?: string): string {
   <section class="revision-actions" aria-labelledby="revision-actions-title">
     <div>
       <p class="section-label">{{ t('values.revision.workflow') }}</p>
-      <h2 id="revision-actions-title">{{ revision ? `Revision ${revision.revision}` : t('values.revision.new') }}</h2>
+      <h2 id="revision-actions-title">{{ revision ? `版本 ${revision.revision}` : t('values.revision.new') }}</h2>
       <p v-if="revision" class="status-line">
         <span :class="['status', `status--${revision.status}`]">{{ statusLabel }}</span>
         <code>{{ revision.valuesDigest }}</code>
@@ -44,7 +44,7 @@ function formatDecidedAt(value?: string): string {
       <p v-if="revision?.status === 'rejected' && revision.decidedAt" class="rejection">
         {{ t('values.revision.rejectTime') }} {{ formatDecidedAt(revision.decidedAt) }}
       </p>
-      <p v-if="selfApproval && revision?.status === 'pending_approval'" class="hint">不可审批自己创建的 Revision。</p>
+      <p v-if="selfApproval && revision?.status === 'pending_approval'" class="hint">不可审批自己创建的版本。</p>
     </div>
 
     <div class="revision-actions__buttons">
@@ -52,7 +52,7 @@ function formatDecidedAt(value?: string): string {
            creates one (stores/valuesEditor.ts save() → createValuesRevision with
            the parent anchor). Gating it on `revision.status === 'draft'` left the
            editor with no way to save at all — the page renders "创建首个配置
-           Revision。" and a convergence session prepared from a pending task starts
+           版本。" and a convergence session prepared from a pending task starts
            with no draft, so the cross-actor approval flow was unreachable from the
            UI (found by actually running web/e2e/emergency-smoke.spec.ts). -->
       <button
@@ -62,14 +62,14 @@ function formatDecidedAt(value?: string): string {
         :disabled="saveDisabled"
         @click="emit('save')"
       >
-        {{ saving ? '保存中…' : '保存 Draft' }}
+        {{ saving ? '保存中…' : '保存草稿' }}
       </button>
       <button
         v-if="!readOnly && revision?.status === 'draft'"
         type="button"
         class="primary"
         :disabled="approving || submitDisabled"
-        :title="submitDisabled ? '请先保存 Draft：提交的是已保存的 Revision' : undefined"
+        :title="submitDisabled ? '请先保存草稿：提交的是已保存的版本' : undefined"
         @click="emit('submit')"
       >
         {{ approving ? t('values.revision.submitting') : t('values.revision.submit') }}

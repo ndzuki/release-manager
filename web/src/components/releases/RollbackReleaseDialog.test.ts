@@ -65,7 +65,7 @@ describe('RollbackReleaseDialog', () => {
     await fill(wrapper, String(CURRENT), 'because');
     await wrapper.get('form').trigger('submit');
     await flushPromises();
-    expect(wrapper.get('[data-testid="rollback-validation"]').text()).toContain('必须小于当前 Revision');
+    expect(wrapper.get('[data-testid="rollback-validation"]').text()).toContain('必须小于当前版本');
 
     expect(mockedRollback).not.toHaveBeenCalled();
   });

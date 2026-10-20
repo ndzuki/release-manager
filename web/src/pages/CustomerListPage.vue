@@ -95,7 +95,7 @@ onMounted(() => store.loadList(true));
   border-radius: var(--r);
   background: var(--sf);
 }
-.status { font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
+.status { font-size: var(--font-size-xs); font-weight: 700; letter-spacing: 0.02em; }
 .status--active { color: var(--color-success-ink); }
 .status--disabled { color: var(--color-error-strong); }
 /* Unreadable is neither success nor failure. */

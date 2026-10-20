@@ -193,7 +193,7 @@ describe('AuditPage', () => {
     const selector = wrapper.get<HTMLSelectElement>('select[name="organization"]');
     const values = Array.from(selector.element.options).map((option) => option.value);
     expect(values).toEqual(['', 'org-1', 'org-2', 'system']);
-    expect(selector.text()).toContain('系统事件（system）');
+    expect(selector.text()).toContain('系统事件');
   });
 
   it('queries the system scope when platform_admin selects it', async () => {

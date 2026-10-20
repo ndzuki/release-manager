@@ -108,7 +108,7 @@ describe('ReleaseInventoryTable narrow-screen structure (W15)', () => {
     // Release/status/Chart/Revision/digest/sync/actions one. Chart and the last sync time
     // moved into the row's context line, so they no longer carry a data-label.
     const labels = wrapper.findAll('td[data-label]').map((cell) => cell.attributes('data-label'));
-    expect(labels).toEqual(['集群', '当前 revision', '库存状态', 'Values 摘要', '操作']);
+    expect(labels).toEqual(['集群', '当前版本', '库存状态', '配置摘要', '操作']);
   });
 
   it('labels the emergency column when the capability renders it', () => {
@@ -119,6 +119,6 @@ describe('ReleaseInventoryTable narrow-screen structure (W15)', () => {
 
     expect(wrapper.findAll('th[role="columnheader"]')).toHaveLength(7);
     const labels = wrapper.findAll('td[data-label]').map((cell) => cell.attributes('data-label'));
-    expect(labels).toEqual(['集群', '当前 revision', '库存状态', '紧急变更', 'Values 摘要', '操作']);
+    expect(labels).toEqual(['集群', '当前版本', '库存状态', '紧急变更', '配置摘要', '操作']);
   });
 });

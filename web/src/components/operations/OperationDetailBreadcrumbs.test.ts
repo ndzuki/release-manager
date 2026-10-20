@@ -46,7 +46,7 @@ describe('OperationDetailBreadcrumbs', () => {
 
     const nav = wrapper.get('nav.operation-detail__breadcrumbs');
     expect(nav.attributes('aria-label')).toBe(t('values.page.breadcrumb'));
-    expect(wrapper.get('a[href="/customers/cust-1/clusters/cluster-1/releases"]').text()).toBe('Releases');
+    expect(wrapper.get('a[href="/customers/cust-1/clusters/cluster-1/releases"]').text()).toBe('发布清单');
     expect(
       wrapper.get('a[href="/customers/cust-1/clusters/cluster-1/releases/def-1/operations"]').text(),
     ).toBe('操作历史');
@@ -63,7 +63,7 @@ describe('OperationDetailBreadcrumbs', () => {
     const nav = wrapper.get('nav.operation-detail__breadcrumbs');
     expect(wrapper.get('a[href="/operations"]').text()).toBe(t('operationCenter.title'));
     // The release-scoped links are absent, not broken.
-    expect(nav.text()).not.toContain('Releases');
+    expect(nav.text()).not.toContain('发布清单');
     expect(wrapper.find('a[href^="/customers/"]').exists()).toBe(false);
   });
 });

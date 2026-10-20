@@ -80,9 +80,9 @@ describe('DefinitionEditorDialog', () => {
       expect(label?.textContent?.trim()).not.toBe('');
     }
     expect(document.querySelectorAll('.definitions__mappings label[for$="-0-kind"]')[0]?.textContent?.trim())
-      .toBe('Workload 类型（第 1 行）');
+      .toBe('工作负载类型（第 1 行）');
     expect(document.querySelectorAll('.definitions__mappings label[for$="-1-kind"]')[0]?.textContent?.trim())
-      .toBe('Workload 类型（第 2 行）');
+      .toBe('工作负载类型（第 2 行）');
   });
 
   it('edits the draft it was handed in place (the page owns it)', async () => {

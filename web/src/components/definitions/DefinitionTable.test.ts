@@ -63,7 +63,7 @@ describe('DefinitionTable', () => {
       'Chart 名称',
       '状态',
       '版本',
-      'Promotion Mapping（提升映射）',
+      '提升映射',
       '操作',
     ]);
 

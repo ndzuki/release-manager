@@ -134,8 +134,8 @@ function continueToRevision(): void {
     <LoadingState v-if="gate === 'loading'" message="正在加载收敛任务…" />
     <ForbiddenState
       v-else-if="gate === 'forbidden'"
-      title="403"
-      message="你没有创建 ValuesRevision 收敛的权限（canCreateValuesRevision）。"
+      title="无权操作"
+      message="你没有创建收敛任务的权限。"
     />
     <div v-else class="convergence-body">
       <!-- UX-035 (W15): while selection.load is running the page used to render the

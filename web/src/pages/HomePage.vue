@@ -213,14 +213,14 @@ const tiles = computed<Tile[]>(() => {
   ];
   if (operationsEnabled) {
     list.push({ name: 'OperationCenter', label: t('operationCenter.title'), hint: t('operationCenter.hint') });
-    list.push({ name: 'Definitions', label: '发布定义', hint: 'Promotion Mapping 与定义设置' });
+    list.push({ name: 'Definitions', label: '发布定义', hint: '提升映射与发布定义设置' });
     if (auth.canReadBundles) {
       list.push({ name: 'Bundles', label: '发布 Bundle', hint: '内容摘要、镜像绑定与证据引用' });
     }
-    list.push({ name: 'StuckLocks', label: '紧急锁', hint: '效果未知且已过观察窗口的紧急操作' });
+    list.push({ name: 'StuckLocks', label: '紧急锁', hint: '效果未知且已过观察窗口的紧急变更' });
   }
   if (auth.canRunCleanup) {
-    list.push({ name: 'ArtifactLifecycle', label: '制品生命周期', hint: '保留期 GC 与归档恢复' });
+    list.push({ name: 'ArtifactLifecycle', label: '制品生命周期', hint: '保留期清理与归档恢复' });
   }
   list.push({ name: 'TrustPolicy', label: '信任根', hint: '签名信任策略与轮换' });
   if (auth.canReadBindings) {

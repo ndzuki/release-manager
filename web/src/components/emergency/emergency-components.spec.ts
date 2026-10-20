@@ -51,8 +51,8 @@ describe('emergency components (Step 4)', () => {
     const wrapper = mount(EmergencyTargetSelector, {
       props: { targets: [target()], selectedUid: null, loading: false, error: null },
     });
-    expect(wrapper.text()).toContain('DEPLOYMENT ns1/api');
-    expect(wrapper.text()).toContain('副本由 HPA 管理');
+    expect(wrapper.text()).toContain('Deployment ns1/api');
+    expect(wrapper.text()).toContain('副本数由自动扩缩容管理');
     await wrapper.find('input[type="radio"]').setValue();
     expect(wrapper.emitted('select')).toEqual([['u1']]);
   });
@@ -91,7 +91,7 @@ describe('emergency components (Step 4)', () => {
       },
     });
     expect(wrapper.text()).toContain('请先选择容器');
-    expect(wrapper.text()).not.toContain('没有可用的 VERIFIED 候选制品');
+    expect(wrapper.text()).not.toContain('没有可用的已验证候选制品');
 
     // Once a container is chosen and the server really returns nothing, the honest
     // message is back.
@@ -105,7 +105,7 @@ describe('emergency components (Step 4)', () => {
         error: null,
       },
     });
-    expect(empty.text()).toContain('没有可用的 VERIFIED 候选制品');
+    expect(empty.text()).toContain('没有可用的已验证候选制品');
   });
 
   // TASK-331: the read model carries each container's observed image
@@ -149,7 +149,7 @@ describe('emergency components (Step 4)', () => {
     });
     const requireRadio = wrapper.find('input[value="REQUIRE_PROMOTION"]');
     expect((requireRadio.element as HTMLInputElement).disabled).toBe(true);
-    expect(wrapper.text()).toContain('已固定为 REVERT');
+    expect(wrapper.text()).toContain('已固定为「下次对账时回退」');
     const revertRadio = wrapper.find('input[value="REVERT_ON_NEXT_RECONCILE"]');
     expect((revertRadio.element as HTMLInputElement).checked).toBe(true);
   });
@@ -319,12 +319,12 @@ describe('emergency components (Step 4)', () => {
         currentReplicas: 2,
         max: 8,
         available: false,
-        unavailableReason: '副本数由 HPA 管理，不可修改。',
+        unavailableReason: '副本数由自动扩缩容管理，不可修改。',
         error: null,
       },
     });
     expect(wrapper.find('input[type="number"]').exists()).toBe(false);
-    expect(wrapper.text()).toContain('副本数由 HPA 管理');
+    expect(wrapper.text()).toContain('副本数由自动扩缩容管理');
   });
 
   // TASK-273/TASK-274: one action per request. The selector keeps an unavailable
@@ -337,7 +337,7 @@ describe('emergency components (Step 4)', () => {
 
     const replicas = wrapper.get('input[value="replicas"]');
     expect((replicas.element as HTMLInputElement).disabled).toBe(true);
-    expect(wrapper.text()).toContain('副本数由 HPA 管理');
+    expect(wrapper.text()).toContain('副本数由自动扩缩容管理');
     const annotations = wrapper.get('input[value="annotations"]');
     expect((annotations.element as HTMLInputElement).disabled).toBe(true);
     // base carries reasonCode 'not_observed'

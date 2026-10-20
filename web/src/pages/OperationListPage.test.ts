@@ -186,7 +186,7 @@ describe('OperationListPage header (TASK-394)', () => {
     });
 
     expect(wrapper.get('h1').text()).toBe('操作历史');
-    expect(wrapper.get('.page-header__eyebrow').text()).toBe('Release 操作');
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('发布操作');
     expect(wrapper.get('.page-header__subtitle').text()).toBe('team/app');
     // The release definition id left the header entirely; the name identifies the release.
     expect(wrapper.get('.page-header').text()).not.toContain(RELEASE);

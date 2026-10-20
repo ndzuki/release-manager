@@ -40,11 +40,11 @@ describe('OperationDetailSummary', () => {
     const wrapper = mount(OperationDetailSummary, { props: { operation: operation() } });
 
     const text = wrapper.text();
-    expect(text).toContain('ReleaseDefinition');
+    expect(text).toContain('发布定义');
     expect(text).toContain('def-1');
-    expect(text).toContain('StateVersion');
+    expect(text).toContain('状态版本');
     expect(text).toContain('7');
-    expect(text).toContain('TargetRevision');
+    expect(text).toContain('目标版本');
     expect(text).toContain('3');
   });
 

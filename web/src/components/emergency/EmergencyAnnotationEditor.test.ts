@@ -40,9 +40,9 @@ describe('EmergencyAnnotationEditor a11y wiring', () => {
     // Ids are unique across the two rows…
     expect(new Set(controls.map((control) => control.attributes('id'))).size).toBe(4);
     // …so the two rows' key selectors are distinguishable by their labels.
-    expect(wrapper.get('label[for$="-local-1-key"]').text()).toBe('Key（白名单）（第 1 行）');
+    expect(wrapper.get('label[for$="-local-1-key"]').text()).toBe('注解键（白名单）（第 1 行）');
     expect(wrapper.get('label[for$="-local-1-value"]').text()).toBe('值（第 1 行）');
-    expect(wrapper.get('label[for$="-local-2-key"]').text()).toBe('Key（白名单）（第 2 行）');
+    expect(wrapper.get('label[for$="-local-2-key"]').text()).toBe('注解键（白名单）（第 2 行）');
   });
 
   /*
@@ -149,7 +149,7 @@ describe('EmergencyAnnotationEditor local row ids (TASK-272)', () => {
     expect(new Set(domIds).size).toBe(6);
     // The appended row rendered under the id it was given: its labels name the
     // third row's columns, so the label/for pair really points at that row.
-    expect(wrapper.get(`label[for$="-${appended[0]}-key"]`).text()).toBe('Key（白名单）（第 3 行）');
+    expect(wrapper.get(`label[for$="-${appended[0]}-key"]`).text()).toBe('注解键（白名单）（第 3 行）');
     expect(wrapper.get(`label[for$="-${appended[0]}-value"]`).text()).toBe('值（第 3 行）');
   });
 

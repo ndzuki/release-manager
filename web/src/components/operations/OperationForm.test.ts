@@ -116,12 +116,12 @@ describe('OperationForm approved ValuesRevision selector', () => {
 
     const select = wrapper.get<HTMLSelectElement>('[data-testid="operation-values-revision"]');
     expect(select.element.disabled).toBe(true);
-    expect(wrapper.text()).toContain('还没有已审批的 ValuesRevision');
+    expect(wrapper.text()).toContain('还没有已审批的 Values 版本');
 
     // The status element is the control's describedby target, not a detached hint.
     const describedBy = select.attributes('aria-describedby');
     expect(describedBy).toBeTruthy();
-    expect(wrapper.get(`#${describedBy}`).text()).toContain('还没有已审批的 ValuesRevision');
+    expect(wrapper.get(`#${describedBy}`).text()).toContain('还没有已审批的 Values 版本');
   });
 
   it('reports a failed revision load as an alert instead of an empty selector', async () => {
@@ -208,7 +208,7 @@ describe('OperationForm field errors are described, not named', () => {
 
     await wrapper.get('form').trigger('submit');
 
-    expectErrorDescribesNotNames(wrapper, '当前 Revision', '无法确定当前 Revision');
+    expectErrorDescribesNotNames(wrapper, '当前版本', '无法确定当前 Revision');
   });
 
   it('describes the target-revision control with its alert', async () => {
@@ -217,7 +217,7 @@ describe('OperationForm field errors are described, not named', () => {
 
     await wrapper.get('form').trigger('submit');
 
-    expectErrorDescribesNotNames(wrapper, '回滚目标 Revision', '请填写回滚目标 Revision');
+    expectErrorDescribesNotNames(wrapper, '回滚目标版本', '请填写回滚目标 Revision');
   });
 });
 
@@ -272,10 +272,10 @@ describe('OperationForm validates on blur and focuses the first error (W12)', ()
     store.fields.patch.push({ path: 'not a path', value: 'v2', kind: 'LITERAL' });
     await flushPromises();
 
-    await wrapper.get('input[aria-label="Patch 1 path"]').trigger('blur');
+    await wrapper.get('input[aria-label="补丁 1 路径"]').trigger('blur');
 
     expect(wrapper.get('.patch-editor__row-error').text()).toBe('Patch 路径格式错误');
-    expect(wrapper.get('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('true');
+    expect(wrapper.get('input[aria-label="补丁 1 路径"]').attributes('aria-invalid')).toBe('true');
     wrapper.unmount();
   });
 

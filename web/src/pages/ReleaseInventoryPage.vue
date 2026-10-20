@@ -44,7 +44,7 @@ const crumbs = computed(() => [
   { label: clusterName.value },
   { label: t('release.inventory.breadcrumb') },
 ]);
-const subtitle = computed(() => `展示 operator 最近同步的 Helm Release；共 ${inventory.totalCount} 条。`);
+const subtitle = computed(() => `展示 Operator 最近同步的 Helm Release；共 ${inventory.totalCount} 条。`);
 
 const canSync = computed(() => auth.user?.roles.some((role) => ['platform_admin', 'release_admin', 'deployer'].includes(role)) === true);
 const operationsEnabled = import.meta.env.VITE_ENABLE_RELEASE_OPERATIONS !== 'false';
@@ -179,7 +179,7 @@ function handleSearchInput(event: Event): void {
       </label>
       <label class="filters__field filters__search">
         搜索 Release
-        <input :value="inventory.nameSearch" maxlength="253" placeholder="按 release name 搜索" @input="handleSearchInput" />
+        <input :value="inventory.nameSearch" maxlength="253" placeholder="按 Release 名称搜索" @input="handleSearchInput" />
       </label>
     </div>
 
@@ -204,7 +204,7 @@ function handleSearchInput(event: Event): void {
       <EmptyState
         v-if="inventory.isEmpty"
         title="暂无 Release"
-        message="operator 同步后将自动出现"
+        message="Operator 同步后将自动出现"
         action-label="刷新"
         @action="inventory.refresh()"
       />

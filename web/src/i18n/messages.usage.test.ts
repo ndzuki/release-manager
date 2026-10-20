@@ -180,7 +180,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/TimelineEntryItem.vue',
-    allowed: ['： / 就绪', '状态转换', '已确认', '发布进度', '错误', '未知事件', '未知状态', '发布出错', '未知'],
+    allowed: ['： / 就绪', '发布出错', '状态转换', '已确认', '发布进度', '错误', '未知事件'],
     reason:
       'the fragments around the workload/ready interpolations (colon, slash and the 就绪 unit) plus the timeline event-kind labels; TASK-394 moved the identity copy to CopyableHash, so the three 复制 literals are gone',
   },
@@ -206,64 +206,28 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/emergency/EmergencyResultPanel.vue',
-    allowed: [
-      '受理状态',
-      '紧急变更结果',
-      'image ${values.container} → ${values.imageReference}',
-      'replicas → ${values.replicas}',
-      'annotations ${values.annotations.map((entry) =>',
-      '尚未开始影响集群',
-      '集群效果未知，继续观察并保留目标锁',
-      '目标字段已写入集群',
-      '未生效，不创建收敛任务',
-      '已受理（执行异步进行）',
-      '未受理',
-    ],
+    allowed: ['受理状态', '紧急变更结果', '已受理（执行异步进行）', '未受理', '镜像 ${values.container} → ${values.imageReference}', '副本数 → ${values.replicas}', '注解 ${values.annotations.map((entry) =>', '尚未开始影响集群', '集群效果未知，继续观察并保留目标锁', '目标字段已写入集群', '未生效，不创建收敛任务'],
     reason:
       'Chinese labels plus evidence strings assembled at runtime from the diff payload (no static scan can follow those)',
   },
   {
     file: 'src/pages/EmergencyChangePage.vue',
-    allowed: [
-      '选择变更目标',
-      '选择容器与制品',
-      '镜像变更暂不可用：平台尚未采集到该工作负载的容器信息，因此无法选择容器与制品。',
-      '填写变更信息',
-      '确认变更',
-      '正在加载授权与目标…',
-      '403',
-      '你没有执行紧急变更的权限（release.emergency.execute）。',
-      '404',
-      '紧急变更不可用：功能已关闭或发布定义不存在。',
-    ],
+    allowed: ['选择变更目标', '选择容器与制品', '镜像变更暂不可用：平台尚未采集到该工作负载的容器信息，因此无法选择容器与制品。', '填写变更信息', '确认变更', '正在加载授权与目标…', '无权操作', '你没有执行紧急变更的权限。', '不可用', '紧急变更不可用：功能已关闭或发布定义不存在。'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/pages/ConvergenceTasksPage.vue',
-    allowed: [
-      '选择不兼容：',
-      '已选择 个任务',
-      '正在加载收敛任务…',
-      '403',
-      '你没有创建 ValuesRevision 收敛的权限（canCreateValuesRevision）。',
-      '准备中…',
-    ],
+    allowed: ['选择不兼容：', '已选择 个任务', '正在加载收敛任务…', '无权操作', '你没有创建收敛任务的权限。', '正在加载收敛任务…', '准备中…'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/components/values/RejectRevisionDialog.vue',
-    allowed: ['拒绝原因（可选）', '取消', '拒绝 ValuesRevision', '说明需要修改的内容', '拒绝原因过长 (上限 1000 字符)', '提交中…', '确认拒绝'],
+    allowed: ['拒绝原因（可选）', '取消', '拒绝 Values 版本', '说明需要修改的内容', '提交中…', '确认拒绝', '拒绝原因过长（上限 1000 字符）'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/components/values/ValuesConflictDialog.vue',
-    allowed: [
-      '稍后处理',
-      'Revision 已被更新',
-      '请重新基于最新 approved revision 计算 diff。当前编辑内容会保留，不会覆盖本地 draft。',
-      '重新加载最新 Revision',
-      '重新加载中…',
-    ],
+    allowed: ['稍后处理', '版本已被更新', '请基于最新已批准的版本重新计算差异。当前编辑内容会保留，不会覆盖本地草稿。', '重新加载中…', '重新加载最新版本'],
     reason: 'Chinese copy already in the target locale; centralising it is the separate Chinese-wave pass',
   },
   {
@@ -291,7 +255,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/values/SecretRefEditor.vue',
-    allowed: ['SecretRef', '添加 SecretRef', '仅保存 namespace 内 Secret 的 name、key 与目标 path，不读取或传输 value。', '尚未配置 SecretRef。', '请选择 Secret 名称', '请选择 Key', '移除', '选择 name/key 后自动生成'],
+    allowed: ['添加 Secret 引用', '只保存命名空间内 Secret 的名称、键与目标路径，不读取或传输其值。', '尚未配置 Secret 引用。', 'Secret 引用', '请选择 Secret 名称', '请选择键', '移除', '选择名称与键后自动生成'],
     reason: 'SecretRef is the domain noun used as the row heading (CONTEXT/GLOSSARY)',
   },
   {
@@ -301,7 +265,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/values/ValuesDiffPanel.vue',
-    allowed: ['无 canonical 变化。格式、注释与 key 顺序差异不会产生无意义 diff。'],
+    allowed: ['无规范化内容变化。格式、注释与键顺序差异不会产生无意义的差异。'],
     reason:
       'values diff panel converged to Chinese (wave 6); TASK-394 moved its heading and the zero-change label into the catalog and composes the count from the existing `values.diff.changes` unit, so the allowlisted empty-state sentence is the only inline copy left',
   },
@@ -312,18 +276,18 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/values/ValuesRevisionActions.vue',
-    allowed: ['不可审批自己创建的 Revision。', '保存 Draft', '请先保存 Draft：提交的是已保存的 Revision', '保存中…', '丢弃中…', '审批中…'],
+    allowed: ['不可审批自己创建的版本。', '版本 ${revision.revision}', '保存中…', '保存草稿', '丢弃中…', '审批中…', '请先保存草稿：提交的是已保存的版本'],
     reason: 'revision workflow converged to Chinese (wave 6)',
   },
   {
     file: 'src/pages/ValuesEditorPage.vue',
-    allowed: ['YAML', 'JSON', '${releaseName.value} Values', '编辑 canonical values，通过 SecretRef 引用集群 Secret。', '创建首个配置 Revision。', '当前角色为只读。服务端仍会独立执行授权。', '重试', '确认丢弃当前 Draft？绑定的 个收敛任务将被解绑。', '取消', '确认丢弃', 'ValuesRevision 加载失败', '确认丢弃 Draft'],
+    allowed: ['YAML', 'JSON', '创建首个配置版本。', '当前角色为只读。', '重试', '确认丢弃当前草稿？绑定的 个收敛任务将被解绑。', '取消', '确认丢弃', '编辑规范化 Values 内容，通过 Secret 引用读取集群 Secret。', 'Values 版本加载失败', '重试', '确认丢弃草稿', '${releaseName.value} Values'],
     reason:
       'editor language identifiers, the page-heading template (a release NAME plus the `Values` surface noun) and Chinese copy already in the target locale; TASK-394 moved the header, subtitle and save entry onto PageHeader, which is why the old inline subtitle literal left this allowlist',
   },
   {
     file: 'src/pages/DefinitionsPage.vue',
-    allowed: ['发布定义', '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 ValuesRevision。', '客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的 Promotion Mapping 无法解析（契约违反）： 。这些行已禁用编辑，避免把损坏数据写回。', '操作未成功', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '刷新中…', '刷新', '刷新列表'],
+    allowed: ['客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的提升映射无法解析（数据异常）： 。这些行已禁用编辑，避免把损坏数据写回。', '发布定义', '操作未成功', '刷新列表', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '刷新中…', '刷新', '每个定义把 Bundle 来源与客户、集群、命名空间与 Release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 Values 版本。'],
     reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281). TASK-318 registered `刷新列表` (a rendered action-label with no capital and no space). TASK-363 carved the list and the three dialogs into components and the editor/create/disable state into composables, so their literals moved with them; nothing new was written',
   },
   {
@@ -419,18 +383,18 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ArtifactLifecyclePage.vue',
-    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；仅 platform_admin 可用，维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 清理', '同步', '执行，服务端预算可达约 1 小时，所以页面会一直等待结果。', '保留窗口内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求， 点「执行 GC」才会发起新的清理。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有从', 'validated', '归档的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 重复恢复是安全的：再次成功且不改数据；结果显示的「归档前状态」是归档时的原始状态。', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC', '请先确认已了解清理不可撤销', '执行中…（最长约 1 小时）', '提交中…', '恢复', '重试'],
+    allowed: ['执行保留期清理', '不可撤销', '：清理会删除超出保留期的 Bundle、候选制品与预检记录，计数是', '行数', '而非释放的字节。 清理', '同步', '执行，最长可能需要约 1 小时，页面会一直等待结果。', '保留期内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求， 点「执行清理」才会发起新的清理。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 Bundle', '删除候选制品', '删除预检记录', '跳过 Bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有从「已验证」状态归档的 Bundle 能恢复；恢复后回到「已验证」，不是重新接收。 重复恢复是安全的，结果里的「归档前状态」就是归档时的状态。', '已恢复', '，归档前状态：', '制品生命周期', '清理未执行', 'Bundle ID', '恢复未成功', '执行中…（最长约 1 小时）', '执行清理', '提交中…', '恢复', '重试', '保留期清理与归档恢复；仅平台管理员可用，维护模式下会被拒绝。', '请先确认已了解清理不可撤销'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the implementation detail (the `cleanup/write` policy action, `cleanup_already_requested`, `previous_status` and the key-table/deadline notes) out of the rendered copy, so those literals left this allowlist',
   },
   {
     file: 'src/pages/BundlesPage.vue',
-    allowed: ['Chart', 'definition id', 'chart name'],
+    allowed: ['Chart', '发布定义 ID', 'Chart 名称'],
     reason:
       'TASK-394 (consistency wave 3) moved the page copy — title, subtitle, filters, table headers, detail labels and every state message — into the catalog. What stays inline is the `Chart` column noun and the two wire-field placeholders (`definition id`, `chart name`), which are examples of the value the filter expects rather than prose',
   },
   {
     file: 'src/pages/StuckLocksPage.vue',
-    allowed: ['op', 'Release Definition ID', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE'],
+    allowed: ['操作', '发布定义 ID', 'NOT_APPLIED_PROVEN', 'AUDITED_OVERRIDE'],
     reason:
       'TASK-394 (consistency wave 3) moved the page copy — title, subtitle, filter, table headers, dialog labels, placeholders and the five validation messages — into the catalog. What stays inline is the `op ` row prefix, the wire-field placeholder, and the two radio VALUES (`NOT_APPLIED_PROVEN` / `AUDITED_OVERRIDE`), which are the enum the server receives, not copy',
   },
@@ -442,12 +406,12 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/OperationCreatePage.vue',
-    allowed: ['查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '没有可创建操作的选项', '请先准备 validated Bundle；通过审批的 ValuesRevision 会在表单里自动列出。', '操作创建失败', '重新加载'],
+    allowed: ['查看进行中操作', '重试', '正在加载可用制品与配置…', '操作选项加载失败', '重试', '没有可创建操作的选项', '请先准备已验证的 Bundle；通过审批的 Values 版本会自动列在表单里。', '重新加载', '操作创建失败'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-318 registered the rendered action-label `重新加载`. TASK-394 moved the page title, subtitle, section title and back action into the catalog, so the three literals that used to sit inline (`创建发布操作`, `选择制品和已审批配置，确认完整目标后启动 Preflight。`, `返回 Releases`) left this allowlist',
   },
   {
     file: 'src/pages/OperationListPage.vue',
-    allowed: ['状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标 Revision', '创建时间', 'Operation', '操作历史加载失败', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该 ReleaseDefinition 还没有执行过操作。', '全部状态', '进行中', '已成功', '已失败', '已取消', '查询中…', '刷新', '加载中…', '加载更多'],
+    allowed: ['状态', '页码已过期，已从最新一页重新加载（筛选条件保留）。', '重试', '类型', '状态', '目标版本', '创建时间', '操作', '操作历史加载失败', '重试', '正在加载操作历史…', '暂无操作记录', '当前筛选条件下没有操作。', '该发布定义还没有执行过操作。', '查询中…', '刷新', '加载中…', '加载更多', '全部状态', '进行中', '已成功', '已失败', '已取消'],
     reason:
       'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the page title, the eyebrow, the two header actions and the breadcrumb region name into the catalog (the hand-rolled `<nav aria-label="面包屑">` became PageHeader crumbs), so those four literals left this allowlist',
   },
@@ -459,7 +423,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationDetailBreadcrumbs.vue',
-    allowed: ['Releases', '操作历史'],
+    allowed: ['操作历史'],
     reason: 'Chinese copy already in the target locale; W18 carved it out of OperationDetailPage without changing the rendered text',
   },
   {
@@ -470,18 +434,18 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/components/operations/OperationDetailSummary.vue',
-    allowed: ['Operation ID', 'ReleaseDefinition', 'StateVersion', 'TargetRevision', '变更原因', '创建时间', '更新时间', '终止时间'],
+    allowed: ['操作 ID', '发布定义', '状态版本', '目标版本', '变更原因', '创建时间', '更新时间', '终止时间'],
     reason:
       'Chinese copy already in the target locale (plus server wire values and domain nouns); TASK-394 added the Operation ID row so the identifier keeps a home after leaving the page heading',
   },
   {
     file: 'src/pages/HomePage.vue',
-    allowed: ['Release Manager', '进入客户 → 集群 → 发布的层级', 'Promotion Mapping 与定义设置', '发布 Bundle', '保留期 GC 与归档恢复', '客户', '审计', '按组织检索已脱敏的审计事件', '发布定义', '内容摘要、镜像绑定与证据引用', '紧急锁', '效果未知且已过观察窗口的紧急操作', '制品生命周期', '信任根', '签名信任策略与轮换', '授权绑定', '组织与客户的绑定及能力授予', '组织成员', '成员与角色', '修改密码', '修改后会吊销全部会话'],
+    allowed: ['Release Manager', '进入客户 → 集群 → 发布的层级', '发布 Bundle', '客户', '审计', '按组织检索已脱敏的审计事件', '发布定义', '提升映射与发布定义设置', '内容摘要、镜像绑定与证据引用', '紧急锁', '效果未知且已过观察窗口的紧急变更', '制品生命周期', '保留期清理与归档恢复', '信任根', '签名信任策略与轮换', '授权绑定', '组织与客户的绑定及能力授予', '组织成员', '成员与角色', '修改密码', '修改后会吊销全部会话'],
     reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
   },
   {
     file: 'src/components/releases/ReleaseInventoryTable.vue',
-    allowed: ['操作历史', '未绑定 Definition', '紧急变更', '紧急变更已阻断', '收敛', '创建操作', '回滚', '未关联 ReleaseDefinition，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '发起紧急变更', 'Values', '尚未同步', '${release.pendingConvergenceCount} 个待收敛任务'],
+    allowed: ['操作历史', '未绑定发布定义', '收敛', 'Values', '创建操作', '未绑定发布定义', '回滚', '未关联发布定义，紧急变更入口不可用', '存在进行中的标准操作，紧急变更入口已阻断', '紧急变更已阻断', '发起紧急变更', '紧急变更', '${release.pendingConvergenceCount} 个待收敛任务', '尚未同步'],
     reason:
       'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the column headers and the three status tooltips into the catalog; what remains inline is the row-action copy and the `Values` domain noun',
   },
@@ -673,8 +637,14 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
     reason: 'cluster sub-component converged to Chinese (wave 3)',
   },
   {
+    file: 'src/i18n/status-labels.ts',
+    allowed: ['Deployment', 'Job', 'Pod'],
+    reason:
+      'canonical Kubernetes resource kind names (proper nouns rendered in their conventional casing); every label in this module comes from the catalog',
+  },
+  {
     file: 'src/components/clusters/RouteRuleEditor.vue',
-    allowed: [],
+    allowed: ['（暂不可用）'],
     reason: 'cluster routing-rule editor converged to Chinese (wave 3)',
   },
   {
@@ -928,18 +898,20 @@ describe('migrated files carry no unrecorded copy', () => {
    *  - the rule is stated once, so the failing message names the offending value.
    */
   /*
-   * The project's own vocabulary keeps its English nouns inside Chinese copy (CONTEXT /
-   * GLOSSARY: Release, Definition, Bundle, ValuesRevision, Operation, Emergency, Cluster,
-   * Customer, Operator, Trust Root…). Blanking those terms before the sentence check lets
-   * the copy read naturally without weakening the rule: `无效的 Reason code` is still
-   * flagged, because "Reason" is not part of the domain vocabulary.
+   * The gate blanks the product nouns that are still allowed to remain English inside a
+   * Chinese sentence (TASK-394 policy in messages.ts: Release, Values, Bundle, Chart,
+   * Operator, Secret, Trust Root), plus the legacy nouns that survive in copy this wave
+   * did not reach (Definition/Revision/Operation/Emergency…). Blanking them before the
+   * sentence check lets the copy read naturally without weakening the rule:
+   * `无效的 Reason code` is still flagged, because "Reason" is not a product noun.
    */
   const DOMAIN_TERMS = [
     'Release', 'Definition', 'Bundle', 'ValuesRevision', 'Values', 'Revision', 'Mapping',
     'Promotion', 'Namespace', 'Operation', 'Emergency', 'Cluster', 'Customer', 'Operator',
     'Trust', 'Root',
     // Product terms kept in English inside Chinese copy (they name a feature, not prose):
-    'Pull-through', 'cache', 'Operator', 'Helm', 'Kubernetes',
+    'Pull-through', 'cache', 'Operator', 'Helm', 'Kubernetes', 'Secret', 'Chart', 'YAML',
+    'JSON', 'PEM', 'SBOM', 'TTL', 'DNS',
     // Proto/domain vocabulary that appears inside Chinese sentences on purpose:
     'Emergency', 'Unresolved', 'Effect', 'Result', 'Intent', 'APPLIED', 'NOT_APPLIED',
   ];
@@ -954,6 +926,10 @@ describe('migrated files carry no unrecorded copy', () => {
     // A numeric format template for the StatCard value; the unit and meaning live in the
     // card's label and hint, so there is no sentence to translate here.
     ['home.stat.syncRateValue', 'a percentage format template rendered inside a StatCard value'],
+    // The ACK timeline line joins two catalog values with a structural parenthesis
+    // (`集群已确认写入（已写入磁盘）`). Both halves are Chinese entries of their own; this
+    // template carries no prose, only the separator.
+    ['operation.timeline.ackWithStage', 'a composition template for the ACK timeline line; both parts are catalog values'],
   ]);
 
   /** Violations ignoring the exemption map — the exemption check needs them raw. */

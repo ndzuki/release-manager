@@ -63,11 +63,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       </div>
       <div>
         <dt>{{ t('audit.table.resource') }}</dt>
-        <dd>{{ props.event.resourceType }}:{{ props.event.resourceId }}</dd>
+        <dd>{{ statusLabel('auditResource', props.event.resourceType) }}:{{ props.event.resourceId }}</dd>
       </div>
       <div>
         <dt>{{ t('audit.table.action') }}</dt>
-        <dd>{{ props.event.action }}</dd>
+        <dd>{{ statusLabel('auditAction', props.event.action) }}</dd>
       </div>
       <div>
         <dt>{{ t('audit.table.status') }}</dt>
@@ -112,7 +112,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .audit-detail__header h2 {
@@ -144,7 +143,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   color: var(--color-muted-strong);
   font-size: var(--font-size-xs);
   font-weight: 700;
-  text-transform: uppercase;
 }
 
 .audit-detail__grid dd {

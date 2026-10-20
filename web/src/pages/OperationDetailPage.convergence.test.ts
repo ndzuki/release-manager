@@ -122,7 +122,7 @@ function operationsClient(): Client<typeof OrchestratorService> {
 
 /** The convergence CTA: only rendered when the page holds a release scope. */
 function convergenceButton(wrapper: VueWrapper) {
-  return wrapper.findAll('button').find((button) => button.text() === '创建 ValuesRevision 收敛');
+  return wrapper.findAll('button').find((button) => button.text() === '创建收敛 Values 版本');
 }
 
 beforeEach(() => {

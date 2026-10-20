@@ -301,7 +301,7 @@ describe('release dialog semantics (TASK-296)', () => {
     const dialog = getDialog();
     const describedBy = dialog.getAttribute('aria-describedby');
     expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy!)?.textContent ?? '').toContain('没有撤销');
+    expect(document.getElementById(describedBy!)?.textContent ?? '').toContain('释放后不可撤销');
   });
 
   it('keeps the validation message inside the dialog', async () => {

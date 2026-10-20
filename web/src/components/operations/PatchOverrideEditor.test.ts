@@ -35,7 +35,7 @@ describe('PatchOverrideEditor error placement', () => {
     expect(message.attributes('role')).toBe('alert');
     // The row-level message is what the focus-first-error search must not need to find.
     expect(wrapper.find('[data-field-error]').exists()).toBe(false);
-    expect(wrapper.get('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('true');
+    expect(wrapper.get('input[aria-label="补丁 1 路径"]').attributes('aria-invalid')).toBe('true');
   });
 
   it('renders an error without an index as a fieldset-level alert instead of dropping it', () => {
@@ -51,7 +51,7 @@ describe('PatchOverrideEditor error placement', () => {
     expect(wrapper.find('.patch-editor__row--error').exists()).toBe(false);
     // The component binds `:aria-invalid` to a boolean, so Vue renders "false" rather
     // than omitting the attribute — `[aria-invalid="true"]` still never matches it.
-    expect(wrapper.get('input[aria-label="Patch 1 path"]').attributes('aria-invalid')).toBe('false');
+    expect(wrapper.get('input[aria-label="补丁 1 路径"]').attributes('aria-invalid')).toBe('false');
   });
 
   it('renders nothing when the error is cleared (the summary cannot outlive its message)', async () => {
@@ -68,8 +68,8 @@ describe('PatchOverrideEditor blur reporting', () => {
   it('reports a blur from either control so the form can validate on the way out', async () => {
     const wrapper = mountEditor();
 
-    await wrapper.get('input[aria-label="Patch 1 path"]').trigger('blur');
-    await wrapper.get('input[aria-label="Patch 1 value"]').trigger('blur');
+    await wrapper.get('input[aria-label="补丁 1 路径"]').trigger('blur');
+    await wrapper.get('input[aria-label="补丁 1 值"]').trigger('blur');
 
     expect(wrapper.emitted('blur')).toHaveLength(2);
   });

@@ -58,8 +58,8 @@ describe('audit event components', () => {
 
     const text = wrapper.text();
     expect(text).toContain('用户:user-abc123');
-    expect(text).toContain('operation:operation-abc123');
-    expect(text).toContain('upgrade');
+    expect(text).toContain('操作:operation-abc123');
+    expect(text).toContain('升级');
     expect(text).toContain('成功');
     // No role, no display name, no operation/request id columns — the wire
     // contract has none of these on AuditEvent, and role is redacted.

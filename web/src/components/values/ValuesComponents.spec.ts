@@ -19,7 +19,7 @@ const editableDraft: ValuesRevision = { ...draft, status: 'draft' };
 describe('values editor presentation', () => {
   it('explains when canonical diff has no changes', () => {
     const wrapper = mount(ValuesDiffPanel, { props: { result: { changes: [], hasChanges: false } } });
-    expect(wrapper.text()).toContain('无 canonical 变化');
+    expect(wrapper.text()).toContain('无规范化内容变化');
   });
 
   // TASK-394: the card counts its changes next to the title. A zero diff is a neutral
@@ -82,7 +82,7 @@ describe('values editor presentation', () => {
       },
     });
 
-    const save = wrapper.findAll('button').find((button) => button.text() === '保存 Draft');
+    const save = wrapper.findAll('button').find((button) => button.text() === '保存草稿');
     expect(save).toBeDefined();
     await save!.trigger('click');
     expect(wrapper.emitted('save')).toHaveLength(1);
@@ -112,7 +112,7 @@ describe('values editor presentation', () => {
       },
     });
 
-    expect(wrapper.text()).toContain('不可审批自己创建的 Revision');
+    expect(wrapper.text()).toContain('不可审批自己创建的版本');
     expect(wrapper.text()).not.toContain('审批通过');
     expect(wrapper.text()).not.toContain('驳回');
   });

@@ -331,7 +331,6 @@ onUnmounted(clearPlaintext);
   color: var(--color-muted);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
-  text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
