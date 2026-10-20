@@ -118,14 +118,17 @@ beforeEach(() => {
 });
 
 describe('BindingsPage characterization', () => {
-  it('renders the governance header with the active organization identity', async () => {
+  it('renders the governance header with the active organization name and no UUID', async () => {
     const wrapper = await mountPage();
 
-    expect(wrapper.get('.eyebrow').text()).toBe('治理');
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('治理');
     expect(wrapper.get('h1').text()).toBe('授权绑定');
-    const subtitle = wrapper.get('.governance__subtitle');
-    expect(subtitle.text()).toContain('Platform');
-    expect(subtitle.get('code').text()).toBe('org-1');
+    const subtitle = wrapper.get('.page-header__subtitle');
+    expect(subtitle.text()).toBe('Platform');
+    // TASK-394: the subtitle used to print the organization UUID in a <code> element;
+    // the name the store carries replaces it, so no identifier is rendered here.
+    expect(subtitle.text()).not.toContain('org-1');
+    expect(subtitle.find('code').exists()).toBe(false);
   });
 
   it('loads the active organization on mount', async () => {
@@ -140,8 +143,8 @@ describe('BindingsPage characterization', () => {
     const wrapper = await mountPage();
 
     expect(mockedList).not.toHaveBeenCalled();
-    expect(wrapper.get('.governance__subtitle').text()).toContain('当前组织');
-    expect(wrapper.find('.governance__subtitle code').exists()).toBe(false);
+    expect(wrapper.get('.page-header__subtitle').text()).toBe('当前组织');
+    expect(wrapper.find('.page-header__subtitle code').exists()).toBe(false);
 
     clickButton(wrapper.element as HTMLElement, '刷新');
     await flushPromises();

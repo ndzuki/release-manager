@@ -31,9 +31,11 @@ const emit = defineEmits<{
     TASK-367: the member row (UUID + role + version + timestamp + role select and
     remove button) does not fit 375px. Same labelled, focusable scroll region as the
     other wide tables in the console; the page itself must not scroll sideways.
+    TASK-394: the region is the shared `.table-wrap` instead of a page-private scroll
+    class, and it now carries the frame and the surface.
   -->
   <div
-    class="organization__scroll"
+    class="table-wrap"
     role="region"
     :aria-label="t('organization.table.scrollRegion')"
     tabindex="0"
@@ -59,16 +61,22 @@ const emit = defineEmits<{
         <td>{{ formatTimestamp(member.createdAt) }}</td>
         <td v-if="canWrite" class="organization__actions">
           <label class="visually-hidden" :for="`role-${member.userId}`">修改 {{ member.userId }} 的角色</label>
-          <select
-            :id="`role-${member.userId}`"
-            :value="member.role"
-            :disabled="saving"
-            @change="emit('change-role', member, $event)"
-          >
-            <option v-for="role in ORGANIZATION_ROLES" :key="role" :value="role" :disabled="!grantableRoles.includes(role)">
-              {{ role }}
-            </option>
-          </select>
+          <!-- TASK-394: the inline role control is the last raw native select in the row.
+               The UA arrow is painted outside the token palette, so it is suppressed and
+               the caret is drawn with the muted text colour instead. -->
+          <span class="organization__select">
+            <select
+              :id="`role-${member.userId}`"
+              :value="member.role"
+              :disabled="saving"
+              @change="emit('change-role', member, $event)"
+            >
+              <option v-for="role in ORGANIZATION_ROLES" :key="role" :value="role" :disabled="!grantableRoles.includes(role)">
+                {{ role }}
+              </option>
+            </select>
+            <span class="organization__select-caret" aria-hidden="true" />
+          </span>
           <button type="button" class="danger" :disabled="saving" @click="emit('remove', member)">移除</button>
         </td>
         <td v-else class="organization__readonly">只读</td>
@@ -79,16 +87,17 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.organization__scroll {
-  overflow-x: auto;
-  /* Keep the scroll container from passing the table's min-content width back to
-     the page grid, which is what made the whole document scroll sideways. */
-  min-width: 0;
-  /* The per-row `visually-hidden` <label> is absolutely positioned; without a
-     positioned ancestor its containing block is the viewport, so its static
-     position inside the scrolled row leaked past the scroll region (measured
-     418px document width with a 375px viewport, 2026-10-18). */
+/* Direction C table frame (TASK-394): the surface is `--sf`, so the strong border is what
+   separates the table from the page. Horizontal containment comes from `.table-wrap`.
+   `position: relative` is load-bearing: the per-row `visually-hidden` <label> is absolutely
+   positioned, and without a positioned ancestor its containing block is the viewport, so its
+   static position inside the scrolled row leaked past the scroll region (measured 418px
+   document width with a 375px viewport, 2026-10-18). */
+.table-wrap {
   position: relative;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--color-surface);
 }
 
 .organization__table {
@@ -97,11 +106,24 @@ const emit = defineEmits<{
   background: var(--color-surface);
 }
 
+/* Cells stay on one line: the wrapper scrolls, so a narrow viewport gets a scrollbar
+   instead of a header label broken into one glyph per line. */
 .organization__table th,
 .organization__table td {
-  padding: var(--space-2) var(--space-3);
+  padding: 10px 20px;
   border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
+  white-space: nowrap;
+}
+
+/* Direction-C header: the muted surface and the strong muted ink separate the header row
+   from the body instead of relying on the UA bold. */
+.organization__table th {
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .organization__role {
@@ -121,6 +143,40 @@ const emit = defineEmits<{
   display: flex;
   gap: var(--space-2);
   align-items: center;
+}
+
+/* Direction C select: the UA arrow is suppressed and the caret comes from the muted text
+   colour (the pattern ReleaseInventoryPage and LocalUsersPage established). */
+.organization__select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.organization__select select {
+  padding: var(--space-2) 30px var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  appearance: none;
+  cursor: pointer;
+}
+
+.organization__select-caret {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid var(--color-muted);
+  border-bottom: 1px solid var(--color-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.organization__select select:disabled {
+  cursor: not-allowed;
 }
 
 .organization__actions button {

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import type { OrganizationMemberView } from '@/connect/organization-api';
@@ -120,5 +122,44 @@ describe('OrganizationMemberTable', () => {
     expect(region.attributes('aria-label')).toBe('组织成员表格（可横向滚动）');
     expect(region.attributes('tabindex')).toBe('0');
     expect(region.find('table.organization__table').exists()).toBe(true);
+    // TASK-394: the wrapper is the shared `.table-wrap`, not a page-private scroll class.
+    expect(region.classes()).toContain('table-wrap');
+    expect(region.classes()).not.toContain('organization__scroll');
+  });
+
+  /*
+   * TASK-394: happy-dom does not evaluate scoped CSS, so the direction-C table and select
+   * contracts are asserted against the component source — the convention the audit tables
+   * use for their stylesheet invariants.
+   */
+  it('frames the scroller and paints the header from the direction-C tokens', () => {
+    const style = styleOf('OrganizationMemberTable.vue');
+
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*border:\s*1px solid var\(--color-border-strong\)/);
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*background:\s*var\(--color-surface\)/);
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*border-radius:\s*var\(--r\)/);
+    // The visually-hidden per-row label needs this scroller as its containing block.
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*position:\s*relative/);
+    expect(style).toMatch(/\.organization__table th\s*\{[^}]*background:\s*var\(--color-surface-muted\)/);
+    expect(style).toMatch(/\.organization__table th\s*\{[^}]*color:\s*var\(--color-muted-strong\)/);
+    expect(style).toMatch(/\.organization__table th\s*\{[^}]*font-size:\s*var\(--font-size-xs\)/);
+  });
+
+  it('customises the inline role select instead of leaving the UA widget', () => {
+    const style = styleOf('OrganizationMemberTable.vue');
+    const wrapper = mountTable([member()]);
+
+    // The select is wrapped so a token-coloured caret can replace the UA arrow.
+    expect(wrapper.find('.organization__select select').exists()).toBe(true);
+    expect(wrapper.get('.organization__select .organization__select-caret').attributes('aria-hidden')).toBe('true');
+    expect(style).toMatch(/\.organization__select select\s*\{[^}]*appearance:\s*none/);
+    expect(style).toMatch(/\.organization__select select\s*\{[^}]*border:\s*1px solid var\(--color-border-strong\)/);
+    expect(style).toMatch(/\.organization__select select\s*\{[^}]*background:\s*var\(--color-surface-muted\)/);
+    expect(style).toMatch(/\.organization__select-caret\s*\{[^}]*border-right:\s*1px solid var\(--color-muted\)/);
   });
 });
+
+function styleOf(file: string): string {
+  const source = readFileSync(resolve(__dirname, file), 'utf8');
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] ?? '';
+}

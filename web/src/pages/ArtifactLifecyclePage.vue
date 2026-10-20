@@ -2,6 +2,7 @@
 import { t } from '@/i18n/messages';
 import { ref } from 'vue';
 import ErrorState from '@/components/common/ErrorState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import { useArtifactLifecycleStore } from '@/stores/artifactLifecycle';
 
@@ -17,6 +18,14 @@ import { useArtifactLifecycleStore } from '@/stores/artifactLifecycle';
  * which is exactly what a retry after a lost response will see.
  */
 const store = useArtifactLifecycleStore();
+
+/*
+ * Direction C (TASK-394). The hand-rolled header becomes PageHeader; the eyebrow keeps
+ * the "维护" category verbatim. The subtitle is reduced to what an operator needs before
+ * acting — who may run this and that maintenance mode refuses it. The dropped tail named
+ * the authorization policy action (`cleanup/write`), which is implementation, not copy.
+ */
+const pageSubtitle = '保留期垃圾回收与归档恢复；仅 platform_admin 可用，维护模式下会被拒绝。';
 
 const bundleId = ref('');
 const restoreError = ref('');
@@ -57,15 +66,7 @@ async function restore(): Promise<void> {
 
 <template>
   <section class="lifecycle">
-    <header class="lifecycle__header">
-      <div>
-        <p class="eyebrow">{{ t('artifact.eyebrow') }}</p>
-        <h1>制品生命周期</h1>
-        <p class="lifecycle__subtitle">
-          保留期垃圾回收与归档恢复；两者都只对 platform_admin 开放（cleanup/write），维护模式下会被拒绝。
-        </p>
-      </div>
-    </header>
+    <PageHeader title="制品生命周期" :eyebrow="t('artifact.eyebrow')" :subtitle="pageSubtitle" />
 
     <!-- TASK-267: GC and restore outcomes use the shared Toast primitive. -->
     <Toast
@@ -82,18 +83,18 @@ async function restore(): Promise<void> {
       <h2>执行保留期 GC</h2>
       <p class="lifecycle__warning">
         <strong>不可撤销</strong>：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是<b>行数</b>而非释放的字节。
-        调用<b>同步</b>执行（服务端预算可达约 1 小时），因此客户端对本过程使用更长的死线。
+        清理<b>同步</b>执行，服务端预算可达约 1 小时，所以页面会一直等待结果。
       </p>
       <p class="lifecycle__hint">
-        同一幂等键在保留窗口内（默认 24 小时，可配置）会被拒绝（<code>cleanup_already_requested</code>）而不重跑；
-        「重试」复用同一个键，点「执行 GC」才是新的清理请求。注意：单节点部署可能没有幂等键表，此时只有进程内互斥生效。
+        保留窗口内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求，
+        点「执行 GC」才会发起新的清理。
       </p>
       <label class="lifecycle__ack">
         <input v-model="acknowledged" type="checkbox" name="acknowledged" />
         我已确认清理会删除超出保留期的制品，且不可撤销
       </label>
       <button type="button" class="danger" :disabled="store.running" data-testid="cleanup-run" @click="runGc">
-        {{ store.running ? '执行中…（服务端预算可达约 1 小时）' : '执行 GC' }}
+        {{ store.running ? '执行中…（最长约 1 小时）' : '执行 GC' }}
       </button>
       <p v-if="runError" class="lifecycle__error" role="alert" data-testid="cleanup-validation">{{ runError }}</p>
 
@@ -128,8 +129,8 @@ async function restore(): Promise<void> {
     <section class="lifecycle__panel">
       <h2>恢复已归档 Bundle</h2>
       <p class="lifecycle__hint">
-        只有「从 <code>validated</code> 归档」的 bundle 能恢复；恢复后回到 <code>validated</code>，不是重新接收。
-        该操作是收敛的：重复调用再次成功且不改数据，因此要按<b>存储的原始状态</b>理解 <code>previous_status</code>。
+        只有从 <code>validated</code> 归档的 bundle 能恢复；恢复后回到 <code>validated</code>，不是重新接收。
+        重复恢复是安全的：再次成功且不改数据；结果显示的「归档前状态」是归档时的原始状态。
       </p>
       <form @submit.prevent="restore">
         <label>
@@ -160,35 +161,24 @@ async function restore(): Promise<void> {
 .lifecycle {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-.lifecycle__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the panels.
+   The shell's <main> already owns the page inset, so this page adds no padding of its own. */
+.lifecycle :deep(.page-header) {
+  margin-bottom: 0;
 }
 
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.lifecycle__subtitle {
-  margin: var(--space-1) 0 0;
-  max-width: 56rem;
-  color: var(--color-muted);
-}
-
+/* Direction C panel: surface fill + the STRONG border (`--color-border` is a hairline and
+   vanishes in the dark theme). */
 .lifecycle__panel {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
   background: var(--color-surface);
 }
 
@@ -264,7 +254,10 @@ async function restore(): Promise<void> {
   padding-left: var(--space-4);
 }
 
-.lifecycle__ack {
+/* The extra `.lifecycle__panel` is load-bearing: `.lifecycle__panel label` (0,1,1) is more
+   specific than `.lifecycle__ack` (0,1,0) and made this label a grid, which stacked the
+   checkbox above its sentence. */
+.lifecycle__panel .lifecycle__ack {
   display: flex;
   gap: var(--space-2);
   align-items: center;

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import BindingTable from './BindingTable.vue';
@@ -64,5 +66,25 @@ describe('BindingTable', () => {
     const wrapper = mountTable({ saving: true });
 
     expect((wrapper.get('[data-testid="binding-row-customer-a"] button').element as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  /*
+   * TASK-394: happy-dom does not evaluate scoped CSS, so the direction-C table contract is
+   * asserted against the component source — the convention the audit tables use for their
+   * stylesheet invariants. The frame moved from the <table> to the `.table-wrap` scroller so
+   * the rounded corners and the surface are one box.
+   */
+  it('frames the scroller and paints the header from the direction-C tokens', () => {
+    const source = readFileSync(resolve(__dirname, 'BindingTable.vue'), 'utf8');
+    const style = source.replace(/\/\*[\s\S]*?\*\//g, '').match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] ?? '';
+
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*border:\s*1px solid var\(--color-border-strong\)/);
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*background:\s*var\(--color-surface\)/);
+    expect(style).toMatch(/\.table-wrap\s*\{[^}]*border-radius:\s*var\(--r\)/);
+    expect(style).toMatch(/\.governance__table th\s*\{[^}]*background:\s*var\(--color-surface-muted\)/);
+    expect(style).toMatch(/\.governance__table th\s*\{[^}]*color:\s*var\(--color-muted-strong\)/);
+    expect(style).toMatch(/\.governance__table th\s*\{[^}]*font-size:\s*var\(--font-size-xs\)/);
+    // The table must not draw a second border inside the frame.
+    expect(style).not.toMatch(/\.governance__table\s*\{[^}]*border:/);
   });
 });

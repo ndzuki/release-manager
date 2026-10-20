@@ -74,18 +74,38 @@ function statusLabel(binding: BindingView): string {
 </template>
 
 <style scoped>
+/* Direction C table frame (TASK-394): the surface is `--sf`, so the strong border is what
+   separates the table from the page. Horizontal containment comes from `.table-wrap`. */
+.table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--color-surface);
+}
+
 .governance__table {
   width: 100%;
   border-collapse: collapse;
   background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
 }
 
+/* Cells stay on one line: the wrapper scrolls, so a narrow viewport gets a scrollbar
+   instead of a header label broken into one glyph per line. */
 .governance__table th,
 .governance__table td {
-  padding: var(--space-2) var(--space-3);
+  padding: 10px 20px;
   border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
+  white-space: nowrap;
+}
+
+/* Direction-C header: the muted surface and the strong muted ink separate the header row
+   from the body instead of relying on the UA bold. */
+.governance__table th {
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .governance__status {

@@ -135,13 +135,17 @@ beforeEach(() => {
 });
 
 describe('OrganizationPage header and page-level states (TASK-363)', () => {
-  it('renders the active organization identity in the header', async () => {
+  it('renders the active organization name in the header without printing its UUID', async () => {
     const wrapper = await mountPage();
 
     expect(wrapper.get('h1').text()).toBe('组织成员');
-    const subtitle = wrapper.get('.organization__subtitle');
-    expect(subtitle.text()).toContain('Platform');
-    expect(subtitle.get('code').text()).toBe('org-1');
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('治理');
+    const subtitle = wrapper.get('.page-header__subtitle');
+    expect(subtitle.text()).toBe('Platform');
+    // TASK-394: the subtitle used to print the organization UUID in a <code> element;
+    // the name the store carries replaces it, so no identifier is rendered here.
+    expect(subtitle.text()).not.toContain('org-1');
+    expect(subtitle.find('code').exists()).toBe(false);
   });
 
   it('reports the in-flight refresh in the button label', async () => {
