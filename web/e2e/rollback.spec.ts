@@ -66,6 +66,13 @@ const ACCEPTED_STATES = /^(pending|preflight)$/;
 
 const ROLLBACK_ROW = '[data-testid^="release-rollback-"]';
 
+// The release inventory's two terminal renderings: the rows, or the shared EmptyState.
+// The old `[data-testid="release-inventory-empty"]` marker is gone (TASK-394 converged the
+// page onto EmptyState/ReleaseInventorySkeleton), so waiting on it only ever burned the
+// timeout and made the diagnostic below claim "empty-state absent" on a genuinely empty
+// inventory.
+const INVENTORY_SETTLED = 'tbody tr, .empty-state';
+
 // Quoted by every "rollback entry missing although E2E_BACKEND=true" failure so
 // the message names the likely cause instead of only "element not found".
 // The `(web` + `/vite.config.ts` split is deliberate: the locator-hygiene gate
@@ -149,7 +156,7 @@ async function inventoryRevisions(page: Page): Promise<number[]> {
 // regression, and neither may be mistaken for a pass.
 async function requireRollbackTrigger(page: Page): Promise<Locator> {
   await page
-    .locator('tbody tr, [data-testid="release-inventory-empty"]')
+    .locator(INVENTORY_SETTLED)
     .first()
     .waitFor({ state: 'attached', timeout: 20_000 })
     .catch(() => undefined);
@@ -158,7 +165,7 @@ async function requireRollbackTrigger(page: Page): Promise<Locator> {
   if ((await trigger.count()) > 0) return trigger;
 
   const rows = await page.locator('tbody tr').count();
-  const emptyState = await page.locator('[data-testid="release-inventory-empty"]').count();
+  const emptyState = await page.locator('.empty-state').count();
   const staleNotice = await page.locator('.auth-stale-notice').count();
   const revisions = await inventoryRevisions(page);
   const maxRevision = revisions.length > 0 ? Math.max(...revisions) : null;
@@ -274,11 +281,29 @@ test('Rollback from the release inventory creates a ROLLBACK operation and lands
     `/customers/${scope.customerId}/clusters/${scope.clusterId}/releases/${definitionId}/operations/${wireResponse.operationId}`,
   );
   // (a) the type comes from the server-rendered operation on the detail page:
-  // ROLLBACK, not INSTALL/UPGRADE. The status is one of the operation statuses.
-  await expect(page.locator('.operation-detail__eyebrow')).toHaveText('回滚操作');
-  await expect(page.locator('.operation-detail__header code')).toHaveText(wireResponse.operationId);
-  await expect(page.locator('.operation-detail__state')).toHaveText(
-    /^(等待中|预检|排队中|执行中|取消中|成功|失败|已取消|超时)$/,
+  // ROLLBACK, not INSTALL/UPGRADE. TASK-394 moved it out of `.operation-detail__eyebrow`
+  // into the direction-C PageHeader h1 (`{type}操作`, plus ` · {release}` when the route
+  // carries a release name — orchestrator.go's `operationType` is what decides the word),
+  // so the assertion moves with it and still pins the WORD, not "a heading exists".
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^回滚操作( · .+)?$/);
+  // The id is a CopyableHash in the summary now: truncated on screen, FULL value in
+  // `title` and on copy. Asserting `title` keeps the old `.operation-detail__header code`
+  // strength — the whole server-issued id, not a shortened prefix.
+  const summary = page.locator('.operation-detail__summary');
+  await expect(
+    summary.locator('dt:text-is("Operation ID") + dd .copyable-hash__value'),
+  ).toHaveAttribute('title', wireResponse.operationId);
+  // The operation must hang off the definition the rollback was submitted for, not a
+  // neighbour's: the second CopyableHash carries the id the row was bound to.
+  await expect(
+    summary.locator('dt:text-is("ReleaseDefinition") + dd .copyable-hash__value'),
+  ).toHaveAttribute('title', definitionId);
+  // The state moved from `.operation-detail__state` into the PageHeader subtitle
+  // (`{state} · 状态版本 {version}`, messages.ts `operation.detail.subtitle`). The state
+  // is still asserted verbatim and the version must be a number, so a blank subtitle or
+  // a raw server value does not pass.
+  await expect(page.locator('.page-header__subtitle')).toHaveText(
+    /^(等待中|预检|排队中|执行中|取消中|成功|失败|已取消|超时) · 状态版本 \d+$/,
   );
 });
 

@@ -92,24 +92,31 @@ async function openReleases(page: import('@playwright/test').Page): Promise<void
 const BOUND_RELEASE_PRECONDITION =
   'no release on this cluster is bound to a ReleaseDefinition, so the emergency entry does not render (TASK-217: the binding is written by the operator after a deployment driven through the orchestrator, so run `make e2e-stage STAGES=release` first and point E2E_CLUSTER_ID at that cluster)';
 
+// The release inventory's two terminal renderings: the rows, or the shared EmptyState.
+// The old `[data-testid="release-inventory-empty"]` marker is gone — TASK-394 converged the
+// page onto EmptyState/ReleaseInventorySkeleton — so a wait on it could only time out and
+// turn "renders nothing" into "still loading".
+const INVENTORY_SETTLED = 'tbody tr, .empty-state';
+
 test('Inventory → Emergency → Execute → Operation Detail (REQUIRE_PROMOTION)', async ({ page }) => {
   await login(page, CREDENTIALS.adminA.username, CREDENTIALS.adminA.password);
   await openReleases(page);
 
   // The inventory is loaded asynchronously: a precondition read before the table arrives
   // would skip every time. Wait for the rows (or the empty state), then judge.
-  const emitted = page.locator('tbody tr');
   await page
-    .locator('tbody tr, [data-testid="release-inventory-empty"]')
+    .locator(INVENTORY_SETTLED)
     .first()
     .waitFor({ state: 'attached', timeout: 20_000 })
     .catch(() => undefined);
-  await emitted.first().waitFor({ state: 'attached', timeout: 20_000 }).catch(() => undefined);
 
-  // The entry comes from the ReleaseSummary projection (AC-058-08).
+  // The entry comes from the ReleaseSummary projection (AC-058-08). TASK-394 rebuilt the
+  // inventory as the direction-C table, so the anchor's class is `release-table__emergency`
+  // (the old `emergency-link` no longer exists anywhere in src); its href still carries the
+  // bound ReleaseDefinition id this lane was told to drive.
   const emergencyLink = DEFINITION_ID === ''
     ? page.getByRole('link', { name: '紧急变更' }).first()
-    : page.locator(`a.emergency-link[href*="${DEFINITION_ID}"]`).first();
+    : page.locator(`a.release-table__emergency[href*="${DEFINITION_ID}"]`).first();
   test.skip((await emergencyLink.count()) === 0, BOUND_RELEASE_PRECONDITION);
   await expect(emergencyLink).toBeVisible();
 

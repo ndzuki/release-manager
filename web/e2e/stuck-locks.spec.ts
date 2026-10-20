@@ -105,16 +105,19 @@ function lockMessage() {
   });
 }
 
-// serveList installs the in-flight ListStuckLocks rewrite. With hideAfterFirstRead the lock
-// is absent from the SECOND read, which is what the store does after a release (it re-reads
-// the list before reporting), so the row disappearing is the page's own behaviour rather
-// than an artefact of the mock.
-async function serveList(page: Page, hideAfterFirstRead = false): Promise<void> {
+// serveList installs the in-flight ListStuckLocks rewrite. The lock disappears only once
+// a release has been SERVED — that is what the store's own re-read models: it re-reads the
+// list before reporting, so the row going away (and the empty state taking its place) is
+// the page's behaviour rather than an artefact of the mock.
+//
+// It is keyed on the release, NOT on a read ordinal (TASK-394): the home workbench the
+// login lands on already reads ListStuckLocks for its 紧急 tile, so the previous
+// "empty from the second read" rule emptied the list before the page under test mounted.
+async function serveList(page: Page): Promise<{ afterRelease: () => void }> {
   const lock = lockMessage();
-  let reads = 0;
+  let released = false;
   await page.route(`**/${STUCK_LOCKS_METHOD}`, async (route) => {
-    reads += 1;
-    const locks = hideAfterFirstRead && reads > 1 ? [] : [lock];
+    const locks = released ? [] : [lock];
     const message = create(ListStuckLocksResponseSchema, { locks });
     await route.fulfill({
       status: 200,
@@ -122,6 +125,11 @@ async function serveList(page: Page, hideAfterFirstRead = false): Promise<void> 
       body: Buffer.from(toBinary(ListStuckLocksResponseSchema, message)),
     });
   });
+  return {
+    afterRelease: () => {
+      released = true;
+    },
+  };
 }
 
 test('S1 解锁页可达：从工作台进入，且渲染空态或有锁态（不同屏、不落错误态）', async ({ page }) => {
@@ -186,7 +194,7 @@ test('S2 释放确认：有锁态打开 alertdialog，Esc 取消且不发出释�
 
 test('S3 释放提交：空原因被服务前守卫拦住，提交后载荷与可见反馈一致', async ({ page }) => {
   requireCredentials();
-  await serveList(page, true);
+  const list = await serveList(page);
 
   let sent: ReleaseEmergencyLockRequest | null = null;
   await page.route(`**/${RELEASE_LOCK_METHOD}`, async (route) => {
@@ -198,6 +206,9 @@ test('S3 释放提交：空原因被服务前守卫拦住，提交后载荷与�
       effectStatus: EmergencyEffectStatus.NOT_APPLIED,
       auditEventId: 'e2e-stuck-audit-1',
     });
+    // The mocked server accepted the release: from here the list read must no longer
+    // contain the lock, so the row that disappears is the page's own re-read.
+    list.afterRelease();
     await route.fulfill({
       status: 200,
       headers: { 'content-type': 'application/proto' },
