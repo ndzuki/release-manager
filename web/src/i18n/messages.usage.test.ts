@@ -302,7 +302,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   {
     file: 'src/components/values/ValuesDiffPanel.vue',
     allowed: ['无 canonical 变化。格式、注释与 key 顺序差异不会产生无意义 diff。'],
-    reason: 'values diff panel converged to Chinese (wave 6)',
+    reason:
+      'values diff panel converged to Chinese (wave 6); TASK-394 moved its heading and the zero-change label into the catalog and composes the count from the existing `values.diff.changes` unit, so the allowlisted empty-state sentence is the only inline copy left',
   },
   {
     file: 'src/components/values/ValuesEditorSkeleton.vue',
@@ -316,8 +317,9 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ValuesEditorPage.vue',
-    allowed: ['YAML', 'JSON', '编辑 canonical values 并通过 SecretRef 引用集群 Secret。', '创建首个配置 Revision。', '当前角色为只读。服务端仍会独立执行授权。', '重试', '确认丢弃当前 Draft？绑定的 个收敛任务将被解绑。', '取消', '确认丢弃', 'ValuesRevision 加载失败', '确认丢弃 Draft'],
-    reason: 'editor language identifiers; the surrounding labels are Chinese',
+    allowed: ['YAML', 'JSON', '${releaseName.value} Values', '编辑 canonical values，通过 SecretRef 引用集群 Secret。', '创建首个配置 Revision。', '当前角色为只读。服务端仍会独立执行授权。', '重试', '确认丢弃当前 Draft？绑定的 个收敛任务将被解绑。', '取消', '确认丢弃', 'ValuesRevision 加载失败', '确认丢弃 Draft'],
+    reason:
+      'editor language identifiers, the page-heading template (a release NAME plus the `Values` surface noun) and Chinese copy already in the target locale; TASK-394 moved the header, subtitle and save entry onto PageHeader, which is why the old inline subtitle literal left this allowlist',
   },
   {
     file: 'src/pages/DefinitionsPage.vue',

@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DiffResult } from '@/types/valuesRevision';
 import ValuesEditorPage from './ValuesEditorPage.vue';
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +12,14 @@ const mocks = vi.hoisted(() => ({
   auth: {
     user: { id: 'admin-1', roles: ['release_admin'] },
   },
+  /*
+   * TASK-394: the breadcrumbs resolve NAMES through `useScopeNames`; the real composable
+   * reads the customer/cluster stores, which would need a Pinia instance this suite does not
+   * create. The stub keeps the same ref shape and lets a case make a lookup "fail" (the name
+   * falls back to the identifier) to prove the page omits that crumb instead of printing a
+   * UUID.
+   */
+  scope: { customerName: 'Customer One', clusterName: 'Cluster One' },
   authorization: {
     canApproveValuesRevision: false,
     load: vi.fn(async () => undefined),
@@ -33,7 +42,7 @@ const mocks = vi.hoisted(() => ({
     error: null as string | null,
     canonicalCurrent: {} as unknown | null,
     validationIssue: null,
-    diffResult: { changes: [], hasChanges: false },
+    diffResult: { changes: [], hasChanges: false } as DiffResult,
     secretRefs: [],
     availableSecrets: [],
     secretRefsError: null,
@@ -68,6 +77,18 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => ({ push: mocks.push }) }));
+vi.mock('@/composables/useScopeNames', async () => {
+  const { computed, reactive } = await import('vue');
+  const scope = reactive(mocks.scope);
+  return {
+    useScopeNames: () => ({
+      customerId: computed(() => 'customer-1'),
+      clusterId: computed(() => 'cluster-1'),
+      customerName: computed(() => scope.customerName),
+      clusterName: computed(() => scope.clusterName),
+    }),
+  };
+});
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => mocks.auth }));
 vi.mock('@/stores/valuesEditor', async () => {
   // TASK-267: the stub is reactive so the page's `v-if`/`@dismiss` wiring can be
@@ -83,6 +104,7 @@ function mountPage() {
   return mount(ValuesEditorPage, {
     global: {
       stubs: {
+        RouterLink: true,
         ValuesEditorSkeleton: { template: '<div data-testid="values-skeleton">Loading values</div>' },
         ValuesCodeEditor: {
           props: ['modelValue'],
@@ -160,6 +182,9 @@ describe('ValuesEditorPage reject reason (AC-055-11)', () => {
     return mount(ValuesEditorPage, {
       global: {
         stubs: {
+          // PageHeader renders a RouterLink for a linked crumb; this suite mounts the page
+          // outside a router (vue-router is mocked), so the component must be stubbed.
+          RouterLink: true,
           ValuesEditorSkeleton: true,
           ValuesCodeEditor: { props: ['modelValue'], template: '<pre>{{ modelValue }}</pre>' },
           ValuesDiffPanel: true,
@@ -225,6 +250,9 @@ describe('ValuesEditorPage return to task list (AC-055-15)', () => {
     return mount(ValuesEditorPage, {
       global: {
         stubs: {
+          // PageHeader renders a RouterLink for a linked crumb; this suite mounts the page
+          // outside a router (vue-router is mocked), so the component must be stubbed.
+          RouterLink: true,
           ValuesEditorSkeleton: true,
           ValuesCodeEditor: { props: ['modelValue'], template: '<pre>{{ modelValue }}</pre>' },
           ValuesDiffPanel: true,
@@ -332,6 +360,9 @@ describe('ValuesEditorPage notice lifetime (TASK-267)', () => {
     const wrapper = mount(ValuesEditorPage, {
       global: {
         stubs: {
+          // PageHeader renders a RouterLink for a linked crumb; this suite mounts the page
+          // outside a router (vue-router is mocked), so the component must be stubbed.
+          RouterLink: true,
           ValuesEditorSkeleton: true,
           ValuesCodeEditor: { props: ['modelValue'], template: '<pre data-testid="values-editor">{{ modelValue }}</pre>' },
           ValuesDiffPanel: true,
@@ -397,5 +428,131 @@ describe('ValuesEditorPage notice lifetime (TASK-267)', () => {
     await wrapper.get('[data-testid="save"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-testid="values-editor-toast"]').text()).toContain('已保存为 Draft');
+  });
+});
+
+/*
+ * TASK-394 (direction C). The page moved onto the shared PageHeader and the two-column
+ * editor | diff row. These pin the contract the migration must preserve: names (never
+ * identifiers) in the crumbs, a language switch that really reaches the store, the header
+ * save entry, the diff data source, and the disabled read-only state.
+ */
+describe('ValuesEditorPage direction C surface (TASK-394)', () => {
+  function mountWithDiffStub() {
+    return mount(ValuesEditorPage, {
+      global: {
+        stubs: {
+          // PageHeader renders a RouterLink for a linked crumb; this suite mounts the page
+          // outside a router (vue-router is mocked), so the component must be stubbed.
+          RouterLink: true,
+          ValuesEditorSkeleton: true,
+          ValuesCodeEditor: {
+            props: ['modelValue', 'language', 'readOnly'],
+            template: '<pre data-testid="values-editor">{{ modelValue }}</pre>',
+          },
+          ValuesDiffPanel: {
+            props: ['result'],
+            template: '<pre data-testid="values-diff">{{ JSON.stringify(result) }}</pre>',
+          },
+          SecretRefEditor: true,
+          ValuesRevisionActions: true,
+          ValuesConflictDialog: true,
+          RejectRevisionDialog: true,
+          ErrorState: true,
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    Object.assign(mocks.editor, {
+      currentRevision: null,
+      parentRevision: null,
+      editorContent: '{}',
+      editorLanguage: 'yaml',
+      loading: false,
+      error: null,
+      canonicalCurrent: {},
+      restoredDraft: false,
+      toast: null,
+      showConflictDialog: false,
+      saving: false,
+      saveDisabled: false,
+      diffResult: { changes: [], hasChanges: false } as DiffResult,
+    });
+    mocks.auth.user = { id: 'admin-1', roles: ['release_admin'] };
+    Object.assign(mocks.scope, { customerName: 'Customer One', clusterName: 'Cluster One' });
+    vi.clearAllMocks();
+  });
+
+  it('heads the page with the release name and passes scope names as crumbs', async () => {
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    expect(wrapper.get('h1').text()).toBe('Release One Values');
+    const crumbs = wrapper.get('nav[aria-label="面包屑"]').text();
+    expect(crumbs).toContain('Customer One');
+    expect(crumbs).toContain('Cluster One');
+    expect(crumbs).toContain('Release One');
+    expect(crumbs).not.toContain('definition-1');
+    expect(wrapper.text()).toContain('编辑 canonical values，通过 SecretRef 引用集群 Secret。');
+  });
+
+  it('omits a crumb whose resolved name is the identifier instead of printing a UUID', async () => {
+    Object.assign(mocks.scope, { customerName: 'customer-1', clusterName: 'cluster-1' });
+
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    const crumbs = wrapper.get('nav[aria-label="面包屑"]').text();
+    expect(crumbs).not.toContain('customer-1');
+    expect(crumbs).not.toContain('cluster-1');
+    expect(crumbs).toContain('Release One');
+  });
+
+  it('switches the editor language through the segmented control', async () => {
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    const yaml = wrapper.get('[data-testid="values-language-yaml"]');
+    const json = wrapper.get('[data-testid="values-language-json"]');
+    expect(yaml.attributes('aria-pressed')).toBe('true');
+    expect(json.attributes('aria-pressed')).toBe('false');
+
+    await json.trigger('click');
+    expect(mocks.editor.setEditorLanguage).toHaveBeenCalledWith('json');
+  });
+
+  it('saves a new revision from the header action', async () => {
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    await wrapper.get('[data-testid="values-save-new"]').trigger('click');
+    expect(mocks.editor.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the language switch and the save action for a read-only role', async () => {
+    mocks.auth.user = { id: 'viewer-1', roles: ['viewer'] };
+
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    expect(wrapper.get('[data-testid="values-language-yaml"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="values-language-json"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="values-save-new"]').attributes('disabled')).toBeDefined();
+  });
+
+  it('feeds the store diff result into the side-by-side panel', async () => {
+    mocks.editor.diffResult = {
+      changes: [{ path: '.replicas', kind: 'modified', oldValue: 1, newValue: 3 }],
+      hasChanges: true,
+    };
+
+    const wrapper = mountWithDiffStub();
+    await flushPromises();
+
+    const panel = wrapper.get('[data-testid="values-diff"]').text();
+    expect(panel).toContain('.replicas');
+    expect(panel).toContain('"newValue":3');
   });
 });
