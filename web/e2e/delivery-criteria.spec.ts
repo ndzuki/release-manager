@@ -44,6 +44,12 @@ const LOGIN_BUDGET_MS = 4000;
 const ROLLBACK_ROW = '[data-testid^="release-rollback-"]';
 const ROLLBACK_METHOD = 'RollbackRelease';
 
+// The release inventory's two terminal renderings: the rows, or the shared EmptyState.
+// The old `[data-testid="release-inventory-empty"]` marker is gone — TASK-394 converged the
+// page onto EmptyState/ReleaseInventorySkeleton — so waiting on it only ever burned the
+// timeout and hid "renders nothing at all" behind "still loading".
+const INVENTORY_SETTLED = 'tbody tr, .empty-state';
+
 // H3 asks whether Escape leaves NO RollbackRelease behind, and that is a negative
 // assertion — a negative assertion with no observation window is not evidence.
 // Reading the counter the instant the panel hides cannot see a request that leaves
@@ -62,6 +68,15 @@ const LIST_NON_TERMINAL = 'orchestrator.v1.OrchestratorService/ListNonTerminalOp
 // The correlation id the H4 read-failure case asserts is rendered where the
 // operator can copy it.
 const MOCK_REQUEST_ID = 'e2e-h4-read-failure';
+
+// TASK-394 direction C: the operation detail page no longer renders the hand-rolled
+// `.operation-detail__eyebrow` / `.operation-detail__header code` / `.operation-detail__state`
+// markup. PageHeader renders the SERVER's operation type as the h1 — `{type}操作`, and
+// `{type}操作 · {release}` when the route carries a release name (i18n/messages.ts
+// `operation.detail.title` / `operation.detail.titleWithRelease`) — while the id and the
+// definition moved into the summary as CopyableHash values whose `title` attribute carries
+// the FULL string (the visible text is truncated on screen).
+const OPERATION_TITLE = /^(安装|升级|回滚|紧急变更)操作( · .+)?$/;
 
 // E2E_BACKEND=true means the environment was declared up: a missing credential
 // is a misconfiguration that must fail, not silently skip the whole case.
@@ -106,7 +121,7 @@ async function openReleases(page: Page): Promise<void> {
 // state smoke.sh leaves behind (same precondition as rollback.spec.ts).
 async function requireRollbackTrigger(page: Page): Promise<Locator> {
   await page
-    .locator('tbody tr, [data-testid="release-inventory-empty"]')
+    .locator(INVENTORY_SETTLED)
     .first()
     .waitFor({ state: 'attached', timeout: 20_000 })
     .catch(() => undefined);
@@ -202,11 +217,27 @@ test('H2 关键页可达：客户 → 集群 → 发布清单 → 创建操作 �
   // The list must hold the operations the prerequisite smoke left behind.
   const firstOperation = page.locator('.operation-list__table tbody tr a').first();
   await expect(firstOperation).toBeVisible({ timeout: 20_000 });
+  // The history row prints the operation id in full, so it is the expected value for the
+  // detail page's own identity assertion below.
+  const listedOperationId = (await firstOperation.innerText()).trim();
   await firstOperation.click();
   await page.waitForURL((url) => url.pathname.includes('/operations/'));
-  await expect(page.locator('.operation-detail__eyebrow')).toBeVisible();
-  const operationId = (await page.locator('.operation-detail__header code').innerText()).trim();
-  expect(operationId).not.toBe('');
+  // The detail page is reached AND it is the detail of the operation the history row
+  // links to: the h1 is the server-derived type title, and the summary's CopyableHash
+  // `title` (the full value, not the truncated render) must equal the listed id. The
+  // bound definition must be the one the scoped route names — two identities, both whole.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(OPERATION_TITLE);
+  expect(listedOperationId, 'the operation history row must render the id it links to').not.toBe('');
+  const pathParts = new URL(page.url()).pathname.split('/');
+  const urlDefinitionId = pathParts[pathParts.lastIndexOf('releases') + 1] ?? '';
+  expect(urlDefinitionId, 'the scoped detail route must name a release definition').not.toBe('');
+  const summary = page.locator('.operation-detail__summary');
+  await expect(
+    summary.locator('dt:text-is("Operation ID") + dd .copyable-hash__value'),
+  ).toHaveAttribute('title', listedOperationId);
+  await expect(
+    summary.locator('dt:text-is("ReleaseDefinition") + dd .copyable-hash__value'),
+  ).toHaveAttribute('title', urlDefinitionId);
 });
 
 test('H3 危险操作确认：回滚走自定义 alertdialog，Esc 取消且不发出请求', async ({ page }) => {
