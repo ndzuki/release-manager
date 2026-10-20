@@ -2138,9 +2138,9 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期
 - **没做**：故障注入、SIGTERM、`make quality` 全量 Go 门禁（本次 0 个 Go 文件改动）；没有在 Values 编辑器里做实际保存/审批（只读观察 + 主题切换）；没有与 `:7427e7b` 做同屏 A/B（旧版已不在入口服务，before 依据是同一脚本在滚动前对同一数据的测量）。
 - **§0/§1 的镜像 tag 口径仍停在 §8.11**，本次未改（与 §8.12–§8.14 同例）；要看当前运行 tag 以 §8.15 与本节的 revision 表为准。
 
-### 8.16 实测：方向 C 多页面改版发布（`f3b328d` → `a059272`；无迁移、无依赖变化、仅 `web` 镜像内容变化，2026-10-20，TASK-394 ①–⑨）
+### 8.16 实测：方向 C 多页面改版发布（`f3b328d` → `5080198`；无迁移、无依赖变化、仅 `web` 镜像内容变化，2026-10-20，TASK-394 ①–⑨）
 
-§8.15 把 `f3b328d` 发布后，方向 C 的**页面迁移**在当日谷时分十二个小步落地（每个 PR 独立复核、门禁全绿后合并），本次把 `origin/main` 从 `f3b328d` 前移到 **`a059272`**（`Merge pull request #506 from ndzuki/fix/e2e-console-redesign`，完整 sha `a0592722cff37dcc5c2601d27fb2a8b5361b40eb`），并把 `web` 滚动上去。
+§8.15 把 `f3b328d` 发布后，方向 C 的**页面迁移**在当日谷时分十余个小步落地（每个 PR 独立复核、门禁全绿后合并）。本次把 `origin/main` 从 `f3b328d` 前移到 **`5080198`**（完整 sha `508019845f…`），`web` 共滚动 **两次**：先 `:fe3cbad`（rev 19，全部产品改动），再 `:6a8f3b7`/`:5080198`（rev 21/22，真机验收发现的两处 Values 标题重复修复）。三次镜像的**产品产物**在 `fe3cbad` 之后才真正改变（`a059272`/`fe3cbad` 的节点 IMAGE ID 同为 `f46bdc433bef5`）。
 
 **本波合并的 PR（按合并顺序）**
 
@@ -2151,7 +2151,9 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期
 | #492 | 语义色文字迁移（102 条 `color:` 改用 ink/strong 阶；新增静态门禁「语义基色不得出现在 `color:`」，并修好该门禁的 `color-mix` 解析，避免 NaN 空转） |
 | #495 / #501 / #503 | `PageHeader` 新增 `eyebrow`；客户/集群/Operator/账号/表格三页/治理四页/操作三页/认证与错误页共 **25 页**统一（表头 band、外框、双重内边距、UUID→名称或 `CopyableHash`）；补 Emergency 页（此前未覆盖） |
 | #505 | 界面文案「干净化」：A 档 40 条、术语统一（Revision→版本、Definition→发布定义、`platform_admin`→平台管理员等）、去掉 9 处 `text-transform: uppercase` 造成的混排、字段直译转中文；catalog 967→1044 键 |
-| #500 / #506 | **既有 CI 缺陷修复**：`e2e-prerequisite` 的 `smoke.sh` 三处 `ExecuteEmergencyChange` 缺必填 `reason`（服务端 `emergency.go:547` 要求 1..1000 字节）——该红在 §8.13/§8.14/§8.15 三个部署点与更早 main 上就存在；以及改版后 4 个 console spec 的选择器/文案/mock 时序失效 |
+| #507 | §8.16 部署记录（本文件） |
+| #509 / #510 | Values 编辑器标题收口：三层标签 → 单一 h2；面板标题改为「Values 内容」以消除与页面标题的重复（真机验收发现） |
+| #508 / #500 / #506 | **既有 CI 缺陷修复**：`e2e-prerequisite` 的 `smoke.sh` 三处 `ExecuteEmergencyChange` 缺必填 `reason`（服务端 `emergency.go:547` 要求 1..1000 字节）——该红在 §8.13/§8.14/§8.15 三个部署点与更早 main 上就存在；以及改版后 4 个 console spec 的选择器/文案/mock 时序失效 |
 
 **变更面**（`git diff --no-ext-diff --shortstat f3b328d..a059272`）：**174 个文件，+9504/−2442**。
 
@@ -2168,7 +2170,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz # 期
 
 | 服务 | 发布前 `:f3b328d` | 发布后 `:a059272` | 内容变化 |
 | --- | --- | --- | --- |
-| `web` | `501e3990af27f` | **`f46bdc433bef5`** | **是** |
+| `web` | `501e3990af27f` | **`6bc81023d5bef`**（`:5080198`；中间 `:fe3cbad`/`:a059272` = `f46bdc433bef5`） | **是** |
 | `api` | `e974b98f7cb80` | `e974b98f7cb80` | 否（未重建） |
 | `auth` | `1ad5fa70ca651` | `1ad5fa70ca651` | 否 |
 | `orchestrator` | `e6df24dfbb754` | `e6df24dfbb754` | 否 |
@@ -2198,8 +2200,8 @@ docker exec k3d-rm-prod-server-0 crictl images | grep "release-web.*a059272"
 
 | 项 | 发布前 | 发布后 |
 | --- | --- | --- |
-| `web` 镜像 | `:f3b328d` | **`:a059272`** |
-| `web` revision | 18 | **20** |
+| `web` 镜像 | `:f3b328d` | **`:5080198`** |
+| `web` revision | 18 | **22**（`fe3cbad`=19 → `6a8f3b7`=21 → `5080198`=22） |
 | Pod | 10 工作负载 `1/1` + 3 个 `Completed`（备份 Job） | 同左，`RESTARTS` 全 **0** |
 | schema | `36\|f` | `36\|f`（未变） |
 | 入口 | `/` 200、`/readyz` 200 | `/` **200**、`/readyz` **200** |
@@ -2213,6 +2215,17 @@ docker exec k3d-rm-prod-server-0 crictl images | grep "release-web.*a059272"
 - ✅ **「无效 id 永久正在加载」缺陷已在生产验证修复**：`/operations/11111111-2222-…` 打开后 `errorState=true`、`loading=false`、不再出现「正在加载」文案。
 - console error 仅 3 例且均为**预期网络响应**：首页登录探测 `401`（无会话探测）、无效 id 的 `404`；无 JS 异常（`pageerror` 0）。
 - 页面形态抽查（真实 DOM）：发布清单/创建操作/Values/紧急变更均有 **1 个 `h1`**，`.page-header` 存在（紧急变更页采用无 actions 的 PageHeader），表格外框与状态胶囊渲染正常。
+
+**既定 CI 车道的最终状态（23:40 +08）**
+
+- `e2e-prerequisite` 在 `6a8f3b7` 上 **success**（`==== SMOKE SUMMARY: 48 pass, 0 fail ====` + 全部 console spec 通过）——这是自 §8.13 以来该车道的**第一次全绿**，此前每个 main 提交都带着它。
+- 期间另有一次失败是**一次性 flake**：失败快照显示页面停在启动失败「无法连接发布管理服务 / [internal] internal error」，Home 磁贴从未渲染（`getByTestId('home-tile-StuckLocks')` 等不到）。按纪律 `rerun` 后转绿，未当作缺陷、也未放宽断言。
+
+**第二次滚动后的真机复验（`5080198`，真实生产会话）**
+
+- Values 页：h1「Values 文档」+ 面板 h2「Values 内容」，**不再重复**（旧的微标签 `values-section__title` 已删，孤儿 key `values.page.editor` 一并删除）。
+- 抽查 12 个路由 × 暗/亮（首页 / 审计 / 发布定义 / 紧急锁 / 信任根 / 授权绑定 / 组织成员 / 本地用户 / 制品生命周期 / 发布 Bundle / 客户 / 操作中心）：**24/24 `scrollWidth === innerWidth`**、每页恰好 **1 个 `h1`**、旧 `.eyebrow` **0**。
+- 截图：`/tmp/rm-prod-verify/final/`（24 张）与 `/tmp/rm-prod-verify/shots3/`（16 张，含发布清单/创建操作/Values/紧急变更/收敛/Operator/集群详情）。
 
 **本波修复的两处既有 CI 缺陷（如实记录）**
 
