@@ -3,6 +3,7 @@ import { t } from '@/i18n/messages';
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import { changePassword, mapChangePasswordError, passwordTooLong, PASSWORD_MAX_BYTES } from '@/connect/auth-api';
 import { useAuthStore } from '@/stores/auth';
 
@@ -20,6 +21,14 @@ import { useAuthStore } from '@/stores/auth';
  */
 const router = useRouter();
 const auth = useAuthStore();
+
+/*
+ * W2 (TASK-394): the heading and its hint moved out of the hand-rolled <header> into
+ * PageHeader. The copy itself is still inline and registered as such in the W5
+ * manifest (`messages.usage.test.ts`); centralising it is the separate Chinese wave.
+ */
+const pageTitle = '修改密码';
+const pageHint = '修改成功后所有会话都会被撤销，需要重新登录。';
 
 const oldPassword = ref('');
 const newPassword = ref('');
@@ -66,13 +75,7 @@ async function submit(): Promise<void> {
 
 <template>
   <section class="change-password">
-    <header>
-      <p class="eyebrow">{{ t('account.security') }}</p>
-      <h1>修改密码</h1>
-      <p class="change-password__hint">
-        修改成功后所有会话都会被撤销，需要重新登录。
-      </p>
-    </header>
+    <PageHeader :eyebrow="t('account.security')" :title="pageTitle" :subtitle="pageHint" />
 
     <p v-if="changed" class="change-password__success" role="status" data-testid="change-password-success">
       密码已修改，正在跳转到登录页…
@@ -119,30 +122,18 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
+/* W2 (TASK-394): the shell's <main> already carries the page padding (24px 32px 48px);
+   this page added a second var(--space-5) on top of it. */
 .change-password {
   display: grid;
   gap: var(--space-4);
   max-width: 32rem;
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-.change-password h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.change-password__hint {
-  margin: var(--space-1) 0 0;
-  color: var(--color-muted);
+/* PageHeader owns a 20px bottom margin; the grid gap above is the spacing here. */
+.change-password :deep(.page-header) {
+  margin-bottom: 0;
 }
 
 .change-password__success {

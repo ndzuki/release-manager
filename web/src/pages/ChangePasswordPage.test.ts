@@ -135,4 +135,18 @@ describe('ChangePasswordPage', () => {
 
     expect(mockedChange).toHaveBeenCalledWith('old-secret', 'new-secret');
   });
+
+  /*
+   * W2 (TASK-394): the hand-rolled <header> moved to PageHeader. The copy itself did
+   * not change (it is still the inline Chinese the W5 manifest registers); what moved is
+   * which slot each line occupies.
+   */
+  it('heads the page through PageHeader without changing the copy (W2)', async () => {
+    const { wrapper } = await mountPage();
+
+    const header = wrapper.get('.page-header');
+    expect(header.get('.page-header__eyebrow').text()).toBe('账号安全');
+    expect(header.get('h1').text()).toBe('修改密码');
+    expect(header.get('.page-header__subtitle').text()).toBe('修改成功后所有会话都会被撤销，需要重新登录。');
+  });
 });

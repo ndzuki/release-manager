@@ -6,6 +6,8 @@ import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import CopyableHash from '@/components/common/CopyableHash.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import OperatorPollingNotice from '@/components/operators/OperatorPollingNotice.vue';
 import OperatorStatusBadge from '@/components/operators/OperatorStatusBadge.vue';
@@ -27,6 +29,18 @@ const showRevoke = shallowRef(false);
 // W10 (UX-041): the detail page updated the badge without saying the revocation
 // had gone through; the toast is the confirmation the operator acts on.
 const revokeNotice = ref<string | null>(null);
+
+/*
+ * W2 (TASK-394): the header used to print the operator UUID on its own line and fell
+ * back to it as the h1. Neither is readable. The name is the title (the enrolment flow
+ * requires one, so the fallback is the page label rather than an identifier), the cluster
+ * name is the subtitle, and the id itself moved to the identity card as a CopyableHash —
+ * truncated on screen, complete in `title`, copyable.
+ */
+const operatorName = computed(() => store.current?.name?.trim() ?? '');
+const operatorTitle = computed(() => operatorName.value || t('operator.detail.title'));
+const operatorEyebrow = computed(() => (operatorName.value ? t('operator.detail.title') : undefined));
+const operatorSubtitle = computed(() => store.current?.clusterName ?? '');
 
 async function refresh(): Promise<boolean> {
   return store.loadDetail(customerId.value, clusterId.value, operatorId.value);
@@ -71,22 +85,23 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
     </ErrorState>
 
     <template v-else-if="store.current">
-      <header class="page__header">
-        <div>
-          <p class="eyebrow">{{ t('operator.detail.title') }}</p>
-          <h1>{{ store.current.name || store.current.id }}</h1>
-          <p>{{ store.current.id }}</p>
-        </div>
-        <div class="actions">
-          <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
-          <button
-            v-if="auth.canRevokeOperators && store.current.lifecycleStatus !== 'revoked'"
-            type="button"
-            class="danger"
-            @click="showRevoke = true"
-          >{{ t('operator.detail.revokeOperator') }}</button>
-        </div>
-      </header>
+      <PageHeader
+        :eyebrow="operatorEyebrow"
+        :title="operatorTitle"
+        :subtitle="operatorSubtitle"
+      >
+        <template #actions>
+          <div class="actions">
+            <button type="button" @click="refresh">{{ t('action.refresh') }}</button>
+            <button
+              v-if="auth.canRevokeOperators && store.current.lifecycleStatus !== 'revoked'"
+              type="button"
+              class="danger"
+              @click="showRevoke = true"
+            >{{ t('operator.detail.revokeOperator') }}</button>
+          </div>
+        </template>
+      </PageHeader>
 
       <p v-if="store.error" class="warning" role="alert">
         {{ store.error.message }} {{ t('operator.detail.stale') }}
@@ -108,11 +123,18 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
       <section class="card" aria-labelledby="identity-title">
         <h2 id="identity-title">{{ t('operator.detail.identity') }}</h2>
         <dl class="details">
-          <div><dt>{{ t('operator.detail.customer') }}</dt><dd>{{ store.current.customerId }}</dd></div>
-          <div><dt>{{ t('operator.detail.cluster') }}</dt><dd>{{ store.current.clusterName }} · {{ store.current.clusterId }}</dd></div>
+          <div><dt>{{ t('operator.detail.id') }}</dt><dd><CopyableHash :value="store.current.id" /></dd></div>
+          <div><dt>{{ t('operator.detail.customer') }}</dt><dd><CopyableHash :value="store.current.customerId" /></dd></div>
+          <div><dt>{{ t('operator.detail.cluster') }}</dt><dd>{{ store.current.clusterName }} · <CopyableHash :value="store.current.clusterId" /></dd></div>
           <div><dt>{{ t('operator.detail.instance') }}</dt><dd>{{ store.current.instanceId ?? t('operator.detail.notReported') }}</dd></div>
           <div><dt>{{ t('operator.detail.version') }}</dt><dd>{{ store.current.version ?? t('operator.detail.notReported') }}</dd></div>
-          <div><dt>{{ t('operator.detail.supersededBy') }}</dt><dd>{{ store.current.supersededBy ?? '—' }}</dd></div>
+          <div>
+            <dt>{{ t('operator.detail.supersededBy') }}</dt>
+            <dd>
+              <CopyableHash v-if="store.current.supersededBy" :value="store.current.supersededBy" />
+              <template v-else>—</template>
+            </dd>
+          </div>
           <div><dt>{{ t('operator.detail.revokedAt') }}</dt><dd>{{ formatOperatorTime(store.current.revokedAt) }}</dd></div>
         </dl>
         <div v-if="Object.keys(store.current.capabilities).length" class="capabilities">
@@ -141,19 +163,25 @@ const { stopped: pollingStopped, resume: resumePolling } = useOperatorPolling({ 
 </template>
 
 <style scoped>
-.page { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
-.page__header, .actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-h1, h2, h3, p { margin: 0; }
-.page__header > div:first-child > p:last-child { margin-top: 0.375rem; color: var(--color-muted); }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 800; text-transform: uppercase; }
+.page { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; min-width: 0; }
+/* PageHeader owns a 20px bottom margin; the grid gap above already spaces the header
+   from the first card, so the two must not stack. */
+.page :deep(.page-header) { margin-bottom: 0; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 1rem; }
+h2, h3, p { margin: 0; }
 .actions button { padding: 0.55rem 0.8rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
 .actions .danger { border-color: var(--color-danger-border); color: var(--color-error-strong); }
 .warning { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-warning-soft); color: var(--color-warning-ink); }
-.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
-.summary, .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin: 0; }
+/* W2 (TASK-394): direction-C card — the strong border alone left the card flat against
+   the page in the dark theme, so the card carries its own surface and the 8px radius. */
+.card { display: grid; gap: 1rem; padding: 1.25rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); min-width: 0; }
+.summary, .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin: 0; min-width: 0; }
 dt { color: var(--color-muted); }
 dd { margin: 0.25rem 0 0; font-weight: 700; overflow-wrap: anywhere; }
-.reason { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-bg); color: var(--color-muted-strong); }
+/* CopyableHash inherits the 700 of its dd; a machine value reads better at the medium
+   weight (the chip already carries its own border and mono face). */
+dd :deep(.copyable-hash) { font-weight: var(--font-weight-medium); }
+.reason { padding: 0.75rem; border-radius: 0.5rem; background: var(--color-surface-muted); color: var(--color-muted-strong); }
 .capabilities { display: grid; gap: 0.5rem; }
 .capabilities ul { margin: 0; padding-left: 1.25rem; }
 .danger-card { border-color: var(--color-danger-border-soft); background: var(--color-danger-soft); }

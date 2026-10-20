@@ -17,7 +17,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="table-wrap">
+  <div class="table-wrap" role="region" :aria-label="t('operator.table.caption')" tabindex="0">
     <table class="operators">
       <!-- UX-017 (W14): caption + column scopes, so the table has a name and
            every header is bound to its column. -->
@@ -43,7 +43,10 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.table-wrap { overflow-x: auto; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+/* W2 (TASK-394): the frame belongs to the scroller (the global `.table-wrap` supplies
+   the containment), and it needs a surface fill so the rounded frame reads as a card
+   rather than an outline floating on the page background. */
+.table-wrap { overflow-x: auto; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); }
 .operators { width: 100%; border-collapse: collapse; }
 .operators th, .operators td { padding: 0.8rem; border-bottom: 1px solid var(--color-border-strong); text-align: left; vertical-align: top; }
 /*
@@ -55,7 +58,10 @@ const emit = defineEmits<{
  */
 .operators__name { overflow-wrap: anywhere; }
 .operators__time { white-space: nowrap; }
-.operators th { background: var(--color-bg); color: var(--color-muted-strong); font-size: var(--font-size-sm); text-transform: uppercase; }
+/* W2 (TASK-394): the header used `--color-bg` — the page colour, which is what makes a
+   header row disappear instead of separating it from the body. Direction C paints it on
+   the muted surface with the strong muted ink. */
+.operators th { background: var(--color-surface-muted); color: var(--color-muted-strong); font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); letter-spacing: 0.01em; }
 .operators small { display: block; max-width: 18rem; margin-top: 0.35rem; color: var(--color-muted); white-space: normal; }
 .link { border: 0; background: transparent; color: var(--color-primary); cursor: pointer; font-weight: 700; }
 .danger { padding: 0.35rem 0.6rem; border: 1px solid var(--color-danger-border); border-radius: 0.375rem; background: var(--color-surface); color: var(--color-error-strong); cursor: pointer; }
