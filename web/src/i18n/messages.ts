@@ -26,6 +26,23 @@ const zhCN = {
   'shell.organization.choose': '组织',
   'shell.organization.switchError': '切换组织失败，请重试',
   'shell.signOut': '退出登录',
+  /*
+   * Direction C sidebar (TASK-394). The three group headings keep the 14 entries in the
+   * 212px rail scannable; they are new copy, so they go through the catalog rather than
+   * into the component (the older navigation labels are inline and already registered).
+   */
+  'shell.nav.group.release': '发布与运维',
+  'shell.nav.group.assets': '资产与审计',
+  'shell.nav.group.governance': '治理与账号',
+  /*
+   * The theme control cycles system → light → dark. The accessible name states the
+   * CURRENT preference, because a bare "toggle theme" does not tell a screen-reader user
+   * what the button will do next.
+   */
+  'shell.theme.toggle': '切换主题（当前：{theme}）',
+  'shell.theme.system': '跟随系统',
+  'shell.theme.light': '浅色',
+  'shell.theme.dark': '深色',
   'nav.customers': '客户',
   'nav.clusters': '集群',
   'nav.audit': '审计',
@@ -177,6 +194,16 @@ const zhCN = {
   'release.table.valuesDigest': 'Values 摘要',
   'release.table.scrollRegion': '发布清单表格（可横向滚动）',
   'common.breadcrumb': '面包屑',
+  /*
+   * Direction C copy affordance (TASK-394, CopyableHash). The failure copy names the
+   * manual fallback because the truncated value stays selectable on screen; it is
+   * rendered visibly, not only announced, so a refused clipboard write cannot look like
+   * success.
+   */
+  'common.copy': '复制',
+  'common.copied': '已复制',
+  'common.copyFailed': '复制失败，请手动选中复制',
+  'common.copyFullValue': '复制完整值',
   /*
    * Accessible name for a form control that lives in a repeated table row: the field
    * name alone repeats once per row, so a screen-reader user tabbing through the row
