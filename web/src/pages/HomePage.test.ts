@@ -30,10 +30,10 @@ import {
  * overview of four numbers, the in-progress queue and per-cluster health. These
  * cases pin three things the redesign must not lose:
  *
- *   - the entry grid is still the navigation fallback, and every tile names a real
- *     route;
- *   - a number only appears when the read behind it succeeded — the 7-day success
- *     rate has no cross-release source, so it stays "—/接口未提供";
+ *   - the entry grid is still the navigation fallback (REQ-100 §5.1 N1), and every
+ *     tile names a real route;
+ *   - a number only appears when the read behind it succeeded — the sync rate is
+ *     derived from the inventory and reads "—" when there are no rows to divide by;
  *   - a refused or unavailable source degrades on its own, without blanking the
  *     rest of the page.
  *
@@ -154,9 +154,8 @@ describe('HomePage workbench', () => {
     expect(tiles.length).toBeGreaterThan(5);
     expect(wrapper.find('[data-testid="home-tile-CustomerList"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="home-tile-Audit"]').exists()).toBe(true);
-    // The tiles live behind a collapsed <details> so the sidebar stays the primary
-    // navigation; the summary is the visible label (review of PR #484).
-    expect(wrapper.get('.home-page__quicklinks summary').text()).toBe('快速入口');
+    // REQ-100 §5.1 N1 keeps the workbench visible, so the heading is a real h2 again.
+    expect(wrapper.get('#home-quicklinks-title').text()).toBe('快速入口');
   });
 
   // A tile whose route name is misspelled would render and then explode on click; this
@@ -222,7 +221,7 @@ describe('HomePage stat cards', () => {
    * operation query, so the success rate has no sample size to divide by.
    */
   /*
-   * The hero row used to spend a slot on a "7-day success rate" the contract cannot
+
    * compute; the independent review of PR #484 called the permanent "—" card a broken
    * hero. It now reports the sync rate of the inventory the page already reads, and stays
    * honest when that inventory has no rows.

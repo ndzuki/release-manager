@@ -22,10 +22,10 @@ import type { NonTerminalOperationItem } from '@/connect/operation-api';
  *     operations whose cluster effect is still unknown past the observation
  *     window. That is exactly the "needs an explicit convergence decision" set.
  *
- * The 7-day success rate is NOT here on purpose: no cross-release terminal
+
  * operation query exists (ListOperations is scoped to one release definition),
  * and the audit query is a cursor-paginated event list with no aggregate. The
- * page renders "— / 接口未提供" for it instead of inventing a number.
+
  */
 export type InventoryReleaseStatus = 'active' | 'missing' | 'out_of_sync' | 'unknown';
 

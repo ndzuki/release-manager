@@ -897,12 +897,6 @@ const zhCN = {
   'home.overview.loading': '正在加载…',
   'home.overview.loadFailed': '加载失败',
   'home.overview.featureOff': '功能未启用',
-  /*
-   * The one value the home overview may never compute: no cross-release terminal
-   * operation query exists (ListOperations is scoped to one release definition) and
-   * the audit query is a cursor-paginated event list with no aggregate, so a "7-day
-   * success rate" would have to invent its sample. The card says so instead.
-   */
   'home.stat.pendingConvergence': '待收敛发布',
   'home.stat.pendingConvergenceHint': '共 {count} 个发布',
   'home.stat.activeOperations': '进行中操作',

@@ -15,23 +15,24 @@ import type { InventoryRelease } from '@/components/home/homeOverview';
 /*
  * Home overview (TASK-394, direction C).
  *
- * The page answers four questions and then gets out of the way: how many releases
- * still need convergence, how much work is in flight, how the last week went, and
- * whether any emergency change is waiting for an explicit decision. Below them sit
- * the in-progress queue and the per-cluster health the operation centre and the
+ * The page answers four questions and then gets out of the way: how many releases still
+ * need convergence, how much work is in flight, how much of the inventory matches its
+ * clusters, and whether any emergency change is waiting for an explicit decision. Below
+ * them sit the in-progress queue and the per-cluster health the operation centre and the
  * release inventory each know how to read.
  *
  * Two rules the layout enforces, both of them honesty rules rather than styling:
  *
- * 1. A number is rendered only when the read that produces it succeeded. Every
- *    metric card falls back to "—" with the reason in its hint (接口未提供 /
- *    加载失败 / 功能未启用) instead of a 0 that reads like a healthy state. The
- *    7-day success rate is permanently in that bucket: no cross-release terminal
- *    operation query exists, and the audit list is cursor-paginated with no total,
- *    so computing a rate would mean inventing a sample size.
- * 2. The navigation tiles stay. They were the only way into most surfaces from
- *    the console's front door, so the redesign tucks them into a "quick links"
- *    card instead of replacing them with the overview.
+ * 1. A number is rendered only when the read that produces it succeeded. Every metric
+ *    card falls back to "—" with the reason in its hint (加载失败 / 功能未启用) instead of
+ *    a 0 that reads like a healthy state. The sync-rate card is derived from the release
+ *    inventory the page already reads, so it never needs a second source; with no rows it
+ *    shows "—" rather than a meaningless 0%.
+ * 2. The navigation tiles stay VISIBLE. REQ-100 §5.1 N1 requires the workbench to offer
+ *    more than four entries and the console E2E lane asserts they are reachable, so the
+ *    redesign tucks them into a "quick links" card instead of replacing or collapsing
+ *    them. (Collapsing them was proposed in review; that is a requirement change, not a
+ *    styling change.)
  */
 const auth = useAuthStore();
 const router = useRouter();
@@ -297,11 +298,13 @@ const tiles = computed<Tile[]>(() => {
       />
     </div>
 
-    <!-- The tiles duplicate the sidebar, so they start collapsed. They stay in the DOM
-         because the rail folds into a drawer at <=1024px, where the tiles are the only
-         discovery surface (independent review of PR #484 asked for exactly this). -->
-    <details class="home-page__quicklinks">
-      <summary class="home-page__quicklinks-title">{{ t('home.quickLinks.title') }}</summary>
+    <!-- The tiles stay visible on purpose: REQ-100 §5.1 N1 requires the home workbench to
+         offer more than four entries, and the console E2E lane asserts they are reachable.
+         Collapsing them was proposed in the PR #484 review, but that is a requirement change
+         (it would make the workbench undiscoverable until expanded), so it is recorded as a
+         product question rather than applied here. -->
+    <section class="home-page__quicklinks" aria-labelledby="home-quicklinks-title">
+      <h2 id="home-quicklinks-title" class="home-page__quicklinks-title">{{ t('home.quickLinks.title') }}</h2>
       <nav class="home-page__tiles" :aria-label="t('home.workbench')">
         <RouterLink
           v-for="tile in tiles"
@@ -314,7 +317,7 @@ const tiles = computed<Tile[]>(() => {
           <span>{{ tile.hint }}</span>
         </RouterLink>
       </nav>
-    </details>
+    </section>
 
     <AppDialog v-if="canCreate" :open="createOpen" :title="t('home.create.title')" @close="createOpen = false">
       <div class="home-page__dialog">
