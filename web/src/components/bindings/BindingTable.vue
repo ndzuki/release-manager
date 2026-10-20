@@ -78,6 +78,7 @@ function statusLabel(binding: BindingView): string {
   width: 100%;
   border-collapse: collapse;
   background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
 }
 
 .governance__table th,

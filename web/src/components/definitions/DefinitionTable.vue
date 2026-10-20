@@ -128,6 +128,7 @@ const emit = defineEmits<{
   width: 100%;
   border-collapse: collapse;
   background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
 }
 
 .definitions__table th,
