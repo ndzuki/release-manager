@@ -666,7 +666,9 @@ kubectl --context $CTX -n $NS get pods | grep release-manager-backup
 ### 11.2 日志位置与常用日志命令
 
 生产日志全部在 Pod 的 stdout/stderr（`kubectl logs` 可取），**没有额外的日志文件落盘**；
-审计事件不是日志，它在数据库里（查法与导出见控制台「审计」页或 `docs/api.md` 的 audit 服务）。
+审计事件**不是日志**，它在数据库里：查法见控制台「审计」页（或 `docs/api.md` 的 audit 服务）。
+⚠️ **导出能力尚未实现**：`ExportAuditEvents` 只写一条 `pending` 记录、没有任何消费者，导出永远不会变成 `completed`
+（见 §10 第 9 条）——需要归档请直接对数据库做只读导出，不要按 UI 的「导出当前查询」期待结果。
 
 ```bash
 CTX=k3d-rm-prod; NS=release-manager
@@ -689,8 +691,25 @@ docker ps --format '{{.Names}} {{.Status}}' | grep -i edge
 docker logs --tail=200 rm-edge-forwarder
 ```
 
-**判据**：`orchestrator` 与 `auth` 的日志是结构化键值（级别、`component`、`err`）；找根因先按
-`level=ERROR` 或 `warn` 过滤，再用时间点与 §11.1 的 `RESTARTS`/事件对齐。**不要把日志里的
+**判据**：生产 logger 是 `slog.NewJSONHandler`（`internal/app/app.go`），每行是**一行 JSON**，字段为
+`time` / `level` / `msg` 加上下文键（实际观测到 `request_id`、`procedure`、`organization_id`、`customer_id`、`reason`、`error`）。
+**没有 `component` 字段**，所以不要按 `level=ERROR` 这种文本过滤（匹配不到），要用 JSON 过滤：
+
+```bash
+# 只看错误行（grep 要带引号，因为值是 JSON 字符串）
+kubectl --context k3d-rm-prod -n release-manager logs deploy/auth --tail=500 | grep -F '"level":"ERROR"'
+# 或用 jq 结构化过滤（有 jq 的机器）
+kubectl --context k3d-rm-prod -n release-manager logs deploy/orchestrator --tail=500 | jq -c 'select(.level=="ERROR")'
+```
+
+真实样例（生产实测，2026-10-21）：
+
+```json
+{"time":"2026-10-20T17:06:08Z","level":"WARN","msg":"authorization snapshot pull failed","organization_id":"…","customer_id":"…","reason":"unauthenticated"}
+{"time":"2026-10-20T17:06:08Z","level":"ERROR","msg":"request failed","request_id":"…","procedure":"/auth.v1.AuthorizationService/GetAuthorizationSnapshot","error":"unauthenticated: invalid token: …"}
+```
+
+找根因先用 `msg` + `error` 定位，再用 `time` 与 §11.1 的 `RESTARTS`/事件对齐。**不要把日志里的
 `invalid token` 直接当成用户会话问题**——它也可能是服务间授权快照拉取失败（见 §5）。
 
 ### 11.3 症状 → 章节映射（生产口径）
@@ -700,8 +719,9 @@ docker logs --tail=200 rm-edge-forwarder
 | 入口 5xx / 证书告警 / 页面打不开 | §11.1 的 `/`、`/readyz`、pod 状态 | §1（服务不可用）、§11.5（证书） |
 | 登录失败、401 风暴、会话刚发就失效 | `auth` 日志 + 浏览器 Set-Cookie | §5 |
 | 数据库连接失败、迁移失败、schema `dirty=true` | `postgres` 日志、`schema_migrations` | §2 |
-| Operator 离线 / 心跳陈旧 / 命令不投递 | Operator 会话状态、`rm-edge-forwarder`、入口 IP | §3（含入口 IP 漂移） |
-| 审计缺事件 / 导出卡住 | `api` 的审计日志与 outbox 积压 | §4 |
+| Operator 离线 / 心跳陈旧 / 命令不投递 | Operator 会话状态、`rm-edge-forwarder` | §3（Operator 失联）；入口 IP 漂移见 §11.5 |
+| 审计缺事件 / 缓冲积压 | `api` 的审计日志与 outbox 积压 | §4 |
+| 审计「导出」一直 pending | 这是**现状缺口**（导出无消费者） | §10 第 9 条 |
 | 操作长期非终态 / `cancelling` 不消失 | 操作中心 + 时间线 + `orchestrator` 日志 | §6 |
 | 要紧急改副本/镜像 | 控制台「紧急变更」页的授权快照与候选制品 | §7.2（含收敛策略） |
 | 紧急锁（效果未知、已过观察窗口） | 控制台「紧急锁」页 + 客户集群实际状态 | §7.3（人工放行前置确认） |
@@ -783,7 +803,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://10.10.33.122:8443/readyz
 - **证书轮换**：当前**没有自动轮换**（无 cert-manager/无 cron 轮换）。入口证书到期或需要换 CA 时，按
   `docs/production-deploy.md` 的部署章节手工替换 Secret 并滚动 `edge`/`orchestrator`；客户端（浏览器）自签证书需手工信任导入
   （Chrome 要加「受信任的服务器证书 / 受信任对端」）。轮换属**建议能力**，落地前不要按「已自动化」处置。
-- **入口 IP**：`10.10.33.122` 是 DHCP 地址，IP 漂移会让 forwarder 监听与 `advertise_url` 失配（§3 的 operator 失联症状之一）。
+- **入口 IP**：`10.10.33.122` 是 DHCP 地址，IP 漂移会让 forwarder 监听与 `advertise_url` 失配 ⇒ Operator 会失联（失联的判据与处置见 §3；IP 漂移这条只在本节记录）。
   变更前先确认当前 IP 与 forwarder 进程。
 
 ### 11.6 数据库备份与恢复
