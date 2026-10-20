@@ -419,8 +419,8 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/ArtifactLifecyclePage.vue',
-    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；两者都只对 platform_admin 开放（cleanup/write），维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 调用', '同步', '执行（服务端预算可达约 1 小时），因此客户端对本过程使用更长的死线。', '同一幂等键在保留窗口内（默认 24 小时，可配置）会被拒绝（', 'cleanup_already_requested', '）而不重跑； 「重试」复用同一个键，点「执行 GC」才是新的清理请求。注意：单节点部署可能没有幂等键表，此时只有进程内互斥生效。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有「从', 'validated', '归档」的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 该操作是收敛的：重复调用再次成功且不改数据，因此要按', '存储的原始状态', '理解', 'previous_status', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC', '请先确认已了解清理不可撤销', '执行中…（服务端预算可达约 1 小时）', '提交中…', '恢复', '重试'],
-    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass',
+    allowed: ['制品生命周期', '保留期垃圾回收与归档恢复；仅 platform_admin 可用，维护模式下会被拒绝。', '执行保留期 GC', '不可撤销', '：清理会删除超出保留期的 bundle、候选制品与 preflight 记录；计数是', '行数', '而非释放的字节。 清理', '同步', '执行，服务端预算可达约 1 小时，所以页面会一直等待结果。', '保留窗口内（默认 24 小时）重复提交同一请求会被拒绝，不会重跑；「重试」沿用本次请求， 点「执行 GC」才会发起新的清理。', '我已确认清理会删除超出保留期的制品，且不可撤销', '计数', '删除 bundle', '删除候选制品', '删除 preflight', '跳过 bundle', '非致命错误（ ）', '成功响应里仍可能包含逐阶段错误，需要人工确认：', '本次没有非致命错误。', '恢复已归档 Bundle', '只有从', 'validated', '归档的 bundle 能恢复；恢复后回到', 'validated', '，不是重新接收。 重复恢复是安全的：再次成功且不改数据；结果显示的「归档前状态」是归档时的原始状态。', '已恢复', '，归档前状态：', '清理未执行', 'bundle id', '恢复未成功', '执行 GC', '请先确认已了解清理不可撤销', '执行中…（最长约 1 小时）', '提交中…', '恢复', '重试'],
+    reason: 'Chinese copy already in the target locale (plus server wire values and domain nouns); centralising it is the separate Chinese-wave pass. TASK-394 moved the implementation detail (the `cleanup/write` policy action, `cleanup_already_requested`, `previous_status` and the key-table/deadline notes) out of the rendered copy, so those literals left this allowlist',
   },
   {
     file: 'src/pages/BundlesPage.vue',

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 import { useAuthStore } from '@/stores/auth';
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import DefinitionCreateDialog from '@/components/definitions/DefinitionCreateDialog.vue';
 import DefinitionDisableDialog from '@/components/definitions/DefinitionDisableDialog.vue';
@@ -30,6 +31,24 @@ import { useDefinitionsStore } from '@/stores/definitions';
  */
 const store = useDefinitionsStore();
 const auth = useAuthStore();
+
+/*
+ * Direction C (TASK-394). The hand-rolled header (eyebrow + h1 + a subtitle carrying a
+ * <strong>) becomes PageHeader. PageHeader takes the subtitle as a string, so the old
+ * emphasis on "Promotion Mapping" is gone; the wording is carried over verbatim. The
+ * eyebrow and the h1 were already the same word ("发布定义") before the migration, so the
+ * duplication below is preserved rather than introduced — changing it is a copy decision,
+ * not part of the shell migration.
+ *
+ * The page is the top of its route, so it has no breadcrumb; a crumb built from route
+ * params would print an id, which is the anti-pattern PageHeader exists to stop.
+ */
+const pageSubtitle = computed(
+  () =>
+    '每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；' +
+    t('definitions.promotionMapping') +
+    ' 决定收敛后的紧急变更如何提升为标准 ValuesRevision。',
+);
 
 const customerId = ref('');
 const clusterId = ref('');
@@ -90,24 +109,18 @@ function applyFilters(): void {
 
 <template>
   <section class="definitions">
-    <header class="definitions__header">
-      <div>
-        <p class="eyebrow">{{ t('definitions.eyebrow') }}</p>
-        <h1>发布定义</h1>
-        <p class="definitions__subtitle">
-          每个定义把 Bundle 来源与客户/集群/namespace/release 名称绑定；<strong>{{ t('definitions.promotionMapping') }}</strong>
-          决定收敛后的紧急变更如何提升为标准 ValuesRevision。
-        </p>
-      </div>
-      <div class="definitions__header-actions">
-        <button v-if="auth.canWrite" type="button" data-testid="definitions-create-open" @click="startCreate">
-          {{ t('definitions.create.open') }}
-        </button>
-        <button type="button" :disabled="store.loading" @click="applyFilters">
-          {{ store.loading ? '刷新中…' : '刷新' }}
-        </button>
-      </div>
-    </header>
+    <PageHeader title="发布定义" :eyebrow="t('definitions.eyebrow')" :subtitle="pageSubtitle">
+      <template #actions>
+        <div class="definitions__header-actions">
+          <button v-if="auth.canWrite" type="button" data-testid="definitions-create-open" @click="startCreate">
+            {{ t('definitions.create.open') }}
+          </button>
+          <button type="button" :disabled="store.loading" @click="applyFilters">
+            {{ store.loading ? '刷新中…' : '刷新' }}
+          </button>
+        </div>
+      </template>
+    </PageHeader>
 
     <form class="definitions__filters" @submit.prevent="applyFilters">
       <label>
@@ -206,44 +219,26 @@ function applyFilters(): void {
 .definitions {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-.definitions__header {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-  justify-content: space-between;
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the filters.
+   The shell's <main> already owns the page inset, so this page adds no padding of its own. */
+.definitions :deep(.page-header) {
+  margin-bottom: 0;
 }
 
-.definitions__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.definitions__subtitle {
-  margin: var(--space-1) 0 0;
-  max-width: 52rem;
-  color: var(--color-muted);
-}
-
+/* Direction C filter card: surface fill + the STRONG border (`--color-border` is a hairline
+   and vanishes in the dark theme). */
 .definitions__filters {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-end;
   padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
   background: var(--color-surface);
 }
 
@@ -256,11 +251,15 @@ function applyFilters(): void {
 
 .definitions__header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
 }
 
-.definitions__checkbox {
+/* The extra `.definitions__filters` is load-bearing: `.definitions__filters label` (0,1,1)
+   is more specific than this class (0,1,0) and made the checkbox a grid, which stacked the
+   box above its label. */
+.definitions__filters .definitions__checkbox {
   display: flex;
   gap: var(--space-2);
   align-items: center;

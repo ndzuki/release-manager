@@ -4,6 +4,7 @@ import { computed, nextTick, onMounted, useTemplateRef } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import BindingCreateForm from '@/components/bindings/BindingCreateForm.vue';
 import BindingRevokeDialog from '@/components/bindings/BindingRevokeDialog.vue';
 import BindingTable from '@/components/bindings/BindingTable.vue';
@@ -31,6 +32,13 @@ import { useGovernanceStore } from '@/stores/governance';
 const auth = useAuthStore();
 const store = useGovernanceStore();
 
+/*
+ * Direction C (TASK-394). The hand-rolled header becomes PageHeader and the eyebrow keeps
+ * the "治理" category verbatim. The subtitle used to print the active organization's UUID
+ * in a `<code>` element; it now shows the NAME the auth store already carries, and the id
+ * (still needed for the RPCs) is no longer rendered at all — a crumb or a subtitle carrying
+ * a UUID is the anti-pattern the direction-C spec calls out.
+ */
 const activeOrgId = computed(() => auth.activeOrganization?.id ?? '');
 const activeOrgName = computed(() => auth.activeOrganization?.name ?? '');
 const activeBindings = computed(() => store.bindings.filter((binding) => binding.status === 'active'));
@@ -86,19 +94,13 @@ async function confirmRevoke(): Promise<void> {
 
 <template>
   <section class="governance">
-    <header class="governance__header">
-      <div>
-        <p class="eyebrow">{{ t('governance.eyebrow') }}</p>
-        <h1>授权绑定</h1>
-        <p class="governance__subtitle">
-          {{ activeOrgName || '当前组织' }}
-          <code v-if="activeOrgId">{{ activeOrgId }}</code>
-        </p>
-      </div>
-      <button type="button" :disabled="store.loading" @click="store.loadBindings(activeOrgId)">
-        {{ store.loading ? '刷新中…' : '刷新' }}
-      </button>
-    </header>
+    <PageHeader title="授权绑定" :eyebrow="t('governance.eyebrow')" :subtitle="activeOrgName || '当前组织'">
+      <template #actions>
+        <button type="button" :disabled="store.loading" @click="store.loadBindings(activeOrgId)">
+          {{ store.loading ? '刷新中…' : '刷新' }}
+        </button>
+      </template>
+    </PageHeader>
 
     <p
       v-if="store.notice"
@@ -170,36 +172,15 @@ async function confirmRevoke(): Promise<void> {
 .governance {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-/* TASK-394: title + refresh button measured 379px at 375; wrapping keeps the document
-   from scrolling sideways for two words. */
-.governance__header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.governance__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.governance__subtitle {
-  margin: var(--space-1) 0 0;
-  color: var(--color-muted);
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the table.
+   The shell's <main> already owns the page inset, so this page adds no padding of its own.
+   PageHeader's action row wraps, which keeps title + refresh inside 375px (TASK-394). */
+.governance :deep(.page-header) {
+  margin-bottom: 0;
 }
 
 .governance__notice {

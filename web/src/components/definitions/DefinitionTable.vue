@@ -30,10 +30,11 @@ const emit = defineEmits<{
     min-content width well above a 375px viewport. The table is wrapped in a labelled,
     focusable scroll region (the same shape as AuditEventTable and ReleaseInventoryTable)
     instead of letting the whole page scroll sideways, so a keyboard user can Tab to the
-    region and scroll it with the arrow keys.
+    region and scroll it with the arrow keys. TASK-394: the region is the shared
+    `.table-wrap` instead of a page-private scroll class, and it now carries the frame.
   -->
   <div
-    class="definitions__scroll"
+    class="table-wrap"
     role="region"
     :aria-label="t('definitions.table.scrollRegion')"
     tabindex="0"
@@ -106,17 +107,25 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.definitions__scroll {
-  overflow-x: auto;
-  /* A grid/flex item's automatic minimum would otherwise re-inflate the page to the
-     table's min-content width, which is exactly the bug the wrapper fixes. */
-  min-width: 0;
+/* Direction C table frame: the surface is `--sf`, so the strong border is what separates
+   the table from the page (the plain `--bd` hairline measured ~1.3:1 and read as a flat
+   sheet). Horizontal containment comes from the global `.table-wrap` rule. */
+.table-wrap {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--color-surface);
 }
 
 .definitions__row-actions {
   display: flex;
   gap: var(--space-2);
   align-items: center;
+}
+
+/* The action cell is the narrowest column; without this the two labels break mid-word
+   ("编 / 辑") once the cell padding grew to the direction-C 10px 20px. */
+.definitions__row-actions button {
+  white-space: nowrap;
 }
 
 .definitions__row-actions button.danger {
@@ -128,14 +137,31 @@ const emit = defineEmits<{
   width: 100%;
   border-collapse: collapse;
   background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
 }
 
 .definitions__table th,
 .definitions__table td {
-  padding: var(--space-2) var(--space-3);
+  padding: 10px 20px;
   border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
+}
+
+/* Direction-C header: the muted surface and the strong muted ink separate the header row
+   from the body instead of relying on the UA bold. The labels stay on one line: the 20px
+   cell padding plus eight columns otherwise squeezed "版本" into one glyph per line. */
+.definitions__table th {
+  background: var(--color-surface-muted);
+  color: var(--color-muted-strong);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* The status label is three characters; the column is narrow once the UUID column claims
+   its width, so it stays on one line instead of breaking into "生效 / 中". */
+.definitions__table td:nth-child(5) {
+  white-space: nowrap;
 }
 
 .definitions__table small {

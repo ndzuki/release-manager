@@ -4,6 +4,7 @@ import { t } from '@/i18n/messages';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import OrganizationAddMemberForm from '@/components/organization/OrganizationAddMemberForm.vue';
 import OrganizationCreateDialog from '@/components/organization/OrganizationCreateDialog.vue';
@@ -46,6 +47,13 @@ const auth = useAuthStore();
 const store = useOrganizationStore();
 const orgStore = useOrganizationsStore();
 
+/*
+ * Direction C (TASK-394). The hand-rolled header becomes PageHeader and the eyebrow keeps
+ * the "治理" category verbatim. The subtitle used to print the active organization's UUID
+ * in a `<code>` element; it now shows the NAME the auth store already carries, and the id
+ * (still needed by every RPC on this page) is no longer rendered at all — a crumb or a
+ * subtitle carrying a UUID is the anti-pattern the direction-C spec calls out.
+ */
 const activeOrgId = computed(() => auth.activeOrganization?.id ?? '');
 const activeOrgName = computed(() => auth.activeOrganization?.name ?? '');
 const activeOrgStatus = computed(() => auth.activeOrganization?.status ?? '');
@@ -124,40 +132,34 @@ function removeMember(member: OrganizationMemberView): void {
 
 <template>
   <section class="organization">
-    <header class="organization__header">
-      <div>
-        <p class="eyebrow">{{ t('governance.eyebrow') }}</p>
-        <h1>组织成员</h1>
-        <p class="organization__subtitle">
-          {{ activeOrgName || '当前组织' }}
-          <code v-if="activeOrgId">{{ activeOrgId }}</code>
-        </p>
-      </div>
-      <div class="organization__header-actions">
-        <button
-          v-if="canCreateOrganization"
-          type="button"
-          :disabled="orgStore.saving"
-          data-testid="organization-create-open"
-          @click="startCreateOrg"
-        >
-          {{ t('organization.create.open') }}
-        </button>
-        <button
-          v-if="canDisableOrganization && activeOrgStatus !== 'disabled'"
-          type="button"
-          class="danger"
-          :disabled="orgStore.saving || loadingOrg"
-          data-testid="organization-disable-open"
-          @click="armDisableOrg"
-        >
-          {{ loadingOrg ? t('organization.disable.submitting') : t('organization.disable.open') }}
-        </button>
-        <button type="button" :disabled="store.loading" @click="store.load(activeOrgId)">
-          {{ store.loading ? '刷新中…' : '刷新' }}
-        </button>
-      </div>
-    </header>
+    <PageHeader title="组织成员" :eyebrow="t('governance.eyebrow')" :subtitle="activeOrgName || '当前组织'">
+      <template #actions>
+        <div class="organization__header-actions">
+          <button
+            v-if="canCreateOrganization"
+            type="button"
+            :disabled="orgStore.saving"
+            data-testid="organization-create-open"
+            @click="startCreateOrg"
+          >
+            {{ t('organization.create.open') }}
+          </button>
+          <button
+            v-if="canDisableOrganization && activeOrgStatus !== 'disabled'"
+            type="button"
+            class="danger"
+            :disabled="orgStore.saving || loadingOrg"
+            data-testid="organization-disable-open"
+            @click="armDisableOrg"
+          >
+            {{ loadingOrg ? t('organization.disable.submitting') : t('organization.disable.open') }}
+          </button>
+          <button type="button" :disabled="store.loading" @click="store.load(activeOrgId)">
+            {{ store.loading ? '刷新中…' : '刷新' }}
+          </button>
+        </div>
+      </template>
+    </PageHeader>
 
     <!-- TASK-301: the organization-level notice uses the shared Toast primitive. -->
     <Toast v-if="orgStore.notice" tone="success" data-testid="organization-org-notice">
@@ -254,38 +256,19 @@ function removeMember(member: OrganizationMemberView): void {
 .organization {
   display: grid;
   gap: var(--space-4);
-  padding: var(--space-5);
+  min-width: 0;
 }
 
-.organization__header {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-}
-
-.organization__header h1 {
-  margin: 0;
-  font-size: var(--font-size-xl);
-}
-
-.eyebrow {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: var(--font-size-xs);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.organization__subtitle {
-  margin: var(--space-1) 0 0;
-  color: var(--color-muted);
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the table.
+   The shell's <main> already owns the page inset, so this page adds no padding of its own. */
+.organization :deep(.page-header) {
+  margin-bottom: 0;
 }
 
 .organization__header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
 }
