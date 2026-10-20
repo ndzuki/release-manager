@@ -891,8 +891,6 @@ const zhCN = {
   'emergency.tasks.scrollRegion': '收敛任务表格（可横向滚动）',
   'annotation.table.scrollRegion': '注解表格（可横向滚动）',
   'definitions.mappings.scrollRegion': 'Promotion Mapping 表格（可横向滚动）',
-
-
   // --- home overview (TASK-394) ---
   'home.overview.subtitle': '发布活动与集群健康一览',
   'home.overview.loading': '正在加载…',
@@ -954,6 +952,36 @@ const zhCN = {
   'release.status.tooltip.active': 'Release 与最近一次同步结果一致',
   'release.status.tooltip.missing': 'Release 已从集群中消失',
   'release.status.tooltip.outOfSync': '配置与期望不一致',
+||||||| f2b6765
+
+  // --- audit page (TASK-394) ---
+  /*
+   * Direction C audit page. The heading sentence names the scope the current query is
+   * pinned to (an organization, every organization, or the platform "system" scope);
+   * the wording mirrors the page's subtitle contract "查看 <scope> 的脱敏审计记录".
+   */
+  'audit.page.headerSubtitle': '查看 {scope} 的脱敏审计记录',
+  'audit.table.scrollRegion': '审计事件表格（可横向滚动）',
+  /*
+   * Labels for the audit outcome values the server actually writes (the sources are
+   * listed in src/components/audit/auditEventStatus.ts). The four values the catalog
+   * already covered reuse status.audit.*; these are the rest of the open set, and an
+   * unknown value still falls back to the raw server string on purpose.
+   */
+  'audit.result.trusted': '可信',
+  'audit.result.rejected': '已拒绝',
+  'audit.result.blocked': '已阻断',
+  'audit.result.wouldBlock': '预演：将阻断（观察模式）',
+  'audit.result.policyWarning': '策略警告',
+  'audit.result.signatureMissing': '缺少签名',
+  'audit.result.verificationUnavailable': '校验不可用',
+  'audit.result.pending': '待处理',
+  'audit.result.preflight': '预检中',
+  'audit.result.queued': '已排队',
+  'audit.result.running': '执行中',
+  'audit.result.cancelling': '取消中',
+  'audit.result.cancelled': '已取消',
+  'audit.result.timeout': '超时',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

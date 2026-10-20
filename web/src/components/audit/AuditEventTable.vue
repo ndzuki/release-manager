@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
-import { statusLabel } from '@/i18n/status-labels';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { ref } from 'vue';
 import { ActorKind, type AuditEvent } from '@/gen/audit/v1/audit_pb';
+import CopyableHash from '@/components/common/CopyableHash.vue';
 import Pagination from '@/components/common/Pagination.vue';
+import StatusTag from '@/components/common/StatusTag.vue';
 import { formatTimestamp } from '@/utils/formatTimestamp';
+import { auditStatusLabel, auditStatusTone } from './auditEventStatus';
 
 const props = defineProps<{
   events: AuditEvent[];
@@ -58,6 +60,22 @@ function actorLabel(event: AuditEvent): string {
   if (!actor) return 'unknown';
   return `${actorKindLabels[actor.kind]}:${actor.id || t('audit.table.unknownActor')}`;
 }
+
+/*
+ * TASK-394 (direction C): the time column shows the clock only (HH:MM:SS), monospaced
+ * so events can be compared down the column, and the FULL timestamp lives in `title`.
+ * `timeStyle: 'medium'` is the same seconds precision formatTimestamp uses; dropping
+ * the date here is a layout choice, not a precision change.
+ */
+const clockFormatter = new Intl.DateTimeFormat('zh-CN', { timeStyle: 'medium' });
+
+function formatClock(event: AuditEvent): string {
+  return event.createdAt ? clockFormatter.format(timestampDate(event.createdAt)) : '—';
+}
+
+function formatTimeTitle(event: AuditEvent): string | undefined {
+  return event.createdAt ? formatTime(event) : undefined;
+}
 </script>
 
 <template>
@@ -66,7 +84,12 @@ function actorLabel(event: AuditEvent): string {
        region by name when the consumer moves focus here after a page change. -->
   <section ref="resultsRef" class="audit-results" tabindex="-1" :aria-label="t('audit.table.results')">
     <p class="audit-results__count">{{ t('audit.table.showing') }} {{ props.events.length }} / {{ props.totalSize }}</p>
-    <div class="audit-results__table-wrap">
+    <div
+      class="table-wrap audit-results__table-wrap"
+      role="region"
+      :aria-label="t('audit.table.scrollRegion')"
+      tabindex="0"
+    >
       <table>
         <!-- UX-017 (W14): a table without a caption has no accessible name, and
              a header cell without scope makes screen readers guess the axis. -->
@@ -75,8 +98,8 @@ function actorLabel(event: AuditEvent): string {
           <tr>
             <th scope="col">{{ t('audit.table.time') }}</th>
             <th scope="col">{{ t('audit.table.actor') }}</th>
-            <th scope="col">{{ t('audit.table.resource') }}</th>
             <th scope="col">{{ t('audit.table.action') }}</th>
+            <th scope="col">{{ t('audit.table.resource') }}</th>
             <th scope="col">{{ t('audit.table.status') }}</th>
             <th scope="col">{{ t('audit.table.duration') }}</th>
           </tr>
@@ -91,19 +114,38 @@ function actorLabel(event: AuditEvent): string {
             @keydown.enter="emit('select', event)"
             @keydown.space.prevent="emit('select', event)"
           >
-            <td>{{ formatTime(event) }}</td>
+            <td>
+              <time class="audit-results__time mono" :title="formatTimeTitle(event)">{{ formatClock(event) }}</time>
+            </td>
             <td>
               <strong>{{ actorLabel(event) }}</strong>
             </td>
             <td>
-              <strong>{{ event.resourceType || '—' }}</strong>
-              <small>{{ event.resourceId || '—' }}</small>
-            </td>
-            <td>
               {{ event.action || '—' }}
             </td>
-            <td><span class="audit-status">{{ statusLabel('audit', event.status) || '—' }}</span></td>
-            <td>{{ event.durationMs }} ms</td>
+            <!-- TASK-394: the resource id is a machine identifier. It used to be printed
+                 whole (a 36-character UUID folded into two lines and widened the table);
+                 CopyableHash truncates it while keeping the full value in `title` and in
+                 the copy button. `20 + 4` characters are still visible, so a short id
+                 such as `operation-p2-0` renders in full and stays comparable in place.
+                 The wrapper stops click/keydown from bubbling: pressing "copy" must not
+                 also select the row and open the detail panel. -->
+            <td>
+              <span class="audit-results__resource">
+                <span class="audit-results__resource-type">{{ event.resourceType || '—' }}</span>
+                <span class="audit-results__resource-id" @click.stop @keydown.stop>
+                  <CopyableHash v-if="event.resourceId" :value="event.resourceId" :head="20" :tail="4" />
+                  <template v-else>—</template>
+                </span>
+              </span>
+            </td>
+            <td>
+              <StatusTag
+                :tone="auditStatusTone(event.status)"
+                :label="auditStatusLabel(event.status) || '—'"
+              />
+            </td>
+            <td class="audit-results__duration">{{ event.durationMs }} ms</td>
           </tr>
         </tbody>
       </table>
@@ -130,7 +172,8 @@ function actorLabel(event: AuditEvent): string {
 <style scoped>
 .audit-results {
   display: grid;
-  gap: 1rem;
+  gap: 12px;
+  min-width: 0;
 }
 
 /*
@@ -141,20 +184,23 @@ function actorLabel(event: AuditEvent): string {
 .audit-results:focus {
   outline: 2px solid var(--color-primary);
   outline-offset: 0.25rem;
-  border-radius: var(--radius-md);
+  border-radius: var(--r);
 }
 
 .audit-results__count {
   margin: 0;
-  color: var(--color-muted);
+  color: var(--mu);
   font-size: var(--font-size-sm);
 }
 
+/* Direction C table frame: the surface is `--sf`, 2% lighter than the page, so the
+   strong border is what separates it from the background (the plain `--bd` hairline
+   measured ~1.3:1 and made the table read as a flat sheet). The `.table-wrap` base
+   class supplies `overflow-x: auto; min-width: 0; max-width: 100%`. */
 .audit-results__table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 0.75rem;
-  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
 }
 
 table {
@@ -165,24 +211,49 @@ table {
 
 th,
 td {
-  padding: 0.75rem;
+  padding: 10px 20px;
   border-bottom: 1px solid var(--color-border-strong);
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 th {
-  background: var(--color-bg);
+  background: var(--color-surface-muted);
   color: var(--color-muted-strong);
   font-size: var(--font-size-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-td small {
-  display: block;
-  margin-top: 0.2rem;
-  color: var(--color-muted);
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.audit-results__time {
+  color: var(--color-text-secondary);
+}
+
+.audit-results__resource {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.audit-results__resource-type {
+  color: var(--mu);
+  font-size: var(--font-size-xs);
+}
+
+.audit-results__resource-id {
+  min-width: 0;
+}
+
+.audit-results__duration {
+  color: var(--mu);
+  font-variant-numeric: tabular-nums;
 }
 
 .audit-results__row {
@@ -200,20 +271,13 @@ td small {
  * spans the table and an outside offset would be clipped by the rounded wrapper.
  */
 .audit-results__row:hover {
-  background: var(--color-info-soft);
+  background: var(--sf2);
 }
 
 .audit-results__row:focus-visible {
-  background: var(--color-info-soft);
+  background: var(--sf2);
   outline: 2px solid var(--color-primary);
   outline-offset: -2px;
-}
-
-.audit-status {
-  display: inline-block;
-  padding: 0.15rem 0.45rem;
-  border-radius: 999px;
-  background: var(--color-border);
 }
 
 /*

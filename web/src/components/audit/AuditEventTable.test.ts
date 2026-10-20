@@ -221,3 +221,58 @@ describe('AuditEventTable timestamps (W17 follow-up)', () => {
     expect(wrapper.get('tbody td').text()).toMatch(/20:02:46/);
   });
 });
+
+/*
+ * TASK-394 (direction C audit table): the outcome column is a StatusTag whose tone
+ * comes from the backend value (see auditEventStatus.ts for the producer of each one),
+ * and the resource id is a truncated, copyable machine value instead of a full UUID
+ * printed into the cell.
+ */
+describe('AuditEventTable direction C columns (TASK-394)', () => {
+  it('renders the outcome as a StatusTag with the tone the server value implies', () => {
+    const wrapper = mountTable({
+      events: [
+        { ...auditEvent('ok'), status: 'succeeded' },
+        { ...auditEvent('refused'), status: 'failed' },
+        { ...auditEvent('other'), status: 'accepted' },
+      ],
+      totalSize: 3,
+    });
+
+    const tags = wrapper.findAll('.status-tag');
+    expect(tags).toHaveLength(3);
+    expect(tags[0]!.classes()).toContain('status-tag--ok');
+    expect(tags[1]!.classes()).toContain('status-tag--er');
+    expect(tags[2]!.classes()).toContain('status-tag--neutral');
+  });
+
+  it('truncates a long resource id while keeping the full value in title and copy', async () => {
+    const longId = '1234567890abcdef1234567890abcdef1234';
+    const wrapper = mountTable({ events: [{ ...auditEvent('long'), resourceId: longId }] });
+
+    const code = wrapper.get('.copyable-hash__value');
+    expect(code.text()).toContain('…');
+    expect(code.text()).not.toBe(longId);
+    // The full value is never lost: it is the tooltip and what the copy button writes.
+    expect(code.attributes('title')).toBe(longId);
+    expect(wrapper.get('.copyable-hash__button').attributes('title')).toBeUndefined();
+
+    // Copying is not row selection: the copy control must not open the detail panel.
+    await wrapper.get('.copyable-hash__button').trigger('click');
+    expect(wrapper.emitted('select')).toBeUndefined();
+  });
+
+  it('keeps the full timestamp in the time cell title while showing the clock', () => {
+    const at = new Date(2026, 9, 17, 20, 2, 46);
+    const wrapper = mountTable({
+      events: [{
+        ...auditEvent('e-3'),
+        createdAt: create(TimestampSchema, { seconds: BigInt(Math.floor(at.getTime() / 1000)) }),
+      }],
+    });
+
+    const time = wrapper.get('time.audit-results__time');
+    expect(time.text()).toBe('20:02:46');
+    expect(time.attributes('title')).toContain('2026');
+  });
+});
