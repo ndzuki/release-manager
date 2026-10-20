@@ -1,9 +1,11 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { nextTick } from 'vue';
 import ClusterEditPage from './ClusterEditPage.vue';
+import { getCluster } from '@/connect/cluster-api';
+import type * as ClusterApi from '@/connect/cluster-api';
 import { useAuthStore } from '@/stores/auth';
 import { useClusterStore } from '@/stores/cluster';
 
@@ -15,8 +17,24 @@ import { useClusterStore } from '@/stores/cluster';
  * invisible to the suite.
  */
 
+vi.mock('@/connect/cluster-api', async (importOriginal) => {
+  const original = await importOriginal<typeof ClusterApi>();
+  return { ...original, getCluster: vi.fn() };
+});
+
 beforeEach(() => {
   setActivePinia(createPinia());
+  vi.mocked(getCluster).mockReset();
+  vi.mocked(getCluster).mockResolvedValue({
+    id: 'cluster-1',
+    name: 'staging',
+    customerId: 'customer-1',
+    enabled: true,
+    version: 3,
+    routeCount: 0,
+    imageRules: [],
+    chartRules: [],
+  });
   useAuthStore().$patch({
     status: 'authenticated',
     initialized: true,
@@ -30,22 +48,27 @@ beforeEach(() => {
   });
 });
 
-/** Mounts the create route, whose page has no clusterId: `startCreate()` runs instead
- * of a load, so no API call is issued. */
-async function mountCreatePage() {
+async function mountPage(path: string) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/customers/:customerId/clusters/new', name: 'ClusterNew', component: ClusterEditPage },
+      { path: '/customers/:customerId/clusters/:clusterId/edit', name: 'ClusterEdit', component: ClusterEditPage },
       { path: '/customers/:customerId/clusters', name: 'ClusterList', component: { template: '<div />' } },
       { path: '/customers/:customerId/clusters/:clusterId', name: 'ClusterDetail', component: { template: '<div />' } },
     ],
   });
-  await router.push('/customers/customer-1/clusters/new');
+  await router.push(path);
   await router.isReady();
   const wrapper = mount(ClusterEditPage, { global: { plugins: [router] } });
   await flushPromises();
   return wrapper;
+}
+
+/** Mounts the create route, whose page has no clusterId: `startCreate()` runs instead
+ * of a load, so no API call is issued. */
+function mountCreatePage() {
+  return mountPage('/customers/customer-1/clusters/new?customerName=Acme');
 }
 
 describe('ClusterEditPage field errors are described, not named', () => {
@@ -87,5 +110,39 @@ describe('ClusterEditPage field errors are described, not named', () => {
     expect(input.attributes('aria-invalid')).toBeUndefined();
     expect(input.attributes('aria-describedby')).toBeUndefined();
     expect(wrapper.find('.form-field__error').exists()).toBe(false);
+  });
+});
+
+/*
+ * TASK-394 (direction C). The hand-rolled `.eyebrow` + `<h1>` pair is PageHeader now, and
+ * the category line must survive the migration verbatim: "新建集群" while creating,
+ * "编辑集群" while editing. The crumb trail names the customer and the cluster; neither
+ * may degrade to its route identifier.
+ */
+describe('ClusterEditPage direction C page header', () => {
+  it('keeps the create category line and titles the page with the same label', async () => {
+    const wrapper = await mountCreatePage();
+
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('新建集群');
+    expect(wrapper.get('.page-header__title').text()).toBe('新建集群');
+  });
+
+  it('names the customer in the create breadcrumb', async () => {
+    const wrapper = await mountCreatePage();
+
+    const crumbs = wrapper.get('.page-header__crumbs').text();
+    expect(crumbs).toContain('Acme');
+    expect(crumbs).not.toContain('customer-1');
+  });
+
+  it('keeps the edit category line and shows the cluster and customer names', async () => {
+    const wrapper = await mountPage('/customers/customer-1/clusters/cluster-1/edit?customerName=Acme');
+
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('编辑集群');
+    expect(wrapper.get('.page-header__title').text()).toBe('staging');
+    const crumbs = wrapper.get('.page-header__crumbs').text();
+    expect(crumbs).toContain('Acme');
+    expect(crumbs).toContain('staging');
+    expect(crumbs).not.toContain('cluster-1');
   });
 });

@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import ErrorState from '@/components/common/ErrorState.vue';
 import ForbiddenState from '@/components/common/ForbiddenState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
+import PageHeader from '@/components/common/PageHeader.vue';
 import Toast from '@/components/common/Toast.vue';
 import CustomerForm from '@/components/customers/CustomerForm.vue';
 import CustomerHistory from '@/components/customers/CustomerHistory.vue';
@@ -48,6 +49,28 @@ const formReadonly = computed(() => !auth.canWrite || editability.value !== 'edi
 const title = computed(() => isCreate.value ? t('customer.detail.create') : (store.current?.name ?? t('customer.detail.label')));
 const form = computed<CustomerFormInput | null>(() => store.draft);
 
+/*
+ * Direction C (TASK-394). The category label that used to be a hand-rolled `.eyebrow`
+ * ("客户") becomes PageHeader's `eyebrow`, verbatim, so the page keeps stating what kind
+ * of object it shows. The trail carries NAMES only: the list level is the catalog label
+ * and the customer level is the loaded name — a customer that has not loaded contributes
+ * no level at all rather than its route identifier, which is the UUID anti-pattern
+ * PageHeader exists to stop.
+ */
+const crumbs = computed(() => {
+  if (isCreate.value) return [];
+  const trail: Array<{ label: string }> = [{ label: t('customer.list.title') }];
+  if (store.current?.name) trail.push({ label: store.current.name });
+  return trail;
+});
+/* The status line kept its danger ink for a disabled customer, so the subtitle keeps it
+   too (see `.customer-detail--disabled` below); an unloaded customer has no line. */
+const subtitle = computed(() => {
+  const current = store.current;
+  if (!current) return undefined;
+  return current.status === 'disabled' ? t('customer.detail.disabledBanner') : t('customer.detail.subtitle');
+});
+
 onMounted(async () => {
   if (isCreate.value) store.startCreate();
   else {
@@ -89,7 +112,10 @@ async function disable() {
 </script>
 
 <template>
-  <section class="customer-detail">
+  <section
+    class="customer-detail"
+    :class="{ 'customer-detail--disabled': store.current?.status === 'disabled' }"
+  >
     <Toast
       v-if="disableNotice"
       tone="success"
@@ -103,26 +129,26 @@ async function disable() {
       <button type="button" @click="router.push({ name: 'CustomerList' })">{{ t('customer.detail.back') }}</button>
     </ErrorState>
     <template v-else>
-      <header class="customer-detail__header">
-        <div>
-          <p class="eyebrow">{{ t('customer.detail.label') }}</p>
-          <h1>{{ title }}</h1>
-          <p v-if="store.current" :class="store.current.status === 'disabled' ? 'disabled-copy' : 'muted'">
-            {{ store.current.status === 'disabled' ? t('customer.detail.disabledBanner') : t('customer.detail.subtitle') }}
-          </p>
-        </div>
-        <div class="customer-detail__actions">
-          <!-- Plan N2/N8: the customer subtree had no path to clusters at all, so the
-               release subtree was only reachable by typing a URL. -->
-          <RouterLink
-            v-if="!isCreate && clusterRoutingEnabled && store.current"
-            class="primary"
-            :to="{ name: 'ClusterList', params: { customerId: store.current.id } }"
-          >{{ t('nav.clusters') }}</RouterLink>
-          <RouterLink :to="{ name: 'CustomerList' }">{{ t('customer.detail.back') }}</RouterLink>
-          <button v-if="canWrite && store.current?.status === 'active'" type="button" class="danger" @click="showDisableDialog = true">{{ t('customer.detail.disable') }}</button>
-        </div>
-      </header>
+      <PageHeader
+        :title="title"
+        :eyebrow="t('customer.detail.label')"
+        :subtitle="subtitle"
+        :crumbs="crumbs"
+      >
+        <template #actions>
+          <div class="customer-detail__actions">
+            <!-- Plan N2/N8: the customer subtree had no path to clusters at all, so the
+                 release subtree was only reachable by typing a URL. -->
+            <RouterLink
+              v-if="!isCreate && clusterRoutingEnabled && store.current"
+              class="primary"
+              :to="{ name: 'ClusterList', params: { customerId: store.current.id } }"
+            >{{ t('nav.clusters') }}</RouterLink>
+            <RouterLink :to="{ name: 'CustomerList' }">{{ t('customer.detail.back') }}</RouterLink>
+            <button v-if="canWrite && store.current?.status === 'active'" type="button" class="danger" @click="showDisableDialog = true">{{ t('customer.detail.disable') }}</button>
+          </div>
+        </template>
+      </PageHeader>
 
       <div v-if="store.current?.status === 'disabled'" class="disabled-banner" role="status">
         {{ t('customer.detail.disabled') }}
@@ -182,14 +208,25 @@ async function disable() {
 
 <style scoped>
 .customer-detail { display: grid; gap: 1.5rem; max-width: 72rem; margin: 0 auto; }
-.customer-detail__header, .customer-detail__actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.customer-detail__header h1, .customer-detail__header p { margin: 0; }
-.eyebrow { color: var(--color-primary); font-size: var(--font-size-xs); font-weight: 700; text-transform: uppercase; }
-.muted { color: var(--color-muted); margin-top: 0.375rem !important; }
-.disabled-copy { color: var(--color-error-strong); margin-top: 0.375rem !important; }
-.customer-detail__actions a, .customer-detail__actions button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); text-decoration: none; }
+/* PageHeader keeps a 20px bottom margin for pages that do not stack their sections in a
+   grid; this page does, so the gap is the only space between the header and the banners. */
+.customer-detail :deep(.page-header) { margin-bottom: 0; }
+/* The status line was red for a disabled customer before the migration; PageHeader's
+   subtitle is muted by default, so the danger ink is restored only for that state. */
+.customer-detail--disabled :deep(.page-header__subtitle) { color: var(--color-error-strong); }
+.customer-detail__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 1rem; }
+.customer-detail__actions a, .customer-detail__actions button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: var(--r); background: var(--color-surface); text-decoration: none; }
 .danger { color: var(--color-error-strong); cursor: pointer; }
-.customer-detail__panel { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+/* Direction C card: surface fill + the STRONG border (`--color-border` is a hairline and
+   vanishes in the dark theme). */
+.customer-detail__panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
 .customer-detail__panel h2 { margin: 0; font-size: var(--font-size-lg); }
 .disabled-banner, .readonly-banner, .conflict-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.875rem 1rem; border-radius: 0.5rem; }
 .disabled-banner { background: var(--color-danger-soft); color: var(--color-error-strong); }

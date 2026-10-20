@@ -93,3 +93,32 @@ describe('customer list cluster entries', () => {
     expect(wrapper.get('[data-testid="customer-clusters-c2"]').attributes('href')).toBe('/customers/c2/clusters');
   });
 });
+
+/*
+ * TASK-394 (direction C): both pages hand-rolled their `<header>` and their own h1. They
+ * use the shared PageHeader now — with no eyebrow invented where the audit found no
+ * category label, and with a crumb trail that carries names, never identifiers.
+ */
+describe('customer pages direction C page header', () => {
+  it('gives the list page the shared header and no invented eyebrow', async () => {
+    const api = await import('@/connect/customer-api');
+    vi.mocked(api.listCustomers).mockResolvedValue([]);
+
+    const { wrapper } = await mountCustomers('/customers');
+
+    expect(wrapper.get('.page-header__title').text()).toBe('客户');
+    expect(wrapper.find('.page-header__eyebrow').exists()).toBe(false);
+    expect(wrapper.find('.page-header__crumbs').exists()).toBe(false);
+  });
+
+  it('keeps the 客户 category as the detail eyebrow and names the customer in the trail', async () => {
+    const wrapper = await mountDetail('c9');
+
+    expect(wrapper.get('.page-header__eyebrow').text()).toBe('客户');
+    expect(wrapper.get('.page-header__title').text()).toBe('Acme');
+    const crumbs = wrapper.get('.page-header__crumbs').text();
+    expect(crumbs).toContain('客户');
+    expect(crumbs).toContain('Acme');
+    expect(crumbs).not.toContain('c9');
+  });
+});

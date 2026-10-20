@@ -151,12 +151,30 @@ function isConflictingRule(rule: RouteRuleInput, index: number): boolean {
 .rule-editor__header, .rule-card__header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .rule-editor__header h2 { margin: 0; }
 .rule-editor__header p, .rule-editor__empty { margin: 0.25rem 0 0; color: var(--color-muted); }
-.rule-card { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--color-border-strong); border-radius: 0.75rem; }
+/* Direction C card: surface fill + the STRONG border (`--color-border` is a hairline and
+   vanishes in the dark theme). */
+.rule-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--sf);
+}
 .rule-card--conflict { border-color: var(--color-danger); box-shadow: 0 0 0 2px var(--color-danger-border-soft); }
 .rule-card__id { color: var(--color-muted); font-family: monospace; font-size: var(--font-size-xs); }
 .rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-/* Slotted into FormField, so these still carry this component's scope id. */
-input, select { padding: 0.625rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; font: inherit; }
+/* Slotted into FormField, so these still carry this component's scope id. Direction C
+   metrics (7px/11px), the shared radius and the page background, so a control reads as an
+   inset of the rule card rather than a hole in it. */
+input, select {
+  padding: 7px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--r);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
 [aria-invalid='true'] { border-color: var(--color-danger); }
 button { padding: 0.5rem 0.75rem; border: 1px solid var(--color-border-strong); border-radius: 0.375rem; background: var(--color-surface); cursor: pointer; }
 button.danger { color: var(--color-error-strong); }
