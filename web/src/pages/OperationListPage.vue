@@ -353,7 +353,7 @@ onMounted(() => load(false));
 
 .operation-list__table {
   width: 100%;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-collapse: collapse;
   background: var(--color-surface);
 }

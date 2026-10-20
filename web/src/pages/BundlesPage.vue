@@ -278,7 +278,7 @@ function applyFilters(): void {
 .bundles__images {
   width: 100%;
   /* --sf is only ~2% lighter than --bg, so the panel needs an edge to read as a surface. */
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-strong);
   border-collapse: collapse;
   background: var(--color-surface);
 }
