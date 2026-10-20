@@ -424,7 +424,7 @@ describe('operation pages', () => {
 
     await vi.waitFor(() => expect(wrapper.text()).toContain('op-center'));
 
-    const crumbs = wrapper.get('.operation-detail__breadcrumbs');
+    const crumbs = wrapper.get('.page-header__crumbs');
     expect(crumbs.find('a[href="/operations"]').exists()).toBe(true);
     expect(crumbs.text()).toContain('checkout');
     // The release-scoped crumbs are absent, not broken.
