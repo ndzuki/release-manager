@@ -2232,6 +2232,77 @@ docker exec k3d-rm-prod-server-0 crictl images | grep "release-web.*a059272"
 1. `e2e-prerequisite` 的 AC-066-17 smoke 三处 `ExecuteEmergencyChange` **缺必填 `reason`** ⇒ 确定性 400，使**所有** main 提交的该门禁长期为红（§8.13–§8.15 三次部署是在该红状态下完成的）。修复见 `d991c4f`（仅 `test/e2e/prerequisite/smoke.sh`）。
 2. 改版改变了操作详情/紧急变更/紧急锁页的 DOM 与文案，4 个 console spec 因此失效；修复见 `a059272`（仅 `web/e2e/**`，断言强度提升：operation id 改为对 `CopyableHash` 的 `title` 做**全值**对账）。
 
+### 8.17 实测：Go 1.27.3（crypto/x509 GO-2026-6809）+ 控制台缓存语义修复（全 6 服务滚动，无迁移，2026-10-21，TASK-394）
+
+**触发**：`vulncheck` 在 PR #523 上新增失败（与那个 PR 无关，是漏洞库更新后暴露的**仓库级阻塞**）：
+
+```
+GO-2026-6809  Distrust compromised intermediate certificates in crypto/x509
+Found in: crypto/x509@go1.27.2   Fixed in: crypto/x509@go1.27.3
+#1: internal/auth/providers.go:267: auth.LDAPProvider.connect → ldap.Conn.StartTLS → x509.Certificate.Verify
+```
+
+同时用户反馈「UI 有更新，但截图还是旧的版本」，排查出**线上 `index.html` 没有 `Cache-Control`**：nginx 之前只发 `ETag/Last-Modified`，
+浏览器按启发式缓存旧 HTML，部署后仍可能渲染旧界面（这也是历史上「发布后看起来没更新」的根因）。
+
+**两次合并**：#524（Go 1.27.3：`go.mod` + 16 处 CI `go-version` + 8 个 Dockerfile 基础镜像 digest + 文档版本串）、#523（`web/nginx.conf` 缓存头 + 旧截图归档 + 文档同步）。
+
+**镜像（同一口径：节点内 `crictl images` 的 IMAGE ID）**
+
+| 服务 | 发布前 | 发布后 `:8c40187` | 变化 |
+| --- | --- | --- | --- |
+| `api` | `:f0f8d6b` rev16 | **`:8c40187`** rev17 | 是（Go 1.27.3） |
+| `auth` | `:f0f8d6b` rev8 | **`:8c40187`** rev9 | 是 |
+| `orchestrator` | `:f0f8d6b` rev8 | **`:8c40187`** rev9 | 是 |
+| `webhook` | `:f0f8d6b` rev8 | **`:8c40187`** rev9 | 是 |
+| `notifier` | `:f0f8d6b` rev8 | **`:8c40187`** rev9 | 是 |
+| `web` | `:5080198` rev22 | **`:8c40187`** rev23 | 是（nginx 缓存头） |
+| `edge` | `nginx:1.27-alpine` rev4 | 不变 | 否 |
+
+**构建与导入**
+
+```bash
+# Go 镜像必须带 GOPROXY（Dockerfile 里是 ARG GOPROXY；dev.sh 原本负责注入宿主的 go env GOPROXY）。
+# 不带时容器内会去 proxy.golang.org 并在 ~6 分钟后 i/o timeout。
+docker build --build-arg GOPROXY="$(go env GOPROXY)" -f deploy/docker/Dockerfile.<svc> \
+  -t localhost:5001/release-<svc>:8c40187 .
+
+# ⚠️ 必须用文件形态导入（stdin 形态会假失败/半成功，见 §8.16）
+docker save -o /tmp/<svc>-8c40187.tar localhost:5001/release-<svc>:8c40187
+k3d image import /tmp/<svc>-8c40187.tar -c rm-prod
+docker exec k3d-rm-prod-server-0 crictl images | grep "release-<svc> *8c40187"
+```
+
+- 5 个 Go 镜像各 11–23 MB，web 21.4 MB；6 次导入均 `Successfully imported 1 image(s)`，节点内 `crictl` 逐个可见。
+- 滚动顺序：`webhook → notifier → api → orchestrator → auth → web`，每步 `rollout status` 与 `/readyz` 都通过后才进入下一步。
+
+**结果（实测 10:59–11:00 +08）**
+
+| 项 | 值 |
+| --- | --- |
+| Deployment | 6 个服务全部 `:8c40187` 且 `rollout` 成功（rev 见上表） |
+| Pod | 10 个工作负载 `1/1`、`RESTARTS` 全 **0** |
+| schema | **`36\|f` 未变**（无迁移） |
+| 入口 | `/` 200、`/readyz` 200 |
+
+**缓存语义验证（本次修复的核心，必须每次都验）**
+
+| 请求 | 结果 |
+| --- | --- |
+| `GET /` | 200 + `Cache-Control: no-cache` |
+| `GET /assets/index-BK1UUkn1.js` | 200 + `Cache-Control: public, max-age=31536000, immutable` |
+| `GET /assets/index-doesnotexist.js` | **404 且不带 `Cache-Control`**（去掉 `always` 的效果，避免把 404 缓存一年） |
+| `GET /customers`（SPA 深路由） | 200 + `no-cache` |
+| `GET /auth.v1.AuthService/Login` | 走 proxy，**不带** Cache-Control |
+
+**真机复核（全新浏览器 context + `--disable-http-cache`，真实登录）**
+
+- 首页 DOM 断言：侧栏分组 `["发布与运维","资产与审计","治理与账号"]`、`[data-testid^="home-stat-"]` = **4 张**、主题按钮「跟随系统」、`h1 = Release Manager Production`、`scrollWidth === innerWidth`（1440）。
+- 截图：`/tmp/rm-prod-fresh/fresh-login.png`、`fresh-home-dark.png`、`fresh-home-light.png`（`home-dark` 实际按 OS 默认渲染成亮色，因为主题默认「跟随系统」；见 `docs/user-manual.md` §2）。
+- 结论：**线上界面就是方向 C 新版**（侧栏 212px + 四统计卡 + 快速入口），此前"旧界面"是浏览器缓存了旧 `index.html`。
+
+**回滚**（纯镜像级）：把 6 个 Deployment 指回 `:f0f8d6b`（Go 服务）/ 上一个 `web` tag，`rollout status` 后验 `/readyz`；schema 不变。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
