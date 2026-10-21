@@ -34,7 +34,7 @@
 | 知识库 `Notes/Audit-2026-09-28/web-console-static-ux-audit.md` | 87 条界面问题（4 blocker / 36 major / 36 minor / 11 nit） |
 | 本次评估的 **8 份**语料分析 | 产品与 IA、Web 页面需求全集与 251 条 AC、发布核心、治理与紧急、契约层、决策层、现状 UI 基线、8 个 web REQ 的 202 条规格↔实现审计（见 §14，原文归档在 `Notes/Audit-2026-09-28/corpus-1..8-*.md`） |
 | `docs/ux-review.md` | 2026-09-28 的浏览器实测 blocker（B1–B6） |
-| `docs/user-manual.md` + `docs/images/user-manual/`（22 张） | 现状界面的一手视觉证据 |
+| `docs/user-manual.md` + `docs/images/user-manual/legacy/`（22 张） | 现状界面的一手视觉证据 |
 
 > ⚠️ **本次评估修正了一条既有结论**：`REQ-060`（通知任务与 dead-letter 前端）已于
 > **2026-09-19 由用户裁定撤回**（`status: withdrawn`，撤回取证见该文 `变更记录`），
@@ -178,7 +178,7 @@
 | N4 | 无写权限访问 `/clusters/new`、`/clusters/:id/edit` 时**静默重定向**到列表页，无任何说明；同类问题 `requiresOperationCreate` 却跳 403 | `web/src/router/index.ts:183-185` vs `:220-222` |
 | N5 | **Operation 详情没有列表入口**：只能由创建流程跳入，之后无法回到该操作 | `web/src/router/index.ts`（无 OperationList 路由） |
 | N6 | `ReleaseInventory`、`ValuesEditor`、`OperationCreate`、`EmergencyChange` 均为**单入口**页面（仅 Release 表格行内链接） | `web/src/components/releases/ReleaseInventoryTable.vue` |
-| N7 | 面包屑用 **原始 customer UUID** 当层级名（截图 `09-release-inventory.png`） | `docs/images/user-manual/09-release-inventory.png` |
+| N7 | 面包屑用 **原始 customer UUID** 当层级名（截图 `09-release-inventory.png`） | `docs/images/user-manual/legacy/09-release-inventory.png` |
 | N8 | **release 子树零外部入口**：6 条核心业务路由的全部入边都在子树内部，唯一分叉点是发布清单表格；`ClusterDetailPage` 的动作区只有 Operators/Edit/Disable cluster | `web/src/components/releases/ReleaseInventoryTable.vue`、`web/src/pages/ClusterDetailPage.vue` |
 | N9 | `AppShell.vue` 的 `<slot name="nav">` **零使用点**（死插槽，设计上本想给页面注入额外导航） | `web/src/components/common/AppShell.vue:42` |
 | N10 | `ClusterDetailPage` 未提供 Releases 入口，用户从集群到发布清单要绕回客户 → 集群 → 手输 URL | 同 N8 |
@@ -187,11 +187,11 @@
 
 | # | 问题 | 证据 |
 | --- | --- | --- |
-| P1 | 首屏 85% 空白：运维平台落地页不给「待我处理」信息（进行中 Operation、UNKNOWN 效果、离线 Operator、待审批 revision 全部不可见） | `docs/images/user-manual/03-home.png` |
-| P2 | 客户列表是无搜索/筛选/排序的卡片流；卡片标题折行、`ACTIVE` 徽章脱离标题行、`View` 与卡片标题重复 | `docs/images/user-manual/04-customers.png` |
-| P3 | 发布清单表格：64 位 digest 直接换行占两行、release 名折行、中英表头混排、未绑定行用灰色文本充当禁用态 | `docs/images/user-manual/09-release-inventory.png` |
-| P4 | 创建操作表单是窄列漂浮在大画布；`已审批 ValuesRevision ID` 要**手输 UUID**（规格说的是「选择已审批配置」）；三步流程（填写→确认→Preflight）无步骤指示 | `docs/images/user-manual/11-operation-create.png`、`Requirements/REQ-056-web-release-operation.md:405` |
-| P5 | Preflight 面板把 stage detail 当**原始 JSON 直出**，整页宽 2 121 px > 视口 1 440 px（横向滚动） | `docs/images/user-manual/17-operation-detail-upgrade.png`、`docs/ux-review.md` B6 |
+| P1 | 首屏 85% 空白：运维平台落地页不给「待我处理」信息（进行中 Operation、UNKNOWN 效果、离线 Operator、待审批 revision 全部不可见） | `docs/images/user-manual/legacy/03-home.png` |
+| P2 | 客户列表是无搜索/筛选/排序的卡片流；卡片标题折行、`ACTIVE` 徽章脱离标题行、`View` 与卡片标题重复 | `docs/images/user-manual/legacy/04-customers.png` |
+| P3 | 发布清单表格：64 位 digest 直接换行占两行、release 名折行、中英表头混排、未绑定行用灰色文本充当禁用态 | `docs/images/user-manual/legacy/09-release-inventory.png` |
+| P4 | 创建操作表单是窄列漂浮在大画布；`已审批 ValuesRevision ID` 要**手输 UUID**（规格说的是「选择已审批配置」）；三步流程（填写→确认→Preflight）无步骤指示 | `docs/images/user-manual/legacy/11-operation-create.png`、`Requirements/REQ-056-web-release-operation.md:405` |
+| P5 | Preflight 面板把 stage detail 当**原始 JSON 直出**，整页宽 2 121 px > 视口 1 440 px（横向滚动） | `docs/images/user-manual/legacy/17-operation-detail-upgrade.png`、`docs/ux-review.md` B6 |
 | P6 | 列表**没有分页 UI 控件**（`Pagination`/`pageSize` 只出现在 store、connect 客户端与 3 个测试文件共 7 个非 gen 文件里，**没有任何分页组件**），而契约要求 cursor 分页语义 | `docs/architecture.md:104-105` |
 
 ### 5.3 规格符合度（设计已规定、实现未达成）
