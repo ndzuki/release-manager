@@ -1,4 +1,4 @@
-FROM golang:1.27.2@sha256:2d658507a011f1eadc0114d7a421b312b2e77d9042a24036a26e267cc9231677 AS builder
+FROM golang:1.27.3@sha256:1ad9754cfcca40bdb57424ff4ad9ca754f5d5e4660944a9b266da90f8a6853a5 AS builder
 # GOPROXY build-arg: dev.sh injects the host's go env GOPROXY; the default
 # proxy.golang.org is unreachable from CN hosts.
 ARG GOPROXY
