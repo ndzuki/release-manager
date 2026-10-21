@@ -16,8 +16,9 @@
 | 主题 | 控制台**暗色优先**；亮色样本见 `dc-03-home-light.png`、`dc-09-release-inventory-light.png`、`dc-10-values-editor-light.png`、`dc-14-audit-light.png`、`dc-17-operation-detail-light.png` |
 
 > 本轮的界面是「方向 C」改版后的版本：统一 `PageHeader`（面包屑只显示**名称**）、语义化状态胶囊、`Steps` 阶段条、
-> 并排 diff、可折叠原始 JSON。旧版截图仍保留在 `docs/images/user-manual/`（文件名不带 `dc-` 前缀）作为历史证据，
-> 供 `docs/ux-revamp-plan.md` 与 `docs/ux-review.md` 引用；**本教程只引用 `dc-` 前缀的新截图**。
+> 并排 diff、可折叠原始 JSON。**本教程引用的 `dc-*.png` 全部是改版后的生产界面**；
+> 改版前的历史截图已归档到 `docs/images/user-manual/legacy/`（仅供 `docs/ux-revamp-plan.md` 与 `docs/ux-review.md` 作历史证据，
+> 不要拿它们当现状）。
 
 ## 1. 术语与页面地图
 

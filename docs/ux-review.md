@@ -78,7 +78,7 @@
 | 4 秒后的 URL | 仍为 `/login` |
 | 页面是否出现任何错误文案 | `false`（**零反馈**） |
 
-留档：`docs/images/user-manual/21-login-unpatched-no-progress.png`（与登录前截图逐像素一致，
+留档：`docs/images/user-manual/legacy/21-login-unpatched-no-progress.png`（与登录前截图逐像素一致，
 唯一差别是输入框已填好——这正是「点了没反应」本身）。
 
 **为什么长期没被发现**：`docs/api.md:254` 早就记录了「cookie 被拦截器接受却从不签发」，
@@ -106,7 +106,7 @@ devseed / E2E runner / kulala 集合（它们读 `Login.AccessToken`），这一
 | DOM 节点数 | `1`（只有 `body`） |
 | 浏览器控制台 | `Failed to load resource: 502` + **未捕获** `pageerror: ConnectError: [unavailable] HTTP 502` |
 
-留档：`docs/images/user-manual/22-blank-page-backend-down.png`（1440×900 全白，2026-09-28 复现后重拍；
+留档：`docs/images/user-manual/legacy/22-blank-page-backend-down.png`（1440×900 全白，2026-09-28 复现后重拍；
 auth 已随即恢复为 1 replica 并 `readyz` 200）。
 
 **建议**：`bootstrap()` 包 try/catch，失败时挂载一个最小「无法连接服务端 + 重试」页面；
@@ -290,7 +290,7 @@ render passed {"render_digest":"a36d52d3…","resources":[{"api_version":"apps/v
 
 - 环境：`REGISTRY_PORT=5011 DEV_K3D_API_PORT=6449 make dev-up`（详见 `docs/user-manual.md` 第 2 与第 15 节）。
 - 回归证据：`bash test/e2e/prerequisite/smoke.sh` → `44 pass / 0 fail`（含 Upgrade / Cancel / Rollback / auth 跨重启 token 校验）。
-- 页面截图：`docs/images/user-manual/`（22 张，均为真实 dev 环境整页截图；其中 20 张取自打了出图补丁的环境，
+- 页面截图：`docs/images/user-manual/legacy/`（22 张，均为真实 dev 环境整页截图；其中 20 张取自打了出图补丁的环境，
   第 21 张 `21-login-unpatched-no-progress.png` 取自**回滚后的交付版本**，
   第 22 张 `22-blank-page-backend-down.png` 是 B2 的白屏留档）。
 - 关键复现命令：

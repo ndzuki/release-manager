@@ -520,7 +520,7 @@ TASK-103/ADR-021），service 身份无法写入。因此出站拒绝的「审�
 | 17 | ADR-020 的 Vault SecretResolver 适配器未实现（notifier 出站因此恒在无鉴权分支） | 未见实现 | `docs/decisions/ADR-020-use-hashicorp-vault-go-api-for-notifier-secretresolver.md:14-15`；`cmd/notifier/main.go:81` |
 | 18 | 「一个活跃标准 Operation」的数据库级唯一索引只在 PostgreSQL，SQLite 侧仅应用层计数（双引擎强度不等价） | 部分实现 | `migrations/000001_legacy_baseline.up.sql:62-63` ↔ `internal/store/sqlite/uow.go:89-100` |
 | 19 | 迁移编号连续性与 up/down 成对已有静态门禁（TASK-101：`make check-migrations`，覆盖两个内嵌集合，含负控制） | 已实现 | `migrations/continuity_test.go`、`Makefile` 的 `check-migrations` |
-| 20 | 无 HTTP 安全响应头（CSP / X-Content-Type-Options / X-Frame-Options / HSTS） | 未见实现 | `web/nginx.conf:1-106` 无 `add_header`；Go 侧无相关中间件 |
+| 20 | 无 HTTP 安全响应头（CSP / X-Content-Type-Options / X-Frame-Options / HSTS） | 未见实现 | `web/nginx.conf` 目前只有 `add_header Cache-Control`（缓存语义，2026-10-21 为修「发布后仍见旧页面」而加，不是安全头）；CSP / X-Content-Type-Options / X-Frame-Options / HSTS 仍未声明；Go 侧无相关中间件 |
 | 21 | 未使用 PostgreSQL RLS / `CREATE POLICY` / `GRANT`，租户隔离完全依赖应用层过滤 | 事实（设计选择） | 全仓检索 0 命中；§3.10 |
 | 22 | `README.md:69` 称前端「Node 版本见 `web/package.json`」，但该文件没有 `engines` 字段（全文件无 `engines` 键） | 文档缺陷（未修，本文只报告） | `README.md:69`、`web/package.json:1-51` |
 

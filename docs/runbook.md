@@ -840,8 +840,19 @@ curl -sk https://10.10.33.122:8443/ | sha256sum
 kubectl --context k3d-rm-prod -n release-manager exec deploy/web -- sha256sum /usr/share/nginx/html/index.html
 ```
 
-- `index.html` 是**不缓存**的入口，`assets/*` 是内容哈希文件名、可长期缓存；因此「页面还是旧样子」通常是
-  浏览器缓存了 `index.html`，强制刷新（`Ctrl/Cmd+Shift+R`）即可。
+- **缓存语义（2026-10-21 起由 nginx 显式声明，见 `web/nginx.conf`）**：
+  - 入口 `index.html`（以及所有 SPA 路由回退响应）→ `Cache-Control: no-cache`：浏览器每次**先向服务端确认**
+    （可命中 ETag 304），**不会再出现「部署了新版本，浏览器还渲染旧页面」**；
+  - `assets/*`（Vite 内容哈希文件名）→ `public, max-age=31536000, immutable`：同名文件字节不变，可长期缓存。
+  - 部署后必须验证两条：
+    ```bash
+    curl -skI https://10.10.33.122:8443/ | grep -i '^cache-control'   # 期望: cache-control: no-cache
+    ASSET=$(curl -sk https://10.10.33.122:8443/ | grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' | head -1)
+    curl -skI "https://10.10.33.122:8443/$ASSET" | grep -i '^cache-control'  # 期望: immutable 长缓存
+    ```
+  - **历史症状**：该策略落地前，nginx 只发 `ETag/Last-Modified`（无 `Cache-Control`），浏览器会**启发式缓存** `index.html`，
+    部署后旧 HTML 继续指向旧 asset 名 ⇒ 用户看到旧界面。若某台客户端仍是旧界面，先强制刷新（`Ctrl/Cmd+Shift+R`）；
+    持续复现再按 §11.7 第一条比对 `index.html` sha。
 - **主题偏好存在浏览器**（`localStorage['rm-theme']` = `system` / `light` / `dark`），跟随系统时会随
   `prefers-color-scheme` 实时切换；服务端不保存这个偏好，换浏览器会回到默认（跟随系统）。
 - **发布后 UI 冒烟清单**（与 `docs/user-manual.md` 的页面一一对应，3 分钟）：
