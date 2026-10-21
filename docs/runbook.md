@@ -887,5 +887,9 @@ kubectl --context k3d-rm-prod -n release-manager exec deploy/web -- sha256sum /u
    修复后该车道于 2026-10-21 首次全绿。遗留教训：**看到长期红的门禁要先当缺陷查，而不是当背景噪声**。
 3. **一次性 flake 的判定**：失败快照若显示页面停在启动失败（「无法连接发布管理服务 / [internal] internal error」），
    那是引导 RPC 抖动，`rerun --failed` 后应转绿；若连续复现则按 §1/§2 查服务。
-4. **不要为了变绿改断言**：改版导致的选择器/文案变化要更新 spec，但必须**保持断言强度**
+4. **`vulncheck` 跟随 Go 补丁级**：advisory 一发布，`make vulncheck` 就会在**所有 PR** 上红（2026-10-21 的 `GO-2026-6809` 即此例：
+   `crypto/x509` 在 **Go 1.27.3** 修复）。处置顺序 = **升 Go 补丁版**（`go.mod` + CI `go-version` + 8 个 Dockerfile 的
+   `golang:<ver>@sha256:<linux/amd64 digest>` + 版本串文档）→ CI 转绿 → **重建并滚动 6 个服务**（只改仓库不重建镜像 = 生产仍有漏洞）。
+   digest 用 `docker buildx imagetools inspect golang:<ver>` 解析平台 digest，不要手写。**不要**用 `vulncheck.exceptions.yaml` 掩盖可修的 stdlib 漏洞。
+5. **不要为了变绿改断言**：改版导致的选择器/文案变化要更新 spec，但必须**保持断言强度**
    （例如操作 id 从 `innerText` 升级为对 `CopyableHash.title` 的**全值**对账）。

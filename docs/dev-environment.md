@@ -60,6 +60,10 @@
 | `buf` | `make proto` 生成 protobuf 代码（缺失时 target 自动 `go install ...@latest`） | proto 生成失败 |
 
 Go 版本以 `go.mod` 为准（当前声明 `go 1.27.3`）；CI 用 `actions/setup-go` 钉 `1.27.3`（`GOTOOLCHAIN=local`，故版本必须来自 setup-go），Dockerfile 的 golang 构建镜像钉到同一 patch 的 linux/amd64 digest（TASK-109；1.27.2 起含 `GO-2026-6613`/`6617` 的 net/http 修复，1.27.3 起含 `GO-2026-6809` 的 crypto/x509 修复）。
+**本地 Go 工具链**：`go.mod` 声明的补丁版（现在是 `go 1.27.3`）高于本机安装版本时，`make` 的 Go 目标会因 `GOTOOLCHAIN=local` 直接报
+`go.mod requires go >= 1.27.3`。两种解法：装 1.27.3（`go install golang.org/dl/go1.27.3@latest && go1.27.3 download`），
+或对单条命令用 `GOTOOLCHAIN=go1.27.3 make <target>`。CI 由 `actions/setup-go` 钉 1.27.3，不受影响。
+
 k3d 必须使用 release 二进制而非 `go install` 构建：后者报告 `v5-dev`，会让版本解析误读
 随后的 k3s 版本行并报「k3d 过旧」。其余工具版本要求以 `deploy/dev/dev.sh` 的前置检查为准。
 
