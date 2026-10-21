@@ -2303,6 +2303,57 @@ docker exec k3d-rm-prod-server-0 crictl images | grep "release-<svc> *8c40187"
 
 **回滚**（纯镜像级）：把 6 个 Deployment 指回 `:f0f8d6b`（Go 服务）/ 上一个 `web` tag，`rollout status` 后验 `/readyz`；schema 不变。
 
+### 8.18 实测：依赖批次（distroless digest / redis / helm / otel / doublestar / x-tools / vite）与全 6 服务滚动（无迁移，2026-10-21，TASK-394）
+
+**触发**：8 个 Dependabot PR 的 CI 全红，但**不是依赖本身的问题** —— 而是 Dependabot 做不到的两件事：
+
+| 失败门禁 | 真实原因 | 本批次的修法 |
+| --- | --- | --- |
+| `license-check` | 依赖变更后 `NOTICE` / `docs/dependencies.md` 是**生成产物**，必须重生成（脚本明确报 "generated artifact is stale"） | `GOTOOLCHAIN=go1.27.3 bash scripts/check-licenses.sh --write-notice NOTICE` + `--write docs/dependencies.md` |
+| `operator-image-sdk-only` | `imagecheck.operator.yaml` 里 pin 了**已批准的基础镜像 digest**，只改 Dockerfile 会报 `base_image_unpinned` | 同步白名单到新 digest `516757106de35205…` |
+| `vulncheck`（#519 上） | 合并前的单 PR 基线噪声；批次下 `make vulncheck` **PASS** | 无需例外登记 |
+
+**合并的依赖**：distroless `e2e927e` → **`5167571`**（7 个 Go Dockerfile + fixtures）、`redis/go-redis/v9` 9.23.0、`helm.sh/helm/v3` 3.22.1、`otel/sdk` 1.47.0、`doublestar/v4` 4.10.3、`golang.org/x/tools` 0.52.0、`vite` 6.4.4（dev）。
+**PR**：#527（`c470d30`），8 个来源 PR 在合并后自动标记 `MERGED`。
+
+**镜像（节点内 `crictl` IMAGE ID）**
+
+| 服务 | 发布前 `:8c40187` | 发布后 `:c470d30` | IMAGE ID 变化 |
+| --- | --- | --- | --- |
+| `api` rev17 → **rev18** | `8c40187` | **`c470d30`** | 是（新 distroless + 依赖） |
+| `auth` rev9 → **rev10** | `8c40187` | **`c470d30`** | 是 |
+| `orchestrator` rev9 → **rev10** | `8c40187` | **`c470d30`** | 是 |
+| `webhook` rev9 → **rev10** | `8c40187` | **`c470d30`** | 是 |
+| `notifier` rev9 → **rev10** | `8c40187` | **`c470d30`** | 是 |
+| `web` rev23 → **rev24** | `8c40187` | **`c470d30`** | **否**（IMAGE ID 两者都是 `82db37d14dad9`：vite 6.4.3→6.4.4 是工具链 patch，**构建产物字节级一致**；入口 `index.html` sha 前后同为 `015c6b7a…`） |
+
+> 这张表本身就是「只滚该滚的」的证据：`web` 虽然换了 tag，但 IMAGE ID 未变 ⇒ 内容零差异；5 个 Go 服务因新 distroless digest 与依赖升级而真实变化。
+
+**构建与滚动**
+
+- 构建必须带 `--build-arg GOPROXY`（Dockerfile 里是 `ARG GOPROXY`；不带时容器内访问 proxy.golang.org 会 i/o timeout，见 §8.17）。
+- 导入用**文件形态** + 节点内 `crictl` 判定（§8.16/§8.17 的两个陷阱不重复）。
+- 滚动顺序 `webhook → notifier → api → orchestrator → auth → web`，每步 `rollout status` 与 `/readyz` 通过后才继续。
+
+**结果（实测 12:26–12:28 +08）**：6 个服务全部 `:c470d30` 且 rollout 成功（rev 见上表）；10 个工作负载 `1/1`、`RESTARTS` **0**；`schema 36|f` **不变**（无迁移）；`/` 200、`/readyz` 200；缓存头策略继续生效（`/` = `no-cache`、`/assets/*` = `immutable`）。
+
+**门禁（本地 + CI 双口径）**
+
+| 门禁 | 结果 |
+| --- | --- |
+| `go build ./...`（1.27.3） | RC 0 |
+| `go mod verify` / `go mod tidy -diff` | RC 0 / 无差异 |
+| `make vulncheck` | PASS |
+| `make sdk-check` | RC 0 |
+| `make lint` | 0 issues |
+| `make test`（`go test -race ./...`） | 全绿（复核员实跑） |
+| `scripts/check-licenses.sh` | PASS（Go ok=170 / frontend ok=50，denied=0） |
+| `scripts/check-docs.sh` | PASS |
+| web `npm test` / `lint` / `build` / `check:contract` | 184 files / 1882 tests 全绿 |
+| PR #527 CI | 25 项：23 success / 2 skipped / **0 fail** |
+
+**回滚**：纯镜像级 —— 5 个 Go 服务指回 `:8c40187`、`web` 指回 `:8c40187`（内容与 `:c470d30` 相同），`rollout status` 后验 `/readyz`；schema 不变。
+
 ## 9. 可观测
 
 | 面 | 现状 | 证据 |
