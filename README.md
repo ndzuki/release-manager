@@ -32,7 +32,7 @@
 
 - **发布清单**：按 客户 → 集群 → 命名空间/Release 建立发布清单，持续采集与集群实际状态的同步率与漂移。
 - **Values 全生命周期**：不可变 Revision、并排 diff、审批决策、按 Secret 引用渲染（不落明文）。
-- **Operation 状态机**：安装 / 升级 / 回滚，CAS + 事务 Outbox，幂等、可重放、可取消；每一步的阶段条、预检原始 JSON、时间线都在操作详情页。
+- **Operation 状态机**：安装 / 升级 / 回滚，CAS + 事务 Outbox，幂等、可重放、可取消（仅 pending/queued 可取消，running 返回 `cancel_not_allowed`）；每一步的阶段条、预检原始 JSON、时间线都在操作详情页。
 - **紧急变更与收敛**：受控紧急变更、收敛任务、紧急锁，配合「下次对账回退 / 需异人审批提升」两种收敛策略。
 - **制品与 Bundle**：经 Harbor webhook 入口接收制品；Bundle 记录 chart 与镜像集合的内容摘要、来源证据与镜像绑定；制品生命周期支持保留期清理与归档恢复。
 - **信任与授权**：签名信任根（信任策略与轮换）、组织↔客户绑定与能力授予、角色（平台管理员 / 发布管理员 / 部署者 / 只读）。
@@ -71,8 +71,8 @@ flowchart LR
 make dev-up        # 起 k3d 集群 + 本地 registry + 全部服务（容器）
 make dev-seed      # 播种确定性的开发夹具
 make dev-status    # 打印状态并写 data/dev-status.json
-make ops-check     # 只读巡检（health / pod / 备份 / schema / 入口 / 缓存头）
-make dev-down      # 停止（保留数据卷）
+make ops-check     # 只读巡检 21 项；默认指向仓库记录的验证环境，无集群时 exit 2（可用 RM_KUBE_CONTEXT / RM_BASE_URL 覆盖）
+make dev-down      # 删除 5 个受管集群（保留 registry 与镜像缓存）
 make dev-purge CONFIRM=1   # 彻底清理（不可逆）
 ```
 
@@ -98,7 +98,6 @@ cd web && npm ci && npm run dev
 外部贡献者不需要访问维护者的私有知识库——代码、`docs/` 与门禁即契约：
 
 ```bash
-make quality        # 聚合门禁（下述各项）
 make test           # go test -race ./...
 make lint           # golangci-lint（0 issues）
 make sdk-check      # 禁止命令行的静态门禁
@@ -108,7 +107,11 @@ make lint-proto     # buf lint
 cd web && npm ci && npm test && npm run lint && npm run build
 ```
 
-提交信息格式 `<type>(<scope>): <summary>`（英文祈使句），正文写清**为什么**改与**怎么验证**。细节与评审关注点见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+上面这些都不需要私有资料。一键聚合用 `ALLOW_NO_REQS=1 make quality` —— 该变量会显式**跳过**只对维护者有意义的
+`check-reqs` / `check-tasks`（它们要读维护者的私有知识库卡面），其余门禁照常执行；不设置时这两档会主动 fail
+（宁可红也不静默跳过）。
+
+提交信息格式 `<type>(<scope>): <summary>`（英文祈使句），正文写清**为什么**改与**怎么验证**；仓库内部提交另带 `(TASK-NNN)` 后缀，外部 PR 可省略。细节与评审关注点见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 **硬性红线**（违反会被门禁或评审拒绝）：
 
@@ -130,7 +133,7 @@ cd web && npm ci && npm test && npm run lint && npm run build
 | `release-operator` | 客户集群侧 agent：mTLS 双向流、集群内 Helm 执行 |
 | `release-auth` | 认证、组织与成员、客户绑定、授权快照 |
 | `release-notifier` | 通知投递与死信 |
-| `release-api` | 审计查询/导出与只读 API |
+| `release-api` | 审计查询/归档与只读 API |
 | `release-webhook` | Harbor webhook 入口（bundle ingress） |
 
 工具（非长期运行服务）：`devseed`（经正式 API 播种开发夹具）、`e2e`（分阶段 E2E runner）、`imagecheck`（镜像策略校验）、`installgate`（SDK 门禁失败时的限时 quarantine）、`reqcheck`（原子需求模板校验）、`sdkcheck`（SDK-only 静态分析）、`store-migrate`（SQLite → PostgreSQL 一次性迁移）、`notification-sink`（dev-only 通知落点）。
@@ -165,7 +168,7 @@ docs/         架构、手册、运维与 ADR 导出副本
 | [`docs/cli.md`](docs/cli.md) | `cmd/*` 全部可执行文件的 flag、退出码 |
 | [`docs/observability.md`](docs/observability.md) | 日志、指标与健康检查 |
 | [`docs/glossary.md`](docs/glossary.md) | 领域词汇表（含禁用说法） |
-| [`docs/decisions/`](docs/decisions/) | ADR-000 ~ ADR-021 与索引 |
+| [`docs/decisions/`](docs/decisions/) | ADR-000 ~ ADR-022（共 23 篇）与索引 |
 | [`docs/images/user-manual/README.md`](docs/images/user-manual/README.md) | 截图目录约定（`dc-*` = 当前界面，`legacy/` = 改版前历史证据） |
 | [`docs/dependencies.md`](docs/dependencies.md) | 依赖许可清单（生成产物，`make check-licenses` 校验） |
 | [`docs/ux-review.md`](docs/ux-review.md) | 控制台交互体验审查与优化清单 |
