@@ -10,10 +10,10 @@
 | --- | --- |
 | 截图环境 | **生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:5080198` rev22 + 6 个 Go 服务 `:f0f8d6b`） |
 | 截图方式 | Playwright + 系统 Chrome，真实登录（`admin` / platform_admin），视口 1440×900、长页面整页截图；另含 375×812 两张 |
-| 截图日期 | **2026-10-21**，共 **37 张**（暗色 29 张 + 亮色 6 张 + 375 两张），全部当日实测 |
+| 截图日期 | **2026-10-21**，共 **43 张**（暗色 30 张 + 375px 2 张 + 亮色 11 张），全部当日实测 |
 | 夹具数据 | 生产库现状：1 个客户（RM Cust Demo）/ 1 个集群（rm-cust）/ 4 个 release / 6 个历史操作（5 succeeded、1 failed）/ 1 个已验证 Bundle |
 | 关键限制 | **生产环境当前没有在线 Operator**（客户集群里未部署 operator）。因此所有依赖 Operator 的读都会被拒绝并**显式降级**（例如 Values 页的 Secret 列表、紧急变更的候选制品），本教程在对应位置标注了「本环境降级表现」 |
-| 主题 | 控制台**暗色优先**；亮色样本见 `dc-03-home-light.png`、`dc-09-release-inventory-light.png`、`dc-10-values-editor-light.png`、`dc-14-audit-light.png`、`dc-17-operation-detail-light.png` |
+| 主题 | 控制台**暗色优先**；亮色样本见 `dc-03-home-light.png`、`dc-09-release-inventory-light.png`、`dc-10-values-editor-light.png`、`dc-14-audit-light.png`、`dc-17-operation-detail-light.png`；主要列表/治理页另有亮色版本（`dc-24/25/26/27/32/33-*-light.png`），共 **11 张亮色** |
 
 > 本轮的界面是「方向 C」改版后的版本：统一 `PageHeader`（面包屑只显示**名称**）、语义化状态胶囊、`Steps` 阶段条、
 > 并排 diff、可折叠原始 JSON。**本教程引用的 `dc-*.png` 全部是改版后的生产界面**；
@@ -213,6 +213,8 @@ Operator 是跑在客户集群里的 agent：执行 Helm 操作并回传发布�
 
 ![操作中心](images/user-manual/dc-33-operation-center.png)
 
+![操作中心·亮色](images/user-manual/dc-33-operation-center-light.png)
+
 操作中心是跨发布的非终态操作列表（终态操作不在此），可按状态与发布过滤。
 
 ![操作详情（成功）](images/user-manual/dc-17-operation-detail.png)
@@ -253,6 +255,8 @@ Operator 是跑在客户集群里的 agent：执行 Helm 操作并回传发布�
 
 ![紧急锁](images/user-manual/dc-32-stuck-locks.png)
 
+![紧急锁·亮色](images/user-manual/dc-32-stuck-locks-light.png)
+
 紧急锁页列出**效果未知且已过观察窗口**的紧急操作，需要人工确认实际状态后再决定「释放锁」或显式收敛。
 释放锁要求填写原因并勾选确认；处置流程与值班口径见 `docs/runbook.md` 的「紧急变更 / stuck lock」章节。
 
@@ -274,13 +278,19 @@ Operator 是跑在客户集群里的 agent：执行 Helm 操作并回传发布�
 
 ![发布定义](images/user-manual/dc-24-definitions.png)
 
+![发布定义·亮色](images/user-manual/dc-24-definitions-light.png)
+
 发布定义页维护 Promotion Mapping 与定义设置（新建/编辑/包含已停用的开关、表格）。
 
 ![发布 Bundle](images/user-manual/dc-25-bundles.png)
 
+![发布 Bundle·亮色](images/user-manual/dc-25-bundles-light.png)
+
 Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，行内可展开明细（镜像、证据引用）。
 
 ![制品生命周期](images/user-manual/dc-26-artifact-lifecycle.png)
+
+![制品生命周期·亮色](images/user-manual/dc-26-artifact-lifecycle-light.png)
 
 制品生命周期页管理保留期清理与归档恢复：可以手动触发清理、从归档恢复；页面顶部说明
 「仅平台管理员可用，维护模式下会被拒绝」。清理是同步执行的（服务端预算可达约 1 小时），
@@ -289,6 +299,8 @@ Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，�
 ## 13. 治理与账号
 
 ![签名信任根](images/user-manual/dc-27-trust-policy.png)
+
+![签名信任根·亮色](images/user-manual/dc-27-trust-policy-light.png)
 
 信任根页维护签名信任策略与版本（信任根编辑器、吊销、轮换）。环境选择器决定你看哪一套策略。
 
@@ -374,16 +386,16 @@ Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，�
 | `dc-17-operation-detail.png` / `-light.png` | 操作详情（安装·成功） | 暗 / 亮 | 1440×1476 |
 | `dc-18-operation-detail-failed.png` | 操作详情（紧急变更·失败） | 暗 | 1440×1258 |
 | `dc-21-operation-invalid-error.png` | 操作详情的无效 id 错误态 | 暗 | 1440×900 |
-| `dc-33-operation-center.png` | 操作中心 | 暗 | 1440×900 |
+| `dc-33-operation-center.png` / `-light.png` | 操作中心 | 暗 / 亮 | 1440×900 |
 | `dc-34-operation-list.png` | 单发布的操作历史 | 暗 | 1440×900 |
 | `dc-12-emergency-change.png` | 紧急变更 | 暗 | 1440×1043 |
 | `dc-13-convergence-tasks.png` | 收敛任务 | 暗 | 1440×900 |
-| `dc-32-stuck-locks.png` | 紧急锁 | 暗 | 1440×900 |
+| `dc-32-stuck-locks.png` / `-light.png` | 紧急锁 | 暗 / 亮 | 1440×900 |
 | `dc-14-audit.png` / `-light.png` | 审计 | 暗 / 亮 | 1440×1425 |
-| `dc-24-definitions.png` | 发布定义 | 暗 | 1440×900 |
-| `dc-25-bundles.png` | 发布 Bundle | 暗 | 1440×900 |
-| `dc-26-artifact-lifecycle.png` | 制品生命周期 | 暗 | 1440×900 |
-| `dc-27-trust-policy.png` | 签名信任根 | 暗 | 1440×900 |
+| `dc-24-definitions.png` / `-light.png` | 发布定义 | 暗 / 亮 | 1440×900 |
+| `dc-25-bundles.png` / `-light.png` | 发布 Bundle | 暗 / 亮 | 1440×900 |
+| `dc-26-artifact-lifecycle.png` / `-light.png` | 制品生命周期 | 暗 / 亮 | 1440×900 |
+| `dc-27-trust-policy.png` / `-light.png` | 签名信任根 | 暗 / 亮 | 1440×900 |
 | `dc-28-bindings.png` | 授权绑定 | 暗 | 1440×900 |
 | `dc-29-organization.png` | 组织成员 | 暗 | 1440×900 |
 | `dc-30-local-users.png` | 本地用户 | 暗 | 1440×900 |
@@ -404,7 +416,7 @@ RM_ADMIN_PW='<admin 口令>' node <采集脚本>.mjs   # 脚本把 BASE 指向 h
 - 采集前先确认生产可达：`curl -sk -o /dev/null -w '%{http_code}' https://10.10.33.122:8443/` ⇒ `200`。
 - 深/浅主题通过 `localStorage['rm-theme']` 切换后再 reload，保证与用户实际操作一致。
 - 每张图都断言 `document.documentElement.scrollWidth === window.innerWidth`（不允许横向溢出）；
-  本轮 37 张全部通过。
+  本轮 43 张全部通过（含 6 张追加亮色：`dc-24/25/26/27/32/33-*-light.png`）。
 - 值班巡检命令、故障处置与回滚步骤见 `docs/runbook.md`；部署与镜像级回滚见 `docs/production-deploy.md` 的 §8.16。
 
 > 事实源：`web/src/router/index.ts`、`web/src/components/common/AppShell.vue`、`web/src/components/common/PageHeader.vue`、
