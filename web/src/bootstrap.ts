@@ -7,7 +7,7 @@ import { t } from '@/i18n/messages';
  * fully blank page: no message, no retry, and nothing in the UI to distinguish
  * "backend down" from "console broken". Browser-measured baseline for that state
  * is recorded in docs/ux-review.md (B2): `#app` innerHTML length 0, DOM node
- * count 1, screenshot `docs/images/user-manual/22-blank-page-backend-down.png`.
+ * count 1, screenshot `docs/images/user-manual/legacy/22-blank-page-backend-down.png`.
  *
  * This module renders the surface that failure never had. It is deliberately
  * framework-free: it must work when the Vue app (or its store bootstrap) is
