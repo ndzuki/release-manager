@@ -628,6 +628,22 @@ curl -sS http://127.0.0.1:5001/v2/release-orchestrator/tags/list | head -c 500
 
 ### 11.1 日常巡检（只读，5 分钟）
 
+**一键巡检**（只读；exit 0=全通过 / 1=有发现 / 2=环境不可用）：
+
+```bash
+make ops-check                 # 默认 k3d-rm-prod + release-manager + https://10.10.33.122:8443
+# 或直接调脚本，必要时覆盖：
+RM_BASE_URL=https://10.10.33.122:8443 bash scripts/ops-check.sh --verbose
+RM_KUBE_CONTEXT=other-context bash scripts/ops-check.sh --no-http   # 只查集群侧
+```
+
+它逐项检查：namespace 可达、6 个 Deployment 的 ready/revision/镜像、Pod 就绪与 CrashLoop/ImagePull 状态、
+**重启总数**、备份 CronJob 与最近一次成功备份、**三份私钥 Secret 是否存在**（只判存在，绝不打印值）、
+`schema` 版本与 `dirty`、宿主 edge forwarder 容器、入口 `/` 与 `/readyz`、以及**缓存头**（`/`=no-cache、`/assets/*`=immutable）。
+每一项失败都会带上「期望值 + 去哪查」（§0.2 症状索引）。
+
+手工版本（没有 `make` 或只想看某一项时）：
+
 ```bash
 CTX=k3d-rm-prod; NS=release-manager
 
