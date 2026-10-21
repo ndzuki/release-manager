@@ -42,12 +42,12 @@
 ## 架构
 
 ```mermaid
-flowchart LR
-  U["浏览器<br/>Vue 3 控制台"] -->|Connect RPC<br/>单端口同源| C["中心控制面<br/>orchestrator · auth · api<br/>notifier · webhook"]
-  C --- DB[("PostgreSQL<br/>权威状态")]
-  C <-->|"mTLS 出站双向流<br/>+ 持久命令 Outbox"| O["release-operator<br/>（客户集群内）"]
-  O -->|"Helm Go SDK<br/>（禁命令行）"| K[("客户 K8s 集群")]
+flowchart TB
+  U["浏览器<br/>Vue 3 控制台"] -->|"Connect RPC（单端口同源）"| C
   H["Harbor"] -->|webhook| C
+  C["中心控制面<br/>orchestrator · auth · api · notifier · webhook"] --- DB[("PostgreSQL<br/>权威状态")]
+  C <-->|"mTLS 出站双向流<br/>+ 持久命令 Outbox"| O["release-operator<br/>（客户集群内）"]
+  O -->|"Helm Go SDK（禁命令行）"| K[("客户 K8s 集群")]
 ```
 
 **为什么长这样**（完整决策见 [`docs/architecture.md`](docs/architecture.md) 与 [`docs/decisions/`](docs/decisions/)）：
