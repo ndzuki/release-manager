@@ -2301,6 +2301,8 @@ docker exec k3d-rm-prod-server-0 crictl images | grep "release-<svc> *8c40187"
 - 截图：`/tmp/rm-prod-fresh/fresh-login.png`、`fresh-home-dark.png`、`fresh-home-light.png`（`home-dark` 实际按 OS 默认渲染成亮色，因为主题默认「跟随系统」；见 `docs/user-manual.md` §2）。
 - 结论：**线上界面就是方向 C 新版**（侧栏 212px + 四统计卡 + 快速入口），此前"旧界面"是浏览器缓存了旧 `index.html`。
 
+**发布后巡检**：`make ops-check`（只读，21 项检查；见 `docs/runbook.md` §11.1）应输出 `ops-check: PASS`。
+
 **回滚**（纯镜像级）：把 6 个 Deployment 指回 `:f0f8d6b`（Go 服务）/ 上一个 `web` tag，`rollout status` 后验 `/readyz`；schema 不变。
 
 ## 9. 可观测

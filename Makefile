@@ -703,6 +703,10 @@ check-docs: ## Check documented targets/paths exist and whitelisted citation tok
 check-citations: ## Check that test.yml line citations still match the content they claim (TASK-309)
 	bash scripts/check-citations.sh --check
 
+.PHONY: ops-check
+ops-check: ## Read-only health snapshot of the deployed environment (docs/runbook.md §11.1)
+	bash scripts/ops-check.sh
+
 .PHONY: check-config-keys
 check-config-keys: ## Gate config-key truthfulness: every service config leaf decodes to a real reader (REQ-094)
 	$(GO) test -race -count=1 -run 'TestConfigFilesKeysResolveToLoaderPaths|TestFakeKeyFailsTheGate|TestStructLeavesHaveReaders|TestTrustVerificationTimeoutReader|TestCustomerAgentOverlaysWirePlainHTTPRegistry' ./internal/config/
