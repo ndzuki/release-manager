@@ -107,9 +107,9 @@ make lint-proto     # buf lint
 cd web && npm ci && npm test && npm run lint && npm run build
 ```
 
-上面这些都不需要私有资料。一键聚合用 `ALLOW_NO_REQS=1 make quality` —— 该变量会显式**跳过**只对维护者有意义的
-`check-reqs` / `check-tasks`（它们要读维护者的私有知识库卡面），其余门禁照常执行；不设置时这两档会主动 fail
-（宁可红也不静默跳过）。
+上面这些都不需要私有资料。一键聚合用 `ALLOW_NO_REQS=1 make quality` —— 该变量会显式**跳过**三档只对维护者有
+意义的门禁（`check-reqs`、`check-tasks`、`check-error-codes`，它们要读维护者的私有知识库文档），其余门禁照常执行；
+不设置时这三档会主动 fail（宁可红也不静默跳过）。
 
 提交信息格式 `<type>(<scope>): <summary>`（英文祈使句），正文写清**为什么**改与**怎么验证**；仓库内部提交另带 `(TASK-NNN)` 后缀，外部 PR 可省略。细节与评审关注点见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
