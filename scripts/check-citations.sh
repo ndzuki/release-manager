@@ -5,7 +5,7 @@
 # Why this gate exists (and why it is not `check-docs`): `check-docs.sh` proves a
 # cited LINE EXISTS inside its file and nothing more — it says so itself ("weak
 # guarantee: cited-line content is not verified", V13). A citation can therefore
-# point at `go-version: "1.27.2"` while claiming to point at the `e2e-prerequisite`
+# point at `go-version: "1.27.3"` while claiming to point at the `e2e-prerequisite`
 # job and every gate stays green. This repository did exactly that (TASK-309):
 # `test/e2e/README.md` cited `e2e-prerequisite` at `324` when it lived at `420`,
 # `SECURITY.md` cited the artifact uploads at the module-cache lines, and

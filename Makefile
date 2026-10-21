@@ -428,8 +428,8 @@ lint: ## Run linters (whole tree; see lint-changed for the CI-equivalent scope)
 
 .PHONY: lint-changed
 # Mirrors the CI gate exactly (same tool version, same --new-from-rev scope), so
-# NOTE: golangci-lint must be v2.14.0+ when the toolchain is Go 1.27.2 — older releases
-# bundle an x/tools that cannot read the 1.27.2 export data (TASK-264).
+# NOTE: golangci-lint must be v2.14.0+ when the toolchain is Go 1.27.3 — older releases
+# bundle an x/tools that cannot read the Go 1.27 export data (TASK-264).
 # "does my change pass lint?" is answerable locally. The whole-tree run above is
 # clean since TASK-110 cleared the 45 findings that the Go 1.27 / golangci-lint
 # v2.14.0 bump exposed (TASK-109/TASK-264); CI still lints only the changed range so an
