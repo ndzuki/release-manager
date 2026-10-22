@@ -74,7 +74,9 @@ e2e-results/
 # The path this rule used to name (`test/e2e/testdata/`) never existed - the Helm chart
 # archives the SDK integration tests use are created inside `t.TempDir()`, outside the
 # work tree - so the rule ignored nothing but a guess.
-release-*
+# Build outputs at the repository root only. Keep this anchored: an unanchored
+# `release-*` silently ignored new files such as `docs/release-flow.md` (2026-10-22).
+/release-*
 /sdkcheck
 /reqcheck
 core.*
