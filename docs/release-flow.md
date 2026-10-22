@@ -141,9 +141,10 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 
 ### 3.3 通道 C：本地手测
 
-用 `api/kulala/webhook.http`（Kulala/Neovim）；`make api-webhook` 打开。dev 环境下两把 key 在
+用 `api/kulala/webhook.http`（用 Neovim/Kulala 直接打开该文件；`make api-<service>` 这类只负责打开的
+目标已由 TASK-093 移除）。`make api-check` 校验集合与 `api/proto`、dev 端口的一致性。dev 环境下两把 key 在
 `data/dev-service-tokens/ci-api-key` 与 `data/dev-service-tokens/harbor-service-token`，**不入库**。
-对应关系见 [http-collections](http-collections.md)。
+用法与覆盖范围见 [http-collections](http-collections.md)。
 
 写入后用控制台「发布 Bundle」（按发布定义 ID 过滤）或 `BundleService.GetBundle` 读回核对。
 
