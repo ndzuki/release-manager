@@ -157,6 +157,7 @@ docs/         架构、手册、运维与 ADR 导出副本
 
 | 文档 | 内容 |
 | --- | --- |
+| [`docs/release-flow.md`](docs/release-flow.md) | **从接入到发布**：客户/集群/制品/定义/Values/操作/回滚全链路，含根证书与标识问题 |
 | [`docs/user-manual.md`](docs/user-manual.md) | 控制台使用手册：逐页截图 + 操作步骤 + 排错 |
 | [`docs/architecture.md`](docs/architecture.md) | 执行边界、服务清单、契约面、数据与一致性 |
 | [`docs/dev-environment.md`](docs/dev-environment.md) | 本地环境生命周期、夹具与逐服务调试 |

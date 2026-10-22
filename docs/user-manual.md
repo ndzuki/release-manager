@@ -2,7 +2,7 @@
 
 本教程面向**使用控制台的人**（平台管理员 / 发布管理员 / 部署者 / 只读观察者），按「第一次登录 → 认识导航 → 走完一条发布」
 的顺序编排，并在每个页面说明「它是干什么的、怎么点、点完会发生什么、出错先看哪里」。
-系统边界与契约见 `docs/architecture.md`，本地环境见 `docs/dev-environment.md`，故障处置见 `docs/runbook.md` —— 本文不重复这些内容。
+系统边界与契约见 `docs/architecture.md`，**从接入到发布的完整流程**（含 bundle ingress、根证书、新集群接入）见 `docs/release-flow.md`，本地环境见 `docs/dev-environment.md`，故障处置见 `docs/runbook.md` —— 本文不重复这些内容。
 
 ## 0. 证据与适用边界
 
