@@ -85,7 +85,9 @@ openssl req -x509 -new -key ca.key -sha256 -days 3650 \
    - `TTL`：5–1440 分钟（默认 60）；每个集群至多一个 pending token；
    - 弹窗只显示**一次**明文 token 与部署命令，关掉就无法再取（服务端只存 SHA-256）。
 5. **在客户集群部署 agent**：按 [customer-onboarding](customer-onboarding.md) §1–§3：
-   - 导入 `release-operator` 镜像（distroless、nonroot、无 shell）；
+   - 导入 `release-operator` 镜像（distroless、nonroot、无 shell）；镜像 tag 与控制面同批发布，取
+     `release-operator:<TAG>`（控制面的发布镜像清单见 [production-deploy](production-deploy.md) 的发布记录）；
+     本地 dev 由 `make dev-up` 自动构建并推进 registry；
    - apply `deploy/kustomize/customer-agent/base/` 下的 namespace / serviceaccount / rbac / pvc（再按
      Deployment 模板替换 `<CUSTOMER_ID>` / `<CLUSTER_ID>` / `<OPERATOR_NAME>` / `<TAG>`）；
    - 两个 Secret：`operator-enrollment`（token 明文，一次性）与 `operator-gateway-ca`
@@ -137,7 +139,9 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 - 源码 allowlist：代码层有 `source_not_allowed` 校验（`internal/orchestrator/bundle_service.go`），但
   **当前没有接线**——`cmd/orchestrator/main.go` 的 `loadSourceRegistries` 直接 `return nil`，即生产上不限制
   来源；接上配置后才会真正拦截（这是一个已知缺口，不要按「已生效」理解）；
-- 写请求必须带 `Idempotency-Key`：同 key 同 body 重放返回首个 bundle，不重复创建。
+- `Idempotency-Key` **建议**带上：带了则同 key 同 body 重放返回首个 bundle；**不带也能提交**（服务端只在
+  header 非空时写幂等记录），只是没有重放保护。生产 CI 用的 key 是 `CI_API_KEY`（Secret
+  `release-manager-ci-api-key` 的这个键，创建命令见 [production-deploy](production-deploy.md) §3.1）。
 
 ### 3.3 通道 C：本地手测
 
@@ -171,9 +175,14 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 2. 选择：**类型**（安装 / 升级 / 回滚）、**制品 Bundle**、**已审批 Values 版本**、可选**补丁覆盖**
    （只允许点分路径如 `spec.replicas`；Secret 字段必须用 Secret 引用）；
 3. 「检查并确认」→ 右侧常显的最终确认面板复述类型/发布名/集群/制品/配置版本/补丁；**改任何字段都会解除确认**；
-4. 状态机：`PENDING → PREFLIGHT → QUEUED → RUNNING → SUCCEEDED | FAILED | CANCELLED | TIMEOUT`；
-   - `PREFLIGHT` 同时做 **制品信任校验**（用信任根验证 bundle 证据）与各项预检；
-   - 仅 `pending/queued` 允许取消（running 返回 `cancel_not_allowed`）；
+4. 状态机：`PENDING → PREFLIGHT → QUEUED → RUNNING → SUCCEEDED | FAILED | TIMEOUT`；取消有两条边：
+   `PENDING/PREFLIGHT/QUEUED → CANCELLED`、`RUNNING → CANCELLING → CANCELLED`；
+   - **制品信任校验在「创建操作」时同步发生**：`CreateOperation` 调 `s.verifier.Verify`（信任根 + bundle 证据），
+     不通过直接返回错误，操作不会进入 `PENDING`；`PREFLIGHT` 阶段本身只跑 artifact / render / cluster /
+     runtime_pull 等预检（`internal/orchestrator/preflight/` 没有 trust 调用）；
+   - 取消：`PENDING / PREFLIGHT / QUEUED / RUNNING` 都可取消；**只有运行中的紧急变更**（EMERGENCY）与
+     已经在 `CANCELLING` 的操作返回 `cancel_not_allowed`。取消 ≠ 集群回滚——命令若已越过投递边界，
+     可能得到 `cancelled + effectStatus=UNKNOWN`，需继续观察；
 5. 下发：中心持久命令 Outbox → Operator 出站流 → 集群内 **Helm Go SDK** 执行 → 进度/结果回传时间线；
 6. **回滚**：创建操作选择「回滚」，或 `orchestrator.v1.RollbackRelease{release_definition_id,
    target_revision, expected_current_revision, reason}`（reason 必填）；
