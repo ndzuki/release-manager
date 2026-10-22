@@ -8,10 +8,10 @@
 
 | 项 | 值 |
 | --- | --- |
-| 截图环境 | **生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:5080198` rev22 + 6 个 Go 服务 `:f0f8d6b`） |
-| 截图方式 | Playwright + 系统 Chrome，真实登录（`admin` / platform_admin），视口 1440×900、长页面整页截图；另含 375×812 两张 |
+| 截图环境 | **生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:c470d30` rev24 + 5 个 Go 服务 `:c470d30`，`edge` 为 `nginx:1.27-alpine`） |
+| 截图方式 | Playwright + 系统 Chrome，真实登录（`admin` / platform_admin），视口 1440×900、长页面整页截图；另含 375px 宽设备视口 6 张（高度随内容，812–2084px 不等） |
 | 截图日期 | **2026-10-21/22**，共 **47 张**（暗色 30 张 + 375px 6 张 + 亮色 11 张），全部实测 |
-| 夹具数据 | 生产库现状：1 个客户（RM Cust Demo）/ 1 个集群（rm-cust）/ 4 个 release / 6 个历史操作（5 succeeded、1 failed）/ 1 个已验证 Bundle |
+| 夹具数据 | 生产库现状（2026-10-22 只读核对）：2 个客户（RM Cust Demo、Acme Weekday）/ 2 个集群（rm-cust、prod-west）/ 4 个 release / 6 个历史操作（5 succeeded、1 failed）/ 3 个 `validated` Bundle |
 | 关键限制 | **生产环境当前没有在线 Operator**（客户集群里未部署 operator）。因此所有依赖 Operator 的读都会被拒绝并**显式降级**（例如 Values 页的 Secret 列表、紧急变更的候选制品），本教程在对应位置标注了「本环境降级表现」 |
 | 主题 | 控制台**暗色优先**；亮色样本见 `dc-03-home-light.png`、`dc-09-release-inventory-light.png`、`dc-10-values-editor-light.png`、`dc-14-audit-light.png`、`dc-17-operation-detail-light.png`；主要列表/治理页另有亮色版本（`dc-24/25/26/27/32/33-*-light.png`），共 **11 张亮色** |
 
@@ -411,10 +411,10 @@ Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，�
 | `dc-20-forbidden.png` | 403 | 暗 | 1440×900 |
 | `dc-36-home-375.png` | 首页（375px） | 暗 | 375×2040 |
 | `dc-37-audit-375.png` | 审计（375px） | 暗 | 375×2084 |
-| `dc-38-customers-375.png` | 客户列表（375px） | 暗 | 375×812 |
-| `dc-39-definitions-375.png` | 发布定义（375px） | 暗 | 375×1276 |
-| `dc-40-operation-center-375.png` | 操作中心（375px） | 暗 | 375×812 |
-| `dc-41-trust-policy-375.png` | 签名信任根（375px） | 暗 | 375×812 |
+| `dc-38-customers-375.png` | 客户列表（375px） | 亮 | 375×812 |
+| `dc-39-definitions-375.png` | 发布定义（375px） | 亮 | 375×1276 |
+| `dc-40-operation-center-375.png` | 操作中心（375px） | 亮 | 375×812 |
+| `dc-41-trust-policy-375.png` | 签名信任根（375px） | 亮 | 375×812 |
 
 ## 18. 复现方式（截图与巡检脚本）
 
