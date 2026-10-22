@@ -9,7 +9,7 @@
 | --- | --- |
 | ![控制台首页（暗色）](docs/images/user-manual/dc-03-home.png) | ![Values 并排 diff](docs/images/user-manual/dc-10-values-editor.png) |
 
-> 更多界面截图与逐页操作说明见 [`docs/user-manual.md`](docs/user-manual.md)（43 张真实生产截图，含亮色与移动端）。
+> 更多界面截图与逐页操作说明见 [`docs/user-manual.md`](docs/user-manual.md)（47 张真实生产截图，含亮色与移动端）。
 
 ## 它解决什么问题
 
