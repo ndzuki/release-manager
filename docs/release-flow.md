@@ -46,7 +46,7 @@ CronJob 只 dump 数据库，不含任何 Secret。
 | **JWT 密钥对** | auth 签发会话令牌，api/orchestrator 只验签 | **Ed25519 PKCS#8**（私钥 119 字节 PEM） | Secret `release-manager-jwt-private` / `-jwt-public` | 全员会话失效，重新登录即可恢复 |
 | **mTLS CA** | Operator agent 网关签**operator 叶子证书**；客户侧用它校验网关 | **Ed25519 + `CA:TRUE` 自签**（RSA 会被网关拒绝，orchestrator 起不来） | Secret `release-manager-mtls-ca`（`ca.key`/`ca.crt`） | 所有已接入 Operator 无法再认证，需重签 CA 并全部重新 enroll |
 | **edge TLS** | 控制台 HTTPS（`edge` nginx 终止） | 任意（实测 RSA 2048） | Secret `release-manager-edge-tls` | 只影响浏览器信任 |
-| **制品签名信任根** | 预检阶段判定制品可信（Bundle 证据 vs 信任根） | **Ed25519 公钥 PEM** | 数据库 trust policy（控制台「信任根」录入，可轮换/吊销/宽限） | 预检会得到 `verification_unavailable`/不受信任，操作被拦或显式降级 |
+| **制品签名信任根** | **创建操作时**判定制品可信（`CreateOperation` 用 Bundle 证据对信任根验签） | **Ed25519 公钥 PEM** | 数据库 trust policy（控制台「信任根」录入，可轮换/吊销/宽限） | 创建操作会返回 `verification_unavailable`/不受信任，操作被拒或（非生产）降级为告警 |
 
 生成 JWT 与 mTLS CA（命令取自 [production-deploy](production-deploy.md) §3.1，可原样执行）：
 
@@ -134,8 +134,8 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 约束（不满足直接 `invalid_argument`，不会入库）：
 
 - `chart_ref` 必须以 `oci://` 开头；
-- chart 与镜像的 `digest` 必须是 `sha256:` 形式；证据字段只校验 **ref + digest 形状**（真正的信任判定在
-  预检阶段用信任根，见 §1.2 与 §6）；
+- chart 与镜像的 `digest` 必须是 `sha256:` 形式；证据字段在 ingress 只校验 **ref + digest 形状**（真正的
+  信任判定发生在**创建操作**时：`CreateOperation` 调 `trust.Verify`，见 §1.2 与 §6）；
 - 源码 allowlist：代码层有 `source_not_allowed` 校验（`internal/orchestrator/bundle_service.go`），但
   **当前没有接线**——`cmd/orchestrator/main.go` 的 `loadSourceRegistries` 直接 `return nil`，即生产上不限制
   来源；接上配置后才会真正拦截（这是一个已知缺口，不要按「已生效」理解）；
@@ -175,6 +175,8 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 2. 选择：**类型**（安装 / 升级 / 回滚）、**制品 Bundle**、**已审批 Values 版本**、可选**补丁覆盖**
    （只允许点分路径如 `spec.replicas`；Secret 字段必须用 Secret 引用）；
 3. 「检查并确认」→ 右侧常显的最终确认面板复述类型/发布名/集群/制品/配置版本/补丁；**改任何字段都会解除确认**；
+   API 直接调用时 `CreateOperation` **必须带 `Idempotency-Key`**（控制台自动生成；与 §3.2 里 SubmitBundle 的
+   「可选」不同）；
 4. 状态机：`PENDING → PREFLIGHT → QUEUED → RUNNING → SUCCEEDED | FAILED | TIMEOUT`；取消有两条边：
    `PENDING/PREFLIGHT/QUEUED → CANCELLED`、`RUNNING → CANCELLING → CANCELLED`；
    - **制品信任校验在「创建操作」时同步发生**：`CreateOperation` 调 `s.verifier.Verify`（信任根 + bundle 证据），
@@ -234,7 +236,7 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 | `bundle_not_reachable` | bundle 属于其它组织、或被他人定义占用 | 用该组织自己的 bundle，或经平台管理员/service token 提交 |
 | `source_not_allowed` | 代码层 allowlist 校验拒绝（当前 `loadSourceRegistries` 返回 nil，未接线时不出现） | 若已接线：把来源加入 allowlist（见 `internal/orchestrator/bundle_service.go` 与部署配置） |
 | `invalid_artifact` / `invalid_argument` | 证据 ref 为空或 digest 不是 `sha256:` | 检查 CI 提交体 |
-| 预检 `verification_unavailable` / 不受信任 | 信任根未配置、不匹配，或验签后端不可用 | 信任根页核对 `key_id`/公钥/issuer/宽限期 |
+| 创建操作返回 `verification_unavailable` / 不受信任 | 信任根未配置、不匹配，或验签后端不可用 | 信任根页核对 `key_id`/公钥/issuer/宽限期 |
 | `invalid_cursor` | 分页游标过期（过滤条件变化会重置） | 重新查询 |
 | 维护模式拒绝 | orchestrator 在维护窗口 | 见 [runbook](runbook.md) 维护窗口章节 |
 | `schema dirty=true` | 迁移半应用 | 见 [runbook](runbook.md) §2 |
