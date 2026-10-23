@@ -49,6 +49,9 @@ export function usePickerOptions(loaders: Partial<PickerLoaders> = {}) {
   // An EMPTY list is a valid result; a length check would reload it on every open.
   let customersLoaded = false;
   let definitionsLoaded = false;
+  // Monotonic request id for the cluster list. A slow response for a customer the user
+  // already left must not overwrite the list of the customer they are looking at.
+  let clusterRequest = 0;
 
   async function loadCustomers(includeDisabled = true): Promise<void> {
     if (customersLoaded || loadingCustomers.value) return;
@@ -72,34 +75,47 @@ export function usePickerOptions(loaders: Partial<PickerLoaders> = {}) {
 
   async function loadClusters(customerId: string): Promise<void> {
     const scope = customerId.trim();
+    // Every call supersedes the previous one, including the cache hit and the empty
+    // scope: an in-flight response for the old customer becomes stale by definition.
+    const request = ++clusterRequest;
     if (scope === '') {
       clusters.value = [];
+      loadingClusters.value = false;
+      clustersError.value = null;
       return;
     }
     const cached = clusterCache.get(scope);
     if (cached) {
       clusters.value = cached;
+      loadingClusters.value = false;
+      clustersError.value = null;
       return;
     }
     loadingClusters.value = true;
     clustersError.value = null;
     try {
       const loaded = await resolved.clusters(scope);
+      if (request !== clusterRequest) return;
       clusterCache.set(scope, loaded);
-      // A slower response for a customer the user already left must not overwrite the
-      // current list; the caller's selected customer is the authority.
       clusters.value = loaded;
     } catch {
+      if (request !== clusterRequest) return;
       clusters.value = [];
       clustersError.value = t('picker.clustersError');
     } finally {
-      loadingClusters.value = false;
+      if (request === clusterRequest) loadingClusters.value = false;
     }
   }
 
   function clearClusters(): void {
     clusters.value = [];
     clustersError.value = null;
+  }
+
+  async function reloadDefinitions(): Promise<void> {
+    definitions.value = [];
+    definitionsLoaded = false;
+    await loadDefinitions();
   }
 
   async function loadDefinitions(): Promise<void> {
@@ -132,5 +148,6 @@ export function usePickerOptions(loaders: Partial<PickerLoaders> = {}) {
     loadClusters,
     clearClusters,
     loadDefinitions,
+    reloadDefinitions,
   };
 }

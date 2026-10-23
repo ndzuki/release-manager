@@ -8,7 +8,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 截图环境 | **生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:c470d30` rev24 + 5 个 Go 服务 `:c470d30`，`edge` 为 `nginx:1.27-alpine`） |
+| 截图环境 | 主体为**生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:c470d30` rev24 + 5 个 Go 服务 `:c470d30`）；`dc-24`/`dc-25`（暗+亮）与 `dc-42`/`dc-43` 为 **2026-10-22/23 的本地 dev 环境**（Vite dev server + dev 后端）采集，展示「列表选择 / 可选集群标识」改造后的界面 |
 | 截图方式 | Playwright + 系统 Chrome，真实登录（`admin` / platform_admin），视口 1440×900、长页面整页截图；另含 375px 宽设备视口 6 张（高度随内容，812–2084px 不等） |
 | 截图日期 | **2026-10-21/22/23**，共 **49 张**（暗色 32 张 + 375px 6 张 + 亮色 11 张），全部实测 |
 | 夹具数据 | 生产库现状（2026-10-22 只读核对）：2 个客户（RM Cust Demo、Acme Weekday）/ 2 个集群（rm-cust、prod-west）/ 4 个 release / 6 个历史操作（5 succeeded、1 failed）/ 3 个 `validated` Bundle |

@@ -75,8 +75,8 @@ openssl req -x509 -new -key ca.key -sha256 -days 3650 \
 
 1. **建客户**：控制台「客户 → 新建客户」，填 `name` 与 `slug`（可读标识）。API 也允许显式给 `id`；
    UI 不填 id 时由服务端生成（见 §8 的标识说明）。
-2. **建集群**：客户详情 →「集群」→「新建集群」，填**集群名**（如 `Customer A Direct`）。UI 不要求也不
-   允许填 id（服务端生成 UUID）；如需可读 id（如 `prod-west`），用 API/脚本建：
+2. **建集群**：客户详情 →「集群」→「新建集群」，填**集群名**（如 `Customer A Direct`），并可填可选的
+   **「集群标识」**（如 `prod-west`；留空则由服务端生成 UUID，不便于辨认）。API 形态等价：
    `CreateCluster{id:"prod-west", name:"Prod West", customer_id:"<customer-id>"}`。
 3. **配路由规则**（可选但常见）：集群详情 →「编辑」→ 添加镜像/Chart 路由（直连 `/ 透传缓存 / 复制`，
    提供方 + 源前缀 + 目标前缀）。规则决定 Operator 从哪个 registry 拉 chart/镜像。
@@ -207,8 +207,8 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 - `Customer{id, name, slug}`：`id` 稳定键（UI 建客户时服务端生成 UUID），`name` 显示名，`slug` 可读标识；
 - `Cluster{id, name, customer_id}`：常见实现里 `id` 也是 UUID，**没有 alias/slug 字段**。
 
-**显示口径**：页面标题、面包屑、卡片标题用 **name**；URL、表单字段、API 用 **id**。所以列表里看到的是
-集群名，但「发布定义」对话框要填的是集群 **id** —— 这就是当前体验里最别扭的地方。
+**显示口径**：页面标题、面包屑、卡片标题用 **name**；URL 与 API 用 **id**。控制台里需要 id 的输入
+（发布定义的新建/筛选、Bundle 查询）已经换成**显示名称的列表选择**，不再要求手抄 id。
 
 **能加别名吗**：仍然没有独立的 alias 字段——`Cluster` 只有 `name`（可编辑）与 `id`（生成后不可改），
 `Customer` 多了 `slug` 但也不能替代 id。不过控制台不再强迫你面对 UUID：

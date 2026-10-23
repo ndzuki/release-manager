@@ -849,6 +849,7 @@ const zhCN = {
   'picker.customersError': '客户列表读取失败',
   'picker.clustersError': '集群列表读取失败',
   'picker.definitionsError': '发布定义列表读取失败',
+  'picker.retry': '重新读取',
   'definitions.chartNameOptional': 'Chart 名称（可空）',
   'stuck.eyebrow': '紧急',
   // Stuck-lock confirmation (TASK-296). The warning is a catalog entry so the

@@ -50,6 +50,27 @@ describe('usePickerOptions', () => {
     expect(picker.clusters.value).toHaveLength(1);
   });
 
+  it('drops a stale cluster response so the current customer keeps its own list', async () => {
+    // The user picks customer A (slow), then customer B (fast). B must win even though
+    // A's response arrives last — otherwise the picker shows A's clusters under B.
+    const deferred = new Map<string, (value: Array<{ id: string; name: string; customerId: string; enabled: boolean; version: number; routeCount: number }>) => void>();
+    const clusters = vi.fn((customerId: string) => new Promise<Array<{ id: string; name: string; customerId: string; enabled: boolean; version: number; routeCount: number }>>((resolve) => {
+      deferred.set(customerId, resolve);
+    }));
+    const picker = usePickerOptions({ clusters });
+
+    const slow = picker.loadClusters('cust-a');
+    const fast = picker.loadClusters('cust-b');
+    deferred.get('cust-b')!([{ id: 'b-1', name: 'B', customerId: 'cust-b', enabled: true, version: 1, routeCount: 0 }]);
+    await fast;
+    deferred.get('cust-a')!([{ id: 'a-1', name: 'A', customerId: 'cust-a', enabled: true, version: 1, routeCount: 0 }]);
+    await slow;
+
+    expect(picker.clusters.value.map((cluster) => cluster.id)).toEqual(['b-1']);
+    expect(picker.loadingClusters.value).toBe(false);
+    expect(picker.clustersError.value).toBeNull();
+  });
+
   it('empty customer clears the cluster list without a request', async () => {
     const spies = loaders();
     const picker = usePickerOptions(spies);

@@ -48,7 +48,6 @@ export const useClusterStore = defineStore('cluster', () => {
       const cluster = await getCluster(clusterId);
       current.value = cluster;
       draft.value = {
-        id: cluster.id,
         name: cluster.name,
         enabled: cluster.enabled,
         version: cluster.version,
@@ -102,7 +101,6 @@ export const useClusterStore = defineStore('cluster', () => {
       }
       current.value = saved;
       draft.value = {
-        id: saved.id,
         name: saved.name,
         enabled: saved.enabled,
         version: saved.version,

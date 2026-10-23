@@ -93,7 +93,10 @@ function applyFilters(): void {
             {{ definitionLabel(definition) }}
           </option>
         </select>
-        <span v-if="definitionsError" class="bundles__error" role="alert">{{ definitionsError }}</span>
+        <span v-if="definitionsError" class="bundles__error" role="alert">
+          {{ definitionsError }}
+          <button type="button" class="bundles__retry" @click="definitionPicker.reloadDefinitions()">{{ t('picker.retry') }}</button>
+        </span>
       </label>
       <label>
         {{ t('definitions.chartNameOptional') }}
