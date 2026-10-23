@@ -101,8 +101,10 @@ export async function getCluster(clusterId: string): Promise<Cluster> {
   };
 }
 
-export async function createCluster(customerId: string, name: string): Promise<Cluster> {
-  const response = await client.createCluster({ customerId, name });
+export async function createCluster(customerId: string, name: string, id = ''): Promise<Cluster> {
+  // The server treats an empty id as "generate a UUID"; a non-empty one must be a
+  // caller-chosen stable identifier (validated before we get here).
+  const response = await client.createCluster({ customerId, name, id: id.trim() });
   return { ...mapCluster(requireCluster(response.cluster)), imageRules: [], chartRules: [] };
 }
 

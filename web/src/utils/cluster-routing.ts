@@ -24,6 +24,13 @@ export function isValidPrefix(value: string): boolean {
 
 export function validateClusterForm(input: ClusterFormInput): ClusterValidationResult {
   const violations: FieldViolation[] = [];
+  // Optional readable id (create mode): mirror the server/DNS-label rules so a typo
+  // fails here instead of after a round trip. Empty means "let the server generate".
+  const clusterId = (input.id ?? '').trim();
+  if (clusterId.length > 0 && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(clusterId)) {
+    addViolation(violations, 'id', t('cluster.validation.idFormat'));
+  }
+
   const name = input.name.trim();
   if (name.length === 0) {
     addViolation(violations, 'name', t('cluster.validation.nameRequired'));

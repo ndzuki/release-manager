@@ -14,6 +14,15 @@ export interface RouteRuleInput {
 }
 
 export interface ClusterFormInput {
+  /**
+   * Optional readable identifier for a NEW cluster (create mode only).
+   *
+   * The server accepts a caller-supplied id and only generates a UUID when it is
+   * empty. The console used to send just the name, so every cluster created from the
+   * UI had an opaque UUID; this field lets an operator pick `prod-west` instead. It is
+   * ignored on update (the id is immutable).
+   */
+  id?: string;
   name: string;
   enabled: boolean;
   version: number;

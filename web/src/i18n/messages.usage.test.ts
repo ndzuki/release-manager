@@ -287,7 +287,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/DefinitionsPage.vue',
-    allowed: ['客户 ID（可空）', '集群 ID（可空）', '包含已停用', '查询', '有 个定义的提升映射无法解析（数据异常）： 。这些行已禁用编辑，避免把损坏数据写回。', '发布定义', '操作未成功', '刷新列表', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '刷新中…', '刷新', '每个定义把 Bundle 来源与客户、集群、命名空间与 Release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 Values 版本。'],
+    allowed: ['包含已停用', '查询', '有 个定义的提升映射无法解析（数据异常）： 。这些行已禁用编辑，避免把损坏数据写回。', '发布定义', '操作未成功', '刷新列表', '正在读取发布定义…', '没有发布定义', '当前过滤条件下没有定义；清空客户/集群过滤可查看组织内全部定义。', '刷新中…', '刷新', '每个定义把 Bundle 来源与客户、集群、命名空间与 Release 名称绑定；', '决定收敛后的紧急变更如何提升为标准 Values 版本。'],
     reason: 'release definitions converged to Chinese (wave 6); the editor heading moved into the catalog as definitions.editorTitle (TASK-281). TASK-318 registered `刷新列表` (a rendered action-label with no capital and no space). TASK-363 carved the list and the three dialogs into components and the editor/create/disable state into composables, so their literals moved with them; nothing new was written',
   },
   {
@@ -388,7 +388,7 @@ const MIGRATED: Array<{ file: string; allowed: string[]; reason: string }> = [
   },
   {
     file: 'src/pages/BundlesPage.vue',
-    allowed: ['Chart', '发布定义 ID', 'Chart 名称'],
+    allowed: ['Chart', 'Chart 名称'],
     reason:
       'TASK-394 (consistency wave 3) moved the page copy — title, subtitle, filters, table headers, detail labels and every state message — into the catalog. What stays inline is the `Chart` column noun and the two wire-field placeholders (`definition id`, `chart name`), which are examples of the value the filter expects rather than prose',
   },

@@ -3,6 +3,9 @@ import { useId } from 'vue';
 import { t } from '@/i18n/messages';
 import AppDialog from '@/components/common/AppDialog.vue';
 import type { DefinitionCreateForm } from '@/composables/useDefinitionCreate';
+import type { ClusterSummary } from '@/types/cluster';
+import type { CustomerSummary } from '@/types/customer';
+import { shortId } from '@/utils/shortId';
 
 /*
  * TASK-363: the create dialog, carved out of DefinitionsPage.
@@ -18,12 +21,37 @@ defineProps<{
   saving: boolean;
   validationError: string;
   failure: string | null;
+  /** Customers the picker offers; the page loads them once and passes them down. */
+  customers: CustomerSummary[];
+  /** Clusters of the currently picked customer (empty until one is picked). */
+  clusters: ClusterSummary[];
+  loadingCustomers: boolean;
+  loadingClusters: boolean;
+  customersError: string | null;
+  clustersError: string | null;
 }>();
 
 const emit = defineEmits<{
   close: [];
   submit: [];
+  /** The page owns the cluster list, so it reloads when the customer changes. */
+  customerChange: [];
 }>();
+
+function onCustomerChange(): void {
+  // A cluster belongs to exactly one customer: keeping the old value would submit a
+  // pair the server rejects.
+  form.value.clusterId = '';
+  emit('customerChange');
+}
+
+function customerLabel(customer: CustomerSummary): string {
+  return t('picker.customerLabel', { name: customer.name, slug: customer.slug || shortId(customer.id) });
+}
+
+function clusterLabel(cluster: ClusterSummary): string {
+  return t('picker.clusterLabel', { name: cluster.name, id: shortId(cluster.id) });
+}
 
 const form = defineModel<DefinitionCreateForm>('form', { required: true });
 
@@ -49,12 +77,43 @@ function createFieldId(field: string): string {
       <form @submit.prevent="emit('submit')">
         <div class="definitions__basics">
           <div class="definitions__field">
-            <label :for="createFieldId('customer')">{{ t('definitions.create.customerId') }}</label>
-            <input :id="createFieldId('customer')" v-model="form.customerId" name="create-customerId" />
+            <label :for="createFieldId('customer')">{{ t('definitions.create.customer') }}</label>
+            <select
+              :id="createFieldId('customer')"
+              v-model="form.customerId"
+              name="create-customerId"
+              :disabled="loadingCustomers"
+              @change="onCustomerChange"
+            >
+              <option value="">{{ loadingCustomers ? t('picker.loading') : t('picker.customerPlaceholder') }}</option>
+              <option v-for="customer in customers" :key="customer.id" :value="customer.id" :title="customer.id">
+                {{ customerLabel(customer) }}
+              </option>
+            </select>
+            <p v-if="customersError" class="definitions__error" role="alert">{{ customersError }}</p>
+            <p v-else-if="form.customerId" class="definitions__picked">
+              {{ t('picker.idLabel') }}<code>{{ form.customerId }}</code>
+            </p>
           </div>
           <div class="definitions__field">
-            <label :for="createFieldId('cluster')">{{ t('definitions.create.clusterId') }}</label>
-            <input :id="createFieldId('cluster')" v-model="form.clusterId" name="create-clusterId" />
+            <label :for="createFieldId('cluster')">{{ t('definitions.create.cluster') }}</label>
+            <select
+              :id="createFieldId('cluster')"
+              v-model="form.clusterId"
+              name="create-clusterId"
+              :disabled="!form.customerId || loadingClusters"
+            >
+              <option value="">
+                {{ !form.customerId ? t('picker.pickCustomerFirst') : loadingClusters ? t('picker.loading') : t('picker.clusterPlaceholder') }}
+              </option>
+              <option v-for="cluster in clusters" :key="cluster.id" :value="cluster.id" :title="cluster.id">
+                {{ clusterLabel(cluster) }}
+              </option>
+            </select>
+            <p v-if="clustersError" class="definitions__error" role="alert">{{ clustersError }}</p>
+            <p v-else-if="form.clusterId" class="definitions__picked">
+              {{ t('picker.idLabel') }}<code>{{ form.clusterId }}</code>
+            </p>
           </div>
           <div class="definitions__field">
             <label :for="createFieldId('namespace')">{{ t('definitions.create.namespace') }}</label>
@@ -112,7 +171,8 @@ function createFieldId(field: string): string {
   gap: var(--space-3);
 }
 
-.definitions__basics input {
+.definitions__basics input,
+.definitions__basics select {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -139,6 +199,18 @@ function createFieldId(field: string): string {
 
 .definitions__hint {
   color: var(--color-muted);
+}
+
+/* The picker shows the opaque id next to the human label so an operator can still
+   recognise/copy the value the API uses. */
+.definitions__picked {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.definitions__picked code {
+  font-family: var(--font-family-mono, monospace);
 }
 
 .definitions__error {

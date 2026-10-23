@@ -6,6 +6,8 @@ import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import DefinitionsPage from './DefinitionsPage.vue';
 import * as api from '@/connect/definition-api';
+import * as clusterApi from '@/connect/cluster-api';
+import * as customerApi from '@/connect/customer-api';
 import { useDefinitionsStore } from '@/stores/definitions';
 
 vi.mock('@/connect/definition-api', async (importOriginal) => {
@@ -18,6 +20,18 @@ vi.mock('@/connect/definition-api', async (importOriginal) => {
     disableDefinition: vi.fn(),
   };
 });
+
+vi.mock('@/connect/customer-api', async (importOriginal) => {
+  const original = await importOriginal<typeof customerApi>();
+  return { ...original, listCustomers: vi.fn() };
+});
+vi.mock('@/connect/cluster-api', async (importOriginal) => {
+  const original = await importOriginal<typeof clusterApi>();
+  return { ...original, listClusters: vi.fn() };
+});
+
+const mockedCustomers = vi.mocked(customerApi.listCustomers);
+const mockedClusters = vi.mocked(clusterApi.listClusters);
 
 const mounted: Array<{ unmount: () => void }> = [];
 
@@ -73,11 +87,18 @@ function createRoot(): HTMLElement {
   return root;
 }
 
-function setCreateInput(name: string, value: string): void {
-  const input = document.querySelector<HTMLInputElement>(`.definitions__create input[name="${name}"]`);
-  if (!input) throw new Error(`missing create input ${name}`);
-  input.value = value;
-  input.dispatchEvent(new Event('input'));
+/*
+ * TASK-394 follow-up: customer and cluster are <select>s now (their lists come from the
+ * mocked customer/cluster APIs); the remaining text fields are still inputs.
+ */
+async function setCreateControl(name: string, value: string): Promise<void> {
+  const control = document.querySelector<HTMLInputElement | HTMLSelectElement>(
+    `.definitions__create [name="${name}"]`,
+  );
+  if (!control) throw new Error(`missing create control ${name}`);
+  control.value = value;
+  control.dispatchEvent(new Event(control.tagName === 'SELECT' ? 'change' : 'input'));
+  await flushPromises();
 }
 
 async function submitCreate(): Promise<void> {
@@ -144,6 +165,12 @@ async function mountPage() {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  mockedCustomers.mockReset().mockResolvedValue([
+    { id: 'cust-1', name: 'Cust One', slug: 'cust-one', status: 'active', version: 1 },
+  ]);
+  mockedClusters.mockReset().mockResolvedValue([
+    { id: 'cluster-1', name: 'Cluster One', customerId: 'cust-1', enabled: true, version: 1, routeCount: 0 },
+  ]);
   mockedList.mockReset().mockResolvedValue([definition()]);
   mockedUpdate.mockReset().mockResolvedValue(definition({ version: 4n }));
   mockedCreate.mockReset().mockResolvedValue(definition({ id: 'def-2', name: 'new-def', version: 1n }));
@@ -418,9 +445,9 @@ describe('DefinitionsPage create (TASK-301)', () => {
 
     await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
     expect(createRoot()).toBeTruthy();
-    setCreateInput('create-customerId', 'cust-1');
-    setCreateInput('create-clusterId', 'cluster-1');
-    setCreateInput('create-releaseName', 'new-def');
+    await setCreateControl('create-customerId', 'cust-1');
+    await setCreateControl('create-clusterId', 'cluster-1');
+    await setCreateControl('create-releaseName', 'new-def');
     await nextTick();
     await submitCreate();
 
@@ -457,9 +484,9 @@ describe('DefinitionsPage create (TASK-301)', () => {
     mockedCreate.mockRejectedValue(new ConnectError('definition already exists', Code.AlreadyExists));
 
     await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
-    setCreateInput('create-customerId', 'cust-1');
-    setCreateInput('create-clusterId', 'cluster-1');
-    setCreateInput('create-releaseName', 'new-def');
+    await setCreateControl('create-customerId', 'cust-1');
+    await setCreateControl('create-clusterId', 'cluster-1');
+    await setCreateControl('create-releaseName', 'new-def');
     await nextTick();
     await submitCreate();
 
@@ -479,7 +506,7 @@ describe('DefinitionsPage create (TASK-301)', () => {
     await wrapper.get('[data-testid="definitions-create-open"]').trigger('click');
 
     const root = createRoot();
-    const inputs = Array.from(root.querySelectorAll<HTMLInputElement>('.definitions__field input'));
+    const inputs = Array.from(root.querySelectorAll<HTMLElement>('.definitions__field input, .definitions__field select'));
     expect(inputs).toHaveLength(5);
     for (const input of inputs) {
       const id = input.getAttribute('id');

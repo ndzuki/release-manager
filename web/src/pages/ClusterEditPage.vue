@@ -30,6 +30,9 @@ const isCreate = computed(() => !clusterId);
 const nameError = computed(
   () => store.saveError?.fieldViolations?.find((item) => item.field === 'name')?.description ?? '',
 );
+const idError = computed(
+  () => store.saveError?.fieldViolations?.find((item) => item.field === 'id')?.description ?? '',
+);
 const endpoints = {
   cacheEndpoint: import.meta.env.VITE_ARTIFACT_CACHE_ENDPOINT ?? 'cache.local',
   registryEndpoint: import.meta.env.VITE_ARTIFACT_REGISTRY_ENDPOINT ?? 'registry.local',
@@ -123,6 +126,22 @@ async function handleSave() {
       </div>
 
       <section class="cluster-fields">
+        <FormField
+          v-if="isCreate"
+          :label="t('cluster.edit.id')"
+          :help="t('cluster.edit.idHelp')"
+          :error="idError"
+        >
+          <template #default="{ id, describedBy, invalid }">
+            <input
+              :id="id"
+              v-model="store.draft.id"
+              maxlength="63"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+            />
+          </template>
+        </FormField>
         <FormField :label="t('cluster.edit.name')" :error="nameError">
           <template #default="{ id, describedBy, invalid }">
             <input

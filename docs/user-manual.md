@@ -10,7 +10,7 @@
 | --- | --- |
 | 截图环境 | **生产** `https://10.10.33.122:8443`（k3d `rm-prod`，`web:c470d30` rev24 + 5 个 Go 服务 `:c470d30`，`edge` 为 `nginx:1.27-alpine`） |
 | 截图方式 | Playwright + 系统 Chrome，真实登录（`admin` / platform_admin），视口 1440×900、长页面整页截图；另含 375px 宽设备视口 6 张（高度随内容，812–2084px 不等） |
-| 截图日期 | **2026-10-21/22**，共 **47 张**（暗色 30 张 + 375px 6 张 + 亮色 11 张），全部实测 |
+| 截图日期 | **2026-10-21/22/23**，共 **49 张**（暗色 32 张 + 375px 6 张 + 亮色 11 张），全部实测 |
 | 夹具数据 | 生产库现状（2026-10-22 只读核对）：2 个客户（RM Cust Demo、Acme Weekday）/ 2 个集群（rm-cust、prod-west）/ 4 个 release / 6 个历史操作（5 succeeded、1 failed）/ 3 个 `validated` Bundle |
 | 关键限制 | **生产环境当前没有在线 Operator**（客户集群里未部署 operator）。因此所有依赖 Operator 的读都会被拒绝并**显式降级**（例如 Values 页的 Secret 列表、紧急变更的候选制品），本教程在对应位置标注了「本环境降级表现」 |
 | 主题 | 控制台**暗色优先**；亮色样本见 `dc-03-home-light.png`、`dc-09-release-inventory-light.png`、`dc-10-values-editor-light.png`、`dc-14-audit-light.png`、`dc-17-operation-detail-light.png`；主要列表/治理页另有亮色版本（`dc-24/25/26/27/32/33-*-light.png`），共 **11 张亮色** |
@@ -140,6 +140,12 @@
 
 编辑页可改集群名、是否作为发布目标，并用「添加规则 / 删除」维护路由规则
 （模式：直连 / 透传缓存 / 复制；以及提供方与前缀）。
+
+![新建集群（可选集群标识）](images/user-manual/dc-43-cluster-create.png)
+
+**新建集群时可以填一个可读的「集群标识」（可选）**：留空由服务端生成 UUID（不便于辨认）；
+填 `prod-west` 这类小写字母/数字/短横线标识后，列表、发布定义和 API 里都用它，便于区分多个客户集群。
+标识创建后不可修改（编辑页不显示该字段）。
 
 ### 5.3 Operator
 
@@ -287,12 +293,19 @@ Operator 是跑在客户集群里的 agent：执行 Helm 操作并回传发布�
 ![发布定义·375](images/user-manual/dc-39-definitions-375.png)
 
 发布定义页维护 Promotion Mapping 与定义设置（新建/编辑/包含已停用的开关、表格）。
+筛选区的「客户」「集群」是**列表下拉**（可选「全部客户 / 全部集群」），不再手填 ID。
+
+![新建发布定义（客户/集群从列表选择）](images/user-manual/dc-42-definition-create.png)
+
+**新建定义时客户与集群也从列表选择**：下拉项显示「名称（客户标识 / 集群短 ID）」，选中后表单下方
+会显示完整 ID 便于核对；先选客户，集群下拉才会列出该客户下的集群。
 
 ![发布 Bundle](images/user-manual/dc-25-bundles.png)
 
 ![发布 Bundle·亮色](images/user-manual/dc-25-bundles-light.png)
 
 Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，行内可展开明细（镜像、证据引用）。
+查询必填的「发布定义」同样是**列表下拉**（显示名称 · 命名空间 · 集群短 ID），按定义过滤后才会读制品。
 
 ![制品生命周期](images/user-manual/dc-26-artifact-lifecycle.png)
 
@@ -415,6 +428,8 @@ Bundle 页列出已校验的制品（chart + 镜像集合）与内容摘要，�
 | `dc-39-definitions-375.png` | 发布定义（375px） | 亮 | 375×1276 |
 | `dc-40-operation-center-375.png` | 操作中心（375px） | 亮 | 375×812 |
 | `dc-41-trust-policy-375.png` | 签名信任根（375px） | 亮 | 375×812 |
+| `dc-42-definition-create.png` | 新建发布定义（客户/集群选择器） | 暗 | 1440×900 |
+| `dc-43-cluster-create.png` | 新建集群（可选集群标识） | 暗 | 1440×900 |
 
 ## 18. 复现方式（截图与巡检脚本）
 
@@ -428,7 +443,7 @@ RM_ADMIN_PW='<admin 口令>' node <采集脚本>.mjs   # 脚本把 BASE 指向 h
 - 采集前先确认生产可达：`curl -sk -o /dev/null -w '%{http_code}' https://10.10.33.122:8443/` ⇒ `200`。
 - 深/浅主题通过 `localStorage['rm-theme']` 切换后再 reload，保证与用户实际操作一致。
 - 每张图都断言 `document.documentElement.scrollWidth === window.innerWidth`（不允许横向溢出）；
-  本轮 47 张全部通过（含 6 张追加亮色 `dc-24/25/26/27/32/33-*-light.png` 与 4 张追加移动端 `dc-38/39/40/41-*-375.png`）。
+  本轮 49 张全部通过（含 6 张追加亮色、4 张追加移动端，以及 2 张选择器/可读标识的新截图 `dc-42`、`dc-43`）。
 - 值班巡检命令、故障处置与回滚步骤见 `docs/runbook.md`；部署与镜像级回滚见 `docs/production-deploy.md` 的 §8.16。
 
 > 事实源：`web/src/router/index.ts`、`web/src/components/common/AppShell.vue`、`web/src/components/common/PageHeader.vue`、

@@ -158,8 +158,8 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 `enabled`、`hpa_managed`、`max_emergency_replicas`、`approved_annotation_keys`、提升映射
 （`promotion_mappings`）。
 
-> ⚠️ 当前对话框要求**手填客户 ID / 集群 ID**（纯文本输入，见 §8 的标识问题）。可在「客户」「集群」
-> 页面复制 ID，或用 API（`CreateReleaseDefinition`）直接传 id。
+客户与集群在控制台里**从列表选择**（下拉显示名称 + 标识/短 ID，选中后显示完整 ID 便于核对；先选客户
+才会列出该客户下的集群），不需要手抄 id。API（`CreateReleaseDefinition`）仍然直接传 id，便于脚本化。
 
 ## 5. Values 版本与审批
 
@@ -210,22 +210,22 @@ curl -sk -X POST "https://<control-plane>:8443/webhook.v1.WebhookService/SubmitR
 **显示口径**：页面标题、面包屑、卡片标题用 **name**；URL、表单字段、API 用 **id**。所以列表里看到的是
 集群名，但「发布定义」对话框要填的是集群 **id** —— 这就是当前体验里最别扭的地方。
 
-**能加别名吗**：现在不能。`Cluster` 只有 `name`（可编辑）与 `id`（生成后不可改）；`Customer` 多了 `slug`
-但也不能替代 id。可读 id 是支持的——API 的 `CreateClusterRequest.id` / `CreateCustomerRequest.id` 为空时
-才生成 UUID，所以脚本/fixture 用 `rm-cust`、`dev-customer-a-direct` 这类可读 id；**只是控制台没有暴露这个
-输入**（前端新建集群只提交 name），因此 UI 建的集群都是 UUID。
+**能加别名吗**：仍然没有独立的 alias 字段——`Cluster` 只有 `name`（可编辑）与 `id`（生成后不可改），
+`Customer` 多了 `slug` 但也不能替代 id。不过控制台不再强迫你面对 UUID：
 
-**当前可行做法**：
+- **新建集群时可填可读的「集群标识」（可选）**：留空才由服务端生成 UUID，填 `prod-west` 这类标识后，
+  列表、发布定义与 API 都用它；
+- **发布定义的新建与筛选、Bundle 查询的发布定义**都改成了**列表下拉**（名称 + 标识/短 ID，选中后显示完整
+  ID），不再手填 ID。
 
-1. 用 control-plane API（或脚本）建集群时显式给可读 `id`，例如 `prod-west`，后续所有表单就都有可读值；
-2. 用「集群名」作为人读主键，需要 id 时从「客户/集群」页面复制；
-3. 发布定义一律用 API 建（传 id），避免手填错。
+因此当前的推荐做法：新集群一律给可读标识；存量 UUID 集群用「集群名」做人读主键、需要 id 时从下拉项或
+「客户/集群」页面复制。
 
-**建议的产品改动**（未实现，可作为新 REQ）：
+**仍建议的后续改动**（未实现，可作为新 REQ）：
 
-- 发布定义对话框把「客户 ID / 集群 ID」改成**按名称搜索的下拉选择**（显示 name + id）；
-- 新建集群时提供可选「集群标识（ID）」，留空才生成 UUID；
-- 集群列表/详情提供「复制 ID」；需要迁移存量 UUID 时增加 alias 字段（`Cluster.alias`）并允许按 alias 解析。
+- 给 `Cluster` 增加 `alias` 字段并允许按 alias 解析（用于把存量 UUID 映射成可读名，且 id 保持不可变）；
+- 集群列表/详情提供「复制 ID」按钮；
+- 下拉支持按名称搜索（定义多时比原生 select 更好用）。
 
 ## 9. 常见失败对照
 
