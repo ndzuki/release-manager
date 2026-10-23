@@ -6,6 +6,8 @@ import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import DefinitionsPage from './DefinitionsPage.vue';
 import * as api from '@/connect/definition-api';
+import * as clusterApi from '@/connect/cluster-api';
+import * as customerApi from '@/connect/customer-api';
 import { useAuthStore } from '@/stores/auth';
 
 /*
@@ -36,7 +38,18 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
+vi.mock('@/connect/customer-api', async (importOriginal) => {
+  const original = await importOriginal<typeof customerApi>();
+  return { ...original, listCustomers: vi.fn() };
+});
+vi.mock('@/connect/cluster-api', async (importOriginal) => {
+  const original = await importOriginal<typeof clusterApi>();
+  return { ...original, listClusters: vi.fn() };
+});
+
 const mockedList = vi.mocked(api.listDefinitions);
+const mockedCustomers = vi.mocked(customerApi.listCustomers);
+const mockedClusters = vi.mocked(clusterApi.listClusters);
 const mockedUpdate = vi.mocked(api.updateDefinition);
 
 function definition(overrides: Partial<api.DefinitionView> = {}): api.DefinitionView {
@@ -110,6 +123,12 @@ async function submitEditor(): Promise<void> {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  mockedCustomers.mockReset().mockResolvedValue([
+    { id: 'cust-1', name: 'Cust One', slug: 'cust-one', status: 'active', version: 1 },
+  ]);
+  mockedClusters.mockReset().mockResolvedValue([
+    { id: 'cluster-1', name: 'Cluster One', customerId: 'cust-1', enabled: true, version: 1, routeCount: 0 },
+  ]);
   useAuthStore().$patch({
     user: {
       $typeName: 'auth.v1.SessionUser',
@@ -127,8 +146,11 @@ describe('DefinitionsPage filters and refresh (TASK-363)', () => {
   it('sends the trimmed filters and the includeDisabled flag on submit', async () => {
     const wrapper = await mountPage();
 
-    await wrapper.get('input[name="customerId"]').setValue('  cust-1  ');
-    await wrapper.get('input[name="clusterId"]').setValue('  cluster-1  ');
+    // TASK-394 follow-up: ids come from pickers, so there is nothing to trim; the
+    // assertion pins the selected ids and the flag that go on the wire.
+    await wrapper.get('select[name="customerId"]').setValue('cust-1');
+    await flushPromises();
+    await wrapper.get('select[name="clusterId"]').setValue('cluster-1');
     await wrapper.get('input[name="includeDisabled"]').setValue(false);
     await wrapper.get('form.definitions__filters').trigger('submit');
     await flushPromises();
@@ -142,7 +164,8 @@ describe('DefinitionsPage filters and refresh (TASK-363)', () => {
 
   it('re-queries with the filters already applied when 刷新 is pressed', async () => {
     const wrapper = await mountPage();
-    await wrapper.get('input[name="customerId"]').setValue('cust-1');
+    await wrapper.get('select[name="customerId"]').setValue('cust-1');
+    await flushPromises();
     await wrapper.get('form.definitions__filters').trigger('submit');
     await flushPromises();
 

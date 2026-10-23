@@ -56,6 +56,24 @@ beforeEach(() => {
   vi.mocked(listClusters).mockResolvedValue([]);
 });
 
+describe('cluster create with an optional readable id', () => {
+  it('forwards the chosen id to CreateCluster and lets the server generate one when empty', async () => {
+    const store = useClusterStore();
+    store.startCreate();
+    store.draft!.name = 'Prod West';
+    store.draft!.id = 'prod-west';
+
+    await store.save('customer-1');
+    expect(vi.mocked(createCluster)).toHaveBeenLastCalledWith('customer-1', 'Prod West', 'prod-west');
+
+    store.startCreate();
+    store.draft!.name = 'Generated';
+    store.draft!.id = '';
+    await store.save('customer-1');
+    expect(vi.mocked(createCluster)).toHaveBeenLastCalledWith('customer-1', 'Generated', '');
+  });
+});
+
 describe('cluster store save lifecycle', () => {
   it('treats a repeated identical save as success', async () => {
     updateClusterMock.mockResolvedValue(cluster());

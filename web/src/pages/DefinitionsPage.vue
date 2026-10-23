@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/i18n/messages';
 import { useAuthStore } from '@/stores/auth';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
@@ -12,6 +12,7 @@ import DefinitionDisableDialog from '@/components/definitions/DefinitionDisableD
 import DefinitionEditorDialog from '@/components/definitions/DefinitionEditorDialog.vue';
 import DefinitionTable from '@/components/definitions/DefinitionTable.vue';
 import { useDefinitionCreate } from '@/composables/useDefinitionCreate';
+import { usePickerOptions } from '@/composables/usePickerOptions';
 import { useDefinitionDisable } from '@/composables/useDefinitionDisable';
 import { useDefinitionEditor } from '@/composables/useDefinitionEditor';
 import { useDefinitionsStore } from '@/stores/definitions';
@@ -50,9 +51,38 @@ const pageSubtitle = computed(
     ' 决定收敛后的紧急变更如何提升为标准 Values 版本。',
 );
 
+/*
+ * TASK-394 follow-up: definitions reference a customer and a cluster by opaque id.
+ * Typing those ids by hand was the most error-prone step in the console, so both the
+ * filters and the create dialog now pick from the lists the server already exposes.
+ * The two pickers are separate instances on purpose: the filter's cluster list and the
+ * dialog's cluster list belong to different customers and must not overwrite each other.
+ */
+const filterPicker = usePickerOptions();
+const dialogPicker = usePickerOptions();
+const {
+  customers: filterCustomers,
+  clusters: filterClusters,
+  loadingCustomers: loadingFilterCustomers,
+  loadingClusters: loadingFilterClusters,
+  customersError: filterCustomersError,
+} = filterPicker;
+const { clusters: dialogClusters, loadingClusters: loadingDialogClusters, clustersError: dialogClustersError } = dialogPicker;
+
 const customerId = ref('');
 const clusterId = ref('');
 const includeDisabled = ref(true);
+
+watch(customerId, (next) => {
+  // A cluster belongs to one customer; keeping the old id would filter by a pair that
+  // can never match.
+  clusterId.value = '';
+  void filterPicker.loadClusters(next);
+});
+
+function onCreateCustomerChange(): void {
+  void dialogPicker.loadClusters(createForm.value.customerId);
+}
 
 const {
   editing,
@@ -100,7 +130,14 @@ const {
 
 onMounted(() => {
   void store.load();
+  void filterPicker.loadCustomers(true);
 });
+
+function openCreate(): void {
+  startCreate();
+  dialogPicker.clearClusters();
+  void filterPicker.loadCustomers(true);
+}
 
 function applyFilters(): void {
   void store.load({ customerId: customerId.value.trim(), clusterId: clusterId.value.trim(), includeDisabled: includeDisabled.value });
@@ -112,7 +149,7 @@ function applyFilters(): void {
     <PageHeader title="发布定义" :eyebrow="t('definitions.eyebrow')" :subtitle="pageSubtitle">
       <template #actions>
         <div class="definitions__header-actions">
-          <button v-if="auth.canWrite" type="button" data-testid="definitions-create-open" @click="startCreate">
+          <button v-if="auth.canWrite" type="button" data-testid="definitions-create-open" @click="openCreate">
             {{ t('definitions.create.open') }}
           </button>
           <button type="button" :disabled="store.loading" @click="applyFilters">
@@ -124,12 +161,24 @@ function applyFilters(): void {
 
     <form class="definitions__filters" @submit.prevent="applyFilters">
       <label>
-        客户 ID（可空）
-        <input v-model="customerId" name="customerId" :placeholder="t('definitions.customerId')" />
+        {{ t('definitions.filter.customer') }}
+        <select v-model="customerId" name="customerId" :disabled="loadingFilterCustomers">
+          <option value="">{{ loadingFilterCustomers ? t('picker.loading') : t('picker.allCustomers') }}</option>
+          <option v-for="customer in filterCustomers" :key="customer.id" :value="customer.id" :title="customer.id">
+            {{ customer.name }} ({{ customer.slug || customer.id.slice(0, 8) }})
+          </option>
+        </select>
       </label>
       <label>
-        集群 ID（可空）
-        <input v-model="clusterId" name="clusterId" :placeholder="t('definitions.clusterId')" />
+        {{ t('definitions.filter.cluster') }}
+        <select v-model="clusterId" name="clusterId" :disabled="!customerId || loadingFilterClusters">
+          <option value="">
+            {{ !customerId ? t('picker.pickCustomerFirst') : loadingFilterClusters ? t('picker.loading') : t('picker.allClusters') }}
+          </option>
+          <option v-for="cluster in filterClusters" :key="cluster.id" :value="cluster.id" :title="cluster.id">
+            {{ cluster.name }} ({{ cluster.id.slice(0, 8) }})
+          </option>
+        </select>
       </label>
       <label class="definitions__checkbox">
         <input v-model="includeDisabled" name="includeDisabled" type="checkbox" />
@@ -200,8 +249,15 @@ function applyFilters(): void {
       :saving="store.saving"
       :validation-error="createValidation"
       :failure="createFailure"
+      :customers="filterCustomers"
+      :clusters="dialogClusters"
+      :loading-customers="loadingFilterCustomers"
+      :loading-clusters="loadingDialogClusters"
+      :customers-error="filterCustomersError"
+      :clusters-error="dialogClustersError"
       @close="closeCreate"
       @submit="submitCreate"
+      @customer-change="onCreateCustomerChange"
     />
 
     <DefinitionDisableDialog
@@ -265,7 +321,8 @@ function applyFilters(): void {
   align-items: center;
 }
 
-.definitions__filters input {
+.definitions__filters input,
+.definitions__filters select {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);

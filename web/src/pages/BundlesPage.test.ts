@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import BundlesPage from './BundlesPage.vue';
 import * as api from '@/connect/bundle-api';
+import * as definitionApi from '@/connect/definition-api';
 import { BundleStatus } from '@/gen/common/v1/domain_pb';
 
 vi.mock('@/connect/bundle-api', async (importOriginal) => {
@@ -12,7 +13,35 @@ vi.mock('@/connect/bundle-api', async (importOriginal) => {
   return { ...original, listBundles: vi.fn(), getBundle: vi.fn() };
 });
 
+vi.mock('@/connect/definition-api', async (importOriginal) => {
+  const original = await importOriginal<typeof definitionApi>();
+  return { ...original, listDefinitions: vi.fn() };
+});
+
 const mockedList = vi.mocked(api.listBundles);
+const mockedDefinitions = vi.mocked(definitionApi.listDefinitions);
+
+function definitionView(id: string, name: string): definitionApi.DefinitionView {
+  return {
+    id,
+    name,
+    customerId: 'cust-1',
+    clusterId: 'cluster-1',
+    namespace: 'apps',
+    releaseName: name,
+    chartName: 'chart',
+    status: 'active',
+    version: 1n,
+    hpaManaged: false,
+    maxEmergencyReplicas: 0,
+    createdAt: '2026-09-28T00:00:00Z',
+    updatedAt: null,
+    promotionMappings: [],
+    promotionMappingsViolation: null,
+    approvedAnnotationKeys: [],
+    approvedAnnotationKeysViolation: null,
+  };
+}
 const mockedDetail = vi.mocked(api.getBundle);
 
 function summary(id: string): api.BundleSummaryView {
@@ -44,6 +73,10 @@ async function mountPage() {
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  mockedDefinitions.mockReset().mockResolvedValue([
+    definitionView('def-1', 'definition-one'),
+    definitionView('def-7', 'definition-seven'),
+  ]);
   mockedList.mockReset().mockResolvedValue({ bundles: [summary('b1')], nextPageToken: '', totalSize: 1 });
   mockedDetail.mockReset().mockResolvedValue({
     ...summary('b1'),
@@ -80,7 +113,7 @@ describe('BundlesPage', () => {
     expect(wrapper.get('.page-header__eyebrow').text()).toBe('发布');
     expect(wrapper.get('.page-header__title').text()).toBe('发布 Bundle');
 
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 
@@ -98,7 +131,7 @@ describe('BundlesPage', () => {
 
   it('lists bundles once a definition is given', async () => {
     const wrapper = await mountPage();
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 
@@ -114,7 +147,7 @@ describe('BundlesPage', () => {
   it('shows the permission refusal instead of the empty state', async () => {
     mockedList.mockRejectedValue(new ConnectError('nope', Code.PermissionDenied));
     const wrapper = await mountPage();
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 
@@ -125,7 +158,7 @@ describe('BundlesPage', () => {
   it('marks an empty catalogue as empty', async () => {
     mockedList.mockResolvedValue({ bundles: [], nextPageToken: '', totalSize: 0 });
     const wrapper = await mountPage();
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 
@@ -135,7 +168,7 @@ describe('BundlesPage', () => {
 
   it('opens the detail panel with provenance and evidence', async () => {
     const wrapper = await mountPage();
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 
@@ -153,7 +186,7 @@ describe('BundlesPage', () => {
   it('loads the next page only when the server offered a cursor', async () => {
     mockedList.mockResolvedValue({ bundles: [summary('b1')], nextPageToken: '', totalSize: 1 });
     const wrapper = await mountPage();
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
     expect(wrapper.find('[data-testid="bundles-load-more"]').exists()).toBe(false);
@@ -168,12 +201,12 @@ describe('BundlesPage', () => {
   it('restarts from page 1 when the filter changes', async () => {
     mockedList.mockResolvedValueOnce({ bundles: [summary('b1')], nextPageToken: 'token-1', totalSize: 3 });
     const wrapper = await mountPage();
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-1');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-1');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 
     mockedList.mockResolvedValueOnce({ bundles: [summary('b7')], nextPageToken: '', totalSize: 1 });
-    await wrapper.get('input[name="releaseDefinitionId"]').setValue('def-7');
+    await wrapper.get('select[name="releaseDefinitionId"]').setValue('def-7');
     await wrapper.get('form.bundles__filters').trigger('submit');
     await flushPromises();
 

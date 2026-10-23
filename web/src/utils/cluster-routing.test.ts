@@ -29,7 +29,20 @@ function form(overrides: Partial<ClusterFormInput> = {}): ClusterFormInput {
   };
 }
 
-describe('validateClusterForm', () => {
+describe('validateClusterForm', () => {  it('accepts no id (server generates) and a DNS-label id, rejects anything else', () => {
+    const base = { name: 'Prod West', enabled: true, version: 0, imageRules: [], chartRules: [] };
+    expect(validateClusterForm(base).valid).toBe(true);
+    expect(validateClusterForm({ ...base, id: 'prod-west' }).valid).toBe(true);
+    expect(validateClusterForm({ ...base, id: 'prod-west-1' }).valid).toBe(true);
+
+    for (const id of ['Prod-West', '-prod', 'prod-', 'prod_west', 'a'.repeat(64)]) {
+      const result = validateClusterForm({ ...base, id });
+      expect(result.valid, `id ${id} must be rejected`).toBe(false);
+      expect(result.violations.some((violation) => violation.field === 'id')).toBe(true);
+    }
+  });
+
+
   it('locates both rules with the same source prefix', () => {
     const result = validateClusterForm(form({
       imageRules: [

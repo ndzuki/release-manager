@@ -67,6 +67,7 @@ export const useClusterStore = defineStore('cluster', () => {
     serverVersion.value = null;
     saveError.value = null;
     draft.value = {
+      id: '',
       name: '',
       enabled: true,
       version: 0,
@@ -92,7 +93,7 @@ export const useClusterStore = defineStore('cluster', () => {
     try {
       let saved: Cluster;
       if (!clusterId) {
-        const created = await createCluster(customerId, draft.value.name.trim());
+        const created = await createCluster(customerId, draft.value.name.trim(), (draft.value.id ?? '').trim());
         const createDraft = { ...draft.value, version: created.version };
         saved = await updateCluster(created.id, createDraft);
       } else {

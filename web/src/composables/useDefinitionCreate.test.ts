@@ -51,7 +51,7 @@ describe('useDefinitionCreate', () => {
 
     expect(ok).toBe(false);
     expect(create).not.toHaveBeenCalled();
-    expect(state.validationError.value).toBe('请填写客户 ID、集群 ID 与 Release 名称');
+    expect(state.validationError.value).toBe('请选择客户、集群并填写 Release 名称');
     expect(state.creating.value).toBe(true);
   });
 

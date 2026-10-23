@@ -6,7 +6,10 @@ import ErrorState from '@/components/common/ErrorState.vue';
 import LoadingState from '@/components/common/LoadingState.vue';
 import PageHeader from '@/components/common/PageHeader.vue';
 import { BUNDLE_STATUSES } from '@/connect/bundle-api';
+import { usePickerOptions } from '@/composables/usePickerOptions';
 import { useBundlesStore } from '@/stores/bundles';
+import type { DefinitionView } from '@/connect/definition-api';
+import { shortId } from '@/utils/shortId';
 import { formatTimestamp } from '@/utils/formatTimestamp';
 
 /*
@@ -26,13 +29,31 @@ import { formatTimestamp } from '@/utils/formatTimestamp';
  */
 const store = useBundlesStore();
 
+/*
+ * TASK-394 follow-up: a bundle read is scoped by release definition, and asking for
+ * that definition's id as free text made the page unusable without a copy/paste trip
+ * to the definitions table. The picker lists definitions with their namespace and
+ * cluster so the choice is recognisable; the id stays in the option title.
+ */
+const definitionPicker = usePickerOptions();
+const { definitions, loadingDefinitions, definitionsError } = definitionPicker;
+
 const definitionFilter = ref('');
 const chartFilter = ref('');
 const statusFilter = ref('');
 
 onMounted(() => {
   void store.load();
+  void definitionPicker.loadDefinitions();
 });
+
+function definitionLabel(definition: DefinitionView): string {
+  return t('bundles.filters.definitionLabel', {
+    name: definition.name,
+    namespace: definition.namespace.trim() || '—',
+    cluster: shortId(definition.clusterId),
+  });
+}
 
 function applyFilters(): void {
   // A cursor is bound to the filter that produced it, so this always restarts.
@@ -59,8 +80,23 @@ function applyFilters(): void {
 
     <form class="bundles__filters" @submit.prevent="applyFilters">
       <label>
-        {{ t('definitions.releaseDefinitionIdRequired') }}
-        <input v-model="definitionFilter" name="releaseDefinitionId" placeholder="发布定义 ID" required />
+        {{ t('bundles.filters.definition') }}
+        <select
+          v-model="definitionFilter"
+          name="releaseDefinitionId"
+          required
+          :disabled="loadingDefinitions"
+          :title="definitionFilter"
+        >
+          <option value="">{{ loadingDefinitions ? t('picker.loading') : t('picker.definitionPlaceholder') }}</option>
+          <option v-for="definition in definitions" :key="definition.id" :value="definition.id" :title="definition.id">
+            {{ definitionLabel(definition) }}
+          </option>
+        </select>
+        <span v-if="definitionsError" class="bundles__error" role="alert">
+          {{ definitionsError }}
+          <button type="button" class="bundles__retry" @click="definitionPicker.reloadDefinitions()">{{ t('picker.retry') }}</button>
+        </span>
       </label>
       <label>
         {{ t('definitions.chartNameOptional') }}

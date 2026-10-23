@@ -82,20 +82,21 @@ describe('ClusterEditPage field errors are described, not named', () => {
     };
     await nextTick();
 
-    const field = wrapper.get('.cluster-fields .form-field');
-    const input = field.get('input[maxlength="254"]');
+    const input = wrapper.get('.cluster-fields input[maxlength="254"]');
+    const field = input.element.parentElement as HTMLElement;
     const describedBy = input.attributes('aria-describedby');
-    const label = field.get('label');
+    const label = field.querySelector('label')!;
 
     // ① the accessible name is the label text only — the error is not in it ...
-    expect(label.attributes('for')).toBe(input.attributes('id'));
-    expect(label.text()).not.toContain('名称不能为空');
-    expect(label.find('.form-field__error').exists()).toBe(false);
+    expect(label.getAttribute('for')).toBe(input.attributes('id'));
+    expect(label.textContent).not.toContain('名称不能为空');
+    expect(label.querySelector('.form-field__error')).toBeNull();
     // ② ... it is reachable as the control's description instead. The page-level alert
     // is the first role="alert" in the document, so this is scoped to the field.
     expect(describedBy).toBeTruthy();
-    expect(field.get(`#${describedBy}`).text()).toContain('名称不能为空');
-    expect(field.get(`#${describedBy}`).attributes('role')).toBe('alert');
+    const description = field.querySelector(`#${describedBy}`)!;
+    expect(description.textContent).toContain('名称不能为空');
+    expect(description.getAttribute('role')).toBe('alert');
     expect(input.attributes('aria-invalid')).toBe('true');
     // The page-level alert is unchanged and still carries only the summary message.
     const alert = wrapper.get('.save-error[role="alert"]');
