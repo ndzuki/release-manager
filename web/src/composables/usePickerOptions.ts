@@ -108,8 +108,12 @@ export function usePickerOptions(loaders: Partial<PickerLoaders> = {}) {
   }
 
   function clearClusters(): void {
+    // Clearing is an intent like any other selection: an in-flight response must not
+    // repopulate a list the caller just emptied.
+    clusterRequest += 1;
     clusters.value = [];
     clustersError.value = null;
+    loadingClusters.value = false;
   }
 
   async function reloadDefinitions(): Promise<void> {

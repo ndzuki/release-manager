@@ -71,6 +71,22 @@ describe('usePickerOptions', () => {
     expect(picker.clustersError.value).toBeNull();
   });
 
+  it('clearing the list invalidates an in-flight response', async () => {
+    let resolveSlow: ((value: Array<{ id: string; name: string; customerId: string; enabled: boolean; version: number; routeCount: number }>) => void) | undefined;
+    const clusters = vi.fn(() => new Promise<Array<{ id: string; name: string; customerId: string; enabled: boolean; version: number; routeCount: number }>>((resolve) => {
+      resolveSlow = resolve;
+    }));
+    const picker = usePickerOptions({ clusters });
+
+    const pending = picker.loadClusters('cust-a');
+    picker.clearClusters();
+    resolveSlow!([{ id: 'a-1', name: 'A', customerId: 'cust-a', enabled: true, version: 1, routeCount: 0 }]);
+    await pending;
+
+    expect(picker.clusters.value).toEqual([]);
+    expect(picker.loadingClusters.value).toBe(false);
+  });
+
   it('empty customer clears the cluster list without a request', async () => {
     const spies = loaders();
     const picker = usePickerOptions(spies);
