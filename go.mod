@@ -3,7 +3,7 @@ module github.com/ndzuki/release-manager
 go 1.27.3
 
 require (
-	connectrpc.com/connect v1.21.0
+	connectrpc.com/connect v1.21.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/bmatcuk/doublestar/v4 v4.10.3
